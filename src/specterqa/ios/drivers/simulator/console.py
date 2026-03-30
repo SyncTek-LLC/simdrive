@@ -361,21 +361,43 @@ class ConsoleMonitor:
 def _parse_timestamp(timestamp: str) -> float:
     """Parse an ISO 8601 timestamp string to a Unix epoch float.
 
-    Handles the format used in :class:`LogEntry` fixtures:
-    ``"2026-03-29T10:00:00.000Z"``
+    Handles several formats produced by xcrun log stream and test fixtures:
+    - ``"2026-03-29T10:00:00.000Z"``
+    - ``"2026-03-29 10:00:00.000000+0000"``
+    - ``"2026-03-29T10:00:00.000000+00:00"``
 
     Returns 0.0 if parsing fails (entry treated as infinitely old).
     """
     import datetime
+    import re as _re
     if not timestamp:
         return 0.0
     # Normalise: replace trailing Z with +00:00 for fromisoformat compatibility
-    ts = timestamp.rstrip("Z")
-    # Strip sub-second precision beyond 6 digits (Python's limit)
+    if timestamp.endswith("Z"):
+        ts = timestamp[:-1] + "+00:00"
+    else:
+        ts = timestamp
+    # Strip sub-second precision beyond 6 digits WITHOUT touching the timezone
+    # offset.  A timestamp like "2026-03-29 10:00:00.000000+0000" has its
+    # fractional part followed by a timezone offset (+HHMM or +HH:MM).
     if "." in ts:
-        parts = ts.split(".")
-        frac = parts[1][:6]
-        ts = f"{parts[0]}.{frac}"
+        dot_idx = ts.index(".")
+        # Everything after the dot may be: digits, then optional tz offset
+        after_dot = ts[dot_idx + 1:]
+        # Split fractional digits from any trailing timezone offset
+        m = _re.match(r"(\d+)(.*)", after_dot)
+        if m:
+            frac_digits = m.group(1)[:6]  # keep at most 6 fractional digits
+            tz_suffix = m.group(2)        # e.g. "+0000", "+00:00", or ""
+        else:
+            frac_digits = after_dot[:6]
+            tz_suffix = ""
+        # Normalise +HHMM → +HH:MM so fromisoformat accepts it
+        tz_suffix = _re.sub(r"([+-])(\d{2})(\d{2})$", r"\1\2:\3", tz_suffix)
+        ts = f"{ts[:dot_idx]}.{frac_digits}{tz_suffix}"
+    else:
+        # No fractional seconds — still normalise bare +HHMM offset if present
+        ts = _re.sub(r"([+-])(\d{2})(\d{2})$", r"\1\2:\3", ts)
     try:
         dt = datetime.datetime.fromisoformat(ts)
         # Treat as UTC if no timezone info
