@@ -95,6 +95,8 @@ class ComputerUseDecider:
         ui_context: str = "",
         force_api: bool = False,
         stuck_context: str | None = None,
+        display_width: int | None = None,
+        display_height: int | None = None,
         **kwargs: Any,
     ) -> Decision:
         """Ask Claude what to do next given a screenshot and a goal.
@@ -106,13 +108,20 @@ class ComputerUseDecider:
             force_api: Ignored — always calls the API (kept for protocol compat).
             stuck_context: If provided, appended to the prompt to hint that the
                 agent should try a different approach.
+            display_width: Actual screenshot width in pixels.  When provided,
+                overrides the constructor default so Claude's coordinate space
+                matches the image it sees.
+            display_height: Actual screenshot height in pixels.
 
         Returns:
             A ``Decision`` derived from Claude's response.  Never raises on
             API errors — returns a failure ``Decision`` instead.
         """
         messages = self._build_messages(goal, screenshot_base64, ui_context, stuck_context)
-        tools = self._build_tools()
+        tools = self._build_tools(
+            width=display_width or self._display_width,
+            height=display_height or self._display_height,
+        )
 
         response = self._call_api_with_retry(messages, tools)
         if response is None:
@@ -160,14 +169,20 @@ class ComputerUseDecider:
 
         return [{"role": "user", "content": [image_block, text_block]}]
 
-    def _build_tools(self) -> list[dict[str, Any]]:
-        """Build the tools list including the computer tool with display config."""
+    def _build_tools(self, width: int = 0, height: int = 0) -> list[dict[str, Any]]:
+        """Build the tools list including the computer tool with display config.
+
+        Args:
+            width: Display width to report to Claude.  Defaults to the
+                constructor value when 0.
+            height: Display height to report to Claude.
+        """
         return [
             {
                 "type": "computer_20250124",
                 "name": "computer",
-                "display_width_px": self._display_width,
-                "display_height_px": self._display_height,
+                "display_width_px": width or self._display_width,
+                "display_height_px": height or self._display_height,
                 "display_number": 1,
             }
         ]

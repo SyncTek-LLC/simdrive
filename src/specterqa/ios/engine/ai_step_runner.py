@@ -149,12 +149,16 @@ class IOSAIStepRunner:
             # 1. Capture screenshot
             # ----------------------------------------------------------------
             screenshot_b64: str = ""
+            _img_w: int = 0
+            _img_h: int = 0
             try:
                 raw = self._executor.screenshot()
                 # SimulatorDriver.screenshot() returns a dict with 'base64' key;
                 # extract the string for the decider.
                 if isinstance(raw, dict):
                     screenshot_b64 = raw.get("base64", raw.get("data", ""))
+                    _img_w = int(raw.get("width", 0))
+                    _img_h = int(raw.get("height", 0))
                 else:
                     screenshot_b64 = str(raw) if raw else ""
             except Exception as exc:
@@ -214,11 +218,17 @@ class IOSAIStepRunner:
             # 5. AI decision
             # ----------------------------------------------------------------
             try:
-                decision: Decision = self._decider.decide(
-                    goal=goal,
-                    screenshot_base64=screenshot_b64,
-                    ui_context=_UIContextStr(ui_context_str),
-                )
+                decide_kwargs: dict[str, Any] = {
+                    "goal": goal,
+                    "screenshot_base64": screenshot_b64,
+                    "ui_context": _UIContextStr(ui_context_str),
+                }
+                # Pass actual screenshot dimensions so Claude's coordinate
+                # space matches the image (fixes 14% offset bug).
+                if _img_w and _img_h:
+                    decide_kwargs["display_width"] = _img_w
+                    decide_kwargs["display_height"] = _img_h
+                decision: Decision = self._decider.decide(**decide_kwargs)
             except BudgetExceededError as exc:
                 error_msg = f"Budget exceeded: {exc}"
                 logger.warning("IOSAIStepRunner: %s", error_msg)
