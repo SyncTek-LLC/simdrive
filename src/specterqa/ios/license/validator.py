@@ -3,15 +3,40 @@
 Validates a SpecterQA license key against the Keygen.sh API. Caches the result
 to avoid redundant network round-trips. Falls back to a JWT-based offline grace
 period when the API is unreachable.
+
+Dogfood bypass (v0.1.0):
+  Set SPECTERQA_IOS_LICENSE=founder to bypass all API validation with a
+  pre-configured founder tier grant (valid through 2027-01-01, 4 sims).
+  If no license key and no env var, trial mode allows 1 simulator with a warning.
 """
 
 from __future__ import annotations
 
+import os
 import time
+import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
+
+# ---------------------------------------------------------------------------
+# Dogfood / trial constants
+# ---------------------------------------------------------------------------
+
+_DOGFOOD_LICENSE_VALUE = "founder"
+_DOGFOOD_RESULT: Dict[str, Any] = {
+    "valid": True,
+    "max_concurrent_sims": 4,
+    "tier": "founder",
+    "expires_at": "2027-01-01",
+}
+_TRIAL_RESULT: Dict[str, Any] = {
+    "valid": True,
+    "max_concurrent_sims": 1,
+    "tier": "trial",
+    "expires_at": None,
+}
 
 # ---------------------------------------------------------------------------
 # Tier → default max_concurrent_sims mapping (fallback when API omits the field)
@@ -36,7 +61,7 @@ class LicenseValidator:
 
     def __init__(
         self,
-        license_key: str,
+        license_key: str = "",
         api_url: str = "https://api.keygen.sh/v1",
     ) -> None:
         self._license_key: str = license_key
@@ -50,6 +75,12 @@ class LicenseValidator:
     def validate(self) -> Dict[str, Any]:
         """Validate the license key against the API, caching the result.
 
+        Bypass paths (v0.1.0 dogfood):
+        - If ``SPECTERQA_IOS_LICENSE=founder`` env var is set, returns a
+          pre-configured founder grant without any network call.
+        - If no license key and no env var, returns trial mode (1 simulator)
+          with a printed warning.
+
         On a network failure, falls back to ``_check_offline_grace()``.
 
         Returns:
@@ -57,6 +88,23 @@ class LicenseValidator:
             ``tier`` (str), ``expires_at`` (str).
         """
         if self._cache is not None:
+            return self._cache
+
+        # Dogfood bypass — SPECTERQA_IOS_LICENSE=founder skips API entirely
+        env_license = os.environ.get("SPECTERQA_IOS_LICENSE", "").strip()
+        if env_license.lower() == _DOGFOOD_LICENSE_VALUE:
+            self._cache = dict(_DOGFOOD_RESULT)
+            return self._cache
+
+        # Trial mode — no key and no env var → 1 simulator, warn but allow
+        if not self._license_key and not env_license:
+            warnings.warn(
+                "No SpecterQA license key found. Running in trial mode (1 simulator). "
+                "Set SPECTERQA_IOS_LICENSE=founder or provide a license key to unlock more.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._cache = dict(_TRIAL_RESULT)
             return self._cache
 
         try:
