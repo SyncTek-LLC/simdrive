@@ -296,6 +296,40 @@ class SimulatorDriver:
         return {"success": True, "action": "wait"}
 
     # ------------------------------------------------------------------
+    # Unified action dispatcher
+    # ------------------------------------------------------------------
+
+    def execute(self, decision) -> dict[str, Any]:
+        """Dispatch a Decision to the appropriate action method.
+
+        This is the unified interface expected by IOSAIStepRunner.
+        Maps decision.action to click/fill/scroll/keyboard/wait.
+        """
+        action = getattr(decision, "action", None) or ""
+        try:
+            if action == "click":
+                target = getattr(decision, "target", "0,0")
+                parts = str(target).split(",")
+                x = int(float(parts[0].strip()))
+                y = int(float(parts[1].strip())) if len(parts) > 1 else 0
+                return self.click(x, y)
+            elif action == "fill":
+                return self.fill(getattr(decision, "value", ""))
+            elif action == "scroll":
+                value = getattr(decision, "value", "down")
+                return self.scroll(direction=str(value))
+            elif action == "keyboard":
+                return self.keyboard(getattr(decision, "value", ""))
+            elif action == "wait":
+                return self.wait(1.0)
+            elif action in ("done", "stuck"):
+                return {"success": True, "action": action}
+            else:
+                return {"success": False, "action": action, "error": f"Unknown action: {action}"}
+        except Exception as exc:
+            return {"success": False, "action": action, "error": str(exc)}
+
+    # ------------------------------------------------------------------
     # Context aggregation
     # ------------------------------------------------------------------
 
