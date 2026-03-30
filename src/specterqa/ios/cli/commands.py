@@ -35,6 +35,17 @@ logger = logging.getLogger("specterqa.ios.cli")
 console = Console(stderr=True)
 out = Console()  # stdout — for machine-readable / piped output
 
+# ---------------------------------------------------------------------------
+# Version — guarded import so the CLI remains usable when the upstream
+# specterqa package is installed in a broken or development state where
+# __version__ is missing (e.g. editable installs missing PKG-INFO).
+# ---------------------------------------------------------------------------
+
+try:
+    from specterqa import __version__ as _SPECTERQA_VERSION
+except (ImportError, AttributeError):
+    _SPECTERQA_VERSION = "unknown"
+
 
 # ---------------------------------------------------------------------------
 # Helpers — project config resolution
@@ -900,7 +911,14 @@ def ios_init(app_slug: str, display_name: str, target_dir: str, force: bool) -> 
     """
     from specterqa.ios.cli.setup import scaffold_ios_project
 
-    project_dir = Path(target_dir).resolve() / ".specterqa"
+    resolved = Path(target_dir).resolve()
+    # Avoid double-nesting: if the user points --dir at an existing .specterqa/
+    # directory (or a path that already ends in .specterqa) use it directly;
+    # otherwise append .specterqa to the target directory.
+    if resolved.name == ".specterqa":
+        project_dir = resolved
+    else:
+        project_dir = resolved / ".specterqa"
     scaffold_ios_project(project_dir=project_dir, app_slug=app_slug, display_name=display_name, force=force)
 
 

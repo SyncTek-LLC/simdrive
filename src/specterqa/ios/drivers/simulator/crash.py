@@ -189,6 +189,17 @@ class CrashDetector:
     # Convenience
     # ------------------------------------------------------------------
 
+    def stop(self) -> None:
+        """Stop the crash detector.
+
+        Resets the baseline and clears accumulated crash records.  Provided
+        for symmetry with other driver modules that have a start/stop lifecycle.
+        This is a no-op beyond clearing internal state — no background process
+        is running.
+        """
+        self._baseline = set()
+        self._detected_crashes = []
+
     def latest_crash(self) -> Optional[CrashReport]:
         """Return the most recent crash by timestamp from accumulated check() results.
 

@@ -34,6 +34,7 @@ class LogEntry:
     message: str
     process: str
     thread_id: int
+    ingestion_time: float = field(default_factory=time.time)
 
     # ------------------------------------------------------------------
     # Derived properties
@@ -136,7 +137,12 @@ class ConsoleMonitor:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Spawn the log stream process and begin reading in a background thread."""
+        """Spawn the log stream process and begin reading in a background thread.
+
+        After starting the background reader, calls :meth:`wait_for_ready` with
+        a short timeout so that the first call to :meth:`recent` or
+        :meth:`errors` is more likely to return buffered entries.
+        """
         self._stop_event.clear()
         cmd = [
             "xcrun", "simctl", "spawn", self._device_id,
@@ -156,6 +162,9 @@ class ConsoleMonitor:
             name=f"ConsoleMonitor-{self._device_id}",
         )
         self._reader_thread.start()
+        # Block briefly until at least one log entry is available so that
+        # callers don't race with the background reader on the first query.
+        self.wait_for_ready(timeout=2.0)
 
     def stop(self) -> None:
         """Terminate the log stream process and wait for the reader thread to exit."""
@@ -172,6 +181,34 @@ class ConsoleMonitor:
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=2.0)
             self._reader_thread = None
+
+    def wait_for_ready(self, timeout: float = 5.0) -> bool:
+        """Block until at least one log entry has been buffered, or *timeout* expires.
+
+        Useful after :meth:`start` to ensure the background reader has received
+        and parsed the first entries from the log stream before the caller
+        begins querying.  Also verifies that the subprocess is alive (its
+        ``poll()`` returns ``None``).
+
+        Args:
+            timeout: Maximum number of seconds to wait.  Defaults to ``5.0``.
+
+        Returns:
+            ``True`` when at least one entry was buffered within *timeout*,
+            ``False`` on timeout or if the subprocess exited unexpectedly.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            # Check that the subprocess is still running
+            if self._process is not None and self._process.poll() is not None:
+                # Process exited — no more entries will arrive
+                return False
+            with self._lock:
+                if len(self._buffer) > 0:
+                    return True
+            time.sleep(0.05)
+        with self._lock:
+            return len(self._buffer) > 0
 
     # ------------------------------------------------------------------
     # Internal: reader loop and entry ingestion
@@ -229,6 +266,13 @@ class ConsoleMonitor:
     def _add_entry(self, entry: LogEntry) -> None:
         """Add *entry* to the ring buffer (and error buffer if applicable).
 
+        ``entry.ingestion_time`` is set by the :class:`LogEntry` dataclass
+        ``field(default_factory=time.time)`` at construction time (inside
+        ``_parse_json_line``).  This gives a wall-clock timestamp for
+        ``recent()`` to use when the log's own timestamp string is stale or
+        far in the past.  We do not override it here so that test code that
+        constructs entries with explicit timestamps is not affected.
+
         Thread-safe: protected by ``_lock``.
 
         Args:
@@ -274,8 +318,8 @@ class ConsoleMonitor:
 
         results: list[LogEntry] = []
         for entry in snapshot:
-            entry_ts = _parse_timestamp(entry.timestamp)
-            if entry_ts < cutoff:
+            effective_ts = _effective_timestamp(entry)
+            if effective_ts < cutoff:
                 continue
             if level is not None and entry.level != level:
                 continue
@@ -299,7 +343,7 @@ class ConsoleMonitor:
             snapshot = list(self._error_buffer)
         return [
             e for e in snapshot
-            if _parse_timestamp(e.timestamp) >= cutoff
+            if _effective_timestamp(e) >= cutoff
         ]
 
     def search(self, pattern: str) -> list[LogEntry]:
@@ -406,3 +450,37 @@ def _parse_timestamp(timestamp: str) -> float:
         return dt.timestamp()
     except (ValueError, TypeError):
         return 0.0
+
+
+def _effective_timestamp(entry: "LogEntry") -> float:
+    """Return the best-effort effective timestamp for recency filtering.
+
+    Uses the log timestamp when it's valid and consistent with the ingestion
+    time (within a 1-hour tolerance).  Falls back to ``ingestion_time`` when:
+    - the log timestamp cannot be parsed (returns 0.0), or
+    - the log timestamp is more than 3600 seconds older than ingestion time
+      (indicating the entry's log clock is stale or from a replayed buffer).
+
+    This prevents real-time entries from being filtered out when the device's
+    log daemon emits timestamps that lag behind wall-clock time, while still
+    honouring test-injected entries whose log timestamps represent their
+    intended age.
+
+    Args:
+        entry: The :class:`LogEntry` to evaluate.
+
+    Returns:
+        A Unix epoch float suitable for comparing against ``time.time()``.
+    """
+    log_ts = _parse_timestamp(entry.timestamp)
+    ingestion = entry.ingestion_time
+
+    if log_ts == 0.0:
+        # Log timestamp unparseable — fall back to ingestion time
+        return ingestion if ingestion > 0 else 0.0
+
+    if ingestion > 0 and (ingestion - log_ts) > 3600:
+        # Log timestamp is more than 1 hour behind ingestion → use ingestion
+        return ingestion
+
+    return log_ts
