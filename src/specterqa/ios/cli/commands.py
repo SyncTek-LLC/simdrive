@@ -502,6 +502,35 @@ def run(
         )
         raise SystemExit(2)
 
+    # License check — dogfood bypass or trial mode
+    try:
+        from specterqa.ios.license.validator import LicenseValidator
+
+        env_license = os.environ.get("SPECTERQA_IOS_LICENSE", "").strip()
+        import warnings
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always")
+            validator = LicenseValidator(license_key=env_license)
+            lic = validator.validate()
+
+        if lic.get("tier") == "founder":
+            _print(
+                "[bold green]License:[/bold green] Founder tier "
+                f"(expires {lic.get('expires_at', '?')}, {lic.get('max_concurrent_sims')} sims)"
+            )
+        elif lic.get("tier") == "trial":
+            _print(
+                "[yellow]License:[/yellow] Trial mode — 1 simulator. "
+                "Set [bold]SPECTERQA_IOS_LICENSE=founder[/bold] to unlock all features."
+            )
+        else:
+            _print(
+                f"[dim]License:[/dim] {lic.get('tier', 'unknown')} "
+                f"({lic.get('max_concurrent_sims', 1)} sims)"
+            )
+    except Exception as _lic_exc:
+        logger.debug("License check skipped: %s", _lic_exc)
+
     # Resolve project directory and load configs
     project_dir = _resolve_project_dir()
 
