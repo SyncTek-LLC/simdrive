@@ -1,0 +1,37 @@
+name: Borrow and Read a Book
+product: palace-ios
+persona: new-patron
+
+steps:
+  - id: launch_app
+    goal: "Launch Palace app and wait for it to load."
+    checkpoint: "App loaded and catalog visible"
+
+  - id: browse_catalog
+    goal: "Browse the library catalog. Scroll through available books. Look for an available ebook (not on hold)."
+    checkpoint: "Viewing book list with available titles"
+    monitor:
+      - network: "*/feed*|*/opds*"
+
+  - id: select_book
+    goal: "Tap on an available ebook to see its details page."
+    checkpoint: "Book detail page showing title, author, and borrow button"
+
+  - id: borrow_book
+    goal: "Tap the Borrow or Get button to borrow the book."
+    checkpoint: "Book shows as borrowed or downloading"
+    monitor:
+      - network: "*/loans*|*/borrow*|*/fulfill*"
+      - console: "download|fulfill|borrow|DRM"
+
+  - id: open_book
+    goal: "Open the borrowed book. Wait for it to load in the reader."
+    checkpoint: "Book reader is open showing book content"
+
+  - id: read_pages
+    goal: "Read a few pages — swipe left or tap to advance 3 pages."
+    checkpoint: "Successfully advanced through book pages"
+
+  - id: return_to_shelf
+    goal: "Close the reader and return to My Books."
+    checkpoint: "Back at My Books screen showing borrowed book"

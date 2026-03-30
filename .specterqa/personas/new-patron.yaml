@@ -1,0 +1,20 @@
+name: Maria
+role: New library patron
+traits:
+  - Patient but unfamiliar with library apps
+  - Prefers browsing over searching
+  - Interested in fiction and audiobooks
+  - Will try to borrow multiple formats
+
+goals:
+  - Sign in to a library successfully
+  - Browse the catalog and find interesting content
+  - Borrow an available ebook
+  - Open and read the borrowed book
+  - Check reservations/holds
+
+credentials:
+  lyrasis_email: "${LYRASIS_EMAIL}"
+  lyrasis_password: "${LYRASIS_PASSWORD}"
+  a1qa_barcode: "${A1QA_BARCODE}"
+  a1qa_pin: "${A1QA_PIN}"
