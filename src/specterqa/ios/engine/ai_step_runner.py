@@ -150,7 +150,13 @@ class IOSAIStepRunner:
             # ----------------------------------------------------------------
             screenshot_b64: str = ""
             try:
-                screenshot_b64 = self._executor.screenshot()
+                raw = self._executor.screenshot()
+                # SimulatorDriver.screenshot() returns a dict with 'base64' key;
+                # extract the string for the decider.
+                if isinstance(raw, dict):
+                    screenshot_b64 = raw.get("base64", raw.get("data", ""))
+                else:
+                    screenshot_b64 = str(raw) if raw else ""
             except Exception as exc:
                 logger.warning("Screenshot failed at iteration %d: %s", iteration, exc)
 
