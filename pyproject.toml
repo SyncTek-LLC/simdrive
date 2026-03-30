@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Elastic-2.0"
 requires-python = ">=3.10"
 authors = [
-    {name = "SyncTek LLC", email = "engineering@synctek.io"},
+    {name = "SyncTek LLC", email = "info@synctek.io"},
 ]
 
 dependencies = [
