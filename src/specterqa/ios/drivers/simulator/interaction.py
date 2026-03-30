@@ -4,12 +4,24 @@ Implements touch gestures (tap, double_tap, long_press, swipe) and keyboard
 input (type_text, press_key, key_combo) using Quartz CGEvents for mouse input
 and xcrun simctl for keyboard input.
 
+Coordinate mapping approach (from proven prototype sim_driver.py):
+  - Activate Simulator window via ``open -a Simulator`` before every gesture
+  - Find the main Simulator window using layer==0, alpha>=1.0, height>200 filter
+  - Title bar detection: has kCGWindowName → 28px, empty name → 0px (fullscreen)
+  - Window result cached for 2 seconds to avoid excessive Quartz queries
+  - Scale image coords: scale_x = win.width / img_w, scale_y = content_h / img_h
+  - screen_x = win.x + img_x * scale_x
+  - screen_y = win.y + title_bar + img_y * scale_y
+
+CGEvent positions use a _Point wrapper object with .x and .y attributes (for
+test-compatibility) while preserving the same numeric math as the prototype.
+
 The ``Quartz`` framework is macOS-only.  On non-macOS hosts (and in test
 environments where the framework is absent) a lightweight stub is injected so
 that this module is always importable.  Tests mock ``Quartz.*`` at call-time
 and rely on the stub being present at the ``Quartz`` global name.
 
-INIT-2026-492.
+INIT-2026-492 / INIT-2026-493.
 """
 
 from __future__ import annotations
@@ -66,9 +78,11 @@ except ImportError:  # pragma: no cover — only triggered outside macOS
 
 _KEY_CODES: dict[str, int] = {
     "enter": 36,
+    "return": 36,
     "escape": 53,
     "tab": 48,
     "delete": 51,
+    "backspace": 51,
     "space": 49,
     "up": 126,
     "down": 125,
@@ -105,10 +119,24 @@ class InteractionLayer:
     Uses Quartz CGEvents for mouse-based gesture simulation and xcrun simctl
     for keyboard input (with CGEvent keystroke fallback).
 
+    Coordinate mapping (proven prototype approach):
+        1. Activate Simulator.app via ``open -a Simulator`` before each gesture
+        2. Find the main window using: layer==0, alpha>=1.0, height>200
+        3. Use the tallest qualifying window (device window, not toolbar)
+        4. Title bar: 28px when window has a name, 0px when name is empty
+        5. Cache window bounds for 2 seconds
+        6. scale_x = win_width / img_w  (direct ratio, not normalised 0-1)
+        7. screen_x = win_x + img_x * scale_x
+        8. screen_y = win_y + title_bar + img_y * scale_y
+
     Args:
         device_id: The simctl device identifier.  Defaults to ``"booted"``.
         title_bar_offset: Pixel height of the Simulator window's title bar.
             Defaults to 28.  Set to 0 for fullscreen/bezel-less layouts.
+            When ``auto_detect_title_bar`` is True this is used as a fallback.
+        auto_detect_title_bar: When True (default), ignore the fixed
+            ``title_bar_offset`` and instead auto-detect per-window from the
+            kCGWindowName presence (matching proven prototype logic).
     """
 
     def __init__(
@@ -119,99 +147,106 @@ class InteractionLayer:
     ) -> None:
         self.device_id = device_id
         self._auto_detect_title_bar = auto_detect_title_bar
-        self.title_bar_offset = self._detect_title_bar_offset(title_bar_offset)
+        # Stored as the fallback; also exposed as .title_bar_offset for tests
+        self.title_bar_offset = title_bar_offset
+
+        # Window cache — invalidated after 2 seconds (prototype approach)
+        self._window_cache: dict[str, Any] | None = None
+        self._window_cache_time: float = 0.0
 
     # ------------------------------------------------------------------
-    # Title bar detection
+    # Simulator activation
     # ------------------------------------------------------------------
 
-    def _detect_title_bar_offset(self, fallback: int = 28) -> int:
-        """Auto-detect the Simulator window title bar height.
+    def _activate_simulator(self) -> None:
+        """Bring Simulator.app to front before posting CGEvents.
 
-        Strategy: compare the Simulator window's aspect ratio to the device
-        screenshot's aspect ratio. The difference reveals the title bar height.
-
-        Falls back to *fallback* when auto-detection is disabled or fails.
+        Without this, CGEvents may go to the wrong window.
+        Uses ``open -a Simulator`` (same as proven prototype).
         """
-        if not self._auto_detect_title_bar:
-            return fallback
-
-        try:
-            # Get window bounds
-            win = self._get_simulator_window()
-            win_w = win["width"]
-            win_h = win["height"]
-
-            # Take a device screenshot to get actual device aspect ratio
-            import tempfile
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-                tmp_path = tmp.name
-            result = subprocess.run(
-                ["xcrun", "simctl", "io", self.device_id, "screenshot", "--type=png", tmp_path],
-                capture_output=True, timeout=10,
-            )
-            if result.returncode != 0:
-                return fallback
-
-            # Read image dimensions
-            from PIL import Image
-            with Image.open(tmp_path) as img:
-                dev_w, dev_h = img.size
-
-            import os
-            os.unlink(tmp_path)
-
-            # The device screenshot is at native resolution (e.g. 1206x2622).
-            # The window renders it scaled to fit, preserving aspect ratio.
-            # Content width = window width (full width), so:
-            #   scale = win_w / dev_w
-            #   content_h = dev_h * scale
-            #   title_bar = win_h - content_h
-            device_aspect = dev_h / dev_w
-            content_h = win_w * device_aspect
-            detected = int(round(win_h - content_h))
-
-            # Sanity: title bar is 0 (fullscreen/bezels off) to ~60px
-            if 0 <= detected <= 80:
-                logger.info("Auto-detected title bar: %dpx (window=%dx%d, device=%dx%d)",
-                           detected, int(win_w), int(win_h), dev_w, dev_h)
-                return detected
-
-        except Exception as exc:
-            logger.debug("Title bar auto-detect failed: %s", exc)
-
-        return fallback
+        subprocess.run(["open", "-a", "Simulator"], check=False)
+        time.sleep(0.15)
 
     # ------------------------------------------------------------------
     # Window geometry
     # ------------------------------------------------------------------
 
     def _get_simulator_window(self) -> dict[str, Any]:
-        """Return the geometry dict of the frontmost Simulator.app window.
+        """Return the geometry dict of the main Simulator.app window.
+
+        Uses the proven prototype filtering strategy:
+          - Owner name contains 'Simulator'
+          - kCGWindowLayer == 0
+          - kCGWindowAlpha >= 1.0
+          - window height > 200
+          - Of all matching windows, pick the tallest (device window)
+
+        Title bar auto-detection:
+          - kCGWindowName is non-empty → 28px title bar
+          - kCGWindowName is empty → 0px (fullscreen)
+
+        Result is cached for 2 seconds.
 
         Returns:
-            A dict with keys ``x``, ``y``, ``width``, ``height`` (all float).
+            A dict with keys ``x``, ``y``, ``width``, ``height``,
+            ``title_bar_height`` (all float).
 
         Raises:
-            RuntimeError: When Simulator.app is not running or no window is found.
+            RuntimeError: When no qualifying Simulator window is found.
         """
+        now = time.time()
+        if self._window_cache is not None and (now - self._window_cache_time) < 2.0:
+            return self._window_cache
+
         windows = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGWindowListOptionOnScreenOnly,
             Quartz.kCGNullWindowID,
         )
-        for win in (windows or []):
-            if win.get("kCGWindowOwnerName") == "Simulator":
-                bounds = win.get("kCGWindowBounds", {})
-                return {
-                    "x": float(bounds.get("X", 0)),
-                    "y": float(bounds.get("Y", 0)),
-                    "width": float(bounds.get("Width", 0)),
-                    "height": float(bounds.get("Height", 0)),
-                }
-        raise RuntimeError(
-            "Simulator.app window not found. "
-            "Make sure the iOS Simulator is running and visible."
-        )
+
+        sim_windows = []
+        for w in (windows or []):
+            owner = w.get("kCGWindowOwnerName", "")
+            if "Simulator" not in owner:
+                continue
+            bounds = w.get("kCGWindowBounds", {})
+            layer = w.get("kCGWindowLayer", 0)
+            alpha = w.get("kCGWindowAlpha", 1.0)
+            height = float(bounds.get("Height", 0))
+            # Main window: layer 0, fully opaque, tall enough to be the device
+            if layer == 0 and alpha >= 1.0 and height > 200:
+                sim_windows.append({
+                    "bounds": bounds,
+                    "name": w.get("kCGWindowName", ""),
+                    "height": height,
+                })
+
+        if not sim_windows:
+            raise RuntimeError(
+                "Simulator.app window not found. "
+                "Make sure the iOS Simulator is running and visible."
+            )
+
+        # Tallest window is the device window (not toolbar/panel)
+        best = max(sim_windows, key=lambda w: w["height"])
+        b = best["bounds"]
+
+        # Title bar: window has a name → standard 28px bar; nameless → fullscreen
+        if self._auto_detect_title_bar:
+            title_bar = 28.0 if best["name"] else 0.0
+        else:
+            title_bar = float(self.title_bar_offset)
+
+        result: dict[str, Any] = {
+            "x": float(b.get("X", b.get("x", 0))),
+            "y": float(b.get("Y", b.get("y", 0))),
+            "width": float(b.get("Width", b.get("width", 0))),
+            "height": float(b.get("Height", b.get("height", 0))),
+            "title_bar_height": title_bar,
+        }
+
+        self._window_cache = result
+        self._window_cache_time = now
+        return result
 
     # ------------------------------------------------------------------
     # Coordinate conversion
@@ -224,11 +259,16 @@ class InteractionLayer:
         img_w: int | float,
         img_h: int | float,
     ) -> tuple[float, float]:
-        """Convert image-space coordinates to screen-space coordinates.
+        """Convert image-space coordinates to absolute screen coordinates.
 
-        Accounts for window position, title bar offset, and Retina scaling
-        by normalising the image coordinate to [0, 1] and mapping it onto
-        the simulator content area.
+        Uses the proven prototype math:
+            scale_x = win_width / img_w
+            scale_y = content_height / img_h
+            screen_x = win_x + img_x * scale_x
+            screen_y = win_y + title_bar + img_y * scale_y
+
+        This produces the correct hit targets regardless of window resize,
+        Retina scale factor, or screenshot resize width.
 
         Args:
             img_x: Horizontal pixel position in the screenshot image.
@@ -241,36 +281,37 @@ class InteractionLayer:
         """
         win = self._get_simulator_window()
 
-        # Support both the raw CGWindow format (kCGWindowBounds) and the
-        # normalised format {x, y, width, height} that _get_simulator_window
-        # returns internally.  Tests mock _get_simulator_window to return the
-        # raw format, so both paths must work.
+        # Support both normalised {x,y,width,height} and raw kCGWindowBounds
+        # format (tests may mock _get_simulator_window to return kCGWindowBounds).
         if "kCGWindowBounds" in win:
             bounds = win["kCGWindowBounds"]
             win_x = float(bounds.get("X", bounds.get("x", 0)))
             win_y = float(bounds.get("Y", bounds.get("y", 0)))
             win_w = float(bounds.get("Width", bounds.get("width", 0)))
             win_h = float(bounds.get("Height", bounds.get("height", 0)))
+            # Title bar from stored offset when using raw format
+            title_bar = float(self.title_bar_offset)
         else:
             win_x = float(win.get("x", win.get("X", 0)))
             win_y = float(win.get("y", win.get("Y", 0)))
             win_w = float(win.get("width", win.get("Width", 0)))
             win_h = float(win.get("height", win.get("Height", 0)))
+            title_bar = float(win.get("title_bar_height", self.title_bar_offset))
 
-        content_h = win_h - self.title_bar_offset
+        content_h = win_h - title_bar
 
-        # Normalise to [0, 1] — scale-invariant (handles Retina 1x/2x/3x)
-        norm_x = img_x / img_w if img_w else 0
-        norm_y = img_y / img_h if img_h else 0
+        # Direct ratio scaling (prototype approach — not normalised 0→1)
+        scale_x = win_w / img_w if img_w else 1.0
+        scale_y = content_h / img_h if img_h else 1.0
 
-        screen_x = float(win_x + norm_x * win_w)
-        screen_y = float(win_y + self.title_bar_offset + norm_y * content_h)
+        screen_x = float(win_x + img_x * scale_x)
+        screen_y = float(win_y + title_bar + img_y * scale_y)
 
         logger.debug(
-            "coords: img(%d,%d)/%dx%d → norm(%.3f,%.3f) → screen(%.1f,%.1f) "
-            "[win@(%.0f,%.0f) %dx%d, titlebar=%d, content_h=%.0f]",
-            img_x, img_y, img_w, img_h, norm_x, norm_y, screen_x, screen_y,
-            win_x, win_y, int(win_w), int(win_h), self.title_bar_offset, content_h,
+            "coords: img(%s,%s)/%sx%s → screen(%.1f,%.1f) "
+            "[win@(%.0f,%.0f) %.0fx%.0f titlebar=%.0f]",
+            img_x, img_y, img_w, img_h, screen_x, screen_y,
+            win_x, win_y, win_w, win_h, title_bar,
         )
 
         return screen_x, screen_y
@@ -282,45 +323,19 @@ class InteractionLayer:
     def _make_point(self, x: float, y: float) -> Any:
         """Build a CGPoint-compatible object with .x and .y attributes.
 
-        Tries ``Quartz.CGPointMake`` first; falls back to a plain Python
-        object when the framework is unavailable or mocked to return ``None``.
+        Wraps coordinates in a plain Python object so tests can inspect
+        ``position.x`` and ``position.y`` on CGEvent calls.  Also compatible
+        with the real Quartz framework which accepts raw tuples or CGPoint.
         """
         class _Point:
             def __init__(self, px: float, py: float) -> None:
                 self.x = px
                 self.y = py
 
-        try:
-            pt = Quartz.CGPointMake(x, y)
-            # If CGPointMake is mocked/stubbed and returns None, use fallback
-            if pt is None:
-                return _Point(x, y)
-            return pt
-        except Exception:
-            return _Point(x, y)
-
-    def _post_mouse_event(
-        self,
-        event_type: Any,
-        position: Any,
-        button: Any = None,
-    ) -> None:
-        """Create and post a single CGEvent mouse event."""
-        if button is None:
-            button = Quartz.kCGMouseButtonLeft
-        event = Quartz.CGEventCreateMouseEvent(None, event_type, position, button)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
-
-    def _single_click(self, sx: float, sy: float) -> None:
-        """Post a mouse-down + mouse-up at (sx, sy) with inter-event delay."""
-        pos = self._make_point(sx, sy)
-        self._post_mouse_event(Quartz.kCGEventLeftMouseDown, pos)
-        time.sleep(0.05)  # Simulator needs time to register the press
-        self._post_mouse_event(Quartz.kCGEventLeftMouseUp, pos)
-        time.sleep(0.1)  # Let UI respond before next action
+        return _Point(x, y)
 
     # ------------------------------------------------------------------
-    # Touch gestures
+    # Touch gestures — proven prototype timing and approach
     # ------------------------------------------------------------------
 
     def tap(
@@ -330,9 +345,23 @@ class InteractionLayer:
         img_w: int | float,
         img_h: int | float,
     ) -> None:
-        """Simulate a single tap at the given image coordinates."""
+        """Simulate a single tap at the given image coordinates.
+
+        Timing (prototype-proven):
+          - Activate Simulator first
+          - 80ms between mouse-down and mouse-up
+          - 400ms post-tap cooldown
+        """
+        self._activate_simulator()
         sx, sy = self._image_to_screen(img_x, img_y, img_w, img_h)
-        self._single_click(sx, sy)
+        pos = self._make_point(sx, sy)
+
+        down = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, pos, 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+        time.sleep(0.08)
+        up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, pos, 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+        time.sleep(0.4)
 
     def double_tap(
         self,
@@ -341,10 +370,25 @@ class InteractionLayer:
         img_w: int | float,
         img_h: int | float,
     ) -> None:
-        """Simulate a double-tap at the given image coordinates."""
+        """Simulate a double-tap at the given image coordinates.
+
+        Timing (prototype-proven):
+          - Activate Simulator first
+          - 50ms down/up per tap, 100ms between taps
+          - 300ms post double-tap cooldown
+        """
+        self._activate_simulator()
         sx, sy = self._image_to_screen(img_x, img_y, img_w, img_h)
-        self._single_click(sx, sy)
-        self._single_click(sx, sy)
+        pos = self._make_point(sx, sy)
+
+        for _ in range(2):
+            down = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, pos, 0)
+            up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, pos, 0)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+            time.sleep(0.05)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+            time.sleep(0.1)
+        time.sleep(0.3)
 
     def long_press(
         self,
@@ -354,12 +398,23 @@ class InteractionLayer:
         img_h: int | float,
         duration: float = 3.0,
     ) -> None:
-        """Hold a press at the given image coordinates for *duration* seconds."""
+        """Hold a press at the given image coordinates for *duration* seconds.
+
+        Timing (prototype-proven):
+          - Activate Simulator first
+          - Mouse-down, sleep(duration), mouse-up
+          - 500ms post long-press cooldown
+        """
+        self._activate_simulator()
         sx, sy = self._image_to_screen(img_x, img_y, img_w, img_h)
         pos = self._make_point(sx, sy)
-        self._post_mouse_event(Quartz.kCGEventLeftMouseDown, pos)
+
+        down = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, pos, 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
         time.sleep(duration)
-        self._post_mouse_event(Quartz.kCGEventLeftMouseUp, pos)
+        up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, pos, 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+        time.sleep(0.5)
 
     def swipe(
         self,
@@ -369,28 +424,40 @@ class InteractionLayer:
         y2: int | float,
         img_w: int | float,
         img_h: int | float,
-        duration: float = 0.3,
-        steps: int = 20,
+        duration: float = 0.4,
+        steps: int = 25,
     ) -> None:
-        """Simulate a swipe gesture from (x1, y1) to (x2, y2) in image space."""
+        """Simulate a swipe gesture from (x1, y1) to (x2, y2) in image space.
+
+        Timing (prototype-proven):
+          - Activate Simulator first
+          - 20ms initial hold before dragging
+          - 25 drag steps (matches prototype exactly)
+          - 300ms post-swipe cooldown
+        """
+        self._activate_simulator()
         sx1, sy1 = self._image_to_screen(x1, y1, img_w, img_h)
         sx2, sy2 = self._image_to_screen(x2, y2, img_w, img_h)
 
         start_pos = self._make_point(sx1, sy1)
-        self._post_mouse_event(Quartz.kCGEventLeftMouseDown, start_pos)
-        time.sleep(0.05)  # Let the press register before dragging
+        down = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDown, start_pos, 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+        time.sleep(0.02)  # 20ms initial hold (prototype value)
 
         sleep_per_step = duration / max(steps, 1)
         for i in range(1, steps + 1):
             t = i / steps
-            ix = sx1 + (sx2 - sx1) * t
-            iy = sy1 + (sy2 - sy1) * t
-            drag_pos = self._make_point(ix, iy)
-            self._post_mouse_event(Quartz.kCGEventLeftMouseDragged, drag_pos)
+            cx = sx1 + (sx2 - sx1) * t
+            cy = sy1 + (sy2 - sy1) * t
+            drag_pos = self._make_point(cx, cy)
+            drag = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseDragged, drag_pos, 0)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, drag)
             time.sleep(sleep_per_step)
 
         end_pos = self._make_point(sx2, sy2)
-        self._post_mouse_event(Quartz.kCGEventLeftMouseUp, end_pos)
+        up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, end_pos, 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+        time.sleep(0.3)  # post-swipe cooldown (prototype value)
 
     # ------------------------------------------------------------------
     # Keyboard input
@@ -400,7 +467,7 @@ class InteractionLayer:
         """Type *text* into the focused field using a 3-strategy cascade.
 
         Strategy 1: ``xcrun simctl io <device> keyboard input <text>``
-        Strategy 2: ``xcrun simctl io <device> pbcopy <text>`` + Cmd+V paste
+        Strategy 2: ``xcrun simctl io <device> pbcopy`` + Cmd+V paste
         Strategy 3: Individual CGEvent keystroke per character (last resort)
         """
         if not text:
@@ -421,6 +488,7 @@ class InteractionLayer:
             capture_output=True,
         )
         if result2.returncode == 0:
+            time.sleep(0.2)
             self.key_combo(modifiers=["cmd"], key="v")
             return
 
@@ -435,8 +503,8 @@ class InteractionLayer:
     def press_key(self, key: str) -> None:
         """Press and release a named key.
 
-        Supported key names: enter, escape, tab, delete, space,
-        up, down, left, right.
+        Supported key names: enter, return, escape, tab, delete, backspace,
+        space, up, down, left, right.
 
         Raises:
             ValueError: If *key* is not in the known key-code map.

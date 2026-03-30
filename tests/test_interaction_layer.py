@@ -281,6 +281,7 @@ class TestTap:
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
 
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent") as mock_cg_create, \
              patch("Quartz.CGEventPost") as mock_cg_post:
             mock_event = MagicMock()
@@ -305,6 +306,7 @@ class TestTap:
             return MagicMock()
 
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", side_effect=capture_event), \
              patch("Quartz.CGEventPost"):
             layer.tap(img_x=195, img_y=0, img_w=390, img_h=844)
@@ -319,6 +321,7 @@ class TestTap:
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
              patch("Quartz.CGEventPost"):
             layer.tap(img_x=100, img_y=200, img_w=390, img_h=844)  # Must not raise
@@ -338,6 +341,7 @@ class TestDoubleTap:
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()) as mock_create, \
              patch("Quartz.CGEventPost"):
             layer.double_tap(img_x=100, img_y=200, img_w=390, img_h=844)
@@ -356,6 +360,7 @@ class TestDoubleTap:
             return MagicMock()
 
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", side_effect=capture), \
              patch("Quartz.CGEventPost"):
             layer.double_tap(img_x=150, img_y=300, img_w=390, img_h=844)
@@ -378,13 +383,19 @@ class TestLongPress:
     """long_press() holds mouse button for the specified duration."""
 
     def test_long_press_sends_mouse_down_then_up(self):
-        """long_press() must send mouse-down, wait, then mouse-up."""
+        """long_press() must send mouse-down, wait, then mouse-up.
+
+        Prototype timing: sleep(duration) + sleep(0.5) post-cooldown.
+        _activate_simulator is mocked so its 0.15s overhead is excluded.
+        Total for duration=1.5: 1.5 + 0.5 = 2.0s.
+        """
         import time
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         call_log: list[str] = []
 
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
              patch("Quartz.CGEventPost", side_effect=lambda tap, ev: call_log.append("post")), \
              patch("time.sleep", side_effect=lambda d: call_log.append(f"sleep:{d}")):
@@ -393,25 +404,35 @@ class TestLongPress:
         # There should be at least one sleep call with ≈1.5 seconds
         sleep_calls = [c for c in call_log if c.startswith("sleep:")]
         assert len(sleep_calls) >= 1, "long_press must sleep to hold the button"
+        # Prototype adds a 0.5s post-cooldown: total = duration + 0.5
         total_sleep = sum(float(c.split(":")[1]) for c in sleep_calls)
-        assert abs(total_sleep - 1.5) < 0.2, (
-            f"Expected ≈1.5s total sleep for long_press, got {total_sleep}"
+        expected_total = 1.5 + 0.5  # duration + post-cooldown
+        assert abs(total_sleep - expected_total) < 0.2, (
+            f"Expected ≈{expected_total}s total sleep for long_press(1.5), got {total_sleep}"
         )
 
     def test_long_press_default_duration(self):
-        """long_press() default duration is 3.0 seconds when not specified."""
+        """long_press() default duration is 3.0 seconds when not specified.
+
+        Prototype timing: sleep(3.0) + sleep(0.5) post-cooldown = 3.5s total.
+        _activate_simulator is mocked so its 0.15s overhead is excluded.
+        """
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         sleep_durations: list[float] = []
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
+        with patch.object(layer, "_activate_simulator"), \
+             patch.object(layer, "_get_simulator_window", return_value=window), \
              patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
              patch("Quartz.CGEventPost"), \
              patch("time.sleep", side_effect=lambda d: sleep_durations.append(d)):
             layer.long_press(img_x=100, img_y=200, img_w=390, img_h=844)
 
         total = sum(sleep_durations)
-        assert abs(total - 3.0) < 0.2, f"Expected ≈3.0s default long_press duration, got {total}"
+        expected_total = 3.0 + 0.5  # default duration + post-cooldown
+        assert abs(total - expected_total) < 0.2, (
+            f"Expected ≈{expected_total}s total long_press sleep (default), got {total}"
+        )
 
 
 # ===========================================================================
@@ -430,6 +451,7 @@ class TestSwipe:
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
 
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()) as mock_create, \
              patch("Quartz.CGEventPost"):
             layer.swipe(x1=195, y1=700, x2=195, y2=200, img_w=390, img_h=844)
@@ -440,19 +462,31 @@ class TestSwipe:
         )
 
     def test_swipe_duration_controls_sleep(self):
-        """swipe() with duration=0.5 should sleep ~0.5 seconds total across drag steps."""
+        """swipe() with duration=0.5 should sleep ~0.5 seconds across drag steps.
+
+        Prototype timing breakdown (with _activate_simulator mocked):
+          - 0.02s initial hold before dragging
+          - duration (0.5s) spread across 25 drag steps
+          - 0.3s post-swipe cooldown
+          Total: 0.02 + 0.5 + 0.3 = 0.82s
+        """
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         sleep_durations: list[float] = []
 
         with patch.object(layer, "_get_simulator_window", return_value=window), \
+             patch.object(layer, "_activate_simulator"), \
              patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
              patch("Quartz.CGEventPost"), \
              patch("time.sleep", side_effect=lambda d: sleep_durations.append(d)):
             layer.swipe(x1=195, y1=700, x2=195, y2=200, img_w=390, img_h=844, duration=0.5)
 
         total = sum(sleep_durations)
-        assert abs(total - 0.5) < 0.15, f"Expected ≈0.5s total swipe sleep, got {total}"
+        # 0.02 (initial hold) + 0.5 (drag steps) + 0.3 (post-swipe cooldown) = 0.82
+        expected_total = 0.02 + 0.5 + 0.3
+        assert abs(total - expected_total) < 0.15, (
+            f"Expected ≈{expected_total}s total swipe sleep, got {total}"
+        )
 
 
 # ===========================================================================
