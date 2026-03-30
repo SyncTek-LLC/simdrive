@@ -14,8 +14,11 @@ from the iOS CLI group via ``specterqa ios init``.
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 from pathlib import Path
+from typing import Optional
 
 import click
 from rich.console import Console
@@ -23,6 +26,44 @@ from rich.panel import Panel
 from rich.tree import Tree
 
 console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Simulator auto-detection helper
+# ---------------------------------------------------------------------------
+
+
+def _detect_booted_simulator() -> Optional[dict]:
+    """Return info about the currently-booted simulator, or None.
+
+    Runs ``xcrun simctl list devices booted --json`` and returns the first
+    booted device's dict with keys: ``udid``, ``name``, ``runtime``.
+
+    Returns:
+        Dict with ``udid``, ``name``, ``runtime`` keys, or None if no
+        simulator is booted or xcrun is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "booted", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        for runtime_id, devices in data.get("devices", {}).items():
+            for dev in devices:
+                if dev.get("state") == "Booted":
+                    return {
+                        "udid": dev.get("udid", "booted"),
+                        "name": dev.get("name", "iPhone Simulator"),
+                        "runtime": runtime_id,
+                    }
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -37,8 +78,13 @@ product:
 
   # iOS-specific fields
   bundle_id: "com.example.{slug}"          # replace with your app's bundle identifier
-  device_name: "iPhone 15"                  # preferred simulator model
+  device_name: "{device_name}"              # preferred simulator model
   ios_version: "17"                         # minimum iOS version
+  simulator_id: "{simulator_id}"            # UDID of simulator (or "booted")
+
+  # Log subsystem filter — set to your app's subsystem for targeted console monitoring
+  # e.g. "com.example.{slug}"
+  log_subsystem: "{log_subsystem}"
 
   # Optional: path to .app bundle (set at runtime or via --app flag)
   # app_path: "./build/Debug-iphonesimulator/{display_name}.app"
@@ -153,11 +199,23 @@ def scaffold_ios_project(
         path.write_text(content, encoding="utf-8")
         files_written.append(path)
 
+    # Auto-detect booted simulator for template pre-population
+    booted = _detect_booted_simulator()
+    simulator_id = booted["udid"] if booted else "booted"
+    device_name = booted["name"] if booted else "iPhone 15"
+    log_subsystem = f"com.example.{app_slug}"
+
     # Product config
     product_yaml = project_dir / "products" / f"{app_slug}.yaml"
     _write(
         product_yaml,
-        _IOS_PRODUCT_TEMPLATE.format(slug=app_slug, display_name=display_name),
+        _IOS_PRODUCT_TEMPLATE.format(
+            slug=app_slug,
+            display_name=display_name,
+            simulator_id=simulator_id,
+            device_name=device_name,
+            log_subsystem=log_subsystem,
+        ),
     )
 
     # Persona config

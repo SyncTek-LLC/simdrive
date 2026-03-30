@@ -112,9 +112,72 @@ class InteractionLayer:
         self,
         device_id: str = "booted",
         title_bar_offset: int = 28,
+        auto_detect_title_bar: bool = True,
     ) -> None:
         self.device_id = device_id
-        self.title_bar_offset = title_bar_offset
+        self._auto_detect_title_bar = auto_detect_title_bar
+        self.title_bar_offset = self._detect_title_bar_offset(title_bar_offset)
+
+    # ------------------------------------------------------------------
+    # Title bar detection
+    # ------------------------------------------------------------------
+
+    def _detect_title_bar_offset(self, fallback: int = 28) -> int:
+        """Auto-detect the Simulator window title bar height in points.
+
+        Compares the full window bounds from ``CGWindowListCopyWindowInfo``
+        against the content inset by looking for the smallest ``Y``-origin
+        window that belongs to Simulator.app.  Falls back to *fallback* (28 px)
+        when auto-detection is disabled or the Simulator window cannot be found.
+
+        Args:
+            fallback: Default offset to use when auto-detection fails or is
+                disabled.  Defaults to ``28``.
+
+        Returns:
+            Detected title bar height in points, or *fallback* on failure.
+        """
+        if not self._auto_detect_title_bar:
+            return fallback
+
+        try:
+            windows = Quartz.CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                Quartz.kCGNullWindowID,
+            )
+            if not windows:
+                return fallback
+
+            # Collect all Simulator windows sorted by Y origin (topmost first)
+            sim_windows = [
+                w for w in windows
+                if w.get("kCGWindowOwnerName") == "Simulator"
+            ]
+            if not sim_windows:
+                return fallback
+
+            # Use the outermost (main app) window — the one with the smallest Y
+            main_win = min(sim_windows, key=lambda w: w.get("kCGWindowBounds", {}).get("Y", 9999))
+            bounds = main_win.get("kCGWindowBounds", {})
+            full_height = float(bounds.get("Height", 0))
+
+            # The content window is the next Simulator window with the largest Y
+            content_wins = [
+                w for w in sim_windows
+                if w is not main_win and w.get("kCGWindowBounds", {}).get("Height", 0) < full_height
+            ]
+            if content_wins:
+                content_win = max(content_wins, key=lambda w: w.get("kCGWindowBounds", {}).get("Height", 0))
+                content_height = float(content_win.get("kCGWindowBounds", {}).get("Height", 0))
+                detected = int(full_height - content_height)
+                # Sanity check: title bar is typically 20–60 px
+                if 10 <= detected <= 80:
+                    return detected
+
+        except Exception:
+            pass
+
+        return fallback
 
     # ------------------------------------------------------------------
     # Window geometry

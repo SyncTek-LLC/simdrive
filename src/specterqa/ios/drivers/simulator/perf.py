@@ -45,7 +45,17 @@ class PerfProfiler:
     # ------------------------------------------------------------------
 
     def _get_app_pid(self) -> Optional[int]:
-        """Return the PID for bundle_id from launchctl list, or None if not running."""
+        """Return the PID for bundle_id, or None if not running.
+
+        Strategy 1: ``xcrun simctl spawn <device> launchctl list`` — works when
+        the simctl spawn pathway is available and the app is registered with
+        launchctl inside the simulator.
+
+        Strategy 2 (fallback): ``ps aux | grep <bundle_id>`` — simulator apps
+        run as native host processes on macOS, so the bundle ID often appears
+        in the process argument list even when launchctl doesn't expose it.
+        """
+        # Strategy 1: simctl launchctl
         result = subprocess.run(
             ["xcrun", "simctl", "spawn", self.device_id, "launchctl", "list"],
             capture_output=True,
@@ -56,9 +66,30 @@ class PerfProfiler:
             if len(parts) >= 3 and parts[2].strip() == self.bundle_id:
                 try:
                     pid = int(parts[0].strip())
-                    return pid
+                    if pid > 0:
+                        return pid
                 except ValueError:
-                    return None
+                    pass
+
+        # Strategy 2: host ps aux — simulator app processes appear on the host
+        try:
+            ps_result = subprocess.run(
+                ["ps", "aux"],
+                capture_output=True,
+                text=True,
+            )
+            for line in ps_result.stdout.splitlines():
+                if self.bundle_id in line:
+                    # ps aux columns: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            return int(parts[1])
+                        except ValueError:
+                            pass
+        except Exception:
+            pass
+
         return None
 
     def _get_memory(self, pid: int) -> float:
