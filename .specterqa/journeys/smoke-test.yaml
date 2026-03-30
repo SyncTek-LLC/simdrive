@@ -1,0 +1,18 @@
+name: Example Reader Smoke Test
+product: example-ios
+persona: new-patron
+
+steps:
+  - id: launch
+    goal: "Launch Example Reader and verify it starts without crashing."
+    checkpoint: "App launched, no crash detected"
+
+  - id: navigate_tabs
+    goal: "Tap through the main navigation tabs — Catalog, My Books, Reservations, Settings."
+    checkpoint: "All tabs accessible without errors"
+    monitor:
+      - console: "error|fault|exception|crash"
+
+  - id: check_settings
+    goal: "Open Settings. Verify the settings screen loads with account and app options."
+    checkpoint: "Settings screen visible with options"
