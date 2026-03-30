@@ -274,6 +274,48 @@ class SimulatorDriver:
         except Exception as exc:
             return {"success": False, "action": "scroll", "error": str(exc)}
 
+    def _scroll_at(
+        self,
+        x: int,
+        y: int,
+        direction: str = "down",
+        amount: int = 3,
+    ) -> dict[str, Any]:
+        """Scroll from a specific coordinate (prototype-style).
+
+        Maps direction + amount to a swipe gesture originating at (x, y).
+        This is used when the AI specifies a scroll coordinate (e.g. to scroll
+        a specific list rather than the whole screen).
+
+        Args:
+            x, y: Screen coordinate in screenshot pixels.
+            direction: One of ``"up"``, ``"down"``, ``"left"``, ``"right"``.
+            amount: Number of scroll units (each unit ≈ 100px).
+
+        Returns:
+            Dict with ``success`` (bool) and ``action`` (str).
+        """
+        try:
+            img_w = self._last_img_width or 1024
+            img_h = self._last_img_height or 2226
+            distance = amount * 100
+
+            if direction == "down":
+                x1, y1, x2, y2 = x, y, x, y - distance
+            elif direction == "up":
+                x1, y1, x2, y2 = x, y, x, y + distance
+            elif direction == "left":
+                x1, y1, x2, y2 = x, y, x - distance, y
+            elif direction == "right":
+                x1, y1, x2, y2 = x, y, x + distance, y
+            else:
+                x1, y1, x2, y2 = x, y, x, y - distance
+
+            self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
+            return {"success": True, "action": "scroll"}
+        except Exception as exc:
+            return {"success": False, "action": "scroll", "error": str(exc)}
+
     def keyboard(self, key: str) -> dict[str, Any]:
         """Press a named key on the simulator.
 
@@ -306,11 +348,32 @@ class SimulatorDriver:
     # ------------------------------------------------------------------
 
     def execute(self, decision) -> dict[str, Any]:
-        """Dispatch a Decision to the appropriate action method.
+        """Dispatch a Decision (or raw computer_use dict) to the appropriate action.
 
-        This is the unified interface expected by IOSAIStepRunner.
-        Maps decision.action to click/fill/scroll/keyboard/wait.
+        Handles two input formats:
+
+        1. **Decision objects** (from ComputerUseDecider / IOSAIStepRunner):
+           - decision.action == "click"    → decision.target = "x,y"
+           - decision.action == "fill"     → decision.value = text
+           - decision.action == "scroll"   → decision.value = direction
+           - decision.action == "keyboard" → decision.value = key name
+           - decision.action == "wait"     → 1s sleep
+
+        2. **Raw computer_use dicts** (for direct/prototype use):
+           - {"action": "left_click",   "coordinate": [x, y]}
+           - {"action": "screenshot"}
+           - {"action": "type",         "text": "..."}
+           - {"action": "key",          "key": "Return"}
+           - {"action": "scroll",       "coordinate": [x, y],
+                                        "direction": "down", "amount": 3}
+           - {"action": "left_click_drag", "start_coordinate": [x, y],
+                                           "coordinate": [x2, y2]}
         """
+        # Raw dict format (computer_use protocol)
+        if isinstance(decision, dict):
+            return self._execute_raw(decision)
+
+        # Decision object format (IOSAIStepRunner protocol)
         action = getattr(decision, "action", None) or ""
         try:
             if action == "click":
@@ -322,18 +385,107 @@ class SimulatorDriver:
             elif action == "fill":
                 return self.fill(getattr(decision, "value", ""))
             elif action == "scroll":
-                value = getattr(decision, "value", "down")
-                return self.scroll(direction=str(value))
+                direction = str(getattr(decision, "value", "down"))
+                # target may contain the scroll coordinate, e.g. "512,900"
+                coord_str = str(getattr(decision, "target", "") or "")
+                if coord_str and "," in coord_str:
+                    parts = coord_str.split(",")
+                    try:
+                        sx = int(float(parts[0].strip()))
+                        sy = int(float(parts[1].strip()))
+                        return self._scroll_at(sx, sy, direction)
+                    except (ValueError, IndexError):
+                        pass
+                return self.scroll(direction=direction)
             elif action == "keyboard":
                 return self.keyboard(getattr(decision, "value", ""))
             elif action == "wait":
-                return self.wait(1.0)
+                dur = getattr(decision, "value", None)
+                secs = float(dur) if dur else 1.0
+                return self.wait(secs)
             elif action in ("done", "stuck"):
                 return {"success": True, "action": action}
             else:
                 return {"success": False, "action": action, "error": f"Unknown action: {action}"}
         except Exception as exc:
             return {"success": False, "action": action, "error": str(exc)}
+
+    def _execute_raw(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Execute a raw computer_use tool action dict.
+
+        Maps the Claude Computer Use API format directly to driver methods.
+        Used when the driver is invoked without ComputerUseDecider translation.
+        """
+        action_type = action.get("action", "")
+
+        if action_type == "screenshot":
+            return self.screenshot()
+
+        elif action_type in ("left_click", "click"):
+            coord = action.get("coordinate", [0, 0])
+            return self.click(int(coord[0]), int(coord[1]))
+
+        elif action_type == "double_click":
+            coord = action.get("coordinate", [0, 0])
+            try:
+                img_w = self._last_img_width or 1024
+                img_h = self._last_img_height or 2226
+                self._interaction.double_tap(
+                    int(coord[0]), int(coord[1]), img_w, img_h
+                )
+                return {"success": True, "action": "double_click"}
+            except Exception as exc:
+                return {"success": False, "action": "double_click", "error": str(exc)}
+
+        elif action_type in ("right_click", "long_press"):
+            coord = action.get("coordinate", [0, 0])
+            dur = float(action.get("duration", 3.0))
+            try:
+                img_w = self._last_img_width or 1024
+                img_h = self._last_img_height or 2226
+                self._interaction.long_press(
+                    int(coord[0]), int(coord[1]), img_w, img_h, duration=dur
+                )
+                return {"success": True, "action": action_type}
+            except Exception as exc:
+                return {"success": False, "action": action_type, "error": str(exc)}
+
+        elif action_type == "type":
+            return self.fill(action.get("text", ""))
+
+        elif action_type == "key":
+            return self.keyboard(action.get("key", ""))
+
+        elif action_type == "scroll":
+            coord = action.get("coordinate", None)
+            direction = action.get("direction", "down")
+            amount = int(action.get("amount", 3))
+            if coord:
+                return self._scroll_at(int(coord[0]), int(coord[1]), direction, amount)
+            return self.scroll(direction=direction, amount=amount)
+
+        elif action_type == "left_click_drag":
+            start = action.get("start_coordinate", [0, 0])
+            end = action.get("coordinate", [0, 0])
+            try:
+                img_w = self._last_img_width or 1024
+                img_h = self._last_img_height or 2226
+                self._interaction.swipe(
+                    int(start[0]), int(start[1]),
+                    int(end[0]), int(end[1]),
+                    img_w, img_h,
+                )
+                return {"success": True, "action": "left_click_drag"}
+            except Exception as exc:
+                return {"success": False, "action": "left_click_drag", "error": str(exc)}
+
+        elif action_type == "wait":
+            secs = float(action.get("duration", 1))
+            return self.wait(secs)
+
+        else:
+            return {"success": False, "action": action_type,
+                    "error": f"Unknown action: {action_type}"}
 
     # ------------------------------------------------------------------
     # Context aggregation
