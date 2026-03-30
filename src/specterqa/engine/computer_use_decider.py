@@ -164,7 +164,7 @@ class ComputerUseDecider:
         """Build the tools list including the computer tool with display config."""
         return [
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "name": "computer",
                 "display_width_px": self._display_width,
                 "display_height_px": self._display_height,
