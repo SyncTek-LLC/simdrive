@@ -396,9 +396,18 @@ class SimulatorDriver:
                 self._last_img_height = img_h
 
             if self._backend is not None:
-                # Convert screenshot pixels → device logical points
-                dev_x, dev_y = self._screenshot_to_device(x, y)
-                self._backend.tap(dev_x, dev_y)
+                if self._backend_name == "CGEventBackend":
+                    # CGEventBackend wraps InteractionLayer which does its
+                    # own image→screen conversion.  Pass screenshot pixels
+                    # directly — do NOT convert to device points first.
+                    self._backend._img_w = img_w
+                    self._backend._img_h = img_h
+                    self._backend.tap(x, y)
+                else:
+                    # Headless backends (XCTest, IndigoHID) expect device
+                    # logical points — convert screenshot pixels first.
+                    dev_x, dev_y = self._screenshot_to_device(x, y)
+                    self._backend.tap(dev_x, dev_y)
             else:
                 # Fallback: CGEvent InteractionLayer (image-space coords)
                 self._interaction.tap(x, y, img_w, img_h)
@@ -467,8 +476,13 @@ class SimulatorDriver:
                 x1, y1, x2, y2 = cx, cy + step // 2, cx, cy - step // 2
 
             if self._backend is not None:
-                dx1, dy1, dx2, dy2 = self._swipe_screenshot_to_device(x1, y1, x2, y2)
-                self._backend.swipe(dx1, dy1, dx2, dy2)
+                if self._backend_name == "CGEventBackend":
+                    self._backend._img_w = img_w
+                    self._backend._img_h = img_h
+                    self._backend.swipe(x1, y1, x2, y2)
+                else:
+                    dx1, dy1, dx2, dy2 = self._swipe_screenshot_to_device(x1, y1, x2, y2)
+                    self._backend.swipe(dx1, dy1, dx2, dy2)
             else:
                 self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
 
@@ -514,8 +528,13 @@ class SimulatorDriver:
                 x1, y1, x2, y2 = x, y, x, y - distance
 
             if self._backend is not None:
-                dx1, dy1, dx2, dy2 = self._swipe_screenshot_to_device(x1, y1, x2, y2)
-                self._backend.swipe(dx1, dy1, dx2, dy2)
+                if self._backend_name == "CGEventBackend":
+                    self._backend._img_w = img_w
+                    self._backend._img_h = img_h
+                    self._backend.swipe(x1, y1, x2, y2)
+                else:
+                    dx1, dy1, dx2, dy2 = self._swipe_screenshot_to_device(x1, y1, x2, y2)
+                    self._backend.swipe(dx1, dy1, dx2, dy2)
             else:
                 self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
 
