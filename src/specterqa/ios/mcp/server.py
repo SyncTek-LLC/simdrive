@@ -428,7 +428,9 @@ def create_server() -> Any:
             "and returns structured results with pass/fail, findings, and cost. "
             "Requires: Xcode, a booted simulator, and ANTHROPIC_API_KEY. "
             "product_slug must match a .specterqa/products/<slug>.yaml file. "
-            "journey_name must match a .specterqa/journeys/<name>.yaml file."
+            "journey_name must match a .specterqa/journeys/<name>.yaml file. "
+            "preferred_backend: 'xctest' (headless, port 8222), 'indigo' (headless, "
+            "ctypes), 'cgevents' (requires visible window), or omit for auto-selection."
         ),
     )
     async def ios_run_test(
@@ -438,6 +440,7 @@ def create_server() -> Any:
         budget: float = 5.0,
         max_steps: int = 20,
         directory: str | None = None,
+        preferred_backend: str | None = None,
     ) -> str:
         """Run a test journey against an iOS app in the simulator.
 
@@ -449,9 +452,12 @@ def create_server() -> Any:
             max_steps: Max AI iterations per journey step. Default: 20.
             directory: Working directory to find .specterqa/ project.
                        Defaults to the server's working directory.
+            preferred_backend: Force a specific touch backend — 'xctest', 'indigo',
+                or 'cgevents'.  Omit (or pass None) for auto-selection.
 
         Returns:
-            JSON string with run_id, passed, step_reports, findings, and cost.
+            JSON string with run_id, passed, step_reports, findings, backend_used,
+            and cost.
         """
         import sys
 
@@ -546,6 +552,8 @@ def create_server() -> Any:
         driver_cfg: dict[str, Any] = {"device_id": device_id, "bundle_id": bundle_id}
         if product_cfg.get("screenshot_resize_width"):
             driver_cfg["screenshot_resize_width"] = product_cfg["screenshot_resize_width"]
+        if preferred_backend and preferred_backend != "auto":
+            driver_cfg["preferred_backend"] = preferred_backend
 
         driver = SimulatorDriver(config=driver_cfg)
 
@@ -651,6 +659,7 @@ def create_server() -> Any:
             "journey": journey_name,
             "device_id": device_id,
             "bundle_id": bundle_id,
+            "backend_used": getattr(driver, "_backend_name", "unknown"),
             "passed": all_passed,
             "step_count": len(steps),
             "passed_count": passed_count,
