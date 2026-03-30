@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "specterqa-ios"
+version = "0.1.0"
+description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
+readme = "README.md"
+license = "Elastic-2.0"
+requires-python = ">=3.10"
+authors = [
+    {name = "SyncTek LLC", email = "engineering@synctek.io"},
+]
+
+dependencies = [
+    "specterqa>=0.4,<1.0",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+native = [
+    "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-CoreGraphics>=10.0",
+]
+mcp = [
+    "mcp>=1.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "mypy>=1.0",
+    "ruff>=0.1.0",
+]
+
+[project.entry-points."specterqa.drivers"]
+ios_simulator = "specterqa.ios.drivers.simulator.driver:SimulatorDriver"
+
+[project.entry-points."specterqa.cli_extensions"]
+ios = "specterqa.ios.cli:ios_command_group"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
