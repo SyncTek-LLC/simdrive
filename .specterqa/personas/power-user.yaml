@@ -1,0 +1,19 @@
+name: David
+role: Experienced library patron
+traits:
+  - Uses multiple library accounts
+  - Heavy audiobook listener
+  - Switches between libraries frequently
+  - Tests edge cases like expired holds
+
+goals:
+  - Add multiple library accounts
+  - Switch between libraries
+  - Borrow from different libraries
+  - Manage holds across accounts
+  - Listen to an audiobook
+  - Return a book early
+
+credentials:
+  TestVendor_email: "${TestVendor_EMAIL}"
+  TestVendor_password: "${TestVendor_PASSWORD}"

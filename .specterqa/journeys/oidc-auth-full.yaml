@@ -1,0 +1,29 @@
+name: OIDC Authentication Full Lifecycle
+product: Example Reader-ios
+persona: new-patron
+
+steps:
+  - id: launch_app
+    goal: "Launch the Example Reader app. Wait for the main screen to load."
+    checkpoint: "App launched and main screen visible"
+
+  - id: add_library
+    goal: "Tap the Settings or Account button. Find and tap 'Add Library' or 'Find Your Library'. Search for 'TestVendor' or 'TestAuth' in the library finder."
+    checkpoint: "Library search results showing TestVendor or TestAuth"
+    monitor:
+      - network: "*/authentication_document*|*/loans*"
+
+  - id: select_library
+    goal: "Select the TestVendor/TestAuth library from the results. Tap to add it."
+    checkpoint: "Library added, sign-in option visible"
+
+  - id: sign_in_oidc
+    goal: "Tap Sign In. An OIDC web login page should appear. Enter the email ${TestVendor_EMAIL} and password ${TestVendor_PASSWORD}."
+    checkpoint: "User is signed in — My Books or catalog visible"
+    monitor:
+      - console: "auth|oauth|oidc|token"
+      - network: "*/oauth/*|*/token*|*/authenticate*"
+
+  - id: verify_auth
+    goal: "Verify sign-in was successful. Check that My Books or the catalog is accessible."
+    checkpoint: "Authenticated and browsing catalog"

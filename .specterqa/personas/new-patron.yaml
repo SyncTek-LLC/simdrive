@@ -1,0 +1,20 @@
+name: Maria
+role: New library patron
+traits:
+  - Patient but unfamiliar with library apps
+  - Prefers browsing over searching
+  - Interested in fiction and audiobooks
+  - Will try to borrow multiple formats
+
+goals:
+  - Sign in to a library successfully
+  - Browse the catalog and find interesting content
+  - Borrow an available ebook
+  - Open and read the borrowed book
+  - Check reservations/holds
+
+credentials:
+  TestVendor_email: "${TestVendor_EMAIL}"
+  TestVendor_password: "${TestVendor_PASSWORD}"
+  Test Library_barcode: "${Test Library_BARCODE}"
+  Test Library_pin: "${Test Library_PIN}"

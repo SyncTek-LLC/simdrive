@@ -1,1 +1,31 @@
-"""SpecterQA iOS Driver package."""
+"""SpecterQA iOS Driver package.
+
+This package extends the ``specterqa`` namespace with iOS simulator support.
+At import time we ensure the upstream ``specterqa`` package (a regular package,
+not a namespace package) is aware of our sub-tree so that
+``specterqa.ios.*`` resolves correctly regardless of installation order.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+
+def _ensure_namespace() -> None:
+    """Extend specterqa.__path__ to include our src tree if needed."""
+    try:
+        import specterqa  # noqa: PLC0415
+    except ImportError:
+        return
+
+    _our_root = os.path.dirname(os.path.dirname(__file__))  # .../src/specterqa
+    if _our_root not in specterqa.__path__:
+        specterqa.__path__.insert(0, _our_root)
+
+
+_ensure_namespace()
+
+from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: E402
+
+__all__ = ["SimulatorDriver"]
