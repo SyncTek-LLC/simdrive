@@ -56,6 +56,10 @@ class StateInspector:
         """Read all NSUserDefaults for the app via simctl.
 
         Parses plist-style output (``key = value;`` lines) into a Python dict.
+        Falls back to reading the plist file directly from the app container's
+        ``Library/Preferences/<bundle_id>.plist`` when the ``defaults read``
+        command returns empty output (which can happen before the app registers
+        defaults with the simctl daemon).
 
         Returns:
             Dict of preference key→value pairs.  Values are returned as
@@ -69,7 +73,58 @@ class StateInspector:
             capture_output=True,
             text=True,
         )
-        return self._parse_plist_style(result.stdout)
+        parsed = self._parse_plist_style(result.stdout)
+        if parsed:
+            return parsed
+
+        # Fallback: read the plist file directly from the container filesystem
+        return self._read_defaults_from_plist_file()
+
+    def _read_defaults_from_plist_file(self) -> dict[str, Any]:
+        """Read NSUserDefaults from the container's plist file as a fallback.
+
+        Reads ``Library/Preferences/<bundle_id>.plist`` from the app's data
+        container using ``plistlib``.  This covers the case where the simctl
+        ``defaults read`` pathway fails or returns empty output.
+
+        Returns:
+            Dict of preference key→value pairs, or an empty dict if the plist
+            file cannot be found or parsed.
+        """
+        import plistlib
+
+        container = self._get_container_path()
+        if not container:
+            return {}
+
+        plist_path = (
+            Path(container) / "Library" / "Preferences" / f"{self.bundle_id}.plist"
+        )
+        if not plist_path.exists():
+            return {}
+
+        try:
+            with plist_path.open("rb") as fh:
+                data = plistlib.load(fh)
+            if not isinstance(data, dict):
+                return {}
+            # Normalise values: convert numeric strings to int where possible
+            result: dict[str, Any] = {}
+            for key, value in data.items():
+                if isinstance(value, bool):
+                    result[key] = value
+                elif isinstance(value, int):
+                    result[key] = value
+                elif isinstance(value, str):
+                    try:
+                        result[key] = int(value)
+                    except ValueError:
+                        result[key] = value
+                else:
+                    result[key] = value
+            return result
+        except Exception:
+            return {}
 
     def read_default(self, key: str) -> Any:
         """Read a single NSUserDefaults key.

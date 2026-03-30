@@ -26,6 +26,12 @@ def _ensure_namespace() -> None:
 
 _ensure_namespace()
 
-from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: E402
+try:
+    from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: E402
+except ImportError:
+    # Graceful degradation: if SimulatorDriver cannot be imported (e.g. due to a
+    # missing upstream specterqa __version__ or a broken install), expose a stub
+    # so that the module is still importable and CLI commands still load.
+    SimulatorDriver = None  # type: ignore[assignment,misc]
 
 __all__ = ["SimulatorDriver"]
