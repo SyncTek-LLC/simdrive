@@ -320,19 +320,15 @@ class InteractionLayer:
     # Internal CGEvent helpers
     # ------------------------------------------------------------------
 
-    def _make_point(self, x: float, y: float) -> Any:
-        """Build a CGPoint-compatible object with .x and .y attributes.
+    def _make_point(self, x: float, y: float) -> tuple[float, float]:
+        """Return a raw (x, y) tuple for CGEventCreateMouseEvent.
 
-        Wraps coordinates in a plain Python object so tests can inspect
-        ``position.x`` and ``position.y`` on CGEvent calls.  Also compatible
-        with the real Quartz framework which accepts raw tuples or CGPoint.
+        PyObjC's Quartz bridge reliably accepts plain tuples as CGPoint.
+        The previous _Point wrapper object was not guaranteed to be
+        coerced correctly by PyObjC — the working prototype uses raw
+        tuples exclusively.
         """
-        class _Point:
-            def __init__(self, px: float, py: float) -> None:
-                self.x = px
-                self.y = py
-
-        return _Point(x, y)
+        return (x, y)
 
     # ------------------------------------------------------------------
     # Touch gestures — proven prototype timing and approach
