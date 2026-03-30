@@ -655,7 +655,7 @@ def run(
         raise SystemExit(3)
 
     try:
-        from specterqa.engine.decider import ComputerUseDecider  # type: ignore[import-untyped]
+        from specterqa.engine.computer_use_decider import ComputerUseDecider
     except ImportError:
         try:
             from specterqa.engine.ai_decider import ComputerUseDecider  # type: ignore[import-untyped]
