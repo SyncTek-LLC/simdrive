@@ -14,11 +14,14 @@ INIT-2026-492.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import time
 import types
 from typing import Any
+
+logger = logging.getLogger("specterqa.ios.interaction")
 
 # ---------------------------------------------------------------------------
 # Quartz availability — inject stub if the real framework is absent
@@ -123,59 +126,59 @@ class InteractionLayer:
     # ------------------------------------------------------------------
 
     def _detect_title_bar_offset(self, fallback: int = 28) -> int:
-        """Auto-detect the Simulator window title bar height in points.
+        """Auto-detect the Simulator window title bar height.
 
-        Compares the full window bounds from ``CGWindowListCopyWindowInfo``
-        against the content inset by looking for the smallest ``Y``-origin
-        window that belongs to Simulator.app.  Falls back to *fallback* (28 px)
-        when auto-detection is disabled or the Simulator window cannot be found.
+        Strategy: compare the Simulator window's aspect ratio to the device
+        screenshot's aspect ratio. The difference reveals the title bar height.
 
-        Args:
-            fallback: Default offset to use when auto-detection fails or is
-                disabled.  Defaults to ``28``.
-
-        Returns:
-            Detected title bar height in points, or *fallback* on failure.
+        Falls back to *fallback* when auto-detection is disabled or fails.
         """
         if not self._auto_detect_title_bar:
             return fallback
 
         try:
-            windows = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-                Quartz.kCGNullWindowID,
+            # Get window bounds
+            win = self._get_simulator_window()
+            win_w = win["width"]
+            win_h = win["height"]
+
+            # Take a device screenshot to get actual device aspect ratio
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                tmp_path = tmp.name
+            result = subprocess.run(
+                ["xcrun", "simctl", "io", self.device_id, "screenshot", "--type=png", tmp_path],
+                capture_output=True, timeout=10,
             )
-            if not windows:
+            if result.returncode != 0:
                 return fallback
 
-            # Collect all Simulator windows sorted by Y origin (topmost first)
-            sim_windows = [
-                w for w in windows
-                if w.get("kCGWindowOwnerName") == "Simulator"
-            ]
-            if not sim_windows:
-                return fallback
+            # Read image dimensions
+            from PIL import Image
+            with Image.open(tmp_path) as img:
+                dev_w, dev_h = img.size
 
-            # Use the outermost (main app) window — the one with the smallest Y
-            main_win = min(sim_windows, key=lambda w: w.get("kCGWindowBounds", {}).get("Y", 9999))
-            bounds = main_win.get("kCGWindowBounds", {})
-            full_height = float(bounds.get("Height", 0))
+            import os
+            os.unlink(tmp_path)
 
-            # The content window is the next Simulator window with the largest Y
-            content_wins = [
-                w for w in sim_windows
-                if w is not main_win and w.get("kCGWindowBounds", {}).get("Height", 0) < full_height
-            ]
-            if content_wins:
-                content_win = max(content_wins, key=lambda w: w.get("kCGWindowBounds", {}).get("Height", 0))
-                content_height = float(content_win.get("kCGWindowBounds", {}).get("Height", 0))
-                detected = int(full_height - content_height)
-                # Sanity check: title bar is typically 20–60 px
-                if 10 <= detected <= 80:
-                    return detected
+            # The device screenshot is at native resolution (e.g. 1206x2622).
+            # The window renders it scaled to fit, preserving aspect ratio.
+            # Content width = window width (full width), so:
+            #   scale = win_w / dev_w
+            #   content_h = dev_h * scale
+            #   title_bar = win_h - content_h
+            device_aspect = dev_h / dev_w
+            content_h = win_w * device_aspect
+            detected = int(round(win_h - content_h))
 
-        except Exception:
-            pass
+            # Sanity: title bar is 0 (fullscreen/bezels off) to ~60px
+            if 0 <= detected <= 80:
+                logger.info("Auto-detected title bar: %dpx (window=%dx%d, device=%dx%d)",
+                           detected, int(win_w), int(win_h), dev_w, dev_h)
+                return detected
+
+        except Exception as exc:
+            logger.debug("Title bar auto-detect failed: %s", exc)
 
         return fallback
 
@@ -257,11 +260,18 @@ class InteractionLayer:
         content_h = win_h - self.title_bar_offset
 
         # Normalise to [0, 1] — scale-invariant (handles Retina 1x/2x/3x)
-        norm_x = img_x / img_w
-        norm_y = img_y / img_h
+        norm_x = img_x / img_w if img_w else 0
+        norm_y = img_y / img_h if img_h else 0
 
         screen_x = float(win_x + norm_x * win_w)
         screen_y = float(win_y + self.title_bar_offset + norm_y * content_h)
+
+        logger.debug(
+            "coords: img(%d,%d)/%dx%d → norm(%.3f,%.3f) → screen(%.1f,%.1f) "
+            "[win@(%.0f,%.0f) %dx%d, titlebar=%d, content_h=%.0f]",
+            img_x, img_y, img_w, img_h, norm_x, norm_y, screen_x, screen_y,
+            win_x, win_y, int(win_w), int(win_h), self.title_bar_offset, content_h,
+        )
 
         return screen_x, screen_y
 
@@ -302,10 +312,12 @@ class InteractionLayer:
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
     def _single_click(self, sx: float, sy: float) -> None:
-        """Post a mouse-down + mouse-up at (sx, sy)."""
+        """Post a mouse-down + mouse-up at (sx, sy) with inter-event delay."""
         pos = self._make_point(sx, sy)
         self._post_mouse_event(Quartz.kCGEventLeftMouseDown, pos)
+        time.sleep(0.05)  # Simulator needs time to register the press
         self._post_mouse_event(Quartz.kCGEventLeftMouseUp, pos)
+        time.sleep(0.1)  # Let UI respond before next action
 
     # ------------------------------------------------------------------
     # Touch gestures
@@ -366,6 +378,7 @@ class InteractionLayer:
 
         start_pos = self._make_point(sx1, sy1)
         self._post_mouse_event(Quartz.kCGEventLeftMouseDown, start_pos)
+        time.sleep(0.05)  # Let the press register before dragging
 
         sleep_per_step = duration / max(steps, 1)
         for i in range(1, steps + 1):

@@ -243,25 +243,31 @@ class SimulatorDriver:
             Dict with ``success`` (bool) and ``action`` (str).
         """
         try:
-            # Map direction to swipe coordinates (centre-based, 390×844 logical)
-            cx, cy = 195, 422  # logical centre of a typical iPhone screen
-            step = 100 * amount
+            # Use actual screenshot dimensions for coordinate mapping
+            img_w = self._last_img_width
+            img_h = self._last_img_height
+            if img_w == 0 or img_h == 0:
+                capture_result = self._capture.capture()
+                img_w = capture_result.get("width", 1024)
+                img_h = capture_result.get("height", 2226)
+                self._last_img_width = img_w
+                self._last_img_height = img_h
+
+            # Centre of screenshot, scroll distance = 25% of height
+            cx = img_w // 2
+            cy = img_h // 2
+            step = int(img_h * 0.25 * amount)
 
             if direction == "down":
-                # Swipe up to scroll down
-                x1, y1, x2, y2 = cx, cy + step, cx, cy - step
+                x1, y1, x2, y2 = cx, cy + step // 2, cx, cy - step // 2
             elif direction == "up":
-                # Swipe down to scroll up
-                x1, y1, x2, y2 = cx, cy - step, cx, cy + step
+                x1, y1, x2, y2 = cx, cy - step // 2, cx, cy + step // 2
             elif direction == "left":
-                x1, y1, x2, y2 = cx + step, cy, cx - step, cy
+                x1, y1, x2, y2 = cx + step // 2, cy, cx - step // 2, cy
             elif direction == "right":
-                x1, y1, x2, y2 = cx - step, cy, cx + step, cy
+                x1, y1, x2, y2 = cx - step // 2, cy, cx + step // 2, cy
             else:
-                x1, y1, x2, y2 = cx, cy + step, cx, cy - step
-
-            img_w = self._last_img_width or 390
-            img_h = self._last_img_height or 844
+                x1, y1, x2, y2 = cx, cy + step // 2, cx, cy - step // 2
 
             self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
             return {"success": True, "action": "scroll"}
