@@ -460,6 +460,20 @@ def install(app_path: str, device_id: str | None) -> None:
 @click.option("--app", "app_path", default=None, help="Path to .app bundle to install before running.")
 @click.option("--budget", "-b", default=5.00, type=float, show_default=True, help="Max spend in USD for this run.")
 @click.option("--max-steps", default=20, type=int, show_default=True, help="Max AI iterations per journey step.")
+@click.option(
+    "--backend",
+    "preferred_backend",
+    default=None,
+    type=click.Choice(["auto", "xctest", "indigo", "cgevents"], case_sensitive=False),
+    show_default=True,
+    help=(
+        "Touch input backend.  "
+        "'auto' (default) lets BackendSelector pick the best available. "
+        "'xctest' forces the XCTest HTTP runner (port 8222). "
+        "'indigo' forces IndigoHID (requires Xcode, no window needed). "
+        "'cgevents' forces CGEvents (requires visible Simulator window)."
+    ),
+)
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Enable verbose logging.")
 @click.option("--plain", is_flag=True, default=False, help="Plain ASCII output (no Rich).")
 def run(
@@ -469,6 +483,7 @@ def run(
     app_path: str | None,
     budget: float,
     max_steps: int,
+    preferred_backend: str | None,
     verbose: bool,
     plain: bool,
 ) -> None:
@@ -479,6 +494,7 @@ def run(
       specterqa ios run --product example-ios --journey smoke-test
       specterqa ios run --product example-ios --journey smoke-test --device <UDID>
       specterqa ios run --product example-ios --journey smoke-test --app ./build/Example Reader.app
+      specterqa ios run --product example-ios --journey smoke-test --backend xctest
     """
     if verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(name)s  %(message)s")
@@ -675,6 +691,10 @@ def run(
     }
     if product_cfg.get("screenshot_resize_width"):
         driver_cfg["screenshot_resize_width"] = product_cfg["screenshot_resize_width"]
+    # Map CLI --backend value to BackendSelector's preferred parameter.
+    # "auto" (or omitted) means no preference — BackendSelector will auto-select.
+    if preferred_backend and preferred_backend != "auto":
+        driver_cfg["preferred_backend"] = preferred_backend
 
     driver = SimulatorDriver(config=driver_cfg)
 
