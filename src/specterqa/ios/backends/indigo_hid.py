@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import json
 import logging
 import os
 import struct
@@ -74,9 +75,16 @@ logger = logging.getLogger("specterqa.ios.backends.indigo_hid")
 # ---------------------------------------------------------------------------
 
 _OBJC_LIB = "/usr/lib/libobjc.A.dylib"
+_FOUNDATION_PATH = "/System/Library/Frameworks/Foundation.framework/Foundation"
+_CORE_FOUNDATION_PATH = (
+    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+)
 _CORE_SIM_PATH = (
     "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
 )
+
+# kCFStringEncodingUTF8 — used when creating CFString / NSString via CoreFoundation
+_kCFStringEncodingUTF8 = 0x08000100
 
 
 def _xcode_developer_path() -> str:
@@ -107,11 +115,48 @@ def _sim_kit_path() -> str:
     )
 
 
+def _setup_framework_paths() -> None:
+    """Prepend private framework directories to DYLD_FRAMEWORK_PATH.
+
+    CoreSimulator's internal ObjC classes (e.g. SimServiceContext) depend on
+    additional private frameworks that must be on the dyld load path before any
+    message is sent to those classes.  Setting DYLD_FRAMEWORK_PATH here covers
+    the case where the process was not launched with these paths already set.
+
+    Note: DYLD_FRAMEWORK_PATH is read by dyld at ``dlopen`` time.  Setting it
+    here only helps for frameworks loaded *after* this call.  Frameworks already
+    mapped into the process are unaffected, which is fine — we call this before
+    loading CoreSimulator.
+    """
+    dev = _xcode_developer_path()
+    if not dev:
+        return
+
+    candidates = [
+        f"{dev}/Library/PrivateFrameworks",
+        "/Library/Developer/PrivateFrameworks",
+        f"{dev}/Platforms/iPhoneOS.platform/Library/Developer/CoreSimulator/Profiles/Runtimes",
+    ]
+
+    new_dirs = ":".join(p for p in candidates if os.path.isdir(p))
+    if not new_dirs:
+        return
+
+    existing = os.environ.get("DYLD_FRAMEWORK_PATH", "")
+    if existing:
+        merged = f"{new_dirs}:{existing}"
+    else:
+        merged = new_dirs
+    os.environ["DYLD_FRAMEWORK_PATH"] = merged
+    logger.debug("DYLD_FRAMEWORK_PATH set to: %s", merged)
+
+
 # ---------------------------------------------------------------------------
 # Lazy-loaded framework handles (module-level singletons)
 # ---------------------------------------------------------------------------
 
 _objc: Optional[ctypes.CDLL] = None
+_cf: Optional[ctypes.CDLL] = None          # CoreFoundation — for CFString creation
 _core_sim: Optional[ctypes.CDLL] = None
 _sim_kit: Optional[ctypes.CDLL] = None
 
@@ -123,15 +168,56 @@ def _load_frameworks() -> bool:
 
     Returns True on success.  On failure logs a warning and returns False.
     Safe to call multiple times — cached after the first attempt.
+
+    Load order:
+      1. Set DYLD_FRAMEWORK_PATH so CoreSimulator's dependencies are resolvable.
+      2. Load libobjc (always available on macOS).
+      3. Load CoreSimulator — try the system PrivateFrameworks path first, then
+         fall back to the Xcode developer tree (path varies by Xcode version).
+      4. Load SimulatorKit from the active Xcode developer tree.
     """
-    global _objc, _core_sim, _sim_kit, _frameworks_loaded
+    global _objc, _cf, _core_sim, _sim_kit, _frameworks_loaded
     if _frameworks_loaded is not None:
         return _frameworks_loaded
 
+    # Step 1 — configure DYLD paths before any LoadLibrary call so that
+    # CoreSimulator's transitive dependencies can be found by dyld.
+    _setup_framework_paths()
+
     try:
         _objc = ctypes.cdll.LoadLibrary(_OBJC_LIB)
-        _core_sim = ctypes.cdll.LoadLibrary(_CORE_SIM_PATH)
+        # CoreFoundation is needed for CFStringCreateWithCString (used in nsstr()).
+        # Foundation must also be loaded so NSString class methods work correctly.
+        _cf = ctypes.cdll.LoadLibrary(_CORE_FOUNDATION_PATH)
+        _cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        _cf.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p,   # allocator (NULL = kCFAllocatorDefault)
+            ctypes.c_char_p,   # cStr
+            ctypes.c_uint32,   # encoding
+        ]
+        ctypes.cdll.LoadLibrary(_FOUNDATION_PATH)
 
+        # Step 2 — load CoreSimulator, with Xcode-tree fallback
+        try:
+            _core_sim = ctypes.cdll.LoadLibrary(_CORE_SIM_PATH)
+        except OSError:
+            dev = _xcode_developer_path()
+            if not dev:
+                raise
+            alt_core_sim = os.path.join(
+                dev,
+                "Library",
+                "PrivateFrameworks",
+                "CoreSimulator.framework",
+                "CoreSimulator",
+            )
+            logger.debug(
+                "CoreSimulator not found at system path; trying Xcode path: %s",
+                alt_core_sim,
+            )
+            _core_sim = ctypes.cdll.LoadLibrary(alt_core_sim)
+
+        # Step 3 — load SimulatorKit
         sk_path = _sim_kit_path()
         if not sk_path or not os.path.exists(sk_path):
             logger.warning(
@@ -169,8 +255,9 @@ class _ObjCBridge:
       * NSString creation from Python str (``nsstr``)
     """
 
-    def __init__(self, libobjc: ctypes.CDLL) -> None:
+    def __init__(self, libobjc: ctypes.CDLL, cf: Optional[ctypes.CDLL] = None) -> None:
         self._lib = libobjc
+        self._cf = cf
         self._setup_signatures()
 
     def _setup_signatures(self) -> None:
@@ -187,6 +274,10 @@ class _ObjCBridge:
         # Callers that need extra args must cast via CFUNCTYPE.
         lib.objc_msgSend.restype = ctypes.c_void_p
         lib.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+        # class_respondsToSelector — used to guard against "unrecognized selector" crashes
+        lib.class_respondsToSelector.restype = ctypes.c_bool
+        lib.class_respondsToSelector.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -205,6 +296,32 @@ class _ObjCBridge:
         if not ptr:
             raise RuntimeError(f"Could not register selector: {name!r}")
         return ptr
+
+    def responds_to_selector(self, obj_ptr: int, selector_name: str) -> bool:
+        """Return True if *obj_ptr* (class or instance) responds to *selector_name*.
+
+        Uses ``class_respondsToSelector`` — a pure C runtime query that does NOT
+        send an ObjC message.  Safe to call for unknown selectors without risk of
+        triggering the process-terminating ``NSInvalidArgumentException``.
+
+        For class objects, this checks class-method dispatch.
+        For instance objects, this checks instance-method dispatch.
+        In both cases we use the metaclass for the lookup because
+        ``class_respondsToSelector`` always operates on the metaclass chain.
+        """
+        if not obj_ptr:
+            return False
+        sel_ptr = self._lib.sel_registerName(selector_name.encode())
+        if not sel_ptr:
+            return False
+        # Use class_respondsToSelector on the object's class (works for both
+        # class objects and instances — ObjC runtime handles the metaclass chain).
+        self._lib.object_getClass.restype = ctypes.c_void_p
+        self._lib.object_getClass.argtypes = [ctypes.c_void_p]
+        isa = self._lib.object_getClass(ctypes.c_void_p(obj_ptr)) or obj_ptr
+        return bool(self._lib.class_respondsToSelector(
+            ctypes.c_void_p(isa), ctypes.c_void_p(sel_ptr)
+        ))
 
     def msg(self, receiver: int, selector_name: str, *args) -> int:
         """Send an ObjC message and return the result as an int (pointer)."""
@@ -237,23 +354,40 @@ class _ObjCBridge:
     # ------------------------------------------------------------------
 
     def nsstr(self, s: str) -> int:
-        """Create an NSString from a Python str.  Returns opaque pointer."""
-        cls_ptr = self.cls("NSString")
-        sel_alloc = self.sel("alloc")
-        sel_init = self.sel("initWithUTF8String:")
+        """Create an NSString from a Python str.  Returns opaque pointer.
 
+        Preferred path: ``CFStringCreateWithCString`` (CoreFoundation C API,
+        fixed signature — no ARM64 variadic-call issues with ctypes).
+        Fallback: ``[NSString alloc] initWithUTF8String:`` via objc_msgSend
+        (may fail on ARM64 with ctypes due to variadic ABI issues).
+        """
+        encoded = s.encode("utf-8")
+
+        # --- Preferred: use CoreFoundation (toll-free bridged to NSString) ---
+        if self._cf is not None:
+            result = self._cf.CFStringCreateWithCString(
+                None, encoded, _kCFStringEncodingUTF8
+            )
+            if result:
+                return result
+            # Fall through to ObjC path on failure
+
+        # --- Fallback: ObjC alloc/init ---
         alloc_ptr = self._lib.objc_getClass(b"NSString")
         # [NSString alloc]
         alloc_func = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
         instance = alloc_func(self._lib.objc_msgSend)(alloc_ptr, self.sel("alloc"))
         if not instance:
             raise RuntimeError("NSString alloc returned nil")
-        # [instance initWithUTF8String: cstr]
+        # [instance initWithUTF8String: cstr] — pass bytes via c_void_p + buffer
+        # to avoid ARM64 ctypes variadic-call ABI issues with c_char_p.
+        buf = ctypes.create_string_buffer(encoded + b"\x00")
+        buf_ptr = ctypes.cast(buf, ctypes.c_void_p)
         init_func = ctypes.CFUNCTYPE(
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
         )
         result = init_func(self._lib.objc_msgSend)(
-            instance, self.sel("initWithUTF8String:"), s.encode("utf-8")
+            instance, self.sel("initWithUTF8String:"), buf_ptr
         )
         return result or 0
 
@@ -369,89 +503,253 @@ def _build_indigo_message(
 # Device resolution helpers
 # ---------------------------------------------------------------------------
 
-def _find_sim_device(bridge: "_ObjCBridge", udid: str) -> int:
-    """Locate and return the SimDevice object for *udid*.
+def _resolve_booted_udid() -> str:
+    """Use ``xcrun simctl list devices booted -j`` to find the actual UDID of the
+    currently booted simulator.
 
-    Chain:
-      [SimServiceContext sharedServiceContext]
-        → [ctx defaultDeviceSetWithError: nil]
-        → [deviceSet devices]
-        → find device where [device UDID] == udid  (or first booted if "booted")
-
-    Returns an ObjC pointer (int).  Raises RuntimeError if not found.
+    Returns the UDID string on success, or ``""`` on any failure.
     """
-    # Shared context
-    ctx_cls = bridge.cls("SimServiceContext")
-    ctx = bridge.msg(ctx_cls, "sharedServiceContext")
-    if not ctx:
-        raise RuntimeError("SimServiceContext sharedServiceContext returned nil")
-
-    # Default device set
-    err_ptr = ctypes.c_void_p(0)
-    err_addr = ctypes.addressof(err_ptr)
-
-    # Try defaultDeviceSetWithError: first; fall back to defaultDeviceSet
     try:
-        device_set = bridge.msg(
-            ctx,
-            "defaultDeviceSetWithError:",
-            ctypes.c_void_p(err_addr),
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "booted", "-j"],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
+        if result.returncode != 0:
+            return ""
+        data = json.loads(result.stdout)
+        for _runtime, devices in data.get("devices", {}).items():
+            for d in devices:
+                if d.get("state") == "Booted" and d.get("udid"):
+                    return d["udid"]
+    except Exception as exc:
+        logger.debug("simctl booted UDID lookup failed: %s", exc)
+    return ""
+
+
+def _extract_udid_str(bridge: "_ObjCBridge", udid_obj: int) -> str:
+    """Extract a lowercase UDID string from an ObjC UDID object.
+
+    Handles both:
+    - ``NSString`` (older CoreSimulator) — responds to ``UTF8String``
+    - ``NSUUID``  (Xcode 16+)           — responds to ``UUIDString`` → ``UTF8String``
+    """
+    if not udid_obj:
+        return ""
+    str_func = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p)
+    try:
+        if bridge.responds_to_selector(udid_obj, "UTF8String"):
+            # NSString path
+            cstr = str_func(bridge._lib.objc_msgSend)(udid_obj, bridge.sel("UTF8String"))
+            return (cstr or b"").decode("utf-8", errors="replace").lower()
+        if bridge.responds_to_selector(udid_obj, "UUIDString"):
+            # NSUUID path — call UUIDString to get an NSString first
+            nsstr = bridge.msg(udid_obj, "UUIDString")
+            if nsstr and bridge.responds_to_selector(nsstr, "UTF8String"):
+                cstr = str_func(bridge._lib.objc_msgSend)(nsstr, bridge.sel("UTF8String"))
+                return (cstr or b"").decode("utf-8", errors="replace").lower()
     except Exception:
-        device_set = bridge.msg(ctx, "defaultDeviceSet")
+        pass
+    return ""
 
-    if not device_set:
-        raise RuntimeError("Could not obtain SimDeviceSet")
 
-    # Enumerate devices
+def _enum_devices_from_set(bridge: "_ObjCBridge", device_set: int, target_udid: str) -> int:
+    """Walk the ``[SimDeviceSet devices]`` NSArray looking for *target_udid*.
+
+    *target_udid* must already be a lowercase concrete UDID (not ``"booted"``).
+
+    Uses ``objectEnumerator`` + ``nextObject`` rather than ``objectAtIndex:``
+    because passing ``NSUInteger`` via ctypes CFUNCTYPE on ARM64 is unreliable
+    (the index argument is misinterpreted and the same object is returned for
+    every index).
+
+    Returns the SimDevice pointer (int) or 0 if not found.
+    """
     devices = bridge.msg(device_set, "devices")
     if not devices:
-        raise RuntimeError("SimDeviceSet.devices returned nil")
+        return 0
 
-    count_func = ctypes.CFUNCTYPE(
-        ctypes.c_uint64, ctypes.c_void_p, ctypes.c_void_p
-    )
-    count = count_func(bridge._lib.objc_msgSend)(devices, bridge.sel("count"))
-    logger.debug("SimDeviceSet contains %d device(s)", count)
-
-    target_udid = udid.lower().strip()
-
-    for i in range(count):
+    enumerator = bridge.msg(devices, "objectEnumerator")
+    if not enumerator:
+        # Fall back to count + objectAtIndex: — less reliable on ARM64 but better
+        # than returning nothing.
+        count_func = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_void_p)
+        count = count_func(bridge._lib.objc_msgSend)(devices, bridge.sel("count"))
+        logger.debug("SimDeviceSet contains %d device(s) (no enumerator)", count)
         obj_func = ctypes.CFUNCTYPE(
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong
         )
-        device = obj_func(bridge._lib.objc_msgSend)(
-            devices, bridge.sel("objectAtIndex:"), ctypes.c_uint64(i)
-        )
-        if not device:
-            continue
+        for i in range(count):
+            device = obj_func(bridge._lib.objc_msgSend)(
+                devices, bridge.sel("objectAtIndex:"), ctypes.c_ulong(i)
+            ) or 0
+            if not device:
+                continue
+            dev_udid = _extract_udid_str(bridge, bridge.msg(device, "UDID"))
+            if dev_udid == target_udid:
+                logger.debug("Found device by UDID (fallback enum): %s", dev_udid)
+                return device
+        return 0
 
+    # Preferred path: NSEnumerator — avoids NSUInteger passing issues.
+    next_func = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+    seen = 0
+    while True:
+        device = next_func(bridge._lib.objc_msgSend)(
+            enumerator, bridge.sel("nextObject")
+        ) or 0
+        if not device:
+            break
+        seen += 1
         try:
-            dev_udid_obj = bridge.msg(device, "UDID")
-            # Convert NSString → Python str via UTF8String
-            str_func = ctypes.CFUNCTYPE(
-                ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p
-            )
-            dev_udid_cstr = str_func(bridge._lib.objc_msgSend)(
-                dev_udid_obj, bridge.sel("UTF8String")
-            )
-            dev_udid = (dev_udid_cstr or b"").decode("utf-8", errors="replace").lower()
+            udid_obj = bridge.msg(device, "UDID")
+            dev_udid = _extract_udid_str(bridge, udid_obj)
         except Exception:
             dev_udid = ""
 
-        if target_udid == "booted":
-            # Return the first booted device
-            try:
-                state = bridge.msg(device, "state")
-                # SimDeviceState: 3 = Booted
-                if state == 3:
-                    logger.debug("Found booted device: %s", dev_udid)
-                    return device
-            except Exception:
-                pass
-        elif dev_udid == target_udid:
-            logger.debug("Found device by UDID: %s", dev_udid)
+        if dev_udid == target_udid:
+            logger.debug("Found device by UDID: %s (enumerated %d)", dev_udid, seen)
             return device
+
+    logger.debug("Enumerated %d device(s), target %r not found", seen, target_udid)
+    return 0
+
+
+def _get_sim_service_context(bridge: "_ObjCBridge") -> int:
+    """Return a ``SimServiceContext`` instance using whatever selector this
+    Xcode version exposes.
+
+    Xcode ≤ 15 exposed ``+sharedServiceContext``.
+    Xcode 16+ uses ``+sharedServiceContextForDeveloperDir:error:`` or
+    ``+serviceContextForDeveloperDir:error:``.
+
+    Every selector is guarded by ``responds_to_selector`` before use, so an
+    unrecognised selector cannot terminate the process.
+
+    Returns the context pointer (int), or 0 on failure.
+    """
+    ctx_cls = bridge.cls("SimServiceContext")
+
+    # Xcode 16+: sharedServiceContextForDeveloperDir:error:
+    for sel_name in (
+        "sharedServiceContextForDeveloperDir:error:",
+        "serviceContextForDeveloperDir:error:",
+    ):
+        if bridge.responds_to_selector(ctx_cls, sel_name):
+            dev = _xcode_developer_path()
+            if not dev:
+                continue
+            ns_dev = bridge.nsstr(dev)
+            if not ns_dev:
+                continue
+            call_func = ctypes.CFUNCTYPE(
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            )
+            ctx = call_func(bridge._lib.objc_msgSend)(
+                ctx_cls,
+                bridge.sel(sel_name),
+                ctypes.c_void_p(ns_dev),
+                ctypes.c_void_p(0),  # error — nil
+            ) or 0
+            if ctx:
+                logger.debug("Got SimServiceContext via %r", sel_name)
+                return ctx
+
+    # Xcode ≤ 15: sharedServiceContext (no-arg class method)
+    if bridge.responds_to_selector(ctx_cls, "sharedServiceContext"):
+        ctx = bridge.msg(ctx_cls, "sharedServiceContext") or 0
+        if ctx:
+            logger.debug("Got SimServiceContext via sharedServiceContext")
+            return ctx
+
+    return 0
+
+
+def _find_sim_device(bridge: "_ObjCBridge", udid: str) -> int:
+    """Locate and return the SimDevice ObjC object for *udid*.
+
+    Strategy (tried in order, stops at first success):
+
+    1. Resolve ``"booted"`` to an actual UDID via ``xcrun simctl``.
+    2. Ensure private-framework paths are on DYLD_FRAMEWORK_PATH.
+    3. Try ``SimServiceContext`` (Xcode 16+: ``sharedServiceContextForDeveloperDir:error:``;
+       Xcode ≤ 15: ``sharedServiceContext``) → ``defaultDeviceSetWithError:`` → enumerate.
+    4. Fall back to ``SimServiceContext.deviceSetWithPath:error:`` with the default path.
+
+    Every selector is guarded by ``responds_to_selector`` to prevent the
+    process-terminating ``NSInvalidArgumentException`` ("unrecognised selector")
+    that ctypes cannot catch.
+
+    Returns an ObjC pointer (int).  Raises ``RuntimeError`` if not found.
+    """
+    # --- Step 1: resolve "booted" alias ---
+    actual_udid = udid.strip()
+    if actual_udid.lower() == "booted":
+        resolved = _resolve_booted_udid()
+        if resolved:
+            logger.debug("Resolved 'booted' → %s via simctl", resolved)
+            actual_udid = resolved
+
+    target_udid = actual_udid.lower()
+
+    # --- Step 2: set up framework paths (idempotent) ---
+    _setup_framework_paths()
+
+    # --- Step 3: SimServiceContext → defaultDeviceSetWithError: ---
+    try:
+        ctx = _get_sim_service_context(bridge)
+        if ctx:
+            device_set = 0
+            # Prefer defaultDeviceSetWithError: (Xcode 16+)
+            if bridge.responds_to_selector(ctx, "defaultDeviceSetWithError:"):
+                device_set = bridge.msg(
+                    ctx, "defaultDeviceSetWithError:", ctypes.c_void_p(0)
+                ) or 0
+            # Fall back to deviceSetWithPath: using default path
+            if not device_set:
+                devices_dir = os.path.expanduser(
+                    "~/Library/Developer/CoreSimulator/Devices"
+                )
+                if bridge.responds_to_selector(ctx, "deviceSetWithPath:error:"):
+                    ns_path = bridge.nsstr(devices_dir)
+                    if ns_path:
+                        call_func = ctypes.CFUNCTYPE(
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                            ctypes.c_void_p,
+                        )
+                        device_set = call_func(bridge._lib.objc_msgSend)(
+                            ctx,
+                            bridge.sel("deviceSetWithPath:error:"),
+                            ctypes.c_void_p(ns_path),
+                            ctypes.c_void_p(0),
+                        ) or 0
+
+            if device_set:
+                device = _enum_devices_from_set(bridge, device_set, target_udid)
+                if device:
+                    return device
+                logger.warning(
+                    "SimServiceContext path: device %r not found in device set",
+                    actual_udid,
+                )
+            else:
+                logger.warning(
+                    "SimServiceContext obtained but no device set selector responded"
+                )
+        else:
+            logger.warning(
+                "Could not obtain SimServiceContext — all selectors unavailable or returned nil"
+            )
+    except Exception as exc:
+        logger.warning("SimServiceContext path failed: %s", exc)
 
     raise RuntimeError(
         f"Simulator device not found for UDID={udid!r}. "
@@ -459,13 +757,37 @@ def _find_sim_device(bridge: "_ObjCBridge", udid: str) -> int:
     )
 
 
+_HID_CLIENT_CLASS_NAMES = (
+    # Xcode 16+: Swift-module-qualified name
+    "SimulatorKit.SimDeviceLegacyHIDClient",
+    # Xcode ≤ 15: unqualified
+    "SimDeviceLegacyHIDClient",
+)
+
+
 def _create_hid_client(bridge: "_ObjCBridge", device: int) -> int:
     """Create and return a SimDeviceLegacyHIDClient for *device*.
 
+    Tries both the Swift-module-qualified class name (Xcode 16+) and the
+    unqualified name (Xcode ≤ 15).
+
     Uses:
-        [[SimDeviceLegacyHIDClient alloc] initWithDevice:device error:nil]
+        [[SimulatorKit.SimDeviceLegacyHIDClient alloc] initWithDevice:device error:nil]
     """
-    cls = bridge.cls("SimDeviceLegacyHIDClient")
+    cls = None
+    for class_name in _HID_CLIENT_CLASS_NAMES:
+        try:
+            cls = bridge.cls(class_name)
+            logger.debug("HID client class found: %r", class_name)
+            break
+        except RuntimeError:
+            continue
+    if not cls:
+        raise RuntimeError(
+            "SimDeviceLegacyHIDClient not found (tried: "
+            + ", ".join(_HID_CLIENT_CLASS_NAMES)
+            + "). Is SimulatorKit loaded?"
+        )
 
     alloc_func = ctypes.CFUNCTYPE(
         ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
@@ -474,7 +796,31 @@ def _create_hid_client(bridge: "_ObjCBridge", device: int) -> int:
     if not instance:
         raise RuntimeError("SimDeviceLegacyHIDClient alloc returned nil")
 
-    err_ptr = ctypes.c_void_p(0)
+    # Guard: on Xcode 16+, ``initWithDevice:error:`` triggers a Swift
+    # preconditionFailure (SIGTRAP) if called from outside Simulator.app's
+    # process.  Detect this by checking whether the class name is module-qualified
+    # (Swift-namespaced) — that's the Xcode 16+ form.  When detected, raise a
+    # clear RuntimeError instead of crashing the process.
+    #
+    # In Xcode ≤ 15 the class is ``SimDeviceLegacyHIDClient`` (no module prefix)
+    # and ``initWithDevice:error:`` works fine from external processes.
+    for name in _HID_CLIENT_CLASS_NAMES:
+        try:
+            if bridge.cls(name) == cls and "." in name:
+                # This is the Swift-namespaced (Xcode 16+) variant.
+                # Calling initWithDevice:error: would SIGTRAP — raise cleanly.
+                raise RuntimeError(
+                    "SimulatorKit.SimDeviceLegacyHIDClient.initWithDevice:error: "
+                    "cannot be called from outside Simulator.app in Xcode 16+.  "
+                    "IndigoHID direct injection is not available in this Xcode version.  "
+                    "Use XCTestBackend for automation on Xcode 16+ / iOS 26+."
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
+    # Try initWithDevice:error: (Xcode ≤ 15 path)
     init_func = ctypes.CFUNCTYPE(
         ctypes.c_void_p,
         ctypes.c_void_p,
@@ -487,7 +833,7 @@ def _create_hid_client(bridge: "_ObjCBridge", device: int) -> int:
         bridge.sel("initWithDevice:error:"),
         ctypes.c_void_p(device),
         ctypes.c_void_p(0),   # error pointer — nil; we check return value
-    )
+    ) or 0
     if not client:
         raise RuntimeError(
             "SimDeviceLegacyHIDClient initWithDevice:error: returned nil. "
@@ -503,35 +849,67 @@ def _send_hid_message(
 ) -> None:
     """Send a raw IndigoHID message via the HID client.
 
-    Calls: [client sendWithData:nsdata error:nil]
+    Supports two calling conventions depending on Xcode version:
 
-    If the selector is not found (API version mismatch) falls back to
-    [client send:nsdata error:nil].
+    **Xcode 16+ (SimulatorKit.SimDeviceLegacyHIDClient):**
+        ``sendWithMessage:freeWhenDone:completionQueue:completion:``
+        Takes a ``const IndigoHIDMessageStruct *`` (raw C pointer), a BOOL
+        ``freeWhenDone``, an optional ``dispatch_queue_t``, and an optional
+        completion block.  We pass the raw bytes buffer directly and use
+        ``freeWhenDone=NO`` so the buffer can be managed by Python.
+
+    **Xcode ≤ 15 (SimDeviceLegacyHIDClient):**
+        ``sendWithData:error:`` or ``send:error:`` — wraps bytes in NSData.
     """
+    # --- Xcode 16+ path: sendWithMessage:freeWhenDone:completionQueue:completion: ---
+    if bridge.responds_to_selector(
+        client, "sendWithMessage:freeWhenDone:completionQueue:completion:"
+    ):
+        buf = ctypes.create_string_buffer(msg_bytes)
+        buf_ptr = ctypes.cast(buf, ctypes.c_void_p)
+        send_func = ctypes.CFUNCTYPE(
+            ctypes.c_void_p,   # return void
+            ctypes.c_void_p,   # self
+            ctypes.c_void_p,   # SEL
+            ctypes.c_void_p,   # IndigoHIDMessageStruct *message
+            ctypes.c_bool,     # BOOL freeWhenDone
+            ctypes.c_void_p,   # dispatch_queue_t completionQueue (nil)
+            ctypes.c_void_p,   # completion block (nil)
+        )
+        send_func(bridge._lib.objc_msgSend)(
+            client,
+            bridge.sel("sendWithMessage:freeWhenDone:completionQueue:completion:"),
+            buf_ptr,
+            False,              # freeWhenDone = NO — Python owns the buffer
+            ctypes.c_void_p(0), # completionQueue = nil
+            ctypes.c_void_p(0), # completion = nil
+        )
+        logger.debug("sendHID via sendWithMessage:freeWhenDone:completionQueue:completion:")
+        return
+
+    # --- Xcode ≤ 15 path: NSData-based send ---
     data = bridge.nsdata(msg_bytes)
     if not data:
         raise RuntimeError("Failed to create NSData for IndigoHID message")
 
-    # Try sendWithData:error: first, then send:error:
     for sel_name in ("sendWithData:error:", "send:error:"):
-        try:
-            send_func = ctypes.CFUNCTYPE(
-                ctypes.c_bool,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-            )
-            result = send_func(bridge._lib.objc_msgSend)(
-                client,
-                bridge.sel(sel_name),
-                ctypes.c_void_p(data),
-                ctypes.c_void_p(0),  # error — nil
-            )
-            logger.debug("sendHID via [%s] → %s", sel_name, result)
-            return
-        except Exception as exc:
-            logger.debug("Selector %r failed: %s — trying next", sel_name, exc)
+        if not bridge.responds_to_selector(client, sel_name):
+            continue
+        send_func = ctypes.CFUNCTYPE(
+            ctypes.c_bool,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        )
+        result = send_func(bridge._lib.objc_msgSend)(
+            client,
+            bridge.sel(sel_name),
+            ctypes.c_void_p(data),
+            ctypes.c_void_p(0),  # error — nil
+        )
+        logger.debug("sendHID via [%s] → %s", sel_name, result)
+        return
 
     raise RuntimeError(
         "No compatible send selector found on SimDeviceLegacyHIDClient. "
@@ -628,7 +1006,7 @@ class IndigoHIDBackend:
             )
 
         assert _objc is not None
-        self._bridge = _ObjCBridge(_objc)
+        self._bridge = _ObjCBridge(_objc, cf=_cf)
 
         self._device = _find_sim_device(self._bridge, self._udid)
         self._hid_client = _create_hid_client(self._bridge, self._device)
