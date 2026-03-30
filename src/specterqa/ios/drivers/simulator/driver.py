@@ -5,12 +5,23 @@ It wires together all eight sub-modules (interaction, capture, console,
 network, perf, state, crash, ai_context) and exposes a clean ActionExecutor
 protocol plus lifecycle and context-aggregation methods.
 
-INIT-2026-492 — SpecterQA iOS Simulator Driver.
+Backend selection (INIT-2026-500):
+  On start(), a BackendSelector probes available touch backends in priority
+  order (XCTest → IndigoHID → CGEvents) and stores the winner in
+  ``self._backend``.  All gesture methods (click, scroll, fill, keyboard)
+  route through the backend.  If the selector fails entirely the legacy
+  InteractionLayer is used as a fallback so that tests that mock
+  InteractionLayer continue to pass unchanged.
+
+INIT-2026-492 / INIT-2026-500 — SpecterQA iOS Simulator Driver.
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import subprocess
+import tempfile
 import time
 from typing import Any, Optional
 
@@ -24,6 +35,15 @@ from specterqa.ios.drivers.simulator.crash import CrashDetector
 from specterqa.ios.drivers.simulator.ai_context import SimulatorAIContext
 from specterqa.ios.security.redactor import DataRedactor
 
+logger = logging.getLogger("specterqa.ios.driver")
+
+# Human-readable labels used in the startup banner
+_BACKEND_LABELS: dict[str, str] = {
+    "XCTestBackend": "XCTest backend (headless, port 8222)",
+    "IndigoHIDBackend": "IndigoHID backend (headless, ctypes)",
+    "CGEventBackend": "CGEvent backend (requires visible Simulator window)",
+}
+
 
 class SimulatorDriver:
     """Main facade that composes all iOS Simulator driver sub-modules.
@@ -34,10 +54,12 @@ class SimulatorDriver:
 
     Args:
         config: Configuration dict.  Required keys:
+
             - ``device_id`` (str): Simulator UDID or ``"booted"``.
             - ``bundle_id`` (str): App bundle identifier.
 
             Optional keys:
+
             - ``device_name`` (str): Human-readable device name.
             - ``screenshot_resize_width`` (int): Target screenshot width
               (default: 1024).
@@ -50,6 +72,9 @@ class SimulatorDriver:
               (default: True).
             - ``enable_crash_detection`` (bool): Enable CrashDetector
               (default: True).
+            - ``preferred_backend`` (str | None): Force a specific touch
+              backend — ``"xctest"``, ``"indigo"``, ``"cgevents"``, or
+              ``None`` for auto-selection (default: None).
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -97,6 +122,159 @@ class SimulatorDriver:
         self._last_img_width: int = 0
         self._last_img_height: int = 0
 
+        # Device geometry — populated by _detect_device_info() on start()
+        self._scale_factor: float = 3.0
+        self._device_logical_w: float = 393.0
+        self._device_logical_h: float = 852.0
+
+        # Active touch backend — populated by start(); None = use InteractionLayer
+        self._backend: Optional[Any] = None
+        # Name of the backend class actually selected (for reporting)
+        self._backend_name: str = ""
+
+    # ------------------------------------------------------------------
+    # Device geometry detection
+    # ------------------------------------------------------------------
+
+    def _detect_device_info(self) -> None:
+        """Probe the device's native screenshot to determine scale factor and
+        logical dimensions.
+
+        Takes a raw (non-resized) screenshot via ``xcrun simctl io screenshot``,
+        reads its pixel dimensions, then infers the Retina scale factor:
+          - raw width > 1000 px → 3x (Pro / Max)
+          - raw width > 700 px  → 2x (SE / mini)
+          - otherwise           → 1x
+
+        The logical dimensions (device points) are raw / scale_factor.
+        These are stored on the driver and used in :meth:`_screenshot_to_device`
+        to convert Claude's screenshot-pixel coordinates to the device-point
+        space expected by XCTest and IndigoHID backends.
+
+        Falls back silently to the default iPhone 16 Pro geometry (393×852 @3x)
+        on any error so startup is never blocked by a probe failure.
+        """
+        try:
+            from PIL import Image  # type: ignore[import-untyped]
+
+            fd, tmp_path = tempfile.mkstemp(suffix=".png", prefix="specterqa_probe_")
+            os.close(fd)
+            try:
+                result = subprocess.run(
+                    [
+                        "xcrun", "simctl", "io", self._device_id,
+                        "screenshot", "--type=png", tmp_path,
+                    ],
+                    capture_output=True,
+                    timeout=10,
+                )
+                if result.returncode != 0:
+                    logger.debug(
+                        "_detect_device_info: simctl screenshot failed (rc=%d) — "
+                        "using defaults",
+                        result.returncode,
+                    )
+                    return
+
+                with Image.open(tmp_path) as img:
+                    raw_w, raw_h = img.size   # e.g. 1179×2556 for iPhone 16 Pro
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+            if raw_w > 1000:
+                self._scale_factor = 3.0
+            elif raw_w > 700:
+                self._scale_factor = 2.0
+            else:
+                self._scale_factor = 1.0
+
+            self._device_logical_w = raw_w / self._scale_factor
+            self._device_logical_h = raw_h / self._scale_factor
+
+            logger.debug(
+                "_detect_device_info: raw=%dx%d scale=%.0fx logical=%.0fx%.0f",
+                raw_w, raw_h,
+                self._scale_factor,
+                self._device_logical_w, self._device_logical_h,
+            )
+        except Exception as exc:
+            logger.debug(
+                "_detect_device_info: probe failed (%s) — using defaults", exc
+            )
+
+    # ------------------------------------------------------------------
+    # Backend selection
+    # ------------------------------------------------------------------
+
+    def _select_backend(self) -> None:
+        """Initialise the best available touch backend via BackendSelector.
+
+        Reads ``config["preferred_backend"]`` to optionally force a specific
+        backend.  On success stores the backend in ``self._backend`` and logs
+        which backend was selected.  On failure logs a warning and leaves
+        ``self._backend`` as None so the legacy InteractionLayer fallback is
+        used.
+        """
+        try:
+            from specterqa.ios.backends.selector import BackendSelector
+
+            preferred: Optional[str] = self._config.get("preferred_backend")
+            selector = BackendSelector(udid=self._device_id, preferred=preferred)
+            backend = selector.get_backend()
+            self._backend = backend
+            self._backend_name = type(backend).__name__
+
+            label = _BACKEND_LABELS.get(
+                self._backend_name,
+                f"{self._backend_name} backend",
+            )
+            print(f"[specterqa] Using {label}", flush=True)
+            logger.info("SimulatorDriver: selected backend %s", self._backend_name)
+
+        except Exception as exc:
+            logger.warning(
+                "SimulatorDriver: backend selection failed (%s) — "
+                "falling back to CGEvent InteractionLayer",
+                exc,
+            )
+            self._backend = None
+            self._backend_name = "InteractionLayer"
+
+    # ------------------------------------------------------------------
+    # Coordinate conversion
+    # ------------------------------------------------------------------
+
+    def _screenshot_to_device(self, sx: int, sy: int) -> tuple[float, float]:
+        """Convert screenshot-pixel coordinates to device logical points.
+
+        Claude operates in the resized screenshot pixel space (e.g. 1024×2226).
+        XCTest and IndigoHID expect device logical points (e.g. 393×852).
+
+        Formula::
+
+            dev_x = sx * (device_logical_w / last_img_width)
+            dev_y = sy * (device_logical_h / last_img_height)
+
+        Falls back to (sx, sy) unchanged when no screenshot dimensions are
+        cached yet (prevents division by zero).
+        """
+        img_w = self._last_img_width or 1024
+        img_h = self._last_img_height or 2226
+        dev_x = sx * (self._device_logical_w / img_w)
+        dev_y = sy * (self._device_logical_h / img_h)
+        return dev_x, dev_y
+
+    def _swipe_screenshot_to_device(
+        self, x1: int, y1: int, x2: int, y2: int
+    ) -> tuple[float, float, float, float]:
+        """Convert a pair of screenshot-pixel swipe coordinates to device points."""
+        dx1, dy1 = self._screenshot_to_device(x1, y1)
+        dx2, dy2 = self._screenshot_to_device(x2, y2)
+        return dx1, dy1, dx2, dy2
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -107,6 +285,9 @@ class SimulatorDriver:
         Runs ``xcrun simctl boot <device_id>`` then starts the console,
         network, and crash monitors.  The perf profiler is started if
         ``enable_perf_monitoring`` is truthy in the config (default: True).
+
+        Also detects device geometry and selects the best available touch
+        backend via BackendSelector.
         """
         # Boot the simulator device
         subprocess.run(
@@ -122,6 +303,11 @@ class SimulatorDriver:
         if self._config.get("enable_perf_monitoring", True):
             if hasattr(self._perf, "start"):
                 self._perf.start()
+
+        # Detect device geometry (scale factor, logical dimensions) then pick
+        # the best touch backend.
+        self._detect_device_info()
+        self._select_backend()
 
     def stop(self) -> None:
         """Stop all background monitors.
@@ -186,9 +372,10 @@ class SimulatorDriver:
     def click(self, x: int, y: int) -> dict[str, Any]:
         """Tap a point on the simulator screen.
 
-        Coordinates are in screenshot pixel space.  The driver takes a fresh
-        screenshot to resolve the simulator window bounds before tapping.
-        If the last screenshot dimensions are already cached, they are reused.
+        Coordinates are in screenshot pixel space.  When a headless backend
+        (XCTest or IndigoHID) is active the coordinates are converted to
+        device logical points before forwarding.  When the CGEvent fallback
+        is active, the InteractionLayer's own coordinate mapping is used.
 
         Args:
             x: Horizontal coordinate in screenshot pixels.
@@ -198,7 +385,7 @@ class SimulatorDriver:
             Dict with ``success`` (bool) and ``action`` (str).
         """
         try:
-            # Ensure we have image dimensions for the interaction layer
+            # Ensure we have image dimensions cached
             img_w = self._last_img_width
             img_h = self._last_img_height
             if img_w == 0 or img_h == 0:
@@ -208,7 +395,14 @@ class SimulatorDriver:
                 self._last_img_width = img_w
                 self._last_img_height = img_h
 
-            self._interaction.tap(x, y, img_w, img_h)
+            if self._backend is not None:
+                # Convert screenshot pixels → device logical points
+                dev_x, dev_y = self._screenshot_to_device(x, y)
+                self._backend.tap(dev_x, dev_y)
+            else:
+                # Fallback: CGEvent InteractionLayer (image-space coords)
+                self._interaction.tap(x, y, img_w, img_h)
+
             return {"success": True, "action": "click"}
         except Exception as exc:
             return {"success": False, "action": "click", "error": str(exc)}
@@ -223,7 +417,10 @@ class SimulatorDriver:
             Dict with ``success`` (bool) and ``action`` (str).
         """
         try:
-            self._interaction.type_text(text)
+            if self._backend is not None:
+                self._backend.type_text(text)
+            else:
+                self._interaction.type_text(text)
             return {"success": True, "action": "fill"}
         except Exception as exc:
             return {"success": False, "action": "fill", "error": str(exc)}
@@ -232,7 +429,7 @@ class SimulatorDriver:
         """Scroll the screen in a given direction.
 
         Maps direction strings (``"up"``, ``"down"``, ``"left"``, ``"right"``)
-        to InteractionLayer ``swipe()`` calls.
+        to swipe calls on the active backend (or InteractionLayer fallback).
 
         Args:
             direction: Scroll direction — one of ``"up"``, ``"down"``,
@@ -269,7 +466,12 @@ class SimulatorDriver:
             else:
                 x1, y1, x2, y2 = cx, cy + step // 2, cx, cy - step // 2
 
-            self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
+            if self._backend is not None:
+                dx1, dy1, dx2, dy2 = self._swipe_screenshot_to_device(x1, y1, x2, y2)
+                self._backend.swipe(dx1, dy1, dx2, dy2)
+            else:
+                self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
+
             return {"success": True, "action": "scroll"}
         except Exception as exc:
             return {"success": False, "action": "scroll", "error": str(exc)}
@@ -311,7 +513,12 @@ class SimulatorDriver:
             else:
                 x1, y1, x2, y2 = x, y, x, y - distance
 
-            self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
+            if self._backend is not None:
+                dx1, dy1, dx2, dy2 = self._swipe_screenshot_to_device(x1, y1, x2, y2)
+                self._backend.swipe(dx1, dy1, dx2, dy2)
+            else:
+                self._interaction.swipe(x1, y1, x2, y2, img_w, img_h)
+
             return {"success": True, "action": "scroll"}
         except Exception as exc:
             return {"success": False, "action": "scroll", "error": str(exc)}
@@ -326,7 +533,10 @@ class SimulatorDriver:
             Dict with ``success`` (bool) and ``action`` (str).
         """
         try:
-            self._interaction.press_key(key)
+            if self._backend is not None:
+                self._backend.press_key(key)
+            else:
+                self._interaction.press_key(key)
             return {"success": True, "action": "keyboard"}
         except Exception as exc:
             return {"success": False, "action": "keyboard", "error": str(exc)}
