@@ -949,3 +949,34 @@ def smoke(ctx: click.Context, product: str, device_id: str | None, budget: float
         verbose=False,
         plain=not sys.stdout.isatty(),
     )
+
+
+# ---------------------------------------------------------------------------
+# specterqa ios serve
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.command("serve")
+def serve() -> None:
+    """Start the SpecterQA iOS MCP server (stdio transport).
+
+    Exposes iOS simulator testing capabilities as MCP tools for Claude Code
+    and other AI agent integrations.  Connect via the stdio transport by
+    adding this server to your Claude Code MCP configuration.
+
+    \b
+    Example ~/.claude/mcp.json entry:
+      {
+        "mcpServers": {
+          "specterqa-ios": {
+            "command": "specterqa-ios-mcp",
+            "env": {
+              "SPECTERQA_IOS_LICENSE": "founder"
+            }
+          }
+        }
+      }
+    """
+    from specterqa.ios.mcp.server import serve as run_mcp
+
+    run_mcp()

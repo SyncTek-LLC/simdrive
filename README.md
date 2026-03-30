@@ -46,6 +46,88 @@ specterqa ios smoke --product my-app
 | `specterqa ios init [--slug <id>]` | Scaffold project config files |
 | `specterqa ios run --product <slug> --journey <id>` | Run a test journey |
 | `specterqa ios smoke --product <slug>` | Quick smoke test |
+| `specterqa ios serve` | Start the MCP server (stdio transport) |
+
+## Claude Code Integration
+
+SpecterQA iOS ships as a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server,
+letting Claude Code drive iOS simulator tests directly from your editor.
+
+### Install with MCP extras
+
+```bash
+pip install 'specterqa-ios[mcp]'
+```
+
+### Add to Claude Code
+
+Add the server to your Claude Code MCP configuration. The `specterqa-ios-mcp` console script
+is registered by `pip install` and starts the stdio server automatically.
+
+**Option A — project-level** (`.claude/mcp.json` in your repo root):
+
+```json
+{
+  "mcpServers": {
+    "specterqa-ios": {
+      "command": "specterqa-ios-mcp",
+      "env": {
+        "SPECTERQA_IOS_LICENSE": "founder"
+      }
+    }
+  }
+}
+```
+
+**Option B — global** (add to `~/.claude/mcp.json` or via `claude mcp add`):
+
+```bash
+claude mcp add specterqa-ios -- specterqa-ios-mcp
+```
+
+Set `ANTHROPIC_API_KEY` in the environment (or in the `env` block above).
+
+### Available MCP Tools
+
+Once connected, Claude Code can call these tools:
+
+| Tool | Description |
+|------|-------------|
+| `ios_setup` | Check environment (Xcode, simulators, API key) |
+| `ios_list_devices` | List available iOS simulators |
+| `ios_boot_device` | Boot a simulator by name or UDID |
+| `ios_install_app` | Install a .app bundle on a simulator |
+| `ios_run_test` | Run a full test journey (primary tool) |
+| `ios_run_smoke` | Quick smoke test (reduced budget) |
+| `ios_run_exploratory` | Persona-driven AI exploration |
+| `ios_get_results` | Retrieve results from a previous run |
+| `ios_screenshot` | Screenshot the current simulator state |
+| `ios_list_products` | List configured products |
+| `ios_list_journeys` | List configured journeys |
+
+### Example Claude Code session
+
+```
+> Run a smoke test on the Example Reader iOS app
+
+[Claude calls ios_list_products, discovers example-ios]
+[Claude calls ios_boot_device, boots iPhone 15 Pro]
+[Claude calls ios_run_smoke with product_slug="example-ios"]
+[Returns: 4/4 steps passed, 0 findings, $0.32 spent]
+```
+
+### Alternative: direct invocation
+
+```bash
+# stdio transport (for custom MCP clients)
+specterqa-ios-mcp
+
+# or via Python module
+python -m specterqa.ios.mcp
+
+# or via CLI
+specterqa ios serve
+```
 
 ## Requirements
 

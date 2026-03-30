@@ -1,287 +1,1134 @@
-"""M17a: IOSMCPServer — MCP tool server for iOS Simulator testing.
+"""SpecterQA iOS MCP Server — Model Context Protocol server for Claude Code integration.
 
-Exposes iOS simulator capabilities as MCP tools: run_test, run_exploratory,
-get_results, list_devices, and list_scenarios.
+Exposes SpecterQA iOS simulator capabilities as MCP tools so that AI agents
+(Claude Code and others) can discover simulators, run iOS tests, and retrieve
+results programmatically via stdio transport.
 
-INIT-2026-492 — SpecterQA iOS Simulator Driver, Phase 4.
+Usage:
+    specterqa-ios-mcp            # stdio transport (console_scripts entry point)
+    python -m specterqa.ios.mcp  # alternative invocation
+    specterqa ios serve          # via CLI serve command
+
+The server provides eleven tools:
+
+    ios_setup             Check Xcode, simulator, and API key environment
+    ios_list_devices      List available iOS simulators via xcrun simctl
+    ios_boot_device       Boot a simulator by name or UDID
+    ios_install_app       Install a .app bundle on a simulator
+    ios_run_test          Run a full test journey (main testing entry point)
+    ios_run_smoke         Quick smoke test for a product (reduced budget)
+    ios_run_exploratory   Persona-driven AI exploration of an app
+    ios_get_results       Retrieve results from a previous run by run_id
+    ios_screenshot        Take a screenshot of the current simulator state
+    ios_list_products     List configured products from .specterqa/products/
+    ios_list_journeys     List configured journeys from .specterqa/journeys/
+
+INIT-2026-492 — SpecterQA iOS Simulator Driver.
 """
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
+import os
 import subprocess
+import time
 import uuid
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger("specterqa.ios.mcp")
 
 
-class IOSMCPServer:
-    """MCP tool server that wraps iOS simulator testing capabilities.
+# ---------------------------------------------------------------------------
+# Project-directory helpers (mirrors CLI helpers)
+# ---------------------------------------------------------------------------
 
-    Args:
-        pool: Optional SimulatorPool for device acquisition/release.
-        step_runner_factory: Optional callable that takes a simulator and
-            returns a step runner instance.
+
+def _resolve_project_dir(directory: str | None = None) -> Path:
+    """Find the .specterqa/ project directory.
+
+    Searches upward from *directory* (default: cwd) for a .specterqa/ folder.
+    Returns the path to the .specterqa directory, or a cwd-based default.
     """
+    start = Path(directory).resolve() if directory else Path.cwd()
 
-    def __init__(
-        self,
-        pool: Any = None,
-        step_runner_factory: Callable[..., Any] | None = None,
-    ) -> None:
-        self._pool = pool
-        self._step_runner_factory = step_runner_factory
-        self._results: dict[str, Any] = {}
+    # Check the given directory itself
+    candidate = start / ".specterqa"
+    if candidate.is_dir():
+        return candidate
 
-    # ------------------------------------------------------------------
-    # MCP tool manifest
-    # ------------------------------------------------------------------
+    # Walk up the parent chain
+    for parent in start.parents:
+        candidate = parent / ".specterqa"
+        if candidate.is_dir():
+            return candidate
 
-    def _register_tools(self) -> list[dict[str, Any]]:
-        """Return the MCP tool manifest for this server.
+    # Fallback: return a default (may not exist yet)
+    return start / ".specterqa"
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    """Load a YAML file, returning a dict. Returns empty dict on failure."""
+    try:
+        import yaml  # type: ignore[import-untyped]
+
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        return data or {}
+    except Exception as exc:
+        logger.warning("Failed to load %s: %s", path, exc)
+        return {}
+
+
+def _list_simulator_devices() -> list[dict[str, Any]]:
+    """Run ``xcrun simctl list devices --json`` and return flat device list."""
+    proc = subprocess.run(
+        ["xcrun", "simctl", "list", "devices", "--json"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return []
+    try:
+        data = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+    devices: list[dict[str, Any]] = []
+    for runtime_id, device_list in data.get("devices", {}).items():
+        # Normalise runtime key: com.apple.CoreSimulator.SimRuntime.iOS-17-2 → iOS 17.2
+        runtime_label = (
+            runtime_id
+            .replace("com.apple.CoreSimulator.SimRuntime.", "")
+            .replace("-", " ")
+        )
+        for dev in device_list:
+            devices.append({**dev, "runtime": runtime_label})
+    return devices
+
+
+def _find_booted_udid() -> str | None:
+    """Return the UDID of a currently booted simulator, or None."""
+    for dev in _list_simulator_devices():
+        if dev.get("state") == "Booted":
+            return dev.get("udid")
+    return None
+
+
+def _find_simulator_by_name(name_fragment: str) -> dict[str, Any] | None:
+    """Find the first simulator whose name contains *name_fragment* (case-insensitive)."""
+    needle = name_fragment.lower()
+    for dev in _list_simulator_devices():
+        if needle in dev.get("name", "").lower():
+            return dev
+    return None
+
+
+def _json_serialize(obj: Any) -> str:
+    """JSON serializer for non-standard types (Path, etc.)."""
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+
+# ---------------------------------------------------------------------------
+# In-memory result store (lives for the duration of the server process)
+# ---------------------------------------------------------------------------
+
+_RESULT_STORE: dict[str, Any] = {}
+
+
+# ---------------------------------------------------------------------------
+# MCP server factory
+# ---------------------------------------------------------------------------
+
+
+def create_server() -> Any:
+    """Create and configure the SpecterQA iOS MCP server.
+
+    Returns:
+        A FastMCP server instance with all iOS tools registered.
+
+    Raises:
+        ImportError: if the ``mcp`` package is not installed.
+    """
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:
+        raise ImportError(
+            "The 'mcp' package is required for the SpecterQA iOS MCP server.\n\n"
+            "Install it:\n"
+            "  pip install 'specterqa-ios[mcp]'\n"
+            "  # or: pip install mcp>=1.0.0"
+        )
+
+    mcp = FastMCP(
+        "specterqa-ios",
+        instructions=(
+            "SpecterQA iOS is an AI-powered testing tool for iOS apps running in "
+            "the Xcode Simulator. It uses Claude Computer Use to drive the simulator, "
+            "execute test journeys, and surface UX issues and bugs. "
+            "Before running tests, call ios_setup to verify the environment, "
+            "then ios_list_products to see what's configured. "
+            "Use ios_run_test as the primary testing tool. "
+            "Requires macOS with Xcode 15+ and ANTHROPIC_API_KEY."
+        ),
+    )
+
+    # ── Tool: ios_setup ────────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_setup",
+        description=(
+            "Check the SpecterQA iOS environment: Xcode/xcrun availability, "
+            "iOS simulator presence, ANTHROPIC_API_KEY, and package importability. "
+            "Returns a status dict with pass/fail for each check. "
+            "Call this first to verify the environment is ready for testing."
+        ),
+    )
+    async def ios_setup() -> str:
+        """Check Xcode, simulators, and API key.
 
         Returns:
-            List of tool definition dicts, each with 'name', 'description',
-            and 'parameters' keys.
+            JSON dict with 'all_ok' bool and 'checks' list of {name, ok, detail} dicts.
         """
-        return [
-            {
-                "name": "run_test",
-                "description": "Run a structured test scenario on an iOS Simulator.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "scenario": {
-                            "type": "object",
-                            "description": "Scenario dict with id, name, and steps.",
-                        },
-                        "device_name": {
-                            "type": "string",
-                            "description": "Optional simulator device name.",
-                        },
-                    },
-                    "required": ["scenario"],
-                },
-            },
-            {
-                "name": "run_exploratory",
-                "description": "Run persona-driven exploratory testing on an iOS app.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "persona": {
-                            "type": "object",
-                            "description": "Persona definition (name, role, goals, traits).",
-                        },
-                        "app_context": {
-                            "type": "string",
-                            "description": "Description of the app's current state.",
-                        },
-                        "device_name": {
-                            "type": "string",
-                            "description": "Optional simulator device name.",
-                        },
-                    },
-                    "required": ["persona"],
-                },
-            },
-            {
-                "name": "get_results",
-                "description": "Retrieve stored results for a completed run.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "run_id": {
-                            "type": "string",
-                            "description": "The run ID returned by run_test or run_exploratory.",
-                        },
-                    },
-                    "required": ["run_id"],
-                },
-            },
-            {
-                "name": "list_devices",
-                "description": "List available iOS Simulator devices via xcrun simctl.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            },
-            {
-                "name": "list_scenarios",
-                "description": "List available test scenarios registered with this server.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": [],
-                },
-            },
-        ]
+        checks: list[dict[str, Any]] = []
 
-    # ------------------------------------------------------------------
-    # Tool implementations
-    # ------------------------------------------------------------------
+        # 1. xcrun / Xcode
+        xcrun_result = subprocess.run(
+            ["xcrun", "--version"], capture_output=True, text=True
+        )
+        xcrun_ok = xcrun_result.returncode == 0
+        checks.append({
+            "name": "Xcode / xcrun",
+            "ok": xcrun_ok,
+            "detail": xcrun_result.stdout.strip() if xcrun_ok else "xcrun not found — install Xcode",
+        })
 
-    def run_test(
-        self,
-        scenario: dict[str, Any],
-        device_name: str | None = None,
-    ) -> dict[str, Any]:
-        """Run a structured test scenario, acquiring a simulator from the pool.
+        # 2. iOS simulators
+        sim_ok = False
+        sim_detail = ""
+        if xcrun_ok:
+            devices = _list_simulator_devices()
+            booted = [d for d in devices if d.get("state") == "Booted"]
+            sim_ok = len(devices) > 0
+            sim_detail = (
+                f"{len(devices)} simulators, {len(booted)} booted"
+                if devices
+                else "no simulators found"
+            )
+        checks.append({"name": "iOS Simulators", "ok": sim_ok, "detail": sim_detail})
 
-        Args:
-            scenario: Scenario dict with at minimum an 'id' and 'steps' key.
-            device_name: Optional hint for which device to acquire.
+        # 3. ANTHROPIC_API_KEY
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        api_ok = bool(api_key)
+        checks.append({
+            "name": "ANTHROPIC_API_KEY",
+            "ok": api_ok,
+            "detail": "set" if api_ok else "NOT SET — export ANTHROPIC_API_KEY=sk-ant-...",
+        })
 
-        Returns:
-            Dict with 'run_id', 'results', and 'device_id' keys.
-
-        Raises:
-            Any exception raised by the step runner (pool is released first).
-        """
-        if self._pool is None:
-            run_id = str(uuid.uuid4())
-            result = {"run_id": run_id, "results": [], "device_id": None}
-            self._results[run_id] = result
-            return result
-
-        sim = self._pool.acquire()
+        # 4. Package importability
+        pkg_ok = False
+        pkg_detail = ""
         try:
-            steps = scenario.get("steps", [])
-            step_results: list[Any] = []
+            from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: F401
+            pkg_ok = True
+            pkg_detail = "specterqa.ios importable"
+        except ImportError as exc:
+            pkg_detail = f"import error: {exc}"
+        checks.append({"name": "specterqa-ios package", "ok": pkg_ok, "detail": pkg_detail})
 
-            if self._step_runner_factory is not None:
-                runner = self._step_runner_factory(sim)
-                for step in steps:
-                    step_result = runner.run_step(step)
-                    step_results.append(step_result)
+        all_ok = all(c["ok"] for c in checks)
+        return json.dumps({"all_ok": all_ok, "checks": checks})
 
-            run_id = str(uuid.uuid4())
-            result: dict[str, Any] = {
-                "run_id": run_id,
-                "results": step_results,
-                "device_id": getattr(sim, "udid", None),
-            }
-            self._results[run_id] = result
-            return result
-        finally:
-            self._pool.release(sim)
+    # ── Tool: ios_list_devices ─────────────────────────────────────────────
 
-    def run_exploratory(
-        self,
-        persona: dict[str, Any],
-        app_context: str = "",
-        device_name: str | None = None,
-    ) -> dict[str, Any]:
-        """Run persona-driven exploratory testing using ExploratoryAgent.
-
-        Args:
-            persona: Persona dict (name, role, goals, traits).
-            app_context: Description of the app's current state.
-            device_name: Optional device hint.
+    @mcp.tool(
+        name="ios_list_devices",
+        description=(
+            "List available iOS Simulator devices via xcrun simctl. "
+            "Returns a JSON array of device objects with name, UDID, state, "
+            "and runtime. Use this to find a device name or UDID for other tools."
+        ),
+    )
+    async def ios_list_devices() -> str:
+        """List available iOS simulators.
 
         Returns:
-            Exploration result dict from ExploratoryAgent.explore().
+            JSON array of device dicts with name, udid, state, and runtime.
         """
-        # Import here to avoid circular imports at module load time
-        from specterqa.ios.exploratory.agent import ExploratoryAgent
+        devices = _list_simulator_devices()
+        return json.dumps(devices)
 
-        if self._pool is not None:
-            sim = self._pool.acquire()
-            try:
-                runner = (
-                    self._step_runner_factory(sim)
-                    if self._step_runner_factory is not None
-                    else _NullStepRunner()
-                )
-                agent = ExploratoryAgent(
-                    step_runner=runner,
-                    persona=persona,
-                )
-                result = agent.explore(app_context=app_context)
-            finally:
-                self._pool.release(sim)
+    # ── Tool: ios_boot_device ──────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_boot_device",
+        description=(
+            "Boot an iOS Simulator by name fragment or UDID. "
+            "If device_name is not specified, boots the first available iPhone simulator. "
+            "Accepts a name fragment (e.g. 'iPhone 15') or a full UDID. "
+            "Returns the booted device's name and UDID."
+        ),
+    )
+    async def ios_boot_device(device_name: str | None = None) -> str:
+        """Boot an iOS simulator.
+
+        Args:
+            device_name: Simulator name fragment or full UDID to boot.
+                         If omitted, boots the first available iPhone simulator.
+
+        Returns:
+            JSON dict with 'ok', 'device_name', 'device_id', and optional 'error'.
+        """
+        devices = _list_simulator_devices()
+
+        # Resolve target device
+        target: dict[str, Any] | None = None
+
+        if device_name is None:
+            # Pick the first unbooted iPhone from the most recent runtime
+            for dev in reversed(devices):
+                if "iphone" in dev.get("name", "").lower() and dev.get("state") != "Booted":
+                    target = dev
+                    break
+            if target is None:
+                # Maybe there's already a booted one — use it
+                for dev in devices:
+                    if dev.get("state") == "Booted":
+                        return json.dumps({
+                            "ok": True,
+                            "device_name": dev.get("name"),
+                            "device_id": dev.get("udid"),
+                            "note": "simulator already booted",
+                        })
+                return json.dumps({
+                    "ok": False,
+                    "error": "No iPhone simulator found. Pass device_name.",
+                })
+        elif len(device_name) == 36 and device_name.count("-") == 4:
+            # Looks like a UDID
+            for dev in devices:
+                if dev.get("udid") == device_name:
+                    target = dev
+                    break
+            if target is None:
+                target = {"udid": device_name, "name": device_name}
         else:
-            runner = (
-                self._step_runner_factory()
-                if self._step_runner_factory is not None
-                else _NullStepRunner()
-            )
-            agent = ExploratoryAgent(
-                step_runner=runner,
-                persona=persona,
-            )
-            result = agent.explore(app_context=app_context)
+            needle = device_name.lower()
+            for dev in devices:
+                if needle in dev.get("name", "").lower():
+                    target = dev
+                    break
+            if target is None:
+                return json.dumps({
+                    "ok": False,
+                    "error": f"No simulator matching '{device_name}' found.",
+                })
 
-        run_id = str(uuid.uuid4())
-        result["run_id"] = run_id
-        self._results[run_id] = result
-        return result
+        device_id = target["udid"]
+        dev_label = target.get("name", device_id)
 
-    def get_results(self, run_id: str) -> Any:
-        """Retrieve stored results for a completed run.
-
-        Args:
-            run_id: The run ID returned by run_test or run_exploratory.
-
-        Returns:
-            The stored result dict.
-
-        Raises:
-            KeyError: If run_id is not found in the result store.
-        """
-        if run_id not in self._results:
-            raise KeyError(f"No results found for run_id: {run_id!r}")
-        return self._results[run_id]
-
-    def list_devices(self) -> list[dict[str, Any]]:
-        """List available iOS Simulator devices using xcrun simctl.
-
-        Returns:
-            List of device dicts parsed from simctl JSON output.
-        """
-        proc = subprocess.run(
-            ["xcrun", "simctl", "list", "devices", "--json"],
+        result = subprocess.run(
+            ["xcrun", "simctl", "boot", device_id],
             capture_output=True,
             text=True,
         )
-        if proc.returncode != 0:
-            return []
-        try:
-            data = json.loads(proc.stdout)
-        except (json.JSONDecodeError, ValueError):
-            return []
 
-        devices: list[dict[str, Any]] = []
-        for runtime_devices in data.get("devices", {}).values():
-            for device in runtime_devices:
-                devices.append(device)
-        return devices
+        already_booted = (
+            result.returncode != 0
+            and "Unable to boot device in current state: Booted" in result.stderr
+        )
 
-    def list_scenarios(self) -> list[dict[str, Any]]:
-        """Return all scenarios registered with this server.
+        if result.returncode == 0 or already_booted:
+            return json.dumps({
+                "ok": True,
+                "device_name": dev_label,
+                "device_id": device_id,
+                "note": "already booted" if already_booted else "booted successfully",
+            })
 
-        Base implementation returns an empty list. Subclasses may override to
-        expose a scenario registry.
+        return json.dumps({
+            "ok": False,
+            "device_name": dev_label,
+            "device_id": device_id,
+            "error": result.stderr.strip(),
+        })
+
+    # ── Tool: ios_install_app ──────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_install_app",
+        description=(
+            "Install a .app bundle on an iOS Simulator. "
+            "app_path should be the path to the .app directory produced by a debug build "
+            "(e.g. DerivedData/.../Debug-iphonesimulator/MyApp.app). "
+            "If device_id is not provided, uses the currently booted simulator."
+        ),
+    )
+    async def ios_install_app(
+        app_path: str,
+        device_id: str | None = None,
+    ) -> str:
+        """Install a .app bundle on a simulator.
+
+        Args:
+            app_path: Path to the .app directory.
+            device_id: Simulator UDID. Defaults to currently booted simulator.
 
         Returns:
-            List of scenario dicts.
+            JSON dict with 'ok', 'app_name', 'device_id', and optional 'error'.
         """
-        return []
+        resolved = Path(app_path).resolve()
+        if not resolved.exists():
+            return json.dumps({"ok": False, "error": f"App not found: {app_path}"})
 
+        if device_id is None:
+            device_id = _find_booted_udid()
+            if device_id is None:
+                return json.dumps({
+                    "ok": False,
+                    "error": (
+                        "No booted simulator found. "
+                        "Call ios_boot_device first, or pass device_id."
+                    ),
+                })
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+        result = subprocess.run(
+            ["xcrun", "simctl", "install", device_id, str(resolved)],
+            capture_output=True,
+            text=True,
+        )
 
-class _NullStepRunner:
-    """Minimal no-op step runner used when no factory is configured."""
+        if result.returncode == 0:
+            return json.dumps({
+                "ok": True,
+                "app_name": resolved.name,
+                "device_id": device_id,
+            })
 
-    def run_step(self, goal: Any = None, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        return {
-            "success": True,
-            "finding": None,
-            "covered_area": "unknown",
-            "cost": 0.0,
-            "critical": False,
+        return json.dumps({
+            "ok": False,
+            "app_name": resolved.name,
+            "device_id": device_id,
+            "error": result.stderr.strip(),
+        })
+
+    # ── Tool: ios_run_test ─────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_run_test",
+        description=(
+            "Run a SpecterQA iOS test journey against an app in the simulator. "
+            "This is the primary testing tool. Loads YAML configs from .specterqa/, "
+            "creates a SimulatorDriver, runs each step with Claude Computer Use, "
+            "and returns structured results with pass/fail, findings, and cost. "
+            "Requires: Xcode, a booted simulator, and ANTHROPIC_API_KEY. "
+            "product_slug must match a .specterqa/products/<slug>.yaml file. "
+            "journey_name must match a .specterqa/journeys/<name>.yaml file."
+        ),
+    )
+    async def ios_run_test(
+        product_slug: str,
+        journey_name: str,
+        device_name: str | None = None,
+        budget: float = 5.0,
+        max_steps: int = 20,
+        directory: str | None = None,
+    ) -> str:
+        """Run a test journey against an iOS app in the simulator.
+
+        Args:
+            product_slug: Product slug (matches .specterqa/products/<slug>.yaml).
+            journey_name: Journey ID (matches .specterqa/journeys/<name>.yaml).
+            device_name: Simulator name fragment or UDID. Defaults to booted simulator.
+            budget: Maximum AI spend in USD for this run. Default: $5.00.
+            max_steps: Max AI iterations per journey step. Default: 20.
+            directory: Working directory to find .specterqa/ project.
+                       Defaults to the server's working directory.
+
+        Returns:
+            JSON string with run_id, passed, step_reports, findings, and cost.
+        """
+        import sys
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return json.dumps({
+                "ok": False,
+                "error": "ANTHROPIC_API_KEY is not set.",
+                "error_code": "API_KEY_MISSING",
+            })
+
+        project_dir = _resolve_project_dir(directory)
+        if not project_dir.is_dir():
+            return json.dumps({
+                "ok": False,
+                "error": (
+                    f"SpecterQA project not initialized at {project_dir.parent}. "
+                    "Run 'specterqa ios init' first."
+                ),
+                "error_code": "PROJECT_NOT_INITIALIZED",
+            })
+
+        # Load product and journey configs
+        product_cfg_raw = _load_yaml(project_dir / "products" / f"{product_slug}.yaml")
+        product_cfg = product_cfg_raw.get("product", product_cfg_raw)
+
+        journey_cfg_raw = _load_yaml(project_dir / "journeys" / f"{journey_name}.yaml")
+        journey_cfg = journey_cfg_raw.get("scenario", journey_cfg_raw)
+
+        if not product_cfg:
+            return json.dumps({
+                "ok": False,
+                "error": f"Product config not found: .specterqa/products/{product_slug}.yaml",
+                "error_code": "PRODUCT_NOT_FOUND",
+            })
+
+        if not journey_cfg:
+            return json.dumps({
+                "ok": False,
+                "error": f"Journey config not found: .specterqa/journeys/{journey_name}.yaml",
+                "error_code": "JOURNEY_NOT_FOUND",
+            })
+
+        # Import engine components
+        try:
+            from specterqa.ios.drivers.simulator.driver import SimulatorDriver
+            from specterqa.ios.drivers.simulator.ai_context import SimulatorAIContext
+            from specterqa.ios.engine.ai_step_runner import IOSAIStepRunner
+        except ImportError as exc:
+            return json.dumps({
+                "ok": False,
+                "error": f"Failed to import SpecterQA iOS engine: {exc}",
+                "error_code": "IMPORT_ERROR",
+            })
+
+        try:
+            from specterqa.engine.decider import ComputerUseDecider  # type: ignore[import-untyped]
+        except ImportError:
+            try:
+                from specterqa.engine.ai_decider import ComputerUseDecider  # type: ignore[import-untyped]
+            except ImportError as exc:
+                return json.dumps({
+                    "ok": False,
+                    "error": f"Failed to import SpecterQA decider: {exc}",
+                    "error_code": "IMPORT_ERROR",
+                })
+
+        # Resolve device
+        device_id: str | None = None
+        if device_name:
+            if len(device_name) == 36 and device_name.count("-") == 4:
+                device_id = device_name
+            else:
+                found = _find_simulator_by_name(device_name)
+                device_id = found["udid"] if found else None
+        if device_id is None:
+            device_id = _find_booted_udid()
+        if device_id is None:
+            return json.dumps({
+                "ok": False,
+                "error": "No booted simulator found. Call ios_boot_device first.",
+                "error_code": "NO_SIMULATOR",
+            })
+
+        bundle_id: str = product_cfg.get("bundle_id", product_cfg.get("name", product_slug))
+
+        run_id = f"IOS-RUN-{time.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8].upper()}"
+        evidence_dir = project_dir / "evidence" / run_id
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build driver and runner
+        driver_cfg: dict[str, Any] = {"device_id": device_id, "bundle_id": bundle_id}
+        if product_cfg.get("screenshot_resize_width"):
+            driver_cfg["screenshot_resize_width"] = product_cfg["screenshot_resize_width"]
+
+        driver = SimulatorDriver(config=driver_cfg)
+
+        try:
+            driver.start()
+        except Exception as exc:
+            return json.dumps({
+                "ok": False,
+                "run_id": run_id,
+                "error": f"Failed to start simulator driver: {exc}",
+                "error_code": "DRIVER_ERROR",
+            })
+
+        # Launch app
+        try:
+            driver.launch_app()
+            time.sleep(2)
+        except Exception as exc:
+            logger.warning("launch_app failed (non-fatal): %s", exc)
+
+        try:
+            decider = ComputerUseDecider(api_key=api_key, budget=budget)
+        except TypeError:
+            decider = ComputerUseDecider(api_key=api_key)
+
+        context_builder = SimulatorAIContext()
+
+        runner = IOSAIStepRunner(
+            decider=decider,
+            executor=driver,
+            context_builder=context_builder,
+            evidence_dir=str(evidence_dir),
+            budget=budget,
+        )
+
+        steps = journey_cfg.get("steps", [])
+        all_passed = True
+        step_reports: list[dict[str, Any]] = []
+        start_time = time.monotonic()
+
+        for i, step in enumerate(steps, 1):
+            step_id = step.get("id", f"step-{i}")
+            description = step.get("description", step.get("goal", step_id))
+            goal = step.get("goal", description)
+            checkpoint = step.get("checkpoint", None)
+
+            step_start = time.monotonic()
+            try:
+                result = runner.run_step(
+                    goal=goal,
+                    checkpoint=checkpoint,
+                    max_iterations=max_steps,
+                )
+            except Exception as exc:
+                logger.error("Step %s failed: %s", step_id, exc)
+                all_passed = False
+                step_reports.append({
+                    "step_id": step_id,
+                    "description": description,
+                    "passed": False,
+                    "duration_seconds": round(time.monotonic() - step_start, 3),
+                    "error": str(exc),
+                    "findings": [],
+                })
+                continue
+
+            passed = result.passed
+            if not passed:
+                all_passed = False
+
+            findings_data = [
+                {
+                    "severity": getattr(f, "severity", "?"),
+                    "category": getattr(f, "category", "?"),
+                    "title": getattr(f, "title", ""),
+                    "description": getattr(f, "description", ""),
+                }
+                for f in (result.findings or [])
+            ]
+
+            step_reports.append({
+                "step_id": step_id,
+                "description": description,
+                "passed": passed,
+                "duration_seconds": round(time.monotonic() - step_start, 3),
+                "error": result.error,
+                "findings": findings_data,
+            })
+
+        total_duration = round(time.monotonic() - start_time, 3)
+
+        try:
+            driver.stop()
+        except Exception as exc:
+            logger.warning("driver.stop() failed (non-fatal): %s", exc)
+
+        all_findings = [f for sr in step_reports for f in sr.get("findings", [])]
+        passed_count = sum(1 for sr in step_reports if sr.get("passed"))
+
+        run_result: dict[str, Any] = {
+            "run_id": run_id,
+            "product": product_slug,
+            "journey": journey_name,
+            "device_id": device_id,
+            "bundle_id": bundle_id,
+            "passed": all_passed,
+            "step_count": len(steps),
+            "passed_count": passed_count,
+            "step_reports": step_reports,
+            "findings": all_findings,
+            "duration_seconds": total_duration,
+            "evidence_dir": str(evidence_dir),
         }
+
+        # Persist to evidence directory and in-memory store
+        try:
+            (evidence_dir / "run-result.json").write_text(
+                json.dumps(run_result, indent=2, default=_json_serialize),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to write run-result.json: %s", exc)
+
+        _RESULT_STORE[run_id] = run_result
+
+        return json.dumps(run_result, default=_json_serialize)
+
+    # ── Tool: ios_run_smoke ────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_run_smoke",
+        description=(
+            "Run a quick smoke test for an iOS product. "
+            "Uses the 'smoke-test' journey (or the first journey in the product config) "
+            "with a reduced budget of $1.00 and fewer max steps. "
+            "Thin wrapper over ios_run_test — fast sanity check."
+        ),
+    )
+    async def ios_run_smoke(
+        product_slug: str,
+        device_name: str | None = None,
+        directory: str | None = None,
+    ) -> str:
+        """Run a quick smoke test for a product.
+
+        Args:
+            product_slug: Product slug (matches .specterqa/products/<slug>.yaml).
+            device_name: Simulator name fragment or UDID.
+            directory: Working directory to find .specterqa/ project.
+
+        Returns:
+            JSON run result (same schema as ios_run_test).
+        """
+        project_dir = _resolve_project_dir(directory)
+        smoke_journey = "smoke-test"
+
+        # Check the product config for a preferred first journey
+        product_raw = _load_yaml(project_dir / "products" / f"{product_slug}.yaml")
+        product_cfg = product_raw.get("product", product_raw)
+        journeys_hint = product_cfg.get("journeys", [])
+        if journeys_hint:
+            first = journeys_hint[0]
+            smoke_journey = first if isinstance(first, str) else first.get("id", smoke_journey)
+
+        return await ios_run_test(
+            product_slug=product_slug,
+            journey_name=smoke_journey,
+            device_name=device_name,
+            budget=1.0,
+            max_steps=10,
+            directory=directory,
+        )
+
+    # ── Tool: ios_run_exploratory ──────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_run_exploratory",
+        description=(
+            "Run persona-driven AI exploration of an iOS app. "
+            "The AI adopts the specified persona (from .specterqa/personas/<name>.yaml) "
+            "and explores the app autonomously, surfacing UX issues and bugs "
+            "without a predefined script. "
+            "product_slug is used to resolve bundle_id and device config. "
+            "persona_name must match a .specterqa/personas/<name>.yaml file."
+        ),
+    )
+    async def ios_run_exploratory(
+        product_slug: str,
+        persona_name: str,
+        max_steps: int = 20,
+        device_name: str | None = None,
+        directory: str | None = None,
+    ) -> str:
+        """Run persona-driven exploratory testing.
+
+        Args:
+            product_slug: Product slug (matches .specterqa/products/<slug>.yaml).
+            persona_name: Persona name (matches .specterqa/personas/<name>.yaml).
+            max_steps: Maximum exploration iterations. Default: 20.
+            device_name: Simulator name fragment or UDID.
+            directory: Working directory to find .specterqa/ project.
+
+        Returns:
+            JSON exploration result with run_id, findings, and action trace.
+        """
+        project_dir = _resolve_project_dir(directory)
+
+        product_raw = _load_yaml(project_dir / "products" / f"{product_slug}.yaml")
+        product_cfg = product_raw.get("product", product_raw)
+
+        persona_raw = _load_yaml(project_dir / "personas" / f"{persona_name}.yaml")
+        persona_cfg = persona_raw.get("persona", persona_raw)
+
+        if not persona_cfg:
+            return json.dumps({
+                "ok": False,
+                "error": f"Persona config not found: .specterqa/personas/{persona_name}.yaml",
+                "error_code": "PERSONA_NOT_FOUND",
+            })
+
+        # Import exploratory agent
+        try:
+            from specterqa.ios.exploratory.agent import ExploratoryAgent
+            from specterqa.ios.drivers.simulator.driver import SimulatorDriver
+            from specterqa.ios.drivers.simulator.ai_context import SimulatorAIContext
+            from specterqa.ios.engine.ai_step_runner import IOSAIStepRunner
+        except ImportError as exc:
+            return json.dumps({
+                "ok": False,
+                "error": f"Import error: {exc}",
+                "error_code": "IMPORT_ERROR",
+            })
+
+        try:
+            from specterqa.engine.decider import ComputerUseDecider  # type: ignore[import-untyped]
+        except ImportError:
+            try:
+                from specterqa.engine.ai_decider import ComputerUseDecider  # type: ignore[import-untyped]
+            except ImportError as exc:
+                return json.dumps({
+                    "ok": False,
+                    "error": f"Import error: {exc}",
+                    "error_code": "IMPORT_ERROR",
+                })
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return json.dumps({
+                "ok": False,
+                "error": "ANTHROPIC_API_KEY is not set.",
+                "error_code": "API_KEY_MISSING",
+            })
+
+        # Resolve device
+        device_id: str | None = None
+        if device_name:
+            if len(device_name) == 36 and device_name.count("-") == 4:
+                device_id = device_name
+            else:
+                found = _find_simulator_by_name(device_name)
+                device_id = found["udid"] if found else None
+        if device_id is None:
+            device_id = _find_booted_udid()
+        if device_id is None:
+            return json.dumps({
+                "ok": False,
+                "error": "No booted simulator. Call ios_boot_device first.",
+                "error_code": "NO_SIMULATOR",
+            })
+
+        bundle_id: str = product_cfg.get("bundle_id", product_cfg.get("name", product_slug))
+        driver_cfg: dict[str, Any] = {"device_id": device_id, "bundle_id": bundle_id}
+
+        driver = SimulatorDriver(config=driver_cfg)
+        try:
+            driver.start()
+        except Exception as exc:
+            return json.dumps({
+                "ok": False,
+                "error": f"Driver start failed: {exc}",
+                "error_code": "DRIVER_ERROR",
+            })
+
+        try:
+            driver.launch_app()
+            time.sleep(2)
+        except Exception as exc:
+            logger.warning("launch_app failed (non-fatal): %s", exc)
+
+        try:
+            decider = ComputerUseDecider(api_key=api_key)
+        except TypeError:
+            decider = ComputerUseDecider(api_key=api_key)
+
+        context_builder = SimulatorAIContext()
+        run_id = f"IOS-EXP-{time.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8].upper()}"
+        evidence_dir = project_dir / "evidence" / run_id
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+
+        runner = IOSAIStepRunner(
+            decider=decider,
+            executor=driver,
+            context_builder=context_builder,
+            evidence_dir=str(evidence_dir),
+        )
+
+        try:
+            agent = ExploratoryAgent(
+                step_runner=runner,
+                persona=persona_cfg,
+            )
+            app_context = product_cfg.get("description", f"{product_slug} iOS app")
+            result = agent.explore(app_context=app_context, max_steps=max_steps)
+        except Exception as exc:
+            logger.exception("Exploratory run failed")
+            return json.dumps({
+                "ok": False,
+                "error": f"Exploration failed: {exc}",
+                "error_code": "EXPLORATION_ERROR",
+            })
+        finally:
+            try:
+                driver.stop()
+            except Exception as exc:
+                logger.warning("driver.stop() failed (non-fatal): %s", exc)
+
+        result["run_id"] = run_id
+        result["product"] = product_slug
+        result["persona"] = persona_name
+        result["evidence_dir"] = str(evidence_dir)
+
+        _RESULT_STORE[run_id] = result
+
+        try:
+            (evidence_dir / "run-result.json").write_text(
+                json.dumps(result, indent=2, default=_json_serialize),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to write run-result.json: %s", exc)
+
+        return json.dumps(result, default=_json_serialize)
+
+    # ── Tool: ios_get_results ──────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_get_results",
+        description=(
+            "Retrieve stored results for a previous iOS test run by run_id. "
+            "Checks the in-memory store first, then falls back to the evidence directory. "
+            "run_id is returned by ios_run_test, ios_run_smoke, and ios_run_exploratory."
+        ),
+    )
+    async def ios_get_results(
+        run_id: str,
+        directory: str | None = None,
+    ) -> str:
+        """Get results for a completed run.
+
+        Args:
+            run_id: The run ID returned by ios_run_test or ios_run_exploratory.
+            directory: Working directory to find .specterqa/ project evidence.
+
+        Returns:
+            JSON string with the full run result, or an error with available run IDs.
+        """
+        # Check in-memory store first (fast path for same-session results)
+        if run_id in _RESULT_STORE:
+            return json.dumps(_RESULT_STORE[run_id], default=_json_serialize)
+
+        # Fall back to evidence directory on disk
+        project_dir = _resolve_project_dir(directory)
+        evidence_dir = project_dir / "evidence"
+
+        run_dir = evidence_dir / run_id
+        result_file = run_dir / "run-result.json"
+
+        if result_file.is_file():
+            try:
+                return result_file.read_text(encoding="utf-8")
+            except OSError as exc:
+                return json.dumps({"error": f"Failed to read results: {exc}", "run_id": run_id})
+
+        # Not found — list available runs to help
+        available: list[str] = []
+        if evidence_dir.is_dir():
+            available = sorted(
+                [d.name for d in evidence_dir.iterdir() if d.is_dir() and d.name.startswith("IOS-")],
+                reverse=True,
+            )
+
+        return json.dumps({
+            "error": f"Run ID not found: {run_id}",
+            "error_code": "RUN_NOT_FOUND",
+            "available_run_ids": available[:20],
+        })
+
+    # ── Tool: ios_screenshot ───────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_screenshot",
+        description=(
+            "Take a screenshot of the current state of the iOS Simulator. "
+            "Returns a base64-encoded PNG image. "
+            "Useful for inspecting the simulator state without running a full test. "
+            "Requires a booted simulator."
+        ),
+    )
+    async def ios_screenshot(device_id: str | None = None) -> str:
+        """Take a screenshot of the current simulator state.
+
+        Args:
+            device_id: Simulator UDID. Defaults to the currently booted simulator.
+
+        Returns:
+            JSON dict with 'ok', 'image_base64' (PNG), and optional 'error'.
+        """
+        if device_id is None:
+            device_id = _find_booted_udid()
+            if device_id is None:
+                return json.dumps({
+                    "ok": False,
+                    "error": "No booted simulator found. Call ios_boot_device first.",
+                })
+
+        # Write to a temp file then read back
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                ["xcrun", "simctl", "io", device_id, "screenshot", tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+
+            if result.returncode != 0:
+                return json.dumps({
+                    "ok": False,
+                    "device_id": device_id,
+                    "error": result.stderr.strip() or "Screenshot failed",
+                })
+
+            with open(tmp_path, "rb") as f:
+                image_bytes = f.read()
+
+            image_b64 = base64.b64encode(image_bytes).decode("ascii")
+            return json.dumps({
+                "ok": True,
+                "device_id": device_id,
+                "image_base64": image_b64,
+                "format": "png",
+                "size_bytes": len(image_bytes),
+            })
+        except subprocess.TimeoutExpired:
+            return json.dumps({
+                "ok": False,
+                "device_id": device_id,
+                "error": "Screenshot timed out after 15 seconds.",
+            })
+        except Exception as exc:
+            return json.dumps({"ok": False, "device_id": device_id, "error": str(exc)})
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    # ── Tool: ios_list_products ────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_list_products",
+        description=(
+            "List configured SpecterQA iOS products from .specterqa/products/. "
+            "Returns product slugs, display names, bundle IDs, and the list of "
+            "journeys configured for each product."
+        ),
+    )
+    async def ios_list_products(directory: str | None = None) -> str:
+        """List configured products.
+
+        Args:
+            directory: Working directory to find .specterqa/ project.
+
+        Returns:
+            JSON array of product dicts with slug, name, bundle_id, and journeys.
+        """
+        project_dir = _resolve_project_dir(directory)
+        products_dir = project_dir / "products"
+
+        if not products_dir.is_dir():
+            return json.dumps({
+                "error": f"Products directory not found: {products_dir}",
+                "error_code": "PROJECT_NOT_INITIALIZED",
+            })
+
+        results: list[dict[str, Any]] = []
+
+        for product_file in sorted(products_dir.glob("*.yaml")):
+            raw = _load_yaml(product_file)
+            cfg = raw.get("product", raw)
+            slug = product_file.stem
+            results.append({
+                "slug": slug,
+                "name": cfg.get("name", slug),
+                "bundle_id": cfg.get("bundle_id", ""),
+                "description": cfg.get("description", ""),
+                "journeys": cfg.get("journeys", []),
+            })
+
+        return json.dumps(results, indent=2)
+
+    # ── Tool: ios_list_journeys ────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_list_journeys",
+        description=(
+            "List configured SpecterQA iOS journeys from .specterqa/journeys/. "
+            "Returns journey IDs, names, tags, and step counts. "
+            "Use the journey ID with ios_run_test's journey_name parameter."
+        ),
+    )
+    async def ios_list_journeys(directory: str | None = None) -> str:
+        """List configured journeys.
+
+        Args:
+            directory: Working directory to find .specterqa/ project.
+
+        Returns:
+            JSON array of journey dicts with id, name, tags, and step_count.
+        """
+        project_dir = _resolve_project_dir(directory)
+        journeys_dir = project_dir / "journeys"
+
+        if not journeys_dir.is_dir():
+            return json.dumps({
+                "error": f"Journeys directory not found: {journeys_dir}",
+                "error_code": "PROJECT_NOT_INITIALIZED",
+            })
+
+        results: list[dict[str, Any]] = []
+
+        for journey_file in sorted(journeys_dir.glob("*.yaml")):
+            raw = _load_yaml(journey_file)
+            cfg = raw.get("scenario", raw)
+            journey_id = cfg.get("id", journey_file.stem)
+            results.append({
+                "id": journey_id,
+                "name": cfg.get("name", journey_id),
+                "tags": cfg.get("tags", []),
+                "step_count": len(cfg.get("steps", [])),
+                "description": cfg.get("description", ""),
+            })
+
+        return json.dumps(results, indent=2)
+
+    return mcp
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def serve() -> None:
+    """Start the SpecterQA iOS MCP server on stdio transport.
+
+    This is the entry point for:
+      - the ``specterqa-ios-mcp`` console script
+      - ``python -m specterqa.ios.mcp``
+      - ``specterqa ios serve``
+    """
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    server = create_server()
+    server.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    serve()
