@@ -236,6 +236,12 @@ class IOSAIStepRunner:
                     decide_kwargs["display_width"] = _img_w
                     decide_kwargs["display_height"] = _img_h
                 decision: Decision = self._decider.decide(**decide_kwargs)
+                logger.info(
+                    "IOSAIStepRunner: iter=%d action=%s target=%r value=%r goal_achieved=%s reasoning=%.100s",
+                    iteration, decision.action, decision.target,
+                    getattr(decision, "value", ""), decision.goal_achieved,
+                    getattr(decision, "reasoning", "")[:100],
+                )
             except BudgetExceededError as exc:
                 error_msg = f"Budget exceeded: {exc}"
                 logger.warning("IOSAIStepRunner: %s", error_msg)
