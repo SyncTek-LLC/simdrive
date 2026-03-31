@@ -973,16 +973,65 @@ class IndigoHIDBackend:
     # ------------------------------------------------------------------
 
     @classmethod
-    def is_available(cls) -> bool:
-        """Return ``True`` if SimulatorKit and CoreSimulator can be loaded.
+    def _can_create_hid_client(cls) -> bool:
+        """Probe whether ``SimDeviceLegacyHIDClient alloc initWithDevice:error:``
+        can actually be called on this machine.
 
-        This is a lightweight probe — it loads the frameworks but does not
-        attempt to connect to any simulator device.
+        On Xcode 16+, ``initWithDevice:error:`` is a Swift ``preconditionFailure``
+        when invoked outside Simulator.app — the class is namespaced as
+        ``SimulatorKit.SimDeviceLegacyHIDClient`` (dot in the name).  We detect
+        this early and return ``False`` so ``is_available()`` tells the truth.
+
+        The check is intentionally *cheap*: it only loads frameworks, looks up
+        the class, and inspects the class name — it does NOT try to find a
+        booted device or send any IPC.
 
         Returns:
-            bool: ``True`` when all required private frameworks are loadable.
+            ``True`` only when HID client creation is expected to succeed.
         """
-        return _load_frameworks()
+        if not _load_frameworks():
+            return False
+        assert _objc is not None
+        try:
+            bridge = _ObjCBridge(_objc, cf=_cf)
+            for name in _HID_CLIENT_CLASS_NAMES:
+                try:
+                    cls_ptr = bridge.cls(name)
+                except RuntimeError:
+                    continue
+                if cls_ptr and "." in name:
+                    # Swift-namespaced → Xcode 16+ → initWithDevice:error: will SIGTRAP
+                    logger.debug(
+                        "_can_create_hid_client: detected Xcode 16+ class %r — "
+                        "initWithDevice:error: is blocked outside Simulator.app",
+                        name,
+                    )
+                    return False
+            # Unqualified class name (Xcode ≤ 15) — initWithDevice:error: is safe
+            return True
+        except Exception as exc:
+            logger.debug("_can_create_hid_client probe failed: %s", exc)
+            return False
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Return ``True`` only when IndigoHID injection will actually work.
+
+        Loads private frameworks *and* verifies that
+        ``SimDeviceLegacyHIDClient.initWithDevice:error:`` can be called on
+        this machine.  On Xcode 16+, the Swift-namespaced class raises a
+        ``preconditionFailure`` (SIGTRAP) when instantiated outside
+        Simulator.app, so this method returns ``False`` in that environment.
+
+        Previously this method returned ``True`` as soon as frameworks loaded,
+        which caused :class:`BackendSelector` to pick IndigoHID on Xcode 16+
+        machines and then crash on first use.  This fix was added in
+        INIT-2026-493 (auto-closeout pipeline).
+
+        Returns:
+            bool: ``True`` only when HID client creation is expected to succeed.
+        """
+        return cls._can_create_hid_client()
 
     # ------------------------------------------------------------------
     # Internal setup
