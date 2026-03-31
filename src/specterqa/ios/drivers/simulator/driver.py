@@ -395,6 +395,8 @@ class SimulatorDriver:
                 self._last_img_width = img_w
                 self._last_img_height = img_h
 
+            logger.info("click: img(%d,%d) in %dx%d, backend=%s", x, y, img_w, img_h, self._backend_name)
+
             if self._backend is not None:
                 if self._backend_name == "CGEventBackend":
                     # CGEventBackend wraps InteractionLayer which does its
