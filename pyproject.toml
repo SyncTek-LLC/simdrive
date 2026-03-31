@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "0.5.3"
+version = "0.6.0"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -49,6 +49,9 @@ include = ["specterqa*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: real-device integration tests (require a booted iOS Simulator)",
+]
 
 [tool.ruff]
 line-length = 120

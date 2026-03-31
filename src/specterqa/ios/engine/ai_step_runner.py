@@ -143,6 +143,13 @@ class IOSAIStepRunner:
         # Stuck detection: track last N screenshot hashes.
         recent_screenshots: list[str] = []
 
+        # Consecutive-failure tracking: (error_message → count).
+        # Resets whenever a different error (or a success) is seen.
+        _last_action_error: str | None = None
+        _consecutive_error_count: int = 0
+        # Hard limit — abort if the same backend error repeats this many times.
+        _CONSECUTIVE_ERROR_ABORT = 3
+
         iteration = 0
         while iteration < max_iterations:
             # ----------------------------------------------------------------
@@ -301,6 +308,66 @@ class IOSAIStepRunner:
                     "duration_ms": 0.0,
                     "ui_changed": False,
                 })
+                # Exception counts as a consecutive backend error.
+                error_key = str(exc)
+                if error_key == _last_action_error:
+                    _consecutive_error_count += 1
+                else:
+                    _last_action_error = error_key
+                    _consecutive_error_count = 1
+                if _consecutive_error_count >= _CONSECUTIVE_ERROR_ABORT:
+                    error_msg = (
+                        f"Backend appears broken — same error repeated "
+                        f"{_consecutive_error_count} times: {error_key}"
+                    )
+                    logger.error(
+                        "IOSAIStepRunner: aborting — %s", error_msg
+                    )
+                    iteration += 1
+                    break
+                iteration += 1
+                continue
+
+            # ----------------------------------------------------------------
+            # 9. Check execute() result — surface failures, abort on repeat errors
+            # ----------------------------------------------------------------
+            action_success = getattr(action_result, "success", None)
+            if action_success is None and isinstance(action_result, dict):
+                action_success = action_result.get("success", True)
+
+            if action_success is False:
+                action_error = (
+                    getattr(action_result, "error", None)
+                    or (action_result.get("error") if isinstance(action_result, dict) else None)
+                    or "unknown error"
+                )
+                logger.warning(
+                    "IOSAIStepRunner: action '%s' failed at iteration %d: %s",
+                    decision.action,
+                    iteration,
+                    action_error,
+                )
+                # Track consecutive identical errors to detect a broken backend.
+                if action_error == _last_action_error:
+                    _consecutive_error_count += 1
+                else:
+                    _last_action_error = action_error
+                    _consecutive_error_count = 1
+
+                if _consecutive_error_count >= _CONSECUTIVE_ERROR_ABORT:
+                    error_msg = (
+                        f"Backend appears broken — same error repeated "
+                        f"{_consecutive_error_count} times: {action_error}"
+                    )
+                    logger.error(
+                        "IOSAIStepRunner: aborting — %s", error_msg
+                    )
+                    iteration += 1
+                    break
+            else:
+                # Success (or unknown) — reset consecutive-error counter.
+                _last_action_error = None
+                _consecutive_error_count = 0
 
             iteration += 1
 

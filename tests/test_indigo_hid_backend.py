@@ -278,22 +278,27 @@ class TestIndigoHIDBackendAvailability:
         result = IndigoHIDBackend.is_available()
         assert isinstance(result, bool)
 
-    def test_is_available_returns_true_when_simulatorkit_loadable(self):
-        """is_available() returns True when _load_frameworks succeeds."""
-        import specterqa.ios.backends.indigo_hid as mod
-        orig = mod._frameworks_loaded
-        mod._frameworks_loaded = None
-        try:
-            with patch("ctypes.cdll.LoadLibrary", return_value=MagicMock()), \
-                 patch("os.path.exists", return_value=True), \
-                 patch(
-                     "specterqa.ios.backends.indigo_hid._xcode_developer_path",
-                     return_value=_XCODE_DEV_PATH,
-                 ):
-                result = IndigoHIDBackend.is_available()
-            assert result is True
-        finally:
-            mod._frameworks_loaded = orig
+    def test_is_available_returns_true_when_hid_client_creatable(self):
+        """is_available() returns True only when HID client creation is expected to work.
+
+        This requires both frameworks to load AND _can_create_hid_client() to return
+        True.  We mock _can_create_hid_client to simulate Xcode ≤ 15 (where HID
+        client creation is safe from outside Simulator.app).
+        """
+        with patch.object(IndigoHIDBackend, "_can_create_hid_client", return_value=True):
+            result = IndigoHIDBackend.is_available()
+        assert result is True
+
+    def test_is_available_returns_false_when_xcode16_blocks_hid_client(self):
+        """is_available() returns False on Xcode 16+ (Swift-namespaced class).
+
+        On Xcode 16+, SimulatorKit.SimDeviceLegacyHIDClient has a dot in its name,
+        indicating it's Swift-module-qualified.  _can_create_hid_client() detects
+        this and returns False to prevent initWithDevice:error: from SIGTRAPping.
+        """
+        with patch.object(IndigoHIDBackend, "_can_create_hid_client", return_value=False):
+            result = IndigoHIDBackend.is_available()
+        assert result is False
 
     def test_is_available_returns_false_when_framework_not_found(self):
         """is_available() returns False when LoadLibrary raises OSError."""
