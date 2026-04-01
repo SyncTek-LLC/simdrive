@@ -133,6 +133,31 @@ def _json_serialize(obj: Any) -> str:
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+def _decision_to_action(decision: Any) -> dict:
+    """Convert a ComputerUseDecider Decision to sim_driver action dict."""
+    if decision.action == "click":
+        parts = decision.target.split(",")
+        x, y = int(float(parts[0])), int(float(parts[1]))
+        return {"action": "left_click", "coordinate": [x, y]}
+    elif decision.action == "fill":
+        return {"action": "type", "text": decision.value}
+    elif decision.action == "keyboard":
+        return {"action": "key", "key": decision.value}
+    elif decision.action == "scroll":
+        parts = (decision.target or "512,1108").split(",")
+        x, y = int(float(parts[0])), int(float(parts[1]))
+        return {
+            "action": "scroll",
+            "coordinate": [x, y],
+            "direction": decision.value or "down",
+            "amount": 3,
+        }
+    elif decision.action == "wait":
+        return {"action": "wait", "duration": 1}
+    else:
+        return {"action": decision.action}
+
+
 # ---------------------------------------------------------------------------
 # In-memory result store (lives for the duration of the server process)
 # ---------------------------------------------------------------------------
@@ -234,7 +259,7 @@ def create_server() -> Any:
         pkg_ok = False
         pkg_detail = ""
         try:
-            from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: F401
+            from specterqa.ios.sim_driver import SimDriver  # noqa: F401
             pkg_ok = True
             pkg_detail = "specterqa.ios importable"
         except ImportError as exc:
@@ -501,29 +526,24 @@ def create_server() -> Any:
                 "error_code": "JOURNEY_NOT_FOUND",
             })
 
-        # Import engine components
+        # Import SimDriver and AI decider
         try:
-            from specterqa.ios.drivers.simulator.driver import SimulatorDriver
-            from specterqa.ios.drivers.simulator.ai_context import SimulatorAIContext
-            from specterqa.ios.engine.ai_step_runner import IOSAIStepRunner
+            from specterqa.ios.sim_driver import SimDriver
         except ImportError as exc:
             return json.dumps({
                 "ok": False,
-                "error": f"Failed to import SpecterQA iOS engine: {exc}",
+                "error": f"Failed to import SimDriver: {exc}",
                 "error_code": "IMPORT_ERROR",
             })
 
         try:
             from specterqa.engine.computer_use_decider import ComputerUseDecider
-        except ImportError:
-            try:
-                from specterqa.engine.ai_decider import ComputerUseDecider  # type: ignore[import-untyped]
-            except ImportError as exc:
-                return json.dumps({
-                    "ok": False,
-                    "error": f"Failed to import SpecterQA decider: {exc}",
-                    "error_code": "IMPORT_ERROR",
-                })
+        except ImportError as exc:
+            return json.dumps({
+                "ok": False,
+                "error": f"Failed to import ComputerUseDecider: {exc}",
+                "error_code": "IMPORT_ERROR",
+            })
 
         # Resolve device
         device_id: str | None = None
@@ -548,45 +568,23 @@ def create_server() -> Any:
         evidence_dir = project_dir / "evidence" / run_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
 
-        # Build driver and runner
-        driver_cfg: dict[str, Any] = {"device_id": device_id, "bundle_id": bundle_id}
-        if product_cfg.get("screenshot_resize_width"):
-            driver_cfg["screenshot_resize_width"] = product_cfg["screenshot_resize_width"]
-        if preferred_backend and preferred_backend != "auto":
-            driver_cfg["preferred_backend"] = preferred_backend
-
-        driver = SimulatorDriver(config=driver_cfg)
-
-        try:
-            driver.start()
-        except Exception as exc:
-            return json.dumps({
-                "ok": False,
-                "run_id": run_id,
-                "error": f"Failed to start simulator driver: {exc}",
-                "error_code": "DRIVER_ERROR",
-            })
+        # Create driver
+        udid = product_cfg.get("simulator_id", device_id)
+        driver = SimDriver(udid=udid, verbose=False)
+        driver.device_info()
 
         # Launch app
         try:
-            driver.launch_app()
-            time.sleep(2)
+            driver.launch_app(bundle_id)
         except Exception as exc:
             logger.warning("launch_app failed (non-fatal): %s", exc)
 
-        try:
-            decider = ComputerUseDecider(api_key=api_key, budget=budget)
-        except TypeError:
-            decider = ComputerUseDecider(api_key=api_key)
-
-        context_builder = SimulatorAIContext()
-
-        runner = IOSAIStepRunner(
-            decider=decider,
-            executor=driver,
-            context_builder=context_builder,
-            evidence_dir=str(evidence_dir),
-            budget=budget,
+        # Create AI decider with ACTUAL screenshot dimensions
+        b64, w, h = driver.screenshot()
+        decider = ComputerUseDecider(
+            api_key=api_key,
+            display_width=w,
+            display_height=h,
         )
 
         steps = journey_cfg.get("steps", [])
@@ -599,58 +597,47 @@ def create_server() -> Any:
             description = step.get("description", step.get("goal", step_id))
             goal = step.get("goal", description)
             checkpoint = step.get("checkpoint", None)
+            step_max_iter = step.get("max_iterations", max_steps)
 
             step_start = time.monotonic()
-            try:
-                result = runner.run_step(
-                    goal=goal,
-                    checkpoint=checkpoint,
-                    max_iterations=max_steps,
+            step_passed = False
+            step_error = None
+            full_goal = f"{goal}\nCheckpoint: {checkpoint}" if checkpoint else goal
+
+            for iter_idx in range(step_max_iter):
+                b64, w, h = driver.screenshot()
+                decision = decider.decide(
+                    goal=full_goal,
+                    screenshot_base64=b64,
+                    display_width=w,
+                    display_height=h,
                 )
-            except Exception as exc:
-                logger.error("Step %s failed: %s", step_id, exc)
-                all_passed = False
-                step_reports.append({
-                    "step_id": step_id,
-                    "description": description,
-                    "passed": False,
-                    "duration_seconds": round(time.monotonic() - step_start, 3),
-                    "error": str(exc),
-                    "findings": [],
-                })
-                continue
+                if decision.goal_achieved:
+                    step_passed = True
+                    break
+                try:
+                    action_dict = _decision_to_action(decision)
+                    driver.execute(action_dict)
+                except Exception as exc:
+                    step_error = str(exc)
+                    logger.error("Action failed at step %s iter %d: %s", step_id, iter_idx, exc)
+                    break
+            else:
+                step_error = f"Max iterations ({step_max_iter}) reached"
 
-            passed = result.passed
-            if not passed:
+            if not step_passed:
                 all_passed = False
-
-            findings_data = [
-                {
-                    "severity": getattr(f, "severity", "?"),
-                    "category": getattr(f, "category", "?"),
-                    "title": getattr(f, "title", ""),
-                    "description": getattr(f, "description", ""),
-                }
-                for f in (result.findings or [])
-            ]
 
             step_reports.append({
                 "step_id": step_id,
                 "description": description,
-                "passed": passed,
+                "passed": step_passed,
                 "duration_seconds": round(time.monotonic() - step_start, 3),
-                "error": result.error,
-                "findings": findings_data,
+                "error": step_error,
+                "findings": [],
             })
 
         total_duration = round(time.monotonic() - start_time, 3)
-
-        try:
-            driver.stop()
-        except Exception as exc:
-            logger.warning("driver.stop() failed (non-fatal): %s", exc)
-
-        all_findings = [f for sr in step_reports for f in sr.get("findings", [])]
         passed_count = sum(1 for sr in step_reports if sr.get("passed"))
 
         run_result: dict[str, Any] = {
@@ -659,12 +646,11 @@ def create_server() -> Any:
             "journey": journey_name,
             "device_id": device_id,
             "bundle_id": bundle_id,
-            "backend_used": getattr(driver, "_backend_name", "unknown"),
             "passed": all_passed,
             "step_count": len(steps),
             "passed_count": passed_count,
             "step_reports": step_reports,
-            "findings": all_findings,
+            "findings": [],
             "duration_seconds": total_duration,
             "evidence_dir": str(evidence_dir),
         }
@@ -778,8 +764,7 @@ def create_server() -> Any:
         # Import exploratory agent
         try:
             from specterqa.ios.exploratory.agent import ExploratoryAgent
-            from specterqa.ios.drivers.simulator.driver import SimulatorDriver
-            from specterqa.ios.drivers.simulator.ai_context import SimulatorAIContext
+            from specterqa.ios.sim_driver import SimDriver
             from specterqa.ios.engine.ai_step_runner import IOSAIStepRunner
         except ImportError as exc:
             return json.dumps({
@@ -790,15 +775,12 @@ def create_server() -> Any:
 
         try:
             from specterqa.engine.computer_use_decider import ComputerUseDecider
-        except ImportError:
-            try:
-                from specterqa.engine.ai_decider import ComputerUseDecider  # type: ignore[import-untyped]
-            except ImportError as exc:
-                return json.dumps({
-                    "ok": False,
-                    "error": f"Import error: {exc}",
-                    "error_code": "IMPORT_ERROR",
-                })
+        except ImportError as exc:
+            return json.dumps({
+                "ok": False,
+                "error": f"Import error: {exc}",
+                "error_code": "IMPORT_ERROR",
+            })
 
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key:
@@ -826,30 +808,21 @@ def create_server() -> Any:
             })
 
         bundle_id: str = product_cfg.get("bundle_id", product_cfg.get("name", product_slug))
-        driver_cfg: dict[str, Any] = {"device_id": device_id, "bundle_id": bundle_id}
 
-        driver = SimulatorDriver(config=driver_cfg)
-        try:
-            driver.start()
-        except Exception as exc:
-            return json.dumps({
-                "ok": False,
-                "error": f"Driver start failed: {exc}",
-                "error_code": "DRIVER_ERROR",
-            })
+        # Create SimDriver
+        udid = product_cfg.get("simulator_id", device_id)
+        driver = SimDriver(udid=udid, verbose=False)
+        driver.device_info()
 
         try:
-            driver.launch_app()
-            time.sleep(2)
+            driver.launch_app(bundle_id)
         except Exception as exc:
             logger.warning("launch_app failed (non-fatal): %s", exc)
 
-        try:
-            decider = ComputerUseDecider(api_key=api_key)
-        except TypeError:
-            decider = ComputerUseDecider(api_key=api_key)
+        # Create decider with actual screenshot dimensions
+        b64, w, h = driver.screenshot()
+        decider = ComputerUseDecider(api_key=api_key, display_width=w, display_height=h)
 
-        context_builder = SimulatorAIContext()
         run_id = f"IOS-EXP-{time.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8].upper()}"
         evidence_dir = project_dir / "evidence" / run_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -857,7 +830,6 @@ def create_server() -> Any:
         runner = IOSAIStepRunner(
             decider=decider,
             executor=driver,
-            context_builder=context_builder,
             evidence_dir=str(evidence_dir),
         )
 
@@ -876,10 +848,7 @@ def create_server() -> Any:
                 "error_code": "EXPLORATION_ERROR",
             })
         finally:
-            try:
-                driver.stop()
-            except Exception as exc:
-                logger.warning("driver.stop() failed (non-fatal): %s", exc)
+            pass  # SimDriver has no stop() — resources are cleaned up automatically
 
         result["run_id"] = run_id
         result["product"] = product_slug
