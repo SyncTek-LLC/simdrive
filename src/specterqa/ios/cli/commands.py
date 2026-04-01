@@ -287,8 +287,8 @@ def setup() -> None:
         console.print(
             Panel(
                 "[bold green]Environment ready.[/bold green]\n\n"
-                "Run [bold]specterqa ios devices[/bold] to see simulators,\n"
-                "or [bold]specterqa ios run --product <slug> --journey <id>[/bold] to start testing.",
+                "Run [bold]specterqa-ios devices[/bold] to see simulators,\n"
+                "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
                 title="[green]All Checks Passed[/green]",
                 border_style="green",
             )
@@ -297,7 +297,7 @@ def setup() -> None:
         console.print(
             Panel(
                 "[bold red]One or more checks failed.[/bold red]\n\n"
-                "Fix the issues above, then re-run [bold]specterqa ios setup[/bold].",
+                "Fix the issues above, then re-run [bold]specterqa-ios setup[/bold].",
                 title="[red]Setup Incomplete[/red]",
                 border_style="red",
             )
@@ -439,7 +439,7 @@ def install(app_path: str, device_id: str | None) -> None:
         device_id = _find_booted_udid()
         if device_id is None:
             raise click.ClickException(
-                "No booted simulator found. Boot one first with [bold]specterqa ios boot[/bold], "
+                "No booted simulator found. Boot one first with [bold]specterqa-ios boot[/bold], "
                 "or pass --device <UDID>."
             )
 
@@ -542,13 +542,13 @@ def run(
 
         if lic.get("tier") == "founder":
             _print(
-                "[bold green]License:[/bold green] Founder tier "
-                f"(expires {lic.get('expires_at', '?')}, {lic.get('max_concurrent_sims')} sims)"
+                "[bold green]License:[/bold green] SpecterQA iOS — Founder license "
+                f"({lic.get('max_concurrent_sims', 4)} simulators)"
             )
         elif lic.get("tier") == "trial":
             _print(
-                "[yellow]License:[/yellow] Trial mode — 1 simulator. "
-                "Set [bold]SPECTERQA_IOS_LICENSE=founder[/bold] to unlock all features."
+                "[yellow]License:[/yellow] SpecterQA iOS — Trial mode (1 simulator). "
+                "Get a license at [bold]https://synctek.io/specterqa[/bold]"
             )
         else:
             _print(
@@ -609,7 +609,7 @@ def run(
                 if target_dev:
                     break
             if target_dev is None:
-                _err("No iPhone simulator found. Install Xcode and run 'specterqa ios setup'.", "Simulator Error")
+                _err("No iPhone simulator found. Install Xcode and run 'specterqa-ios setup'.", "Simulator Error")
                 raise SystemExit(2)
             device_id = target_dev["udid"]
             _print(f"Booting: {target_dev['name']} ({device_id})")
@@ -665,7 +665,7 @@ def run(
         _err(
             f"Failed to import SpecterQA iOS engine: {exc}\n\n"
             "Ensure specterqa-ios is installed:\n"
-            "  pip install git+https://github.com/SyncTek-LLC/specterqa-ios.git",
+            "  pip install 'git+https://github.com/SyncTek-LLC/specterqa-ios.git'",
             "Import Error",
         )
         raise SystemExit(3)
@@ -994,6 +994,163 @@ def smoke(ctx: click.Context, product: str, device_id: str | None, budget: float
 # ---------------------------------------------------------------------------
 
 
+@ios_command_group.command("validate")
+@click.option("--product", "-p", required=True, help="Product slug (matches .specterqa/products/<slug>.yaml).")
+@click.option("--journey", "-j", default=None, help="Journey ID to validate (optional).")
+def validate(product: str, journey: str | None) -> None:
+    """Validate product and journey config files for the iOS driver.
+
+    Checks required fields, referenced files, and simulator/app availability.
+
+    \b
+    Example:
+      specterqa-ios validate --product Example Reader-ios
+      specterqa-ios validate --product Example Reader-ios --journey smoke-test
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: list[tuple[str, bool, str]] = []
+
+    project_dir = _resolve_project_dir()
+
+    # --- Product YAML ---
+    product_path = project_dir / "products" / f"{product}.yaml"
+    if not product_path.exists():
+        errors.append(f"Product file not found: {product_path}")
+        checks.append(("Product file exists", False, str(product_path)))
+    else:
+        checks.append(("Product file exists", True, str(product_path)))
+        try:
+            product_cfg = _load_product(project_dir, product)
+
+            # Required fields
+            has_bundle_id = bool(product_cfg.get("bundle_id"))
+            checks.append(("bundle_id present", has_bundle_id, product_cfg.get("bundle_id", "MISSING")))
+            if not has_bundle_id:
+                errors.append("Product config missing required field: bundle_id")
+
+            has_device = bool(product_cfg.get("device_name") or product_cfg.get("simulator_id"))
+            device_val = product_cfg.get("simulator_id") or product_cfg.get("device_name") or "MISSING"
+            checks.append(("device_name or simulator_id present", has_device, device_val))
+            if not has_device:
+                warnings.append("Product config has no device_name or simulator_id — will use booted simulator")
+
+            # Validate simulator UDID exists in simctl if simulator_id is set
+            sim_id = product_cfg.get("simulator_id")
+            if sim_id and _xcrun_available():
+                try:
+                    data = _list_simulators()
+                    all_udids = {
+                        dev.get("udid")
+                        for devs in data.get("devices", {}).values()
+                        for dev in devs
+                    }
+                    udid_found = sim_id in all_udids
+                    checks.append(("simulator_id found in simctl", udid_found, sim_id))
+                    if not udid_found:
+                        errors.append(f"simulator_id '{sim_id}' not found in 'xcrun simctl list devices'")
+
+                    # Check bundle_id installed on simulator if it's booted
+                    bundle_id = product_cfg.get("bundle_id")
+                    if bundle_id and udid_found:
+                        result = subprocess.run(
+                            ["xcrun", "simctl", "listapps", sim_id],
+                            capture_output=True,
+                            text=True,
+                        )
+                        if result.returncode == 0:
+                            app_installed = bundle_id in result.stdout
+                            checks.append(("bundle_id installed on simulator", app_installed, bundle_id))
+                            if not app_installed:
+                                warnings.append(
+                                    f"bundle_id '{bundle_id}' not found on simulator {sim_id} — "
+                                    "install with: specterqa-ios install <app.app>"
+                                )
+                        else:
+                            checks.append(("bundle_id installed on simulator", False, "simctl listapps failed — is simulator booted?"))
+                except click.ClickException as exc:
+                    checks.append(("simctl query", False, str(exc)))
+
+        except click.ClickException as exc:
+            errors.append(f"Failed to load product config: {exc}")
+
+    # --- Journey YAML (if specified) ---
+    if journey:
+        journey_path = project_dir / "journeys" / f"{journey}.yaml"
+        if not journey_path.exists():
+            errors.append(f"Journey file not found: {journey_path}")
+            checks.append(("Journey file exists", False, str(journey_path)))
+        else:
+            checks.append(("Journey file exists", True, str(journey_path)))
+            try:
+                journey_cfg = _load_journey(project_dir, journey)
+
+                steps = journey_cfg.get("steps", [])
+                has_steps = len(steps) > 0
+                checks.append(("Journey has steps", has_steps, f"{len(steps)} step(s)"))
+                if not has_steps:
+                    errors.append("Journey has no steps defined")
+
+                # Every step needs a goal
+                steps_missing_goal = [
+                    s.get("id", f"step-{i+1}") for i, s in enumerate(steps) if not s.get("goal")
+                ]
+                if steps_missing_goal:
+                    errors.append(f"Steps missing 'goal' field: {', '.join(steps_missing_goal)}")
+                    checks.append(("All steps have goal", False, f"missing: {', '.join(steps_missing_goal)}"))
+                else:
+                    checks.append(("All steps have goal", True, f"{len(steps)} step(s) OK"))
+
+                # Check referenced personas exist
+                personas_list = journey_cfg.get("personas", [])
+                for persona_ref in personas_list:
+                    ref = persona_ref.get("ref", "") if isinstance(persona_ref, dict) else str(persona_ref)
+                    if ref:
+                        persona_path = project_dir / "personas" / f"{ref}.yaml"
+                        persona_exists = persona_path.exists()
+                        checks.append((f"Persona '{ref}' exists", persona_exists, str(persona_path)))
+                        if not persona_exists:
+                            warnings.append(f"Referenced persona '{ref}' not found at {persona_path}")
+
+            except click.ClickException as exc:
+                errors.append(f"Failed to load journey config: {exc}")
+
+    # --- Render results ---
+    table = Table(title=f"SpecterQA iOS Config Validation — {product}", border_style="cyan")
+    table.add_column("Check", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail", style="dim")
+
+    for label, ok, detail in checks:
+        status = Text("PASS", style="bold green") if ok else Text("FAIL", style="bold red")
+        table.add_row(label, status, detail)
+
+    console.print()
+    console.print(table)
+
+    if warnings:
+        console.print()
+        for w in warnings:
+            console.print(f"[yellow]WARN:[/yellow] {w}")
+
+    if errors:
+        console.print()
+        for e in errors:
+            console.print(f"[red]ERROR:[/red] {e}")
+        console.print()
+        console.print(Panel(
+            f"[bold red]{len(errors)} error(s) found.[/bold red] Fix the issues above before running.",
+            border_style="red",
+        ))
+        raise SystemExit(1)
+    else:
+        console.print()
+        console.print(Panel(
+            "[bold green]Config is valid.[/bold green]",
+            border_style="green",
+        ))
+
+
 @ios_command_group.command("serve")
 def serve() -> None:
     """Start the SpecterQA iOS MCP server (stdio transport).
@@ -1018,3 +1175,18 @@ def serve() -> None:
     from specterqa.ios.mcp.server import serve as run_mcp
 
     run_mcp()
+
+
+# ---------------------------------------------------------------------------
+# Standalone entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Standalone entry point for the specterqa-ios CLI.
+
+    Invoked by the ``specterqa-ios`` console script registered in pyproject.toml.
+    Runs the iOS command group directly — no dependency on the upstream
+    ``specterqa`` Typer app or its entry-point loading machinery.
+    """
+    ios_command_group()

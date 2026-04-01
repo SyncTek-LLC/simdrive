@@ -5,48 +5,53 @@ AI-driven iOS app testing via Claude Computer Use.
 ## Install
 
 ```bash
-pip install specterqa
-pip install git+https://github.com/SyncTek-LLC/specterqa-ios.git
+pip install "git+https://github.com/SyncTek-LLC/specterqa-ios.git"
 ```
+
+No other packages required — `specterqa-ios` is fully standalone.
 
 ## Quick Start
 
 ```bash
 # Verify environment (Xcode, simulators, API key)
-specterqa ios setup
+specterqa-ios setup
 
 # List available simulators
-specterqa ios devices
+specterqa-ios devices
 
 # Scaffold a project for your app
-specterqa ios init --slug my-app --name "My App"
+specterqa-ios init --slug my-app --name "My App"
 
 # Edit the generated config
 # .specterqa/products/my-app.yaml  — set bundle_id and app_path
 # .specterqa/journeys/smoke-test.yaml  — customize test steps
 
+# Validate your config before running
+specterqa-ios validate --product my-app --journey smoke-test
+
 # Boot a simulator
-specterqa ios boot
+specterqa-ios boot
 
 # Run a test journey
-specterqa ios run --product my-app --journey smoke-test
+specterqa-ios run --product my-app --journey smoke-test
 
 # Quick smoke test (reduced budget, fewer iterations)
-specterqa ios smoke --product my-app
+specterqa-ios smoke --product my-app
 ```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `specterqa ios setup` | Check Xcode, simulators, and API key |
-| `specterqa ios devices` | List available iOS simulators |
-| `specterqa ios boot [--device <name>]` | Boot a simulator |
-| `specterqa ios install <app.app> [--device <id>]` | Install app on simulator |
-| `specterqa ios init [--slug <id>]` | Scaffold project config files |
-| `specterqa ios run --product <slug> --journey <id>` | Run a test journey |
-| `specterqa ios smoke --product <slug>` | Quick smoke test |
-| `specterqa ios serve` | Start the MCP server (stdio transport) |
+| `specterqa-ios setup` | Check Xcode, simulators, and API key |
+| `specterqa-ios devices` | List available iOS simulators |
+| `specterqa-ios boot [--device <name>]` | Boot a simulator |
+| `specterqa-ios install <app.app> [--device <id>]` | Install app on simulator |
+| `specterqa-ios init [--slug <id>]` | Scaffold project config files |
+| `specterqa-ios validate --product <slug>` | Validate product/journey config |
+| `specterqa-ios run --product <slug> --journey <id>` | Run a test journey |
+| `specterqa-ios smoke --product <slug>` | Quick smoke test |
+| `specterqa-ios serve` | Start the MCP server (stdio transport) |
 
 ## Claude Code Integration
 
@@ -126,7 +131,7 @@ specterqa-ios-mcp
 python -m specterqa.ios.mcp
 
 # or via CLI
-specterqa ios serve
+specterqa-ios serve
 ```
 
 ## Requirements
@@ -141,7 +146,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ## Project Structure
 
-After `specterqa ios init`, your project contains:
+After `specterqa-ios init`, your project contains:
 
 ```
 .specterqa/
