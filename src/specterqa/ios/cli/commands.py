@@ -257,7 +257,7 @@ def setup() -> None:
     # 4. specterqa-ios package importability
     pkg_ok = False
     try:
-        from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: F401
+        from specterqa.ios.sim_driver import SimDriver  # noqa: F401
         pkg_ok = True
         pkg_detail = "specterqa.ios importable"
     except ImportError as exc:
@@ -453,6 +453,31 @@ def install(app_path: str, device_id: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _decision_to_action(decision: Any) -> dict:
+    """Convert a ComputerUseDecider Decision to sim_driver action dict."""
+    if decision.action == "click":
+        parts = decision.target.split(",")
+        x, y = int(float(parts[0])), int(float(parts[1]))
+        return {"action": "left_click", "coordinate": [x, y]}
+    elif decision.action == "fill":
+        return {"action": "type", "text": decision.value}
+    elif decision.action == "keyboard":
+        return {"action": "key", "key": decision.value}
+    elif decision.action == "scroll":
+        parts = (decision.target or "512,1108").split(",")
+        x, y = int(float(parts[0])), int(float(parts[1]))
+        return {
+            "action": "scroll",
+            "coordinate": [x, y],
+            "direction": decision.value or "down",
+            "amount": 3,
+        }
+    elif decision.action == "wait":
+        return {"action": "wait", "duration": 1}
+    else:
+        return {"action": decision.action}
+
+
 @ios_command_group.command("run")
 @click.option("--product", "-p", required=True, help="Product slug (matches .specterqa/products/<slug>.yaml).")
 @click.option("--journey", "-j", required=True, help="Journey ID (matches .specterqa/journeys/<id>.yaml).")
@@ -460,20 +485,6 @@ def install(app_path: str, device_id: str | None) -> None:
 @click.option("--app", "app_path", default=None, help="Path to .app bundle to install before running.")
 @click.option("--budget", "-b", default=5.00, type=float, show_default=True, help="Max spend in USD for this run.")
 @click.option("--max-steps", default=20, type=int, show_default=True, help="Max AI iterations per journey step.")
-@click.option(
-    "--backend",
-    "preferred_backend",
-    default=None,
-    type=click.Choice(["auto", "xctest", "indigo", "cgevents"], case_sensitive=False),
-    show_default=True,
-    help=(
-        "Touch input backend.  "
-        "'auto' (default) lets BackendSelector pick the best available. "
-        "'xctest' forces the XCTest HTTP runner (port 8222). "
-        "'indigo' forces IndigoHID (requires Xcode, no window needed). "
-        "'cgevents' forces CGEvents (requires visible Simulator window)."
-    ),
-)
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Enable verbose logging.")
 @click.option("--plain", is_flag=True, default=False, help="Plain ASCII output (no Rich).")
 def run(
@@ -483,7 +494,6 @@ def run(
     app_path: str | None,
     budget: float,
     max_steps: int,
-    preferred_backend: str | None,
     verbose: bool,
     plain: bool,
 ) -> None:
@@ -494,7 +504,6 @@ def run(
       specterqa ios run --product example-ios --journey smoke-test
       specterqa ios run --product example-ios --journey smoke-test --device <UDID>
       specterqa ios run --product example-ios --journey smoke-test --app ./build/Example Reader.app
-      specterqa ios run --product example-ios --journey smoke-test --backend xctest
     """
     if verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(name)s  %(message)s")
@@ -529,35 +538,6 @@ def run(
         )
         raise SystemExit(2)
 
-    # License check — dogfood bypass or trial mode
-    try:
-        from specterqa.ios.license.validator import LicenseValidator
-
-        env_license = os.environ.get("SPECTERQA_IOS_LICENSE", "").strip()
-        import warnings
-        with warnings.catch_warnings(record=True) as caught_warnings:
-            warnings.simplefilter("always")
-            validator = LicenseValidator(license_key=env_license)
-            lic = validator.validate()
-
-        if lic.get("tier") == "founder":
-            _print(
-                "[bold green]License:[/bold green] SpecterQA iOS — Founder license "
-                f"({lic.get('max_concurrent_sims', 4)} simulators)"
-            )
-        elif lic.get("tier") == "trial":
-            _print(
-                "[yellow]License:[/yellow] SpecterQA iOS — Trial mode (1 simulator). "
-                "Get a license at [bold]https://synctek.io/specterqa[/bold]"
-            )
-        else:
-            _print(
-                f"[dim]License:[/dim] {lic.get('tier', 'unknown')} "
-                f"({lic.get('max_concurrent_sims', 1)} sims)"
-            )
-    except Exception as _lic_exc:
-        logger.debug("License check skipped: %s", _lic_exc)
-
     # Resolve project directory and load configs
     project_dir = _resolve_project_dir()
 
@@ -573,27 +553,13 @@ def run(
         _err(str(exc), "Journey Config Error")
         raise SystemExit(2)
 
-    # Load primary persona referenced by the journey
-    persona_cfg: dict[str, Any] = {}
-    personas_list = journey_cfg.get("personas", [])
-    if personas_list:
-        primary_persona_ref = personas_list[0].get("ref", "") if isinstance(personas_list[0], dict) else str(personas_list[0])
-        if primary_persona_ref:
-            try:
-                persona_cfg = _load_persona(project_dir, primary_persona_ref)
-            except click.ClickException:
-                # Non-fatal: persona config is optional for iOS runs
-                logger.warning("Could not load persona '%s' — proceeding without it.", primary_persona_ref)
-
     # Resolve bundle_id from product config
     bundle_id: str = product_cfg.get("bundle_id", product_cfg.get("name", product))
 
     # Resolve / discover device
     if device_id is None:
-        # Try the booted simulator first
         device_id = _find_booted_udid()
         if device_id is None:
-            # Boot a default simulator
             _print("[bold]No booted simulator — booting default iPhone simulator...[/bold]")
             try:
                 data = _list_simulators()
@@ -614,7 +580,6 @@ def run(
             device_id = target_dev["udid"]
             _print(f"Booting: {target_dev['name']} ({device_id})")
             _boot_simulator(device_id)
-            # Wait for boot
             time.sleep(3)
 
     # Install app if provided
@@ -657,86 +622,37 @@ def run(
         )
         console.print()
 
-    # Import engine components
+    # Import SimDriver and AI decider
     try:
-        from specterqa.ios.drivers.simulator.driver import SimulatorDriver
-        from specterqa.ios.engine.ai_step_runner import IOSAIStepRunner
+        from specterqa.ios.sim_driver import SimDriver
     except ImportError as exc:
-        _err(
-            f"Failed to import SpecterQA iOS engine: {exc}\n\n"
-            "Ensure specterqa-ios is installed:\n"
-            "  pip install 'git+https://github.com/SyncTek-LLC/specterqa-ios.git'",
-            "Import Error",
-        )
+        _err(f"Failed to import SimDriver: {exc}", "Import Error")
         raise SystemExit(3)
 
     try:
         from specterqa.engine.computer_use_decider import ComputerUseDecider
-    except ImportError:
-        try:
-            from specterqa.engine.ai_decider import ComputerUseDecider  # type: ignore[import-untyped]
-        except ImportError as exc:
-            _err(
-                f"Failed to import SpecterQA decider: {exc}\n\n"
-                "Ensure specterqa is installed:\n"
-                "  pip install specterqa",
-                "Import Error",
-            )
-            raise SystemExit(3)
-
-    # Build SimulatorDriver config
-    driver_cfg: dict[str, Any] = {
-        "device_id": device_id,
-        "bundle_id": bundle_id,
-    }
-    if product_cfg.get("screenshot_resize_width"):
-        driver_cfg["screenshot_resize_width"] = product_cfg["screenshot_resize_width"]
-    # Map CLI --backend value to BackendSelector's preferred parameter.
-    # "auto" (or omitted) means no preference — BackendSelector will auto-select.
-    if preferred_backend and preferred_backend != "auto":
-        driver_cfg["preferred_backend"] = preferred_backend
-
-    driver = SimulatorDriver(config=driver_cfg)
-
-    _print("Starting simulator driver...")
-    try:
-        driver.start()
-    except Exception as exc:
-        _err(f"Failed to start simulator driver: {exc}", "Driver Error")
+    except ImportError as exc:
+        _err(f"Failed to import ComputerUseDecider: {exc}", "Import Error")
         raise SystemExit(3)
+
+    # Create driver
+    udid = product_cfg.get("simulator_id", device_id or "booted")
+    driver = SimDriver(udid=udid, verbose=verbose)
+    driver.device_info()
 
     # Launch app
     _print(f"Launching {bundle_id}...")
     try:
-        driver.launch_app()
-        time.sleep(2)  # brief settle time
+        driver.launch_app(bundle_id)
     except Exception as exc:
         logger.warning("launch_app failed (non-fatal): %s", exc)
 
-    # Build AI decider
-    try:
-        decider = ComputerUseDecider(
-            api_key=api_key,
-            budget=budget,
-        )
-    except TypeError:
-        # Older ComputerUseDecider may not accept budget kwarg
-        decider = ComputerUseDecider(api_key=api_key)
-
-    # Wrap driver as the context_builder (SimulatorDriver.get_context + ai_context.format_for_claude)
-    # IOSAIStepRunner expects separate executor and context_builder objects.
-    # SimulatorDriver fulfils the executor protocol (screenshot, execute).
-    # We use SimulatorAIContext directly as the context_builder.
-    from specterqa.ios.drivers.simulator.ai_context import SimulatorAIContext
-
-    context_builder = SimulatorAIContext()
-
-    runner = IOSAIStepRunner(
-        decider=decider,
-        executor=driver,
-        context_builder=context_builder,
-        evidence_dir=str(evidence_dir),
-        budget=budget,
+    # Create AI decider with ACTUAL screenshot dimensions
+    b64, w, h = driver.screenshot()
+    decider = ComputerUseDecider(
+        api_key=api_key,
+        display_width=w,
+        display_height=h,
     )
 
     # Execute journey steps
@@ -753,6 +669,7 @@ def run(
         description = step.get("description", step.get("goal", step_id))
         goal = step.get("goal", description)
         checkpoint = step.get("checkpoint", None)
+        step_max_iter = step.get("max_iterations", max_steps)
 
         if plain:
             print(f"Step {i}/{len(steps)}: {description}", file=sys.stderr, flush=True)
@@ -760,78 +677,62 @@ def run(
             console.print(f"  [bold]Step {i}/{len(steps)}:[/bold] {description}")
 
         step_start = time.monotonic()
-        try:
-            result = runner.run_step(
-                goal=goal,
-                checkpoint=checkpoint,
-                max_iterations=max_steps,
+        step_passed = False
+        step_error = None
+
+        full_goal = f"{goal}\nCheckpoint: {checkpoint}" if checkpoint else goal
+
+        for iter_idx in range(step_max_iter):
+            # Screenshot
+            b64, w, h = driver.screenshot()
+
+            # Ask Claude
+            decision = decider.decide(
+                goal=full_goal,
+                screenshot_base64=b64,
+                display_width=w,
+                display_height=h,
             )
-        except Exception as exc:
-            logger.error("Step %s failed with exception: %s", step_id, exc)
+
+            if verbose or not plain:
+                _print(f"  [{iter_idx}] action={decision.action} target={decision.target} achieved={decision.goal_achieved}")
+
+            if decision.goal_achieved:
+                step_passed = True
+                if plain:
+                    print(f"  PASS ({round(time.monotonic() - step_start, 1)}s)", file=sys.stderr, flush=True)
+                else:
+                    console.print(f"    [green]PASS[/green] ({round(time.monotonic() - step_start, 1):.1f}s)")
+                break
+
+            # Execute the action
+            try:
+                action_dict = _decision_to_action(decision)
+                driver.execute(action_dict)
+            except Exception as exc:
+                step_error = str(exc)
+                logger.error("Action failed at step %s iter %d: %s", step_id, iter_idx, exc)
+                break
+        else:
+            step_error = f"Max iterations ({step_max_iter}) reached"
             if plain:
-                print(f"  ERROR: {exc}", file=sys.stderr, flush=True)
+                print(f"  FAIL — {step_error}", file=sys.stderr, flush=True)
             else:
-                console.print(f"  [red]ERROR: {exc}[/red]")
-            all_passed = False
-            step_results.append({
-                "step_id": step_id,
-                "description": description,
-                "passed": False,
-                "duration_seconds": round(time.monotonic() - step_start, 3),
-                "error": str(exc),
-                "findings": [],
-            })
-            continue
+                console.print(f"    [red]FAIL[/red] — {step_error}")
 
-        step_duration = round(time.monotonic() - step_start, 3)
-        passed = result.passed
-        if not passed:
+        if not step_passed:
             all_passed = False
-
-        findings_data = [
-            {
-                "severity": getattr(f, "severity", "?"),
-                "category": getattr(f, "category", "?"),
-                "title": getattr(f, "title", ""),
-                "description": getattr(f, "description", ""),
-            }
-            for f in (result.findings or [])
-        ]
 
         step_results.append({
             "step_id": step_id,
             "description": description,
-            "passed": passed,
-            "duration_seconds": step_duration,
-            "error": result.error,
-            "findings": findings_data,
+            "passed": step_passed,
+            "duration_seconds": round(time.monotonic() - step_start, 3),
+            "error": step_error,
+            "findings": [],
         })
 
-        if plain:
-            status = "PASS" if passed else "FAIL"
-            print(f"  {status} ({step_duration:.1f}s)", file=sys.stderr, flush=True)
-            if result.error:
-                print(f"  Error: {result.error}", file=sys.stderr, flush=True)
-        else:
-            if passed:
-                console.print(f"    [green]PASS[/green] ({step_duration:.1f}s)")
-            else:
-                console.print(f"    [red]FAIL[/red] ({step_duration:.1f}s)")
-                if result.error:
-                    console.print(f"    [dim red]{result.error[:120]}[/dim red]")
-            if findings_data:
-                console.print(f"    [yellow]{len(findings_data)} finding(s)[/yellow]")
-
     total_duration = round(time.monotonic() - start_time, 3)
-
-    # Teardown
-    try:
-        driver.stop()
-    except Exception as exc:
-        logger.warning("driver.stop() failed (non-fatal): %s", exc)
-
-    # Aggregate all findings
-    all_findings = [f for sr in step_results for f in sr.get("findings", [])]
 
     # Save run result JSON
     run_result = {
@@ -843,7 +744,7 @@ def run(
         "passed": all_passed,
         "step_count": len(steps),
         "step_reports": step_results,
-        "findings": all_findings,
+        "findings": [],
         "duration_seconds": total_duration,
     }
     result_path = evidence_dir / "run-result.json"
@@ -857,8 +758,7 @@ def run(
     if plain:
         verdict = "PASSED" if all_passed else "FAILED"
         print(
-            f"RESULT: {verdict} -- {passed_count}/{len(steps)} steps passed, "
-            f"{len(all_findings)} findings, {total_duration:.1f}s",
+            f"RESULT: {verdict} -- {passed_count}/{len(steps)} steps passed, {total_duration:.1f}s",
             file=sys.stderr,
             flush=True,
         )
@@ -874,7 +774,6 @@ def run(
                     verdict,
                     "",
                     f"  Steps:     {passed_count}/{len(steps)} passed",
-                    f"  Findings:  {len(all_findings)}",
                     f"  Duration:  {total_duration:.1f}s",
                     f"  Run ID:    {run_id}",
                     f"  Evidence:  {evidence_dir}",
@@ -883,28 +782,6 @@ def run(
             )
         )
         console.print()
-
-        # Print findings table if any
-        if all_findings:
-            ftable = Table(title="Findings", border_style="yellow")
-            ftable.add_column("Severity", style="bold")
-            ftable.add_column("Category")
-            ftable.add_column("Description")
-            ftable.add_column("Step")
-            _sev_style = {"critical": "red", "high": "yellow", "medium": "cyan", "low": "dim"}
-            for f in all_findings:
-                sev = f.get("severity", "?")
-                desc = f.get("description", "")
-                if len(desc) > 80:
-                    desc = desc[:77] + "..."
-                ftable.add_row(
-                    Text(sev, style=_sev_style.get(sev, "")),
-                    f.get("category", "?"),
-                    desc,
-                    f.get("step_id", "?"),
-                )
-            console.print(ftable)
-            console.print()
 
     raise SystemExit(0 if all_passed else 1)
 
@@ -987,6 +864,7 @@ def smoke(ctx: click.Context, product: str, device_id: str | None, budget: float
         verbose=False,
         plain=not sys.stdout.isatty(),
     )
+
 
 
 # ---------------------------------------------------------------------------

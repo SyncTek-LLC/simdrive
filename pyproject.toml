@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "1.0.0"
+version = "1.1.0"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -20,12 +20,12 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     "pyyaml>=6.0",
+    "pyobjc-framework-Quartz>=10.0",
 ]
 
 [project.optional-dependencies]
 native = [
     "pyobjc-framework-Quartz>=10.0",
-    "pyobjc-framework-CoreGraphics>=10.0",
 ]
 mcp = [
     "mcp>=1.0",
@@ -42,7 +42,7 @@ specterqa-ios = "specterqa.ios.cli.commands:main"
 specterqa-ios-mcp = "specterqa.ios.mcp.server:serve"
 
 [project.entry-points."specterqa.drivers"]
-ios_simulator = "specterqa.ios.drivers.simulator.driver:SimulatorDriver"
+ios_simulator = "specterqa.ios.sim_driver:SimDriver"
 
 [project.entry-points."specterqa.cli_extensions"]
 ios = "specterqa.ios.cli:ios_command_group"
