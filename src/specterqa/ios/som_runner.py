@@ -40,6 +40,9 @@ _HISTORY_WINDOW = 3
 # Pause after each action to let the UI settle.
 _ACTION_SETTLE_S = 0.5
 
+# Guard 3: maximum consecutive scroll actions before giving up.
+MAX_CONSECUTIVE_SCROLLS = 5
+
 # System prompt for the Claude element-selection model.
 _SYSTEM_PROMPT = """\
 You are an iOS UI testing agent. You see an annotated screenshot with numbered
@@ -248,6 +251,7 @@ class SoMRunner:
         same_action_streak: dict[str, int] = {}
         error: Optional[str] = None
         passed = False
+        _scroll_count = 0  # Guard 3: consecutive scroll counter
 
         for i in range(max_iterations):
             # 1. Screenshot
@@ -306,6 +310,22 @@ class SoMRunner:
                     passed = True
                 break
 
+            # Guard 1: Pre-scroll visibility check — skip redundant scrolls.
+            if action_type == "scroll":
+                pre_scroll_tree: Optional[str] = None
+                try:
+                    pre_scroll_tree = self._annotator.get_element_tree()
+                    if self._is_element_visible(goal, pre_scroll_tree):
+                        logger.warning(
+                            "Element already visible, skipping scroll (goal=%r)", goal[:60]
+                        )
+                        _scroll_count = 0
+                        time.sleep(_ACTION_SETTLE_S)
+                        continue
+                except Exception as exc:
+                    logger.debug("Guard 1 pre-scroll check failed (non-fatal): %s", exc)
+                    pre_scroll_tree = None
+
             # 5. Execute
             try:
                 result = self._execute_action(decision, elements)
@@ -314,6 +334,32 @@ class SoMRunner:
             except Exception as exc:
                 logger.warning("Action execution failed (retrying next iter): %s", exc)
                 actions.append({"iter": i, "decision": decision, "error": str(exc)})
+
+            # Guard 2: Post-scroll state-change detection — stop if boundary reached.
+            if action_type == "scroll" and pre_scroll_tree is not None:
+                try:
+                    post_scroll_tree = self._annotator.get_element_tree()
+                    if not self._annotator._screen_changed(pre_scroll_tree, post_scroll_tree):
+                        logger.warning(
+                            "Screen unchanged after scroll, stopping (guard 2)"
+                        )
+                        error = "Screen unchanged after scroll — scroll boundary reached"
+                        break
+                except Exception as exc:
+                    logger.debug("Guard 2 post-scroll check failed (non-fatal): %s", exc)
+
+            # Guard 3: Max consecutive scroll cap.
+            if action_type == "scroll":
+                _scroll_count += 1
+                if _scroll_count >= MAX_CONSECUTIVE_SCROLLS:
+                    logger.warning(
+                        "Max scroll cap (%d) reached, marking element as already visible",
+                        MAX_CONSECUTIVE_SCROLLS,
+                    )
+                    error = f"Max consecutive scrolls ({MAX_CONSECUTIVE_SCROLLS}) reached"
+                    break
+            else:
+                _scroll_count = 0  # reset on any non-scroll action
 
             # Stuck detection: check if screen changed after action.
             # For scroll/swipe, the screen SHOULD change — if not, we're stuck.
@@ -531,6 +577,49 @@ class SoMRunner:
                 result["reasoning"] = value
 
         return result
+
+    # ------------------------------------------------------------------
+    # Scroll-stuck prevention guards
+    # ------------------------------------------------------------------
+
+    def _is_element_visible(self, target_description: str, element_tree_xml: str) -> bool:
+        """Check if target element is already visible in the current element tree.
+
+        Guard 1: Pre-scroll visibility check.  Call this before executing a
+        scroll action — if the target is already on-screen, the scroll is
+        unnecessary and can be skipped.
+
+        Args:
+            target_description: The element to find (e.g. "Settings", "Account").
+            element_tree_xml: Raw XML string from GET /source.
+
+        Returns:
+            True if an element whose label contains ``target_description``
+            (case-insensitive) is found with a non-zero width and height.
+        """
+        needle = target_description.strip().lower()
+        if not needle:
+            return False
+
+        try:
+            import xml.etree.ElementTree as ET  # already imported in annotator
+            root = ET.fromstring(element_tree_xml)
+        except Exception as exc:
+            logger.debug("_is_element_visible: XML parse error — %s", exc)
+            return False
+
+        for node in root.iter():
+            label = (node.get("label") or node.get("name") or "").lower()
+            if needle in label:
+                try:
+                    w = float(node.get("width", 0))
+                    h = float(node.get("height", 0))
+                except (TypeError, ValueError):
+                    w = h = 0.0
+                if w > 0 and h > 0:
+                    return True
+
+        return False
 
     # ------------------------------------------------------------------
     # Action execution
