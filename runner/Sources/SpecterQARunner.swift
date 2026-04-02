@@ -29,6 +29,7 @@ class SpecterQARunnerTests: XCTestCase {
         try server.start()
 
         NSLog("[SpecterQA] Runner listening on port \(port) targeting bundle '\(bundleId)'")
+        NSLog("[SpecterQA] Endpoints: GET /health  GET /source  GET /screenshot  POST /tap  POST /swipe  POST /type  POST /key  POST /press_button  POST /shutdown")
 
         // Block the test thread until the server signals shutdown.
         server.waitUntilStopped()

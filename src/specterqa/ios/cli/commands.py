@@ -453,6 +453,50 @@ def install(app_path: str, device_id: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _xctest_runner_available() -> bool:
+    """Return True when the compiled .xctestrun file exists in the runner build dir.
+
+    Does NOT check whether the runner process is currently running — only whether
+    the build artifact exists so it can be deployed.
+
+    Returns:
+        True if at least one .xctestrun is found in ``~/.specterqa/runner-build/``.
+    """
+    import glob as _glob
+
+    build_dir = Path.home() / ".specterqa" / "runner-build"
+    pattern = str(build_dir / "Build" / "Products" / "*.xctestrun")
+    return bool(_glob.glob(pattern))
+
+
+def _runner_build_dir() -> Path:
+    """Return the canonical path to the runner build output directory."""
+    env_override = os.environ.get("SPECTERQA_DERIVED_DATA")
+    if env_override:
+        return Path(env_override)
+    return Path.home() / ".specterqa" / "runner-build"
+
+
+def _runner_source_dir() -> Path | None:
+    """Locate the Swift runner source directory relative to the installed package.
+
+    Searches for ``runner/build.sh`` relative to the specterqa-ios package
+    root.  Returns None if it cannot be determined.
+
+    Returns:
+        Path to the runner directory, or None.
+    """
+    try:
+        import specterqa.ios as _pkg
+        pkg_root = Path(_pkg.__file__).parent.parent.parent  # src/specterqa/ios → repo root
+        candidate = pkg_root / "runner"
+        if (candidate / "build.sh").exists():
+            return candidate
+    except Exception:
+        pass
+    return None
+
+
 def _get_driver(udid: str = "booted", verbose: bool = False) -> tuple[Any, str]:
     """Return the best available touch driver and its backend name.
 
@@ -662,22 +706,31 @@ def run(
         )
         console.print()
 
-    # Check WDA availability — SoM pipeline requires WDA
-    from specterqa.ios.wda_driver import WDADriver
-    if not WDADriver.is_available():
-        _err(
-            "WebDriverAgent is not running on port 8100.\n\n"
-            "Start it with:  specterqa-ios wda start\n"
-            "Or follow the setup guide: specterqa-ios setup",
-            "WDA Not Available",
-        )
-        raise SystemExit(2)
-
-    if not plain:
-        console.print("  [dim]Backend: SoM (WDA + Set-of-Mark)[/dim]")
-
     # Resolve UDID
     udid = product_cfg.get("simulator_id", device_id or "booted")
+
+    # Decide which backend to use.
+    # Priority: XCTest runner (headless, non-blocking) > WDA > CGEvents.
+    use_xctest = _xctest_runner_available()
+    from specterqa.ios.wda_driver import WDADriver
+
+    if use_xctest:
+        if not plain:
+            console.print("  [dim]Backend: SoM (XCTest runner + Set-of-Mark — headless)[/dim]")
+    elif WDADriver.is_available():
+        use_xctest = False
+        if not plain:
+            console.print("  [dim]Backend: SoM (WDA + Set-of-Mark)[/dim]")
+    else:
+        # Neither runner built nor WDA running — fall back to CGEvents with warning.
+        use_xctest = False
+        _print(
+            "[yellow]Warning:[/yellow] XCTest runner not built and WDA not running.\n"
+            "  For best accuracy, build the runner:  specterqa-ios runner build\n"
+            "  Falling back to CGEvents (will steal mouse cursor during test)."
+        )
+        if not plain:
+            console.print("  [dim]Backend: CGEvents (cursor-blocking fallback)[/dim]")
 
     # Build evidence directory for this run
     runner = None
@@ -686,6 +739,8 @@ def run(
         api_key=api_key,
         verbose=verbose,
         evidence_dir=str(evidence_dir),
+        use_xctest_runner=use_xctest,
+        headless=True,
     )
 
     _print(f"Launching {bundle_id}...")
@@ -1041,6 +1096,217 @@ def validate(product: str, journey: str | None) -> None:
             "[bold green]Config is valid.[/bold green]",
             border_style="green",
         ))
+
+
+# ---------------------------------------------------------------------------
+# specterqa ios runner  (build / status / clean)
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.group("runner")
+def runner_group() -> None:
+    """Manage the SpecterQA Swift XCTest runner.
+
+    The runner is a compiled Swift XCUITest bundle that runs inside the iOS
+    Simulator.  It provides pixel-perfect tap injection and accessibility tree
+    access without stealing the mouse cursor.
+
+    \b
+    One-time setup:
+      specterqa-ios runner build    # ~30s, requires Xcode
+      specterqa-ios runner status   # verify build
+
+    \b
+    After building, ``specterqa-ios run`` uses the runner automatically.
+    """
+
+
+@runner_group.command("build")
+@click.option("--runner-dir", "runner_dir", default=None,
+              help="Path to the Swift runner source (default: auto-detected).")
+@click.option("--verbose", "-v", is_flag=True, default=False,
+              help="Stream xcodebuild output to stdout.")
+def runner_build(runner_dir: str | None, verbose: bool) -> None:
+    """Compile the Swift XCTest runner (~30 seconds, one-time setup).
+
+    Calls ``xcodebuild build-for-testing`` targeting the ``iphonesimulator``
+    SDK and deposits the .xctestrun artifact under ``~/.specterqa/runner-build/``.
+
+    \b
+    Example:
+      specterqa-ios runner build
+      specterqa-ios runner build --verbose
+    """
+    if not _xcrun_available():
+        raise click.ClickException("Xcode is required to build the runner. Install Xcode from the Mac App Store.")
+
+    # Locate the runner source.
+    if runner_dir:
+        source = Path(runner_dir).resolve()
+    else:
+        source = _runner_source_dir() or Path.cwd()
+
+    build_dir = _runner_build_dir()
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    # Locate the Xcode project inside the runner source directory.
+    xcodeproj = source / "SpecterQARunner.xcodeproj"
+    if not xcodeproj.exists():
+        # Fallback: accept any .xcodeproj in the source tree
+        candidates = list(source.glob("*.xcodeproj"))
+        xcodeproj = candidates[0] if candidates else source / "SpecterQARunner.xcodeproj"
+
+    console.print(f"[bold]Building SpecterQA XCTest runner...[/bold]")
+    console.print(f"  Source:    {source}")
+    console.print(f"  Output:    {build_dir}")
+    console.print()
+
+    stdout = None if verbose else subprocess.DEVNULL
+    stderr = None if verbose else subprocess.PIPE
+
+    result = subprocess.run(
+        [
+            "xcodebuild",
+            "build-for-testing",
+            "-project", str(xcodeproj),
+            "-scheme", "SpecterQARunner",
+            "-sdk", "iphonesimulator",
+            "-derivedDataPath", str(build_dir),
+        ],
+        cwd=str(source),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    if result.returncode != 0:
+        error_detail = ""
+        if not verbose and result.stderr:
+            error_detail = f"\n\nBuild output:\n{result.stderr.decode('utf-8', errors='replace')[-2000:]}"
+        raise click.ClickException(
+            f"Runner build failed (exit {result.returncode}).{error_detail}\n\n"
+            "Re-run with --verbose to see full xcodebuild output."
+        )
+
+    # Verify the xctestrun was produced (advisory — build already succeeded).
+    import glob as _glob
+    pattern = str(build_dir / "Build" / "Products" / "*.xctestrun")
+    matches = _glob.glob(pattern)
+    artifact_line = f"  Artifact: {matches[0]}\n\n" if matches else ""
+    if not matches:
+        logger.warning("No .xctestrun found at %s — run 'runner status' to verify.", pattern)
+
+    console.print(Panel(
+        f"[bold green]Runner built successfully.[/bold green]\n\n"
+        f"{artifact_line}"
+        "Run [bold]specterqa-ios runner status[/bold] to verify,\n"
+        "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
+        title="[green]Build Complete[/green]",
+        border_style="green",
+    ))
+
+
+@runner_group.command("status")
+def runner_status() -> None:
+    """Check whether the Swift XCTest runner is compiled and ready.
+
+    Looks for the .xctestrun artifact under ``~/.specterqa/runner-build/``.
+
+    \b
+    Example:
+      specterqa-ios runner status
+    """
+    import glob as _glob
+
+    build_dir = _runner_build_dir()
+    pattern = str(build_dir / "Build" / "Products" / "*.xctestrun")
+    matches = _glob.glob(pattern)
+
+    table = Table(title="SpecterQA XCTest Runner Status", border_style="cyan")
+    table.add_column("Item", style="bold")
+    table.add_column("Status")
+    table.add_column("Detail", style="dim")
+
+    # Build dir exists?
+    build_dir_ok = build_dir.exists()
+    table.add_row(
+        "Build directory",
+        Text("OK", style="green") if build_dir_ok else Text("MISSING", style="red"),
+        str(build_dir),
+    )
+
+    # .xctestrun found?
+    if matches:
+        xctestrun = Path(matches[0])
+        mtime = xctestrun.stat().st_mtime
+        import datetime
+        built_at = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+        table.add_row(
+            "Runner artifact (.xctestrun)",
+            Text("READY", style="bold green"),
+            f"{xctestrun.name}  (built {built_at})",
+        )
+        runner_ready = True
+    else:
+        table.add_row(
+            "Runner artifact (.xctestrun)",
+            Text("NOT BUILT", style="bold red"),
+            "Run: specterqa-ios runner build",
+        )
+        runner_ready = False
+
+    console.print()
+    console.print(table)
+    console.print()
+
+    if runner_ready:
+        console.print(
+            "[green]Runner is ready.[/green] "
+            "Tests will run headless without stealing the mouse cursor."
+        )
+    else:
+        console.print(
+            "[yellow]Runner is not built.[/yellow] "
+            "Run [bold]specterqa-ios runner build[/bold] for non-blocking headless testing.\n"
+            "Without the runner, tests fall back to CGEvents (blocks the cursor)."
+        )
+
+
+@runner_group.command("clean")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip confirmation prompt.")
+def runner_clean(yes: bool) -> None:
+    """Remove the compiled runner build artifacts.
+
+    Deletes ``~/.specterqa/runner-build/`` and its contents.  The runner will
+    need to be rebuilt with [bold]specterqa-ios runner build[/bold] before
+    headless testing resumes.
+
+    \b
+    Example:
+      specterqa-ios runner clean
+      specterqa-ios runner clean --yes
+    """
+    import shutil
+
+    build_dir = _runner_build_dir()
+
+    if not build_dir.exists():
+        console.print("[dim]Runner build directory does not exist — nothing to clean.[/dim]")
+        return
+
+    if not yes:
+        click.confirm(
+            f"Delete runner build artifacts at {build_dir}?",
+            abort=True,
+        )
+
+    try:
+        shutil.rmtree(build_dir)
+        console.print(f"[green]Deleted:[/green] {build_dir}")
+        console.print(
+            "Run [bold]specterqa-ios runner build[/bold] to rebuild the runner."
+        )
+    except Exception as exc:
+        raise click.ClickException(f"Failed to remove {build_dir}: {exc}")
 
 
 @ios_command_group.command("serve")
