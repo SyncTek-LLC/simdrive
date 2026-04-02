@@ -526,23 +526,16 @@ def create_server() -> Any:
                 "error_code": "JOURNEY_NOT_FOUND",
             })
 
-        # Import SimDriver and AI decider
-        try:
-            from specterqa.ios.sim_driver import SimDriver
-        except ImportError as exc:
+        # Check WDA availability — SoM pipeline requires WDA
+        from specterqa.ios.wda_driver import WDADriver
+        if not WDADriver.is_available():
             return json.dumps({
                 "ok": False,
-                "error": f"Failed to import SimDriver: {exc}",
-                "error_code": "IMPORT_ERROR",
-            })
-
-        try:
-            from specterqa.engine.computer_use_decider import ComputerUseDecider
-        except ImportError as exc:
-            return json.dumps({
-                "ok": False,
-                "error": f"Failed to import ComputerUseDecider: {exc}",
-                "error_code": "IMPORT_ERROR",
+                "error": (
+                    "WebDriverAgent is not running on port 8100. "
+                    "Start it with: specterqa-ios wda start"
+                ),
+                "error_code": "WDA_NOT_AVAILABLE",
             })
 
         # Resolve device
@@ -568,74 +561,51 @@ def create_server() -> Any:
         evidence_dir = project_dir / "evidence" / run_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create driver
-        udid = product_cfg.get("simulator_id", device_id)
-        driver = SimDriver(udid=udid, verbose=False)
-        driver.device_info()
-
-        # Launch app
-        try:
-            driver.launch_app(bundle_id)
-        except Exception as exc:
-            logger.warning("launch_app failed (non-fatal): %s", exc)
-
-        # Create AI decider with ACTUAL screenshot dimensions
-        b64, w, h = driver.screenshot()
-        decider = ComputerUseDecider(
+        # Build and start the SoM runner
+        from specterqa.ios.som_runner import SoMRunner
+        runner = SoMRunner(
             api_key=api_key,
-            display_width=w,
-            display_height=h,
+            verbose=False,
+            evidence_dir=str(evidence_dir),
         )
+        try:
+            runner.start(bundle_id)
+        except Exception as exc:
+            return json.dumps({
+                "ok": False,
+                "error": f"SoM runner failed to start: {exc}",
+                "error_code": "RUNNER_START_ERROR",
+            })
 
-        steps = journey_cfg.get("steps", [])
+        # Raw steps list (support both flat and wrapped schemas)
+        steps = journey_cfg.get("steps", journey_cfg.get("scenario", {}).get("steps", []))
         all_passed = True
         step_reports: list[dict[str, Any]] = []
         start_time = time.monotonic()
 
-        for i, step in enumerate(steps, 1):
-            step_id = step.get("id", f"step-{i}")
-            description = step.get("description", step.get("goal", step_id))
-            goal = step.get("goal", description)
-            checkpoint = step.get("checkpoint", None)
-            step_max_iter = step.get("max_iterations", max_steps)
+        try:
+            for i, step in enumerate(steps, 1):
+                step_id = step.get("id", f"step-{i}")
+                description = step.get("description", step.get("goal", step_id))
+                goal = step.get("goal", description)
+                checkpoint = step.get("checkpoint", None)
+                step_max_iter = step.get("max_iterations", max_steps)
 
-            step_start = time.monotonic()
-            step_passed = False
-            step_error = None
-            full_goal = f"{goal}\nCheckpoint: {checkpoint}" if checkpoint else goal
+                result = runner.run_step(goal=goal, checkpoint=checkpoint, max_iterations=step_max_iter)
+                step_passed = result["passed"]
+                if not step_passed:
+                    all_passed = False
 
-            for iter_idx in range(step_max_iter):
-                b64, w, h = driver.screenshot()
-                decision = decider.decide(
-                    goal=full_goal,
-                    screenshot_base64=b64,
-                    display_width=w,
-                    display_height=h,
-                )
-                if decision.goal_achieved:
-                    step_passed = True
-                    break
-                try:
-                    action_dict = _decision_to_action(decision)
-                    driver.execute(action_dict)
-                except Exception as exc:
-                    step_error = str(exc)
-                    logger.error("Action failed at step %s iter %d: %s", step_id, iter_idx, exc)
-                    break
-            else:
-                step_error = f"Max iterations ({step_max_iter}) reached"
-
-            if not step_passed:
-                all_passed = False
-
-            step_reports.append({
-                "step_id": step_id,
-                "description": description,
-                "passed": step_passed,
-                "duration_seconds": round(time.monotonic() - step_start, 3),
-                "error": step_error,
-                "findings": [],
-            })
+                step_reports.append({
+                    "step_id": step_id,
+                    "description": description,
+                    "passed": step_passed,
+                    "duration_seconds": result["duration"],
+                    "error": result.get("error"),
+                    "findings": [],
+                })
+        finally:
+            runner.stop()
 
         total_duration = round(time.monotonic() - start_time, 3)
         passed_count = sum(1 for sr in step_reports if sr.get("passed"))
@@ -653,6 +623,7 @@ def create_server() -> Any:
             "findings": [],
             "duration_seconds": total_duration,
             "evidence_dir": str(evidence_dir),
+            "backend": "som_wda",
         }
 
         # Persist to evidence directory and in-memory store

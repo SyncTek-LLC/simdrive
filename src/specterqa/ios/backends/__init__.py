@@ -1,10 +1,14 @@
 """specterqa.ios.backends — pluggable touch-injection backends.
 
-Available backends:
+Available backends (priority order):
 
 * :class:`~specterqa.ios.backends.xctest_client.XCTestBackend` —
   HTTP client for the Swift XCTest runner.  Highest fidelity; no window
-  required.
+  required.  Port 8222.
+
+* :class:`~specterqa.ios.wda_driver.WDADriver` —
+  Appium WebDriverAgent HTTP client.  W3C Actions API, device logical points,
+  no window required.  Port 8100.
 
 * :class:`~specterqa.ios.backends.indigo_hid.IndigoHIDBackend` —
   Pure-Python headless injection via Apple's private IndigoHID protocol.
@@ -31,9 +35,11 @@ from specterqa.ios.backends.cgevents import CGEventBackend
 from specterqa.ios.backends.indigo_hid import IndigoHIDBackend
 from specterqa.ios.backends.selector import BackendSelector
 from specterqa.ios.backends.xctest_client import XCTestBackend
+from specterqa.ios.wda_driver import WDADriver
 
 __all__ = [
     "XCTestBackend",
+    "WDADriver",
     "IndigoHIDBackend",
     "CGEventBackend",
     "BackendSelector",
