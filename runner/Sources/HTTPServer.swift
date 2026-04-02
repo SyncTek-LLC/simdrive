@@ -16,6 +16,7 @@ import Network
 ///   POST /key           {"key":"return"}
 ///   POST /press_button  {"button":"home"}
 ///   GET  /screenshot    → {"base64":"…","width":390,"height":844}
+///   GET  /source        → JSON element tree (accessibility snapshot)
 ///   GET  /health        → {"status":"ok","port":8222}
 ///   POST /shutdown      → shuts the server down
 ///
@@ -189,6 +190,13 @@ final class HTTPServer {
                 "height": Int(size.height)
             ]
             return (jsonResponse(body), false)
+
+        case ("GET", "/source"):
+            // AccessibilityTree returns (jsonData, httpStatusCode).
+            // The body already encodes error details when status != 200,
+            // so we forward the bytes directly regardless of status.
+            let (treeData, _) = AccessibilityTree.capture(app: injector.app)
+            return (treeData, false)
 
         default:
             return (jsonError("not found: \(request.method) \(request.path)", status: 404), false)

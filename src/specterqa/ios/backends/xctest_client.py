@@ -260,6 +260,18 @@ class XCTestBackend:
         logger.debug("press_button(%r)", button)
         return self._post("/press_button", {"button": button})
 
+    def source(self) -> dict[str, Any]:
+        """Fetch the accessibility element tree from the runner.
+
+        The runner returns a JSON object with an ``"xml"`` key containing the
+        full accessibility hierarchy as XML, plus optional metadata.
+
+        Returns:
+            Dict with at least ``{"xml": "<AppElement ...>"}`` on success.
+        """
+        logger.debug("source()")
+        return self._get("/source")
+
     def screenshot(self) -> dict[str, Any]:
         """Capture a screenshot.
 
