@@ -453,6 +453,46 @@ def install(app_path: str, device_id: str | None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _get_driver(udid: str = "booted", verbose: bool = False) -> tuple[Any, str]:
+    """Return the best available touch driver and its backend name.
+
+    Selection priority:
+        1. WDADriver  — Appium WebDriverAgent on port 8100 (headless, device pts)
+        2. SimDriver  — Quartz CGEvents fallback (requires visible Simulator window)
+
+    The WDA path is preferred because it injects native touch events directly
+    into the simulator process — no window detection, no title-bar offset math,
+    works headless in CI.  SimDriver is kept as a reliable fallback for local
+    developer workflows where Simulator.app is already open.
+
+    Args:
+        udid: Simulator UDID or ``"booted"``.
+        verbose: Enable debug output on the returned driver.
+
+    Returns:
+        ``(driver, backend_name)`` where *backend_name* is one of
+        ``"wda"`` or ``"cgevents"``.
+    """
+    try:
+        from specterqa.ios.wda_driver import WDADriver
+        if WDADriver.is_available():
+            if verbose:
+                print("[specterqa] Using WDA backend (headless, device points)")
+            return WDADriver(udid=udid, verbose=verbose), "wda"
+    except ImportError:
+        pass
+
+    try:
+        from specterqa.ios.sim_driver import SimDriver
+        if verbose:
+            print("[specterqa] Using CGEvent backend (requires visible Simulator)")
+        return SimDriver(udid=udid, verbose=verbose), "cgevents"
+    except ImportError as exc:
+        raise click.ClickException(
+            f"No driver available. WDA is not running and SimDriver import failed: {exc}"
+        )
+
+
 def _decision_to_action(decision: Any) -> dict:
     """Convert a ComputerUseDecider Decision to sim_driver action dict."""
     if decision.action == "click":
@@ -622,41 +662,41 @@ def run(
         )
         console.print()
 
-    # Import SimDriver and AI decider
-    try:
-        from specterqa.ios.sim_driver import SimDriver
-    except ImportError as exc:
-        _err(f"Failed to import SimDriver: {exc}", "Import Error")
-        raise SystemExit(3)
+    # Check WDA availability — SoM pipeline requires WDA
+    from specterqa.ios.wda_driver import WDADriver
+    if not WDADriver.is_available():
+        _err(
+            "WebDriverAgent is not running on port 8100.\n\n"
+            "Start it with:  specterqa-ios wda start\n"
+            "Or follow the setup guide: specterqa-ios setup",
+            "WDA Not Available",
+        )
+        raise SystemExit(2)
 
-    try:
-        from specterqa.engine.computer_use_decider import ComputerUseDecider
-    except ImportError as exc:
-        _err(f"Failed to import ComputerUseDecider: {exc}", "Import Error")
-        raise SystemExit(3)
+    if not plain:
+        console.print("  [dim]Backend: SoM (WDA + Set-of-Mark)[/dim]")
 
-    # Create driver
+    # Resolve UDID
     udid = product_cfg.get("simulator_id", device_id or "booted")
-    driver = SimDriver(udid=udid, verbose=verbose)
-    driver.device_info()
 
-    # Launch app
-    _print(f"Launching {bundle_id}...")
-    try:
-        driver.launch_app(bundle_id)
-    except Exception as exc:
-        logger.warning("launch_app failed (non-fatal): %s", exc)
-
-    # Create AI decider with ACTUAL screenshot dimensions
-    b64, w, h = driver.screenshot()
-    decider = ComputerUseDecider(
+    # Build evidence directory for this run
+    runner = None
+    from specterqa.ios.som_runner import SoMRunner
+    runner = SoMRunner(
         api_key=api_key,
-        display_width=w,
-        display_height=h,
+        verbose=verbose,
+        evidence_dir=str(evidence_dir),
     )
 
+    _print(f"Launching {bundle_id}...")
+    try:
+        runner.start(bundle_id)
+    except Exception as exc:
+        _err(f"Failed to start SoM runner: {exc}", "Startup Error")
+        raise SystemExit(3)
+
     # Execute journey steps
-    steps = journey_cfg.get("steps", [])
+    steps = journey_cfg.get("steps", journey_cfg.get("scenario", {}).get("steps", []))
     if not steps:
         _print("[yellow]Warning: journey has no steps defined.[/yellow]")
 
@@ -664,73 +704,47 @@ def run(
     step_results = []
     start_time = time.monotonic()
 
-    for i, step in enumerate(steps, 1):
-        step_id = step.get("id", f"step-{i}")
-        description = step.get("description", step.get("goal", step_id))
-        goal = step.get("goal", description)
-        checkpoint = step.get("checkpoint", None)
-        step_max_iter = step.get("max_iterations", max_steps)
+    try:
+        for i, step in enumerate(steps, 1):
+            step_id = step.get("id", f"step-{i}")
+            description = step.get("description", step.get("goal", step_id))
+            goal = step.get("goal", description)
+            checkpoint = step.get("checkpoint", None)
+            step_max_iter = step.get("max_iterations", max_steps)
 
-        if plain:
-            print(f"Step {i}/{len(steps)}: {description}", file=sys.stderr, flush=True)
-        else:
-            console.print(f"  [bold]Step {i}/{len(steps)}:[/bold] {description}")
-
-        step_start = time.monotonic()
-        step_passed = False
-        step_error = None
-
-        full_goal = f"{goal}\nCheckpoint: {checkpoint}" if checkpoint else goal
-
-        for iter_idx in range(step_max_iter):
-            # Screenshot
-            b64, w, h = driver.screenshot()
-
-            # Ask Claude
-            decision = decider.decide(
-                goal=full_goal,
-                screenshot_base64=b64,
-                display_width=w,
-                display_height=h,
-            )
-
-            if verbose or not plain:
-                _print(f"  [{iter_idx}] action={decision.action} target={decision.target} achieved={decision.goal_achieved}")
-
-            if decision.goal_achieved:
-                step_passed = True
-                if plain:
-                    print(f"  PASS ({round(time.monotonic() - step_start, 1)}s)", file=sys.stderr, flush=True)
-                else:
-                    console.print(f"    [green]PASS[/green] ({round(time.monotonic() - step_start, 1):.1f}s)")
-                break
-
-            # Execute the action
-            try:
-                action_dict = _decision_to_action(decision)
-                driver.execute(action_dict)
-            except Exception as exc:
-                step_error = str(exc)
-                logger.error("Action failed at step %s iter %d: %s", step_id, iter_idx, exc)
-                break
-        else:
-            step_error = f"Max iterations ({step_max_iter}) reached"
             if plain:
-                print(f"  FAIL — {step_error}", file=sys.stderr, flush=True)
+                print(f"Step {i}/{len(steps)}: {description}", file=sys.stderr, flush=True)
             else:
-                console.print(f"    [red]FAIL[/red] — {step_error}")
+                console.print(f"  [bold]Step {i}/{len(steps)}:[/bold] {description}")
 
-        if not step_passed:
-            all_passed = False
+            result = runner.run_step(goal=goal, checkpoint=checkpoint, max_iterations=step_max_iter)
+            step_passed = result["passed"]
+            step_error = result.get("error")
 
-        step_results.append({
-            "step_id": step_id,
-            "description": description,
-            "passed": step_passed,
-            "duration_seconds": round(time.monotonic() - step_start, 3),
-            "error": step_error,
-            "findings": [],
-        })
+            if step_passed:
+                if plain:
+                    print(f"  PASS ({result['duration']:.1f}s)", file=sys.stderr, flush=True)
+                else:
+                    console.print(f"    [green]PASS[/green] ({result['duration']:.1f}s)")
+            else:
+                if plain:
+                    print(f"  FAIL — {step_error}", file=sys.stderr, flush=True)
+                else:
+                    console.print(f"    [red]FAIL[/red] — {step_error}")
+
+            if not step_passed:
+                all_passed = False
+
+            step_results.append({
+                "step_id": step_id,
+                "description": description,
+                "passed": step_passed,
+                "duration_seconds": result["duration"],
+                "error": step_error,
+                "findings": [],
+            })
+    finally:
+        runner.stop()
 
     total_duration = round(time.monotonic() - start_time, 3)
 
@@ -1053,6 +1067,255 @@ def serve() -> None:
     from specterqa.ios.mcp.server import serve as run_mcp
 
     run_mcp()
+
+
+# ---------------------------------------------------------------------------
+# specterqa ios wda  — manage WebDriverAgent
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.group("wda")
+def wda_group() -> None:
+    """Manage WebDriverAgent (WDA) — the headless touch-injection backend.
+
+    WDA is an Appium XCTest bundle that runs inside the simulator and exposes
+    a W3C WebDriver-compatible HTTP API on port 8100.  It delivers native touch
+    events directly into the simulator process — no window detection, no title-bar
+    offsets, works in headless CI environments.
+
+    \b
+    Typical workflow:
+      specterqa-ios wda status          # check if WDA is running
+      specterqa-ios wda start           # build + launch WDA on the booted sim
+      specterqa-ios run --product ...   # run now uses WDA automatically
+      specterqa-ios wda stop            # stop WDA when done
+    """
+
+
+@wda_group.command("status")
+def wda_status() -> None:
+    """Check whether WebDriverAgent is running and ready.
+
+    Probes ``GET /status`` on port 8100 and reports the result.
+    """
+    from specterqa.ios.wda_driver import WDADriver
+
+    available = WDADriver.is_available()
+    if available:
+        console.print("[bold green]WDA is running[/bold green] — port 8100 is ready.")
+        console.print(
+            "[dim]The [bold]run[/bold] command will use WDA automatically.[/dim]"
+        )
+    else:
+        console.print("[bold yellow]WDA is not running.[/bold yellow]")
+        console.print(
+            "Start it with:  [bold]specterqa-ios wda start[/bold]\n"
+            "Or run it manually via Xcode / xcodebuild."
+        )
+
+
+@wda_group.command("stop")
+def wda_stop() -> None:
+    """Stop WebDriverAgent.
+
+    Sends ``DELETE /session`` to the active WDA session (if any), then kills
+    any ``xcodebuild`` process that is serving WDA.  Safe to call even when
+    WDA is not running.
+    """
+    # Close the active session gracefully
+    try:
+        from specterqa.ios.wda_driver import WDADriver, WDAError
+        import urllib.request
+
+        req = urllib.request.Request("http://localhost:8100/status", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read())
+        session_id = data.get("sessionId") or data.get("value", {}).get("sessionId")
+        if session_id:
+            try:
+                driver = WDADriver()
+                driver._session_id = session_id  # type: ignore[attr-defined]
+                driver._request("DELETE", f"/session/{session_id}")
+            except Exception:
+                pass
+    except Exception:
+        pass  # WDA not running — nothing to close
+
+    # Kill the xcodebuild process running WDA
+    result = subprocess.run(
+        ["pkill", "-f", "WebDriverAgentRunner"],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        console.print("[green]WDA stopped.[/green]")
+    else:
+        console.print("[dim]WDA was not running (nothing to stop).[/dim]")
+
+
+@wda_group.command("start")
+@click.option(
+    "--device",
+    "device_id",
+    default=None,
+    help="Simulator UDID. Defaults to currently-booted simulator.",
+)
+@click.option(
+    "--wda-path",
+    default=None,
+    help="Path to a pre-built WebDriverAgent.xcodeproj. "
+    "Defaults to ~/.specterqa/wda/WebDriverAgent.",
+)
+@click.option(
+    "--port",
+    default=8100,
+    type=int,
+    show_default=True,
+    help="Port WDA should listen on.",
+)
+@click.option(
+    "--timeout",
+    default=60,
+    type=int,
+    show_default=True,
+    help="Seconds to wait for WDA to become ready.",
+)
+def wda_start(
+    device_id: str | None,
+    wda_path: str | None,
+    port: int,
+    timeout: int,
+) -> None:
+    """Build and launch WebDriverAgent on the booted simulator.
+
+    Clones the Appium WebDriverAgent repo to ``~/.specterqa/wda/`` if it has
+    not already been downloaded, then builds the XCTest bundle with
+    ``xcodebuild build-for-testing`` and launches it with
+    ``xcodebuild test-without-building``.
+
+    The process runs in the background.  Use ``specterqa-ios wda status`` to
+    confirm WDA is ready.
+
+    \b
+    Prerequisites:
+      - Xcode 15+ with the iOS Simulator SDK installed
+      - At least one iOS Simulator booted (run: specterqa-ios boot)
+      - git (to clone WebDriverAgent)
+
+    \b
+    Example:
+      specterqa-ios wda start
+      specterqa-ios wda start --device <UDID> --timeout 90
+    """
+    import glob
+
+    from specterqa.ios.wda_driver import WDADriver
+
+    # Resolve target simulator
+    if device_id is None:
+        device_id = _find_booted_udid()
+        if device_id is None:
+            raise click.ClickException(
+                "No booted simulator found. "
+                "Boot one first with: specterqa-ios boot"
+            )
+    console.print(f"[bold]Target simulator:[/bold] {device_id}")
+
+    # Resolve WDA source path
+    wda_dir = wda_path or os.path.expanduser("~/.specterqa/wda/WebDriverAgent")
+    build_dir = os.path.expanduser("~/.specterqa/wda/build")
+    xcodeproj = os.path.join(wda_dir, "WebDriverAgent.xcodeproj")
+
+    # Clone WDA if not present
+    if not os.path.exists(xcodeproj):
+        console.print(
+            f"[bold]Cloning WebDriverAgent[/bold] into {wda_dir} …\n"
+            "[dim](this only happens once)[/dim]"
+        )
+        clone_result = subprocess.run(
+            [
+                "git", "clone", "--depth", "1",
+                "https://github.com/appium/WebDriverAgent.git",
+                wda_dir,
+            ],
+            capture_output=False,
+        )
+        if clone_result.returncode != 0:
+            raise click.ClickException(
+                "Failed to clone WebDriverAgent. "
+                "Check your internet connection or pass --wda-path to an existing clone."
+            )
+
+    # Build WDA for testing
+    console.print("[bold]Building WebDriverAgent for simulator …[/bold]")
+    build_result = subprocess.run(
+        [
+            "xcodebuild", "build-for-testing",
+            "-project", xcodeproj,
+            "-scheme", "WebDriverAgentRunner",
+            "-destination", f"id={device_id}",
+            "-derivedDataPath", build_dir,
+            "CODE_SIGN_IDENTITY=-",
+            "CODE_SIGNING_REQUIRED=NO",
+            "GCC_TREAT_WARNINGS_AS_ERRORS=NO",
+        ],
+        capture_output=False,
+    )
+    if build_result.returncode != 0:
+        raise click.ClickException(
+            "xcodebuild build-for-testing failed. "
+            "Check Xcode installation and simulator status."
+        )
+
+    # Find the .xctestrun file produced by the build
+    xctestrun_pattern = os.path.join(
+        build_dir, "Build", "Products", "*.xctestrun"
+    )
+    xctestrun_files = glob.glob(xctestrun_pattern)
+    if not xctestrun_files:
+        raise click.ClickException(
+            f"No .xctestrun file found at {xctestrun_pattern}. "
+            "The build may have failed silently."
+        )
+    xctestrun = sorted(xctestrun_files)[-1]  # use most recent
+    console.print(f"[dim]Using xctestrun: {xctestrun}[/dim]")
+
+    # Launch WDA as a background process
+    console.print(f"[bold]Launching WebDriverAgent on {device_id} …[/bold]")
+    env = os.environ.copy()
+    env["USE_PORT"] = str(port)
+    subprocess.Popen(  # noqa: S603 — intentional background process
+        [
+            "xcodebuild", "test-without-building",
+            "-xctestrun", xctestrun,
+            "-destination", f"id={device_id}",
+        ],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Poll until WDA is ready
+    console.print(f"[dim]Waiting for WDA to be ready on port {port} …[/dim]")
+    wda_url = f"http://localhost:{port}"
+    for elapsed in range(timeout):
+        if WDADriver.is_available(wda_url=wda_url):
+            console.print(
+                f"[bold green]WDA is ready[/bold green] on port {port}. "
+                f"({elapsed + 1}s)"
+            )
+            console.print(
+                "\nRun your tests now:\n"
+                f"  [bold]specterqa-ios run --product <slug> --journey <id>[/bold]"
+            )
+            return
+        time.sleep(1)
+
+    console.print(
+        f"[bold yellow]WDA did not become ready within {timeout}s.[/bold yellow]\n"
+        "It may still be launching in the background. "
+        "Check with: [bold]specterqa-ios wda status[/bold]"
+    )
+    raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------

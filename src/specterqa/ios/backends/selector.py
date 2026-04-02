@@ -3,12 +3,14 @@
 Probes available backends in priority order and returns the best one:
 
     1. XCTestBackend  — highest fidelity, no window required, on-device gestures
-    2. IndigoHIDBackend — headless, Mach IPC, no window required
-    3. CGEventBackend — fallback, requires visible Simulator window
+    2. WDABackend     — Appium WebDriverAgent, W3C Actions, headless, port 8100
+    3. IndigoHIDBackend — headless, Mach IPC, no window required
+    4. CGEventBackend — fallback, requires visible Simulator window
 
 The ``preferred`` argument bypasses auto-selection and forces a specific backend.
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
+INIT-2026-493 — WDA backend added.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 from specterqa.ios.backends.xctest_client import XCTestBackend
 from specterqa.ios.backends.indigo_hid import IndigoHIDBackend
 from specterqa.ios.backends.cgevents import CGEventBackend
+from specterqa.ios.wda_driver import WDADriver
 
 logger = logging.getLogger("specterqa.ios.backends.selector")
 
@@ -26,6 +29,8 @@ logger = logging.getLogger("specterqa.ios.backends.selector")
 _PREFERRED_MAP: dict[str, str] = {
     "xctest": "xctest",
     "xc_test": "xctest",
+    "wda": "wda",
+    "webdriveragent": "wda",
     "indigo": "indigo",
     "indigo_hid": "indigo",
     "cgevents": "cgevents",
@@ -83,11 +88,13 @@ class BackendSelector:
         Re-evaluates availability on each call.
 
         Returns:
-            List of backend name strings (e.g. ``["xctest", "cgevents"]``).
+            List of backend name strings (e.g. ``["xctest", "wda", "cgevents"]``).
         """
         names: list[str] = []
         if self._check_available(XCTestBackend):
             names.append("xctest")
+        if self._check_available(WDADriver):
+            names.append("wda")
         if self._check_available(IndigoHIDBackend):
             names.append("indigo")
         if self._check_available(CGEventBackend):
@@ -123,7 +130,7 @@ class BackendSelector:
 
     def _auto_select(self) -> Any:
         """Probe backends in priority order and return the first available."""
-        # Priority 1: XCTestBackend
+        # Priority 1: XCTestBackend (custom Swift runner, port 8222)
         if self._check_available(XCTestBackend):
             backend = XCTestBackend(udid=self.udid)
             logger.info(
@@ -131,7 +138,15 @@ class BackendSelector:
             )
             return backend
 
-        # Priority 2: IndigoHIDBackend
+        # Priority 2: WDADriver (Appium WebDriverAgent, port 8100)
+        if self._check_available(WDADriver):
+            backend = WDADriver(udid=self.udid)
+            logger.info(
+                "BackendSelector: selected WDADriver (udid=%r)", self.udid
+            )
+            return backend
+
+        # Priority 3: IndigoHIDBackend (headless Mach IPC)
         if self._check_available(IndigoHIDBackend):
             backend = IndigoHIDBackend(udid=self.udid)
             logger.info(
@@ -139,7 +154,7 @@ class BackendSelector:
             )
             return backend
 
-        # Priority 3: CGEventBackend (fallback)
+        # Priority 4: CGEventBackend (fallback, requires visible window)
         if self._check_available(CGEventBackend):
             backend = CGEventBackend(udid=self.udid)
             logger.info(
@@ -151,8 +166,9 @@ class BackendSelector:
             "No iOS backend is available. "
             "Ensure one of the following: "
             "(1) XCTest runner is listening on port 8222, "
-            "(2) Xcode + SimulatorKit are installed (for IndigoHID), or "
-            "(3) Simulator.app is running and visible (for CGEvents)."
+            "(2) WebDriverAgent is running on port 8100 (run: specterqa-ios wda start), "
+            "(3) Xcode + SimulatorKit are installed (for IndigoHID), or "
+            "(4) Simulator.app is running and visible (for CGEvents)."
         )
 
     def _get_preferred(self) -> Any:
@@ -163,6 +179,13 @@ class BackendSelector:
             backend = XCTestBackend(udid=self.udid)
             logger.info(
                 "BackendSelector: forced XCTestBackend (udid=%r)", self.udid
+            )
+            return backend
+
+        if key == "wda":
+            backend = WDADriver(udid=self.udid)
+            logger.info(
+                "BackendSelector: forced WDADriver (udid=%r)", self.udid
             )
             return backend
 
@@ -182,7 +205,7 @@ class BackendSelector:
 
         raise ValueError(
             f"Unknown preferred backend {self.preferred!r}. "
-            f"Valid values: 'xctest', 'indigo', 'cgevents'."
+            f"Valid values: 'xctest', 'wda', 'indigo', 'cgevents'."
         )
 
     # ------------------------------------------------------------------
