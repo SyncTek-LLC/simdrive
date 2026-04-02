@@ -487,6 +487,61 @@ class SoMAnnotator:
         return elements, annotated
 
     # ------------------------------------------------------------------
+    # Scroll-stuck prevention helpers
+    # ------------------------------------------------------------------
+
+    def _screen_changed(self, before_tree: str, after_tree: str) -> bool:
+        """Compare element trees before/after a scroll to detect content change.
+
+        Guard 2: If the screen is effectively unchanged after a scroll the
+        runner has hit a scroll boundary and should stop looping.
+
+        Uses ``(label, y_bucket)`` tuples for a fast, position-aware comparison.
+        Empty trees are treated as "changed" (safer default — avoids false stops
+        when the tree cannot be fetched).
+
+        Args:
+            before_tree: Raw XML element tree captured before the scroll.
+            after_tree: Raw XML element tree captured after the scroll.
+
+        Returns:
+            ``False`` when > 80 % of ``(label, y_bucket)`` pairs overlap —
+            i.e. the screen is effectively unchanged.
+            ``True`` (changed) in all other cases, including parse failures.
+        """
+        def _extract_signatures(xml_source: str) -> set[tuple[str, int]]:
+            sigs: set[tuple[str, int]] = set()
+            try:
+                root = ET.fromstring(xml_source)
+            except Exception:
+                return sigs
+            for node in root.iter():
+                label = (node.get("label") or node.get("name") or "").strip()
+                if not label:
+                    continue
+                try:
+                    y = float(node.get("y", 0))
+                except (TypeError, ValueError):
+                    y = 0.0
+                sigs.add((label, round(y / 10)))
+            return sigs
+
+        before_sigs = _extract_signatures(before_tree)
+        after_sigs = _extract_signatures(after_tree)
+
+        # Empty trees → treat as changed (safe default).
+        if not before_sigs or not after_sigs:
+            return True
+
+        overlap = len(before_sigs & after_sigs)
+        # Use the larger set as the denominator so a partially-loaded tree
+        # doesn't produce a misleadingly high overlap ratio.
+        denominator = max(len(before_sigs), len(after_sigs))
+        overlap_ratio = overlap / denominator
+
+        return overlap_ratio <= 0.80  # True = changed; False = same
+
+    # ------------------------------------------------------------------
     # Text formatting for Claude context
     # ------------------------------------------------------------------
 
