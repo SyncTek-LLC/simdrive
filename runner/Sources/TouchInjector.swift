@@ -14,7 +14,9 @@ final class TouchInjector {
 
     // MARK: - Properties
 
-    private let app: XCUIApplication
+    /// The XCUIApplication instance for the app-under-test.
+    /// Exposed internally so `HTTPServer` can pass it to `AccessibilityTree.capture(app:)`.
+    let app: XCUIApplication
 
     // MARK: - Init
 
