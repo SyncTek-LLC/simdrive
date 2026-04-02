@@ -232,14 +232,6 @@ class SoMRunner:
                     passed = True
                 break
 
-            # Stuck detection: same action + element 3 times in a row
-            action_key = f"{action_type}:{decision.get('element')}:{decision.get('direction')}:{decision.get('text')}"
-            same_action_streak[action_key] = same_action_streak.get(action_key, 0) + 1
-            if same_action_streak[action_key] >= 3:
-                error = f"Stuck: same action repeated 3 times ({action_key})"
-                logger.warning(error)
-                break
-
             # 5. Execute
             try:
                 result = self._execute_action(decision, elements)
@@ -248,6 +240,22 @@ class SoMRunner:
             except Exception as exc:
                 logger.warning("Action execution failed (retrying next iter): %s", exc)
                 actions.append({"iter": i, "decision": decision, "error": str(exc)})
+
+            # Stuck detection: check if screen changed after action.
+            # For scroll/swipe, the screen SHOULD change — if not, we're stuck.
+            # For taps, same element tapped 3 times without screen change = stuck.
+            post_b64, _, _ = self._driver.screenshot()
+            screen_changed = (post_b64[:500] != b64[:500])
+
+            if screen_changed:
+                same_action_streak.clear()  # Reset — progress was made
+            else:
+                action_key = f"{action_type}:{decision.get('element')}:{decision.get('direction')}"
+                same_action_streak[action_key] = same_action_streak.get(action_key, 0) + 1
+                if same_action_streak[action_key] >= 3:
+                    error = f"Stuck: action '{action_key}' repeated 3 times with no screen change"
+                    logger.warning(error)
+                    break
 
             time.sleep(_ACTION_SETTLE_S)
         else:

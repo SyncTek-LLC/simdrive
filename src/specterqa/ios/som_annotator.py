@@ -95,6 +95,9 @@ _NOISE_LABEL_FRAGMENTS: tuple[str, ...] = (
     "chevron.down",
     "dimmingoverlay",
     "dimmingview",
+    "placard",
+    "separator",
+    "background",
 )
 
 
