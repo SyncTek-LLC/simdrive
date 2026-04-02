@@ -3,15 +3,15 @@
 Overlays numbered labels on interactive UI elements detected from the
 accessibility tree. Claude picks a number instead of guessing coordinates.
 
-Element tree sources (in priority order):
-  1. SpecterQA XCTest runner  — GET /source on our Swift runner (no WDA session)
-  2. WDA fallback             — GET /session/<id>/source via WebDriverAgent
+Element tree source:
+  1. SpecterQA XCTest runner  — GET /source on our Swift runner (required)
 
 Research shows SoM prompting improves UI agent accuracy from ~50% to ~90%+
 by eliminating coordinate prediction entirely.
 
 INIT-2026-493 — SpecterQA SoM annotator.
 INIT-2026-506 — XCTest runner /source integration.
+INIT-2026-508 — Remove WDA fallback from SoM pipeline.
 """
 
 from __future__ import annotations
@@ -109,40 +109,24 @@ _NOISE_LABEL_FRAGMENTS: tuple[str, ...] = (
 class SoMAnnotator:
     """Annotates screenshots with numbered labels from the accessibility tree.
 
-    Supports two element-tree sources:
-    - **XCTest runner** (preferred): Provide ``runner_url`` (e.g.
-      ``"http://localhost:8222"``).  The annotator calls ``GET /source``
-      directly — no WDA session required.
-    - **WDA fallback**: Provide ``wda_url`` + ``session_id``.  Calls the
-      WebDriverAgent ``GET /session/<id>/source`` endpoint.
+    Requires the SpecterQA XCTest runner.  Provide ``runner_url`` (e.g.
+    ``"http://localhost:8222"``); the annotator calls ``GET /source`` directly.
 
-    Usage (XCTest runner)::
+    Usage::
 
         annotator = SoMAnnotator(runner_url="http://localhost:8222")
         elements, annotated_b64 = annotator.annotate(screenshot_b64, img_w, img_h)
 
-    Usage (WDA fallback)::
-
-        annotator = SoMAnnotator(wda_url="http://localhost:8100", session_id="...")
-        elements, annotated_b64 = annotator.annotate(screenshot_b64, img_w, img_h)
-
     Args:
-        wda_url: WDA base URL (default ``http://localhost:8100``).  Used only
-            when ``runner_url`` is not provided and ``session_id`` is set.
-        session_id: Active WDA session ID.  Required for WDA path.
         runner_url: Base URL of our XCTest runner (e.g.
-            ``"http://localhost:8222"``).  When set, this takes priority over
-            the WDA path regardless of whether ``session_id`` is also set.
+            ``"http://localhost:8222"``).  Required — raises ``RuntimeError``
+            at ``get_element_tree()`` time if not set.
     """
 
     def __init__(
         self,
-        wda_url: str = "http://localhost:8100",
-        session_id: Optional[str] = None,
         runner_url: Optional[str] = None,
     ) -> None:
-        self.wda_url = wda_url.rstrip("/")
-        self.session_id = session_id
         self.runner_url = runner_url.rstrip("/") if runner_url else None
 
     # ------------------------------------------------------------------
@@ -150,25 +134,25 @@ class SoMAnnotator:
     # ------------------------------------------------------------------
 
     def get_element_tree(self) -> str:
-        """Fetch the accessibility element tree from the best available source.
+        """Fetch the accessibility element tree from the XCTest runner.
 
-        Priority:
-        1. XCTest runner  — when ``self.runner_url`` is set, calls ``GET /source``
-           on our Swift runner.  The runner returns JSON with an ``"xml"`` key
-           (or plain XML) representing the full accessibility hierarchy.
-        2. WDA fallback   — when ``session_id`` is set, calls the standard WDA
-           ``GET /session/<id>/source`` endpoint and extracts the ``"value"`` key.
+        Calls ``GET /source`` on our Swift runner.  The runner returns JSON with
+        an ``"xml"`` key (or plain XML) representing the full accessibility
+        hierarchy.
 
         Returns:
             Raw XML string of the current UI hierarchy, compatible with
             :meth:`parse_elements`.
 
         Raises:
-            RuntimeError: If neither source is configured or the request fails.
+            RuntimeError: If ``runner_url`` is not configured or the request fails.
         """
-        if self.runner_url:
-            return self._get_element_tree_from_runner()
-        return self._get_element_tree_from_wda()
+        if not self.runner_url:
+            raise RuntimeError(
+                "SoMAnnotator requires runner_url. XCTest runner not configured. "
+                "Build it: specterqa-ios runner build"
+            )
+        return self._get_element_tree_from_runner()
 
     def _get_element_tree_from_runner(self) -> str:
         """Fetch element tree from our XCTest runner's ``/source`` endpoint.
@@ -203,34 +187,6 @@ class SoMAnnotator:
             raise RuntimeError(
                 f"XCTest runner /source returned empty content. "
                 f"Raw response: {raw[:200]!r}"
-            )
-        return xml_source
-
-    def _get_element_tree_from_wda(self) -> str:
-        """Fetch element tree from WDA's ``/session/<id>/source`` endpoint.
-
-        Returns:
-            Raw XML string extracted from the WDA response ``"value"`` key.
-
-        Raises:
-            RuntimeError: If no session_id is set or WDA returns an error.
-        """
-        if not self.session_id:
-            raise RuntimeError(
-                "SoMAnnotator requires either runner_url= or session_id= to fetch the element tree."
-            )
-        url = f"{self.wda_url}/session/{self.session_id}/source"
-        req = urllib.request.Request(url)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read())
-        except Exception as exc:
-            raise RuntimeError(f"WDA /source request failed: {exc}") from exc
-
-        xml_source = data.get("value", "")
-        if not xml_source:
-            raise RuntimeError(
-                f"WDA /source returned empty value. Full response: {data!r}"
             )
         return xml_source
 

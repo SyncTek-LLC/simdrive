@@ -10,6 +10,7 @@ INIT-2026-506 — SpecterQA iOS v3 session manager.
 from __future__ import annotations
 
 import glob
+import json
 import logging
 import os
 import subprocess
@@ -199,11 +200,13 @@ class TestSession:
 
         Steps:
         1. Resolve the source UDID when ``"booted"`` is requested.
-        2. Clone the source simulator with a unique name.
-        3. Boot the clone headless (no Simulator.app window).
-        4. Install the app bundle if *app_path* was given.
-        5. Deploy the XCTest runner via ``xcodebuild test-without-building``.
-        6. Poll ``/health`` until the runner responds or timeout.
+        2. Check source boot state; shutdown if booted (simctl clone requires SHUTDOWN).
+        3. Clone the source simulator with a unique name.
+        4. Restore the source simulator to its original boot state.
+        5. Boot the clone headless (no Simulator.app window).
+        6. Install the app bundle if *app_path* was given.
+        7. Deploy the XCTest runner via ``xcodebuild test-without-building``.
+        8. Poll ``/health`` until the runner responds or timeout.
 
         Raises:
             SessionError: On any failure.  Cleans up partial state on error.
@@ -233,13 +236,53 @@ class TestSession:
     # Internal — start sequence
     # ------------------------------------------------------------------
 
+    def _is_sim_booted(self, udid: str) -> bool:
+        """Check if a simulator is in Booted state.
+
+        Args:
+            udid: The simulator UDID to check.
+
+        Returns:
+            True if the simulator's state is ``"Booted"``, False otherwise.
+        """
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "-j"],
+            capture_output=True,
+            text=True,
+        )
+        try:
+            devices = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return False
+        for runtime_devices in devices.get("devices", {}).values():
+            for device in runtime_devices:
+                if device.get("udid") == udid:
+                    return device.get("state") == "Booted"
+        return False
+
     def _start(self) -> None:
-        """Internal start implementation (called by start() with error cleanup)."""
+        """Internal start implementation (called by start() with error cleanup).
+
+        Preserves the user's simulator state: if the source sim was booted before
+        cloning, it is re-booted after the clone completes so the user's environment
+        is left unchanged.  This resolves the simctl catch-22 where ``clone``
+        requires a SHUTDOWN simulator but the CLI may have discovered the UDID via
+        a booted device.
+        """
         # Step 1 — resolve "booted" to a real UDID.
         source = self._resolve_udid(self.source_udid)
         logger.info("Source simulator: %s", source)
 
-        # Step 2 — clone.
+        # Step 2 — preserve boot state and ensure source is shutdown before clone.
+        # simctl clone requires the source to be in Shutdown state (error 405 if Booted).
+        was_booted = self._is_sim_booted(source)
+        if was_booted:
+            logger.info(
+                "Source simulator is booted — shutting down temporarily for clone..."
+            )
+            _simctl("shutdown", source)
+
+        # Step 3 — clone.
         clone_name = f"specterqa-test-{uuid.uuid4().hex[:8]}"
         self._clone_name = clone_name
         logger.info("Cloning simulator as '%s'...", clone_name)
@@ -252,23 +295,29 @@ class TestSession:
             )
         logger.info("Clone UDID: %s", self._clone_udid)
 
-        # Step 3 — boot headless.
+        # Step 4 — restore the original simulator's state so the user's environment
+        # is unaffected.  Do this before booting the clone so both can boot in parallel.
+        if was_booted:
+            logger.info("Restoring original simulator boot state...")
+            _simctl("boot", source)
+
+        # Step 5 — boot the clone headless (no Simulator.app window).
         logger.info("Booting clone headless...")
         _simctl("boot", self._clone_udid)
         # Give CoreSimulator a moment to finish booting.
         time.sleep(2)
 
-        # Step 4 — install app (optional).
+        # Step 6 — install app (optional).
         if self.app_path:
             resolved = Path(self.app_path).resolve()
             logger.info("Installing %s on %s...", resolved.name, self._clone_udid)
             _simctl("install", self._clone_udid, str(resolved))
 
-        # Step 5 — deploy XCTest runner.
+        # Step 7 — deploy XCTest runner.
         self._port = _find_free_port()
         self._deploy_runner()
 
-        # Step 6 — wait for health.
+        # Step 8 — wait for health.
         health_url = f"{self.runner_url}/health"
         logger.info("Waiting for runner health at %s...", health_url)
         _wait_for_health(health_url, timeout_s=_HEALTH_TIMEOUT_S)
