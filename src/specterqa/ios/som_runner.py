@@ -11,15 +11,15 @@ This achieves near-100% tap accuracy by separating:
   - Precise positioning (element tree) — WHERE it is
 
 Backend modes:
-  - XCTest runner (default, headless, non-blocking): uses our Swift runner
-    deployed on a cloned simulator.  No cursor movement, no window focus.
-  - Legacy/fallback: WDA or CGEvents (requires visible Simulator window).
+  - XCTest runner (required): uses our Swift runner deployed on a cloned
+    simulator.  No cursor movement, no window focus.
 
 Research: SoM prompting improves UI agent accuracy from ~50% to ~90%+
 by eliminating coordinate prediction entirely.
 
 INIT-2026-493 — SpecterQA SoM test runner.
 INIT-2026-506 — XCTest runner integration, non-blocking mode.
+INIT-2026-508 — Remove WDA fallback from SoM pipeline.
 """
 
 from __future__ import annotations
@@ -72,20 +72,19 @@ class SoMRunner:
     """Execute test journeys using the SoM pipeline.
 
     Args:
-        wda_url: WebDriverAgent URL (fallback only; default http://localhost:8100).
         api_key: Anthropic API key.  Falls back to ANTHROPIC_API_KEY env var.
         model: Claude model for element selection.
         verbose: Print debug info to stdout.
         evidence_dir: Path to save annotated screenshots and run results.
-        use_xctest_runner: When True (default), use the Swift XCTest runner via
-            a cloned headless simulator.  When False, fall back to WDA/CGEvents.
+        use_xctest_runner: Must be True (default).  Kept for API compatibility —
+            passing False raises RuntimeError at start() time.
         headless: When True (default), boot the cloned simulator without opening
             Simulator.app (non-blocking; user can keep coding).
+        runner_url: Base URL of the XCTest runner (default http://localhost:8222).
     """
 
     def __init__(
         self,
-        wda_url: str = "http://localhost:8100",
         api_key: Optional[str] = None,
         model: str = "claude-sonnet-4-20250514",
         verbose: bool = False,
@@ -94,7 +93,6 @@ class SoMRunner:
         headless: bool = False,
         runner_url: str = "http://localhost:8222",
     ) -> None:
-        self.wda_url = wda_url
         self.runner_url = runner_url
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
         self.model = model
@@ -115,12 +113,17 @@ class SoMRunner:
     def start(self, bundle_id: str) -> None:
         """Initialise the driver, SoM annotator, and Anthropic client.
 
-        When ``use_xctest_runner=True`` (default), starts a TestSession to clone
-        and boot the simulator headlessly, then wires the SoM annotator to our
-        runner's /source endpoint.  Falls back to WDA/CGEvents when False.
+        Starts a TestSession to clone and boot the simulator headlessly, then
+        wires the SoM annotator to our runner's /source endpoint.  The XCTest
+        runner is the only supported backend — WDA fallback has been removed.
 
         Args:
             bundle_id: iOS bundle identifier of the app under test.
+
+        Raises:
+            RuntimeError: When ``use_xctest_runner=False`` is passed (no longer
+                supported) or when the XCTest runner is not available.
+            SoMRunnerError: When the Anthropic API key is missing.
         """
         from specterqa.ios.som_annotator import SoMAnnotator
 
@@ -129,10 +132,13 @@ class SoMRunner:
                 "No Anthropic API key. Set ANTHROPIC_API_KEY or pass api_key= to SoMRunner."
             )
 
-        if self.use_xctest_runner:
-            self._start_xctest(bundle_id, SoMAnnotator)
-        else:
-            self._start_legacy(bundle_id, SoMAnnotator)
+        if not self.use_xctest_runner:
+            raise RuntimeError(
+                "XCTest runner required for SoM pipeline. "
+                "Build it: specterqa-ios runner build"
+            )
+
+        self._start_xctest(bundle_id, SoMAnnotator)
 
         try:
             import anthropic  # type: ignore[import-untyped]
@@ -143,8 +149,7 @@ class SoMRunner:
             ) from exc
 
         if self.verbose:
-            mode = "xctest-runner" if self.use_xctest_runner else "legacy"
-            print(f"[som] started  bundle_id={bundle_id}  mode={mode}")
+            print(f"[som] started  bundle_id={bundle_id}  mode=xctest-runner")
 
     def _start_xctest(self, bundle_id: str, SoMAnnotator: type) -> None:
         """Start the XCTest-runner-backed pipeline (non-blocking, headless).
@@ -168,35 +173,11 @@ class SoMRunner:
         # Use XCTestBackend as the driver (tap/swipe/screenshot).
         self._driver = XCTestBackend(port=port)
 
-        # Wire the annotator to our runner's /source endpoint (no WDA session).
-        self._annotator = SoMAnnotator(runner_url=runner_url, session_id=None)
+        # Wire the annotator to our runner's /source endpoint.
+        self._annotator = SoMAnnotator(runner_url=runner_url)
 
         if self.verbose:
             print(f"[som] xctest runner at {runner_url}  clone={self._session.clone_udid}")
-
-    def _start_legacy(self, bundle_id: str, SoMAnnotator: type) -> None:
-        """Start the legacy WDA-backed pipeline (may block cursor).
-
-        Used as a fallback when the XCTest runner is not available.
-
-        Args:
-            bundle_id: App bundle identifier.
-            SoMAnnotator: The SoMAnnotator class.
-        """
-        from specterqa.ios.wda_driver import WDADriver
-
-        self._driver = WDADriver(wda_url=self.wda_url, verbose=self.verbose)
-        session_id = self._driver.create_session(bundle_id)
-        self._annotator = SoMAnnotator(wda_url=self.wda_url, session_id=session_id)
-
-        # Launch the app to ensure it is in the foreground.
-        try:
-            self._driver.launch_app(bundle_id)
-        except Exception as exc:
-            logger.warning("launch_app failed (non-fatal): %s", exc)
-
-        if self.verbose:
-            print(f"[som] wda session={session_id}")
 
     def stop(self) -> None:
         """Clean up driver session and (if active) the TestSession clone."""
