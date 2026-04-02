@@ -53,6 +53,7 @@ include = ["specterqa*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 markers = [
     "integration: real-device integration tests (require a booted iOS Simulator)",
 ]
