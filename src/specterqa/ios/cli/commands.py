@@ -147,6 +147,35 @@ def _find_booted_udid() -> str | None:
     return None
 
 
+def _find_any_iphone_udid() -> str | None:
+    """Return the UDID of any available iPhone simulator, booted or not.
+
+    Prefers booted simulators so that the user's current session is used.
+    Falls back to the first available (shutdown) iPhone sim when none is booted.
+    The TestSession boot/shutdown dance handles state preservation regardless.
+    """
+    try:
+        data = _list_simulators()
+    except click.ClickException:
+        return None
+
+    booted_udid: str | None = None
+    first_udid: str | None = None
+
+    for _runtime, devices in sorted(data.get("devices", {}).items(), reverse=True):
+        for dev in devices:
+            if "iphone" not in dev.get("name", "").lower():
+                continue
+            if not dev.get("isAvailable", True):
+                continue
+            if dev.get("state") == "Booted" and booted_udid is None:
+                booted_udid = dev.get("udid")
+            if first_udid is None:
+                first_udid = dev.get("udid")
+
+    return booted_udid or first_udid
+
+
 def _find_simulator_by_name(name_fragment: str) -> dict[str, Any] | None:
     """Find the first simulator whose name contains *name_fragment* (case-insensitive)."""
     try:
@@ -640,31 +669,20 @@ def run(
     # Resolve bundle_id from product config
     bundle_id: str = product_cfg.get("bundle_id", product_cfg.get("name", product))
 
-    # Resolve / discover device
+    # Resolve / discover device.
+    # TestSession handles the boot/shutdown dance for cloning, so we no longer
+    # need the source simulator to be booted before passing its UDID in.
     if device_id is None:
-        device_id = _find_booted_udid()
+        device_id = _find_any_iphone_udid()
         if device_id is None:
-            _print("[bold]No booted simulator — booting default iPhone simulator...[/bold]")
-            try:
-                data = _list_simulators()
-            except click.ClickException as exc:
-                _err(str(exc), "Simulator Error")
-                raise SystemExit(2)
-            target_dev: dict[str, Any] | None = None
-            for _rt, devs in sorted(data.get("devices", {}).items(), reverse=True):
-                for d in devs:
-                    if "iphone" in d.get("name", "").lower():
-                        target_dev = d
-                        break
-                if target_dev:
-                    break
-            if target_dev is None:
-                _err("No iPhone simulator found. Install Xcode and run 'specterqa-ios setup'.", "Simulator Error")
-                raise SystemExit(2)
-            device_id = target_dev["udid"]
-            _print(f"Booting: {target_dev['name']} ({device_id})")
-            _boot_simulator(device_id)
-            time.sleep(3)
+            _err("No iPhone simulator found. Install Xcode and run 'specterqa-ios setup'.", "Simulator Error")
+            raise SystemExit(2)
+        # Log whether we found a booted or shutdown sim so the user has context.
+        booted_udid = _find_booted_udid()
+        if booted_udid and booted_udid == device_id:
+            _print(f"[dim]Using booted simulator: {device_id}[/dim]")
+        else:
+            _print(f"[dim]Using available simulator: {device_id} (TestSession will manage boot state)[/dim]")
 
     # Install app if provided
     if app_path:
@@ -710,23 +728,17 @@ def run(
     udid = product_cfg.get("simulator_id", device_id or "booted")
 
     # Decide which backend to use.
-    # Priority: XCTest runner (headless, non-blocking) > WDA > CGEvents.
+    # XCTest runner is required for SoM pipeline — WDA fallback removed (INIT-2026-508).
     use_xctest = _xctest_runner_available()
-    from specterqa.ios.wda_driver import WDADriver
 
     if use_xctest:
         if not plain:
             console.print("  [dim]Backend: SoM (XCTest runner + Set-of-Mark — headless)[/dim]")
-    elif WDADriver.is_available():
-        use_xctest = False
-        if not plain:
-            console.print("  [dim]Backend: SoM (WDA + Set-of-Mark)[/dim]")
     else:
-        # Neither runner built nor WDA running — fall back to CGEvents with warning.
-        use_xctest = False
+        # Runner not built — fall back to CGEvents with a clear error message.
         _print(
-            "[yellow]Warning:[/yellow] XCTest runner not built and WDA not running.\n"
-            "  For best accuracy, build the runner:  specterqa-ios runner build\n"
+            "[yellow]Warning:[/yellow] XCTest runner not built.\n"
+            "  Run: specterqa-ios runner build\n"
             "  Falling back to CGEvents (will steal mouse cursor during test)."
         )
         if not plain:
