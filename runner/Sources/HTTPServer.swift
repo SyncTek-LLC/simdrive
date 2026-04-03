@@ -182,6 +182,10 @@ final class HTTPServer {
             }
 
         case ("GET", "/screenshot"):
+            // Wait for app to be in foreground before capturing.
+            if !waitForAppReady() {
+                return (jsonError("app not running — timed out waiting for foreground", status: 503), false)
+            }
             let (png, size) = injector.screenshot()
             let b64 = png.base64EncodedString()
             let body: [String: Any] = [
@@ -192,15 +196,29 @@ final class HTTPServer {
             return (jsonResponse(body), false)
 
         case ("GET", "/source"):
-            // AccessibilityTree returns (jsonData, httpStatusCode).
-            // The body already encodes error details when status != 200,
-            // so we forward the bytes directly regardless of status.
+            // Wait for app to be in foreground before querying tree.
+            if !waitForAppReady() {
+                return (jsonError("app not running — timed out waiting for foreground", status: 503), false)
+            }
             let (treeData, _) = AccessibilityTree.capture(app: injector.app)
             return (treeData, false)
 
         default:
             return (jsonError("not found: \(request.method) \(request.path)", status: 404), false)
         }
+    }
+
+    // MARK: - App readiness
+
+    /// Wait up to 10 seconds for the app to reach foreground.
+    /// Returns true if the app is running, false on timeout.
+    private func waitForAppReady() -> Bool {
+        let app = injector.app
+        if app.state == .runningForeground { return true }
+
+        // App may still be launching — give it time.
+        NSLog("[SpecterQA] Waiting for app to reach foreground (state=\(app.state.rawValue))...")
+        return app.wait(for: .runningForeground, timeout: 10)
     }
 
     // MARK: - Response helpers
