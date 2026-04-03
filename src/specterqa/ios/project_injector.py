@@ -217,17 +217,28 @@ class ProjectInjector:
         build_dir = Path.home() / ".specterqa" / "runner-build" / bundle_id
         build_dir.mkdir(parents=True, exist_ok=True)
 
+        # Build OUR runner project with their signing — never compile their code.
+        runner_project = self._runner_sources.parent / "SpecterQARunner.xcodeproj"
+        if not runner_project.is_dir():
+            raise ProjectInjectorError(
+                f"Runner Xcode project not found at {runner_project}. "
+                "Reinstall specterqa-ios."
+            )
+
         # Write xcconfig with user's signing settings.
         xcconfig = build_dir / "specterqa-runner.xcconfig"
-        xcconfig.write_text(self._generate_xcconfig(settings))
+        # Add GENERATE_INFOPLIST_FILE to xcconfig for Xcode 16 compat
+        xcconfig_content = self._generate_xcconfig(settings)
+        xcconfig_content += "GENERATE_INFOPLIST_FILE = YES\n"
+        xcconfig.write_text(xcconfig_content)
 
         derived_data = build_dir / "DerivedData"
 
         cmd = [
             "xcodebuild",
             "build-for-testing",
-            "-project", str(self.project_path),
-            "-scheme", self.scheme,
+            "-project", str(runner_project),
+            "-scheme", "SpecterQARunner",
             "-sdk", "iphonesimulator",
             "-destination", self.destination,
             "-derivedDataPath", str(derived_data),
@@ -236,8 +247,8 @@ class ProjectInjector:
 
         if verbose:
             print(f"[specterqa] Building runner for {bundle_id}...")
-            print(f"[specterqa] Using project: {self.project_path}")
-            print(f"[specterqa] Scheme:        {self.scheme}")
+            print(f"[specterqa] Using project: {runner_project}")
+            print(f"[specterqa] Scheme:        SpecterQARunner")
             print(f"[specterqa] Command:       {' '.join(cmd)}")
 
         result = subprocess.run(
