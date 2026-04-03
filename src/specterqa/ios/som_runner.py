@@ -392,7 +392,11 @@ class SoMRunner:
             # Stuck detection: check if screen changed after action.
             # For scroll/swipe, the screen SHOULD change — if not, we're stuck.
             # For taps, same element tapped 3 times without screen change = stuck.
-            post_b64, _, _ = self._driver.screenshot()
+            post_result = self._driver.screenshot()
+            if isinstance(post_result, dict):
+                post_b64 = post_result["base64"]
+            else:
+                post_b64, _, _ = post_result
             screen_changed = (post_b64[:500] != b64[:500])
 
             if screen_changed:
@@ -739,8 +743,12 @@ class SoMRunner:
             True if Claude confirms the checkpoint is met.
         """
         try:
-            b64, img_w, img_h = self._driver.screenshot()
-        except Exception as exc:
+            result = self._driver.screenshot()
+            if isinstance(result, dict):
+                b64, img_w, img_h = result["base64"], result.get("width", 0), result.get("height", 0)
+            else:
+                b64, img_w, img_h = result
+        except (Exception, TimeoutError) as exc:
             logger.warning("Checkpoint screenshot failed: %s", exc)
             return False
 
