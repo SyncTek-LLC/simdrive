@@ -24,11 +24,24 @@ class SpecterQARunnerTests: XCTestCase {
         let bundleId = resolveBundleId()
 
         let injector = TouchInjector(bundleId: bundleId)
-        let server   = HTTPServer(port: port, injector: injector)
+
+        // Launch the app if not already running. Zero-friction: agents don't
+        // need to simctl launch separately.
+        if injector.app.state != .runningForeground {
+            NSLog("[SpecterQA] Launching app '\(bundleId)'...")
+            injector.app.launch()
+            // Wait for the app to reach foreground.
+            let launched = injector.app.wait(for: .runningForeground, timeout: 15)
+            if !launched {
+                NSLog("[SpecterQA] WARNING: App did not reach foreground within 15s (state=\(injector.app.state.rawValue))")
+            }
+        }
+
+        let server = HTTPServer(port: port, injector: injector)
 
         try server.start()
 
-        NSLog("[SpecterQA] Runner listening on port \(port) targeting bundle '\(bundleId)'")
+        NSLog("[SpecterQA] Runner listening on port \(port) targeting bundle '\(bundleId)' (app state=\(injector.app.state.rawValue))")
         NSLog("[SpecterQA] Endpoints: GET /health  GET /source  GET /screenshot  POST /tap  POST /swipe  POST /type  POST /key  POST /press_button  POST /shutdown")
 
         // Block the test thread until the server signals shutdown.
