@@ -728,17 +728,38 @@ def run(
     udid = product_cfg.get("simulator_id", device_id or "booted")
 
     # Decide which backend to use.
-    # XCTest runner is required for SoM pipeline — WDA fallback removed (INIT-2026-508).
+    # Priority:
+    #   1. XCTest runner  — runner .xctestrun built → SoM pipeline (headless, no cursor)
+    #   2. WDA            — WDA running on port 8100 → SoM pipeline (headless, device pts)
+    #   3. CGEvents       — fallback (blocks cursor, requires visible Simulator.app window)
     use_xctest = _xctest_runner_available()
+
+    wda_url: str | None = None
+    if not use_xctest:
+        # Check whether WDA is reachable before committing to CGEvents.
+        try:
+            from specterqa.ios.wda_driver import WDADriver  # type: ignore[import-untyped]
+            if WDADriver.is_available():
+                wda_url = "http://localhost:8100"
+        except ImportError:
+            pass
 
     if use_xctest:
         if not plain:
             console.print("  [dim]Backend: SoM (XCTest runner + Set-of-Mark — headless)[/dim]")
-    else:
-        # Runner not built — fall back to CGEvents with a clear error message.
+    elif wda_url:
         _print(
-            "[yellow]Warning:[/yellow] XCTest runner not built.\n"
-            "  Run: specterqa-ios runner build\n"
+            "[yellow]Warning:[/yellow] XCTest runner not built — using WDA fallback.\n"
+            "  Run: specterqa-ios runner build --project <path> --scheme <scheme>\n"
+            "  WDA provides headless operation but the runner gives better results."
+        )
+        if not plain:
+            console.print("  [dim]Backend: SoM (WDA fallback — headless)[/dim]")
+    else:
+        # Neither runner nor WDA — fall back to CGEvents with a clear warning.
+        _print(
+            "[yellow]Warning:[/yellow] XCTest runner not built and WDA not available.\n"
+            "  Run: specterqa-ios runner build --project <path> --scheme <scheme>\n"
             "  Falling back to CGEvents (will steal mouse cursor during test)."
         )
         if not plain:
@@ -752,6 +773,7 @@ def run(
         verbose=verbose,
         evidence_dir=str(evidence_dir),
         use_xctest_runner=use_xctest,
+        wda_url=wda_url,
         headless=True,
     )
 
@@ -1134,25 +1156,69 @@ def runner_group() -> None:
 
 
 @runner_group.command("build")
+@click.option("--project", "project_path", default=None, type=click.Path(exists=True),
+              help="Path to user's .xcodeproj for project-injection build (recommended).")
+@click.option("--scheme", "scheme", default=None,
+              help="Xcode scheme name (required when --project is used).")
 @click.option("--runner-dir", "runner_dir", default=None,
-              help="Path to the Swift runner source (default: auto-detected).")
+              help="Path to the Swift runner source (default: auto-detected). "
+                   "Used for standalone build when --project is not provided.")
 @click.option("--verbose", "-v", is_flag=True, default=False,
               help="Stream xcodebuild output to stdout.")
-def runner_build(runner_dir: str | None, verbose: bool) -> None:
-    """Compile the Swift XCTest runner (~30 seconds, one-time setup).
-
-    Calls ``xcodebuild build-for-testing`` targeting the ``iphonesimulator``
-    SDK and deposits the .xctestrun artifact under ``~/.specterqa/runner-build/``.
+def runner_build(
+    project_path: str | None,
+    scheme: str | None,
+    runner_dir: str | None,
+    verbose: bool,
+) -> None:
+    """Compile the Swift XCTest runner against your Xcode project.
 
     \b
-    Example:
+    Project-injection build (recommended — inherits your signing settings):
+      specterqa-ios runner build --project MyApp/MyApp.xcodeproj --scheme MyApp
+      specterqa-ios runner build --project MyApp.xcodeproj --scheme MyApp --verbose
+
+    \b
+    Standalone build (uses SpecterQA's own signing):
       specterqa-ios runner build
       specterqa-ios runner build --verbose
+
+    \b
+    The project-injection build reads your project's signing identity, team ID,
+    and deployment target so the runner bundle is signed consistently with your
+    app.  This avoids simulator trust errors and is the recommended path.
     """
     if not _xcrun_available():
         raise click.ClickException("Xcode is required to build the runner. Install Xcode from the Mac App Store.")
 
-    # Locate the runner source.
+    # --- Project-injection path ---
+    if project_path is not None:
+        if not scheme:
+            raise click.ClickException(
+                "--scheme is required when --project is used.\n"
+                "Example: specterqa-ios runner build --project MyApp.xcodeproj --scheme MyApp"
+            )
+        from specterqa.ios.project_injector import ProjectInjector, ProjectInjectorError
+        console.print(f"[bold]Building runner via project injection...[/bold]")
+        console.print(f"  Project: {project_path}")
+        console.print(f"  Scheme:  {scheme}")
+        console.print()
+        try:
+            injector = ProjectInjector(project_path=project_path, scheme=scheme)
+            xctestrun = injector.build(verbose=verbose)
+        except ProjectInjectorError as exc:
+            raise click.ClickException(str(exc))
+        console.print(Panel(
+            f"[bold green]Runner built successfully.[/bold green]\n\n"
+            f"  Artifact: {xctestrun}\n\n"
+            "Run [bold]specterqa-ios runner status[/bold] to verify,\n"
+            "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
+            title="[green]Build Complete (project injection)[/green]",
+            border_style="green",
+        ))
+        return
+
+    # --- Standalone path (legacy / CI without user project) ---
     if runner_dir:
         source = Path(runner_dir).resolve()
     else:
