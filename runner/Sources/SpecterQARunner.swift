@@ -25,16 +25,30 @@ class SpecterQARunnerTests: XCTestCase {
 
         let injector = TouchInjector(bundleId: bundleId)
 
-        // Launch the app if not already running. Zero-friction: agents don't
-        // need to simctl launch separately.
-        if injector.app.state != .runningForeground {
-            NSLog("[SpecterQA] Launching app '\(bundleId)'...")
-            injector.app.launch()
-            // Wait for the app to reach foreground.
-            let launched = injector.app.wait(for: .runningForeground, timeout: 15)
-            if !launched {
-                NSLog("[SpecterQA] WARNING: App did not reach foreground within 15s (state=\(injector.app.state.rawValue))")
+        // Launch the app with retries. Springboard may not be ready
+        // immediately after sim boot — retry up to 3 times.
+        var launchAttempts = 0
+        let maxAttempts = 3
+        while injector.app.state != .runningForeground && launchAttempts < maxAttempts {
+            launchAttempts += 1
+            NSLog("[SpecterQA] Launching app '\(bundleId)' (attempt \(launchAttempts)/\(maxAttempts))...")
+            do {
+                injector.app.launch()
+            } catch {
+                NSLog("[SpecterQA] Launch attempt \(launchAttempts) failed: \(error)")
             }
+            let launched = injector.app.wait(for: .runningForeground, timeout: 10)
+            if launched {
+                NSLog("[SpecterQA] App launched successfully on attempt \(launchAttempts)")
+                break
+            }
+            if launchAttempts < maxAttempts {
+                NSLog("[SpecterQA] Waiting before retry...")
+                Thread.sleep(forTimeInterval: 3)
+            }
+        }
+        if injector.app.state != .runningForeground {
+            NSLog("[SpecterQA] WARNING: App failed to reach foreground after \(maxAttempts) attempts (state=\(injector.app.state.rawValue))")
         }
 
         let server = HTTPServer(port: port, injector: injector)
