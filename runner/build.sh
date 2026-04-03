@@ -73,12 +73,15 @@ echo ""
 xcodebuild build-for-testing \
     -project "$PROJECT" \
     -scheme "$SCHEME" \
+    -sdk iphonesimulator \
     -destination "generic/platform=iOS Simulator" \
     -derivedDataPath "$DERIVED_DATA" \
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=YES \
     DEVELOPMENT_TEAM="" \
+    SUPPORTED_PLATFORMS="iphonesimulator" \
+    ARCHS="\$(ARCHS_STANDARD)" \
     2>&1
 
 # ── Locate .xctestrun ───────────────────────────────────────────────────────────
