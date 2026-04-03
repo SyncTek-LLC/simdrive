@@ -684,14 +684,15 @@ def run(
         else:
             _print(f"[dim]Using available simulator: {device_id} (TestSession will manage boot state)[/dim]")
 
-    # Install app if provided
+    # Validate app path if provided — don't install here, let TestSession
+    # install on the clone so the cloned sim has the app.
+    resolved_app_path: str | None = None
     if app_path:
         resolved_app = Path(app_path).resolve()
         if not resolved_app.exists():
             _err(f"App not found: {app_path}", "Install Error")
             raise SystemExit(2)
-        _print(f"Installing {resolved_app.name} on {device_id}...")
-        _install_app(device_id, str(resolved_app))
+        resolved_app_path = str(resolved_app)
 
     # Print run header
     run_id = f"IOS-RUN-{time.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:8].upper()}"
@@ -775,6 +776,7 @@ def run(
         use_xctest_runner=use_xctest,
         wda_url=wda_url,
         headless=True,
+        app_path=resolved_app_path,
     )
 
     _print(f"Launching {bundle_id}...")
