@@ -58,8 +58,14 @@ class SpecterQARunnerTests: XCTestCase {
         NSLog("[SpecterQA] Runner listening on port \(port) targeting bundle '\(bundleId)' (app state=\(injector.app.state.rawValue))")
         NSLog("[SpecterQA] Endpoints: GET /health  GET /source  GET /screenshot  POST /tap  POST /swipe  POST /type  POST /key  POST /press_button  POST /shutdown")
 
-        // Block the test thread until the server signals shutdown.
-        server.waitUntilStopped()
+        // Keep the test thread alive with CFRunLoopRun(). This keeps the
+        // RunLoop spinning so XCUICoordinate.tap() can dispatch to the main
+        // thread. DispatchSemaphore.wait() deadlocks because tap() needs
+        // the main RunLoop. CFRunLoopRun() blocks but processes events.
+        //
+        // The server's stop() calls CFRunLoopStop() on this run loop to exit.
+        NSLog("[SpecterQA] Entering run loop (tap/swipe/type will work)...")
+        CFRunLoopRun()
 
         NSLog("[SpecterQA] Runner stopped — test exiting cleanly.")
     }
