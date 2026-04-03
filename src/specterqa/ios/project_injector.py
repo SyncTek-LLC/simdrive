@@ -156,6 +156,10 @@ class ProjectInjector:
             f"DEVELOPMENT_TEAM = {settings.get('DEVELOPMENT_TEAM', '')}",
             f"CODE_SIGNING_REQUIRED = {settings.get('CODE_SIGNING_REQUIRED', 'NO')}",
             f"IPHONEOS_DEPLOYMENT_TARGET = {settings.get('IPHONEOS_DEPLOYMENT_TARGET', '15.0')}",
+            "SDKROOT = iphonesimulator",
+            "SUPPORTED_PLATFORMS = iphonesimulator",
+            "ARCHS = $(ARCHS_STANDARD)",
+            "GENERATE_INFOPLIST_FILE = YES",
         ]
         return "\n".join(lines) + "\n"
 
