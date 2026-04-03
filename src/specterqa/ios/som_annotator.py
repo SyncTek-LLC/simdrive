@@ -204,12 +204,35 @@ class SoMAnnotator:
                 f"XCTest runner /source request failed at {url}: {exc}"
             ) from exc
 
-        # Try JSON envelope first, fall back to treating response as raw XML.
+        # The runner returns JSON (array of element dicts with children).
+        # The annotator's parse_elements() expects WDA-style XML.
+        # Convert the runner's JSON to XML so the existing parser works.
         try:
             data = json.loads(raw)
-            xml_source = data.get("xml") or data.get("value") or ""
-        except (json.JSONDecodeError, AttributeError):
+        except json.JSONDecodeError:
+            # Maybe it's already XML (older runner or WDA format).
             xml_source = raw.decode("utf-8", errors="replace").strip()
+            if not xml_source:
+                raise RuntimeError(
+                    f"XCTest runner /source returned empty content. "
+                    f"Raw response: {raw[:200]!r}"
+                )
+            return xml_source
+
+        # JSON response — convert to XML for parse_elements().
+        if isinstance(data, list):
+            # Array of element trees — wrap in a root.
+            xml_source = self._json_elements_to_xml(data)
+        elif isinstance(data, dict):
+            # Single element or {"xml": "..."} envelope.
+            if "xml" in data or "value" in data:
+                xml_source = data.get("xml") or data.get("value") or ""
+            elif "error" in data:
+                raise RuntimeError(f"Runner /source error: {data}")
+            else:
+                xml_source = self._json_elements_to_xml([data])
+        else:
+            xml_source = ""
 
         if not xml_source:
             raise RuntimeError(
@@ -217,6 +240,50 @@ class SoMAnnotator:
                 f"Raw response: {raw[:200]!r}"
             )
         return xml_source
+
+    @staticmethod
+    def _json_elements_to_xml(elements: list[dict]) -> str:
+        """Convert the runner's JSON element tree to WDA-style XML.
+
+        The runner returns:
+          [{"type": 42, "typeLabel": "application", "label": "Palace",
+            "frame": {"x": 0, "y": 0, "width": 390, "height": 844},
+            "enabled": true, "children": [...]}]
+
+        parse_elements() expects:
+          <XCUIElementTypeApplication label="Palace" x="0" y="0" width="390" height="844" enabled="true" visible="true">
+            ...children...
+          </XCUIElementTypeApplication>
+        """
+        def _convert(elem: dict) -> str:
+            type_label = elem.get("typeLabel", "other")
+            # Map to XCUIElementType tag names used by WDA XML.
+            tag = f"XCUIElementType{type_label[0].upper()}{type_label[1:]}"
+
+            frame = elem.get("frame", {})
+            attrs = {
+                "label": str(elem.get("label", "") or ""),
+                "value": str(elem.get("value", "") or "") if elem.get("value") is not None and str(elem.get("value")) != "<null>" else "",
+                "identifier": str(elem.get("identifier", "") or ""),
+                "enabled": "true" if elem.get("enabled", True) else "false",
+                "visible": "true",  # runner doesn't track visibility — assume visible
+                "x": str(int(frame.get("x", 0))),
+                "y": str(int(frame.get("y", 0))),
+                "width": str(int(frame.get("width", 0))),
+                "height": str(int(frame.get("height", 0))),
+            }
+
+            attr_str = " ".join(f'{k}="{_xml_escape(v)}"' for k, v in attrs.items() if v)
+            children = elem.get("children", [])
+            if children:
+                child_xml = "".join(_convert(c) for c in children)
+                return f"<{tag} {attr_str}>{child_xml}</{tag}>"
+            return f"<{tag} {attr_str}/>"
+
+        def _xml_escape(s: str) -> str:
+            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+        return "".join(_convert(e) for e in elements)
 
     def _get_element_tree_from_wda(self) -> str:
         """Fetch element tree from WDA with timeout guard.
