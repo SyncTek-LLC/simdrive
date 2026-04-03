@@ -87,6 +87,8 @@ class SoMRunner:
         wda_url: Optional WebDriverAgent base URL (e.g. ``"http://localhost:8100"``).
             Used as a fallback when the XCTest runner is not available.
             Triggers a warning directing the user to build the runner.
+        app_path: Path to .app bundle to install on the cloned simulator.
+            Passed through to TestSession so the clone has the app.
     """
 
     def __init__(
@@ -99,6 +101,7 @@ class SoMRunner:
         headless: bool = False,
         runner_url: str = "http://localhost:8222",
         wda_url: Optional[str] = None,
+        app_path: Optional[str] = None,
     ) -> None:
         self.runner_url = runner_url
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
@@ -107,6 +110,7 @@ class SoMRunner:
         self.evidence_dir = Path(evidence_dir) if evidence_dir else None
         self.use_xctest_runner = use_xctest_runner
         self.headless = headless
+        self.app_path = app_path
         self.wda_url = wda_url
 
         self._driver: Any = None
@@ -177,7 +181,7 @@ class SoMRunner:
         from specterqa.ios.session_manager import TestSession
         from specterqa.ios.backends.xctest_client import XCTestBackend
 
-        self._session = TestSession(bundle_id=bundle_id)
+        self._session = TestSession(bundle_id=bundle_id, app_path=self.app_path)
         self._session.start()
 
         runner_url = self._session.runner_url
