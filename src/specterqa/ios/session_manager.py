@@ -26,7 +26,7 @@ _PORT_RANGE = range(8222, 8231)
 
 # Health check poll interval and timeout.
 _HEALTH_POLL_INTERVAL_S = 1.0
-_HEALTH_TIMEOUT_S = 30.0
+_HEALTH_TIMEOUT_S = 60.0
 
 # Default location where `runner build` places the xctestrun file.
 _DEFAULT_RUNNER_BUILD_DIR = Path.home() / ".specterqa" / "runner-build"
@@ -97,10 +97,10 @@ def _find_xctestrun(build_dir: Path) -> Optional[Path]:
     Returns:
         Path to the .xctestrun file, or None if not found.
     """
-    pattern = str(build_dir / "Build" / "Products" / "*.xctestrun")
-    matches = glob.glob(pattern)
-    if matches:
-        return Path(matches[0])
+    # Search recursively — project-injection puts xctestrun in
+    # <bundle_id>/DerivedData/Build/Products/, standalone in Build/Products/
+    for match in build_dir.rglob("*.xctestrun"):
+        return match
     return None
 
 
