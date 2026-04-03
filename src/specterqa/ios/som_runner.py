@@ -280,7 +280,11 @@ class SoMRunner:
         for i in range(max_iterations):
             # 1. Screenshot
             try:
-                b64, img_w, img_h = self._driver.screenshot()
+                result = self._driver.screenshot()
+                if isinstance(result, dict):
+                    b64, img_w, img_h = result["base64"], result.get("width", 0), result.get("height", 0)
+                else:
+                    b64, img_w, img_h = result
             except Exception as exc:
                 error = f"Screenshot failed: {exc}"
                 logger.error(error)
