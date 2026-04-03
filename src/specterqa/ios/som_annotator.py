@@ -3,8 +3,10 @@
 Overlays numbered labels on interactive UI elements detected from the
 accessibility tree. Claude picks a number instead of guessing coordinates.
 
-Element tree source:
-  1. SpecterQA XCTest runner  — GET /source on our Swift runner (required)
+Element tree source (priority order):
+  1. SpecterQA XCTest runner  — GET /source on our Swift runner (preferred)
+  2. WebDriverAgent (WDA)     — GET /session/<id>/source (optional fallback,
+     requires wda_url and session_id at construction time)
 
 Research shows SoM prompting improves UI agent accuracy from ~50% to ~90%+
 by eliminating coordinate prediction entirely.
@@ -12,6 +14,7 @@ by eliminating coordinate prediction entirely.
 INIT-2026-493 — SpecterQA SoM annotator.
 INIT-2026-506 — XCTest runner /source integration.
 INIT-2026-508 — Remove WDA fallback from SoM pipeline.
+INIT-2026-509 — Restore WDA as optional fallback with timeout guard.
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ from __future__ import annotations
 import base64
 import io
 import json
+import socket
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -109,50 +114,73 @@ _NOISE_LABEL_FRAGMENTS: tuple[str, ...] = (
 class SoMAnnotator:
     """Annotates screenshots with numbered labels from the accessibility tree.
 
-    Requires the SpecterQA XCTest runner.  Provide ``runner_url`` (e.g.
+    The XCTest runner is the preferred source.  Provide ``runner_url`` (e.g.
     ``"http://localhost:8222"``); the annotator calls ``GET /source`` directly.
+
+    When ``runner_url`` is not set and ``wda_url`` + ``session_id`` are
+    provided, the annotator falls back to WebDriverAgent's ``/source``
+    endpoint (with a 10-second timeout and 2-retry cap).
 
     Usage::
 
+        # Preferred: XCTest runner
         annotator = SoMAnnotator(runner_url="http://localhost:8222")
+
+        # Optional WDA fallback (legacy):
+        annotator = SoMAnnotator(wda_url="http://localhost:8100",
+                                 session_id="abc123")
+
         elements, annotated_b64 = annotator.annotate(screenshot_b64, img_w, img_h)
 
     Args:
         runner_url: Base URL of our XCTest runner (e.g.
-            ``"http://localhost:8222"``).  Required — raises ``RuntimeError``
-            at ``get_element_tree()`` time if not set.
+            ``"http://localhost:8222"``).  Takes priority over WDA when set.
+        wda_url: Base URL of a running WebDriverAgent instance (e.g.
+            ``"http://localhost:8100"``).  Used only when ``runner_url`` is
+            not configured.  Requires ``session_id``.
+        session_id: WDA session ID returned by ``POST /session``.  Required
+            when ``wda_url`` is provided.
     """
 
     def __init__(
         self,
         runner_url: Optional[str] = None,
+        wda_url: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> None:
         self.runner_url = runner_url.rstrip("/") if runner_url else None
+        self.wda_url = wda_url.rstrip("/") if wda_url else None
+        self.session_id = session_id
 
     # ------------------------------------------------------------------
     # Network — fetch element tree
     # ------------------------------------------------------------------
 
     def get_element_tree(self) -> str:
-        """Fetch the accessibility element tree from the XCTest runner.
+        """Fetch the accessibility element tree.
 
-        Calls ``GET /source`` on our Swift runner.  The runner returns JSON with
-        an ``"xml"`` key (or plain XML) representing the full accessibility
-        hierarchy.
+        Source selection:
+        1. XCTest runner ``GET /source`` — when ``runner_url`` is set.
+        2. WDA ``GET /session/<id>/source`` — when ``wda_url`` + ``session_id``
+           are set (10-second timeout, 2-retry cap).
 
         Returns:
             Raw XML string of the current UI hierarchy, compatible with
             :meth:`parse_elements`.
 
         Raises:
-            RuntimeError: If ``runner_url`` is not configured or the request fails.
+            RuntimeError: If neither runner nor WDA is configured, or if the
+                request fails after all retries.
         """
-        if not self.runner_url:
-            raise RuntimeError(
-                "SoMAnnotator requires runner_url. XCTest runner not configured. "
-                "Build it: specterqa-ios runner build"
-            )
-        return self._get_element_tree_from_runner()
+        if self.runner_url:
+            return self._get_element_tree_from_runner()
+        if self.wda_url and self.session_id:
+            return self._get_element_tree_from_wda()
+        raise RuntimeError(
+            "SoMAnnotator has no element tree source configured. "
+            "Provide runner_url (XCTest runner) or wda_url + session_id (WDA fallback). "
+            "Build the runner: specterqa-ios runner build"
+        )
 
     def _get_element_tree_from_runner(self) -> str:
         """Fetch element tree from our XCTest runner's ``/source`` endpoint.
@@ -189,6 +217,42 @@ class SoMAnnotator:
                 f"Raw response: {raw[:200]!r}"
             )
         return xml_source
+
+    def _get_element_tree_from_wda(self) -> str:
+        """Fetch element tree from WDA with timeout guard.
+
+        Uses a 10-second per-attempt timeout and retries at most 2 times before
+        giving up.  This prevents the annotator from hanging indefinitely when
+        WDA becomes unresponsive mid-test.
+
+        Returns:
+            Raw XML string from WDA ``/session/<id>/source``.
+
+        Raises:
+            RuntimeError: When ``session_id`` is not set, or when all retries
+                are exhausted due to network/timeout errors.
+        """
+        if not self.session_id:
+            raise RuntimeError("No WDA session ID configured.")
+
+        url = f"{self.wda_url}/session/{self.session_id}/source"
+        max_retries = 2
+
+        for attempt in range(max_retries):
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read())
+                return data.get("value", "")
+            except (urllib.error.URLError, socket.timeout) as exc:
+                if attempt < max_retries - 1:
+                    continue
+                raise RuntimeError(
+                    f"WDA /source timed out after {max_retries} attempts: {exc}"
+                ) from exc
+
+        # Unreachable — loop always returns or raises, but satisfies type checkers.
+        raise RuntimeError("WDA fallback exhausted unexpectedly.")  # pragma: no cover
 
     # ------------------------------------------------------------------
     # Parsing — extract interactive elements
