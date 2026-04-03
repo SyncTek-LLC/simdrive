@@ -77,9 +77,17 @@ final class TouchInjector {
         case "home":
             XCUIDevice.shared.press(.home)
         case "volumeup":
+            #if targetEnvironment(simulator)
+            throw TouchInjectorError.unknownButton("volumeUp (unavailable in simulator)")
+            #else
             XCUIDevice.shared.press(.volumeUp)
+            #endif
         case "volumedown":
+            #if targetEnvironment(simulator)
+            throw TouchInjectorError.unknownButton("volumeDown (unavailable in simulator)")
+            #else
             XCUIDevice.shared.press(.volumeDown)
+            #endif
         default:
             throw TouchInjectorError.unknownButton(name)
         }

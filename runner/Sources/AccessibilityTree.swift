@@ -46,10 +46,6 @@ enum AccessibilityTree {
 
         do {
             let snapshot = try app.snapshot()
-            guard let snapshot = snapshot else {
-                let err: [String: Any] = ["error": "snapshot returned nil"]
-                return (encodeJSON(err), 500)
-            }
             let serialized = serialize(snapshot)
             // Wrap in an array for a uniform response shape — callers iterate elements.
             let payload: [[String: Any]] = [serialized]
