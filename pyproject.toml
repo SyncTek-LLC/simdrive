@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "3.8.0"
+version = "3.9.0"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
