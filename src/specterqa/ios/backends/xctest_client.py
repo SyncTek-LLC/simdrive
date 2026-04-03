@@ -50,6 +50,13 @@ class XCTestBackend:
         self.host = host
         self.port = port
         self.udid = udid
+        # SoM runner accesses these for coordinate conversion.
+        # XCTest runner works in device points — no conversion needed,
+        # so display and device dimensions are identical.
+        self._device_width = 390.0
+        self._device_height = 844.0
+        self._display_width = 390
+        self._display_height = 844
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -175,6 +182,10 @@ class XCTestBackend:
         except Exception:
             return False
 
+    def health(self) -> dict[str, Any]:
+        """Check runner health."""
+        return self._get("/health")
+
     # ------------------------------------------------------------------
     # Gesture API
     # ------------------------------------------------------------------
@@ -216,10 +227,10 @@ class XCTestBackend:
         return self._post(
             "/swipe",
             {
-                "x1": float(x1),
-                "y1": float(y1),
-                "x2": float(x2),
-                "y2": float(y2),
+                "fromX": float(x1),
+                "fromY": float(y1),
+                "toX": float(x2),
+                "toY": float(y2),
                 "duration": float(duration),
             },
         )
@@ -292,7 +303,14 @@ class XCTestBackend:
             ``width`` and ``height`` when provided by the runner.
         """
         logger.debug("screenshot()")
-        return self._get("/screenshot")
+        result = self._get("/screenshot")
+        # Update display dimensions from actual screenshot.
+        if "width" in result and "height" in result:
+            self._display_width = int(result["width"])
+            self._display_height = int(result["height"])
+            self._device_width = float(result["width"])
+            self._device_height = float(result["height"])
+        return result
 
     def shutdown(self) -> dict[str, Any]:
         """Gracefully shut down the XCTest runner process.

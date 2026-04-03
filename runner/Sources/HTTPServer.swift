@@ -68,6 +68,8 @@ final class HTTPServer {
     func stop() {
         listener?.cancel()
         stopSemaphore.signal()
+        // Also stop the main CFRunLoop so testServe() can exit.
+        CFRunLoopStop(CFRunLoopGetMain())
     }
 
     /// Blocks the calling thread until POST /shutdown is received.
@@ -136,7 +138,7 @@ final class HTTPServer {
                 return (jsonError("tap requires x, y (numbers)", status: 422), false)
             }
             let duration = request.json["duration"] as? Double ?? 0.0
-            injector.tap(x: x, y: y, duration: duration)
+            runOnMain { self.injector.tap(x: x, y: y, duration: duration) }
             return (jsonResponse(["status": "ok"]), false)
 
         case ("POST", "/swipe"):
@@ -149,62 +151,97 @@ final class HTTPServer {
                 return (jsonError("swipe requires fromX, fromY, toX, toY", status: 422), false)
             }
             let duration = request.json["duration"] as? Double ?? 0.3
-            injector.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY, duration: duration)
+            runOnMain { self.injector.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY, duration: duration) }
             return (jsonResponse(["status": "ok"]), false)
 
         case ("POST", "/type"):
             guard let text = request.json["text"] as? String else {
                 return (jsonError("type requires text (string)", status: 422), false)
             }
-            injector.typeText(text)
+            runOnMain { self.injector.typeText(text) }
             return (jsonResponse(["status": "ok"]), false)
 
         case ("POST", "/key"):
             guard let key = request.json["key"] as? String else {
                 return (jsonError("key requires key (string)", status: 422), false)
             }
-            do {
-                try injector.pressKey(key)
-                return (jsonResponse(["status": "ok"]), false)
-            } catch {
-                return (jsonError("unknown key: \(key)", status: 422), false)
+            var keyError: String? = nil
+            runOnMain {
+                do { try self.injector.pressKey(key) }
+                catch { keyError = "unknown key: \(key)" }
             }
+            if let err = keyError {
+                return (jsonError(err, status: 422), false)
+            }
+            return (jsonResponse(["status": "ok"]), false)
 
         case ("POST", "/press_button"):
             guard let button = request.json["button"] as? String else {
                 return (jsonError("press_button requires button (string)", status: 422), false)
             }
-            do {
-                try injector.pressButton(button)
-                return (jsonResponse(["status": "ok"]), false)
-            } catch {
-                return (jsonError("unknown button: \(button)", status: 422), false)
+            var buttonError: String? = nil
+            runOnMain {
+                do { try self.injector.pressButton(button) }
+                catch { buttonError = "unknown button: \(button)" }
             }
+            if let err = buttonError {
+                return (jsonError(err, status: 422), false)
+            }
+            return (jsonResponse(["status": "ok"]), false)
 
         case ("GET", "/screenshot"):
-            // Wait for app to be in foreground before capturing.
-            if !waitForAppReady() {
-                return (jsonError("app not running — timed out waiting for foreground", status: 503), false)
+            var result: (Data, Bool) = (jsonError("screenshot failed", status: 500), false)
+            runOnMain {
+                guard self.waitForAppReady() else {
+                    result = (self.jsonError("app not running — timed out waiting for foreground", status: 503), false)
+                    return
+                }
+                let (png, size) = self.injector.screenshot()
+                let b64 = png.base64EncodedString()
+                let body: [String: Any] = [
+                    "base64": b64,
+                    "width":  Int(size.width),
+                    "height": Int(size.height)
+                ]
+                result = (self.jsonResponse(body), false)
             }
-            let (png, size) = injector.screenshot()
-            let b64 = png.base64EncodedString()
-            let body: [String: Any] = [
-                "base64": b64,
-                "width":  Int(size.width),
-                "height": Int(size.height)
-            ]
-            return (jsonResponse(body), false)
+            return result
 
         case ("GET", "/source"):
-            // Wait for app to be in foreground before querying tree.
-            if !waitForAppReady() {
-                return (jsonError("app not running — timed out waiting for foreground", status: 503), false)
+            var result: (Data, Bool) = (jsonError("source failed", status: 500), false)
+            runOnMain {
+                guard self.waitForAppReady() else {
+                    result = (self.jsonError("app not running — timed out waiting for foreground", status: 503), false)
+                    return
+                }
+                let (treeData, _) = AccessibilityTree.capture(app: self.injector.app)
+                result = (treeData, false)
             }
-            let (treeData, _) = AccessibilityTree.capture(app: injector.app)
-            return (treeData, false)
+            return result
 
         default:
             return (jsonError("not found: \(request.method) \(request.path)", status: 404), false)
+        }
+    }
+
+    // MARK: - Main thread dispatch
+
+    /// Run a block synchronously on the main thread.
+    /// XCTest APIs (tap, swipe, type, snapshot) must execute on the main
+    /// thread. The HTTP server runs on a background queue, so we dispatch
+    /// to main and wait. CFRunLoopRun() on the test thread keeps the main
+    /// RunLoop alive so this doesn't deadlock.
+    private func runOnMain(_ block: @escaping () -> Void) {
+        if Thread.isMainThread {
+            block()
+        } else {
+            let sem = DispatchSemaphore(value: 0)
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue) {
+                block()
+                sem.signal()
+            }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
+            sem.wait()
         }
     }
 
