@@ -136,6 +136,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				GENERATE_INFOPLIST_FILE = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_INIT_ORDER = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -196,6 +197,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				GENERATE_INFOPLIST_FILE = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_INIT_ORDER = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -249,6 +251,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "-";
+				GENERATE_INFOPLIST_FILE = YES;
 				CODE_SIGN_STYLE = Manual;
 				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
@@ -269,6 +272,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "-";
+				GENERATE_INFOPLIST_FILE = YES;
 				CODE_SIGN_STYLE = Manual;
 				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
