@@ -307,11 +307,15 @@ class TestSession:
         # Give CoreSimulator a moment to finish booting.
         time.sleep(2)
 
-        # Step 6 — install app (optional).
+        # Step 6 — install and launch app (optional).
         if self.app_path:
             resolved = Path(self.app_path).resolve()
             logger.info("Installing %s on %s...", resolved.name, self._clone_udid)
             _simctl("install", self._clone_udid, str(resolved))
+            logger.info("Launching %s...", self.bundle_id)
+            _simctl("launch", self._clone_udid, self.bundle_id)
+            # Give the app time to reach foreground.
+            time.sleep(2)
 
         # Step 7 — deploy XCTest runner.
         self._port = _find_free_port()
