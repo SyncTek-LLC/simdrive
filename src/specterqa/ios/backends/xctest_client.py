@@ -224,6 +224,17 @@ class XCTestBackend:
             },
         )
 
+    def swipe_back(self) -> dict[str, Any]:
+        """Perform a swipe-from-left-edge gesture (iOS back navigation).
+
+        Swipes from x=5 to x=200 at the vertical center of the screen.
+
+        Returns:
+            Runner response dict.
+        """
+        logger.debug("swipe_back()")
+        return self.swipe(x1=5, y1=422, x2=200, y2=422, duration=0.3)
+
     def type_text(self, text: str) -> dict[str, Any]:
         """Type *text* into the currently focused field.
 
