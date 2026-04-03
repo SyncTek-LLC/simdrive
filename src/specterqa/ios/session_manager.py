@@ -304,8 +304,10 @@ class TestSession:
         # Step 5 — boot the clone headless (no Simulator.app window).
         logger.info("Booting clone headless...")
         _simctl("boot", self._clone_udid)
-        # Give CoreSimulator a moment to finish booting.
-        time.sleep(2)
+        # Springboard needs time to settle after boot — launching apps too
+        # early gets "request denied by SBMainWorkspace".
+        logger.info("Waiting for Springboard to settle...")
+        time.sleep(8)
 
         # Step 6 — install and launch app (optional).
         if self.app_path:
@@ -408,17 +410,27 @@ class TestSession:
         with open(xctestrun_path, "rb") as f:
             plist = plistlib.load(f)
 
-        # The xctestrun plist has top-level keys for each test configuration
-        # (e.g., "SpecterQARunner") plus metadata keys like "__xctestrun_metadata__".
-        for key, config in plist.items():
-            if key.startswith("__"):
-                continue
-            if not isinstance(config, dict):
-                continue
-            if "EnvironmentVariables" not in config:
-                config["EnvironmentVariables"] = {}
-            config["EnvironmentVariables"].update(env_vars)
-            logger.info("Injected env vars into xctestrun config '%s': %s", key, list(env_vars.keys()))
+        # Modern xctestrun plists use TestConfigurations → TestTargets structure.
+        # Env vars must go into each TestTarget's EnvironmentVariables dict.
+        injected = False
+        for tc in plist.get("TestConfigurations", []):
+            for tt in tc.get("TestTargets", []):
+                if "EnvironmentVariables" not in tt:
+                    tt["EnvironmentVariables"] = {}
+                tt["EnvironmentVariables"].update(env_vars)
+                target_name = tt.get("BlueprintName", "?")
+                logger.info("Injected env vars into test target '%s': %s", target_name, list(env_vars.keys()))
+                injected = True
+
+        # Fallback for older plist formats with top-level test configs.
+        if not injected:
+            for key, config in plist.items():
+                if key.startswith("__") or not isinstance(config, dict):
+                    continue
+                if "EnvironmentVariables" not in config:
+                    config["EnvironmentVariables"] = {}
+                config["EnvironmentVariables"].update(env_vars)
+                logger.info("Injected env vars into xctestrun config '%s': %s", key, list(env_vars.keys()))
 
         with open(xctestrun_path, "wb") as f:
             plistlib.dump(plist, f)
