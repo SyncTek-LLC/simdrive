@@ -373,22 +373,55 @@ class TestSession:
                 "Build the runner first: specterqa-ios runner build"
             )
 
+        # Inject SPECTERQA_BUNDLE_ID and SPECTERQA_PORT into the xctestrun
+        # plist. Shell env vars don't propagate through xcodebuild to the
+        # test process — they must be in the plist's EnvironmentVariables.
+        self._inject_xctestrun_env(xctestrun, {
+            "SPECTERQA_PORT": str(self._port),
+            "SPECTERQA_BUNDLE_ID": self.bundle_id or "",
+        })
+
         cmd = [
             "xcodebuild", "test-without-building",
             "-xctestrun", str(xctestrun),
             "-destination", f"id={self._clone_udid}",
         ]
 
-        env = os.environ.copy()
-        env["SPECTERQA_PORT"] = str(self._port)
-
         logger.info("Deploying runner: %s", " ".join(cmd))
         self._runner_process = subprocess.Popen(
             cmd,
-            env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    @staticmethod
+    def _inject_xctestrun_env(xctestrun_path: Path, env_vars: dict[str, str]) -> None:
+        """Inject environment variables into the .xctestrun plist.
+
+        Shell env vars don't reach the XCTest process — they must be set in
+        the plist's EnvironmentVariables dict for each test configuration.
+
+        Uses PlistBuddy for reliable plist manipulation.
+        """
+        import plistlib
+
+        with open(xctestrun_path, "rb") as f:
+            plist = plistlib.load(f)
+
+        # The xctestrun plist has top-level keys for each test configuration
+        # (e.g., "SpecterQARunner") plus metadata keys like "__xctestrun_metadata__".
+        for key, config in plist.items():
+            if key.startswith("__"):
+                continue
+            if not isinstance(config, dict):
+                continue
+            if "EnvironmentVariables" not in config:
+                config["EnvironmentVariables"] = {}
+            config["EnvironmentVariables"].update(env_vars)
+            logger.info("Injected env vars into xctestrun config '%s': %s", key, list(env_vars.keys()))
+
+        with open(xctestrun_path, "wb") as f:
+            plistlib.dump(plist, f)
 
     # ------------------------------------------------------------------
     # Internal — teardown
