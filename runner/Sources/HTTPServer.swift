@@ -29,6 +29,7 @@ final class HTTPServer {
     private var listener: NWListener?
     private let stopSemaphore = DispatchSemaphore(value: 0)
     private let queue = DispatchQueue(label: "com.specterqa.http-server", qos: .userInitiated)
+    private(set) var isRunning = false
 
     // MARK: - Init
 
@@ -63,13 +64,13 @@ final class HTTPServer {
         }
 
         listener.start(queue: queue)
+        isRunning = true
     }
 
     func stop() {
+        isRunning = false
         listener?.cancel()
         stopSemaphore.signal()
-        // Also stop the main CFRunLoop so testServe() can exit.
-        CFRunLoopStop(CFRunLoopGetMain())
     }
 
     /// Blocks the calling thread until POST /shutdown is received.
