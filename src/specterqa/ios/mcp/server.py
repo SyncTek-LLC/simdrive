@@ -11,14 +11,16 @@ Usage:
     specterqa ios serve          # via CLI serve command
 
 Tools:
-    ios_start_session   Start XCTest runner on a cloned simulator
-    ios_stop_session    Stop runner and clean up clone
-    ios_screenshot      Annotated screenshot with numbered elements
-    ios_tap             Tap element by index number
-    ios_swipe           Swipe in a direction
-    ios_swipe_back      iOS back navigation gesture
-    ios_type            Type text into focused field
-    ios_elements        Get element list without screenshot
+    ios_start_session    Start XCTest runner on a cloned simulator
+    ios_stop_session     Stop runner and clean up clone
+    ios_screenshot       Annotated screenshot with numbered elements
+    ios_tap              Tap element by index number
+    ios_swipe            Swipe in a direction
+    ios_swipe_back       iOS back navigation gesture
+    ios_type             Type text into focused field
+    ios_elements         Get element list without screenshot
+    ios_set_appearance   Toggle dark/light mode on the cloned simulator
+    ios_simctl           Run arbitrary simctl subcommand on the clone
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -26,12 +28,15 @@ INIT-2026-500 — SpecterQA iOS Headless Driver.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 logger = logging.getLogger("specterqa.ios.mcp")
 
@@ -115,6 +120,35 @@ def _json_serialize(obj: Any) -> str:
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+# BUG V5-5 FIX: resize screenshot before encoding to keep MCP payloads small.
+_QUALITY_SCALES = {
+    "full": 1.0,
+    "standard": 0.5,
+    "thumbnail": 0.25,
+}
+
+
+def _resize_screenshot(b64_png: str, scale: float = 0.5) -> str:
+    """Resize a base64 PNG by *scale* to reduce MCP payload size.
+
+    Args:
+        b64_png: Base-64 encoded PNG string.
+        scale:   Scale factor (0 < scale <= 1.0).  0.5 = half dimensions.
+
+    Returns:
+        Base-64 encoded resized PNG string.
+    """
+    if scale >= 1.0:
+        return b64_png
+    raw = base64.b64decode(b64_png)
+    img = Image.open(io.BytesIO(raw))
+    new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
+    img = img.resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 # ---------------------------------------------------------------------------
 # Tool handler implementations
 # ---------------------------------------------------------------------------
@@ -136,9 +170,13 @@ def handle_start_session(arguments: dict) -> dict:
     """
     global _session, _backend, _annotator, _last_elements
 
-    # License check — validates key or allows trial/founder bypass
+    # License check — validates key or allows trial/founder bypass.
+    # BUG V5-1 FIX: if the caller passes license_key="founder" as an argument,
+    # inject it into the environment so LicenseValidator's founder bypass fires.
     from specterqa.ios.license.validator import LicenseValidator
     license_key = arguments.get("license_key", os.environ.get("SPECTERQA_LICENSE_KEY", ""))
+    if str(license_key).strip().lower() == "founder":
+        os.environ["SPECTERQA_IOS_LICENSE"] = "founder"
     validator = LicenseValidator(license_key=license_key)
     license_result = validator.validate()
     if not license_result.get("valid"):
@@ -213,6 +251,16 @@ def handle_screenshot(arguments: dict) -> dict:
     This is the KEY tool — Claude sees the annotated image and picks
     element numbers to interact with via ios_tap.
 
+    Args:
+        max_elements: Cap the number of elements returned (default 100).
+                      Use 0 for unlimited.  Excess elements are truncated
+                      after annotation so badges remain accurate for the
+                      returned set.
+        quality:      Screenshot size vs. quality trade-off.
+                      "standard" (default) — resize to 50% (< 200 KB typical).
+                      "full"               — no resize (original resolution).
+                      "thumbnail"          — resize to 25% (< 50 KB typical).
+
     Returns:
         {
             "image": "<base64 PNG with numbered bounding-box annotations>",
@@ -221,16 +269,34 @@ def handle_screenshot(arguments: dict) -> dict:
                  "x": 16, "y": 278, "width": 358, "height": 52},
                 ...
             ],
-            "count": <int>
+            "count": <int>,
+            "truncated": <bool>,   # present only when elements were capped
+            "total": <int>,        # total before truncation (when truncated=True)
         }
         or {"error": "<message>"} on failure.
     """
     global _last_elements
 
+    # BUG V5-2 FIX: honour max_elements cap (default 100; 0 = unlimited).
+    max_elements = int(arguments.get("max_elements", 100))
+    # BUG V5-5 FIX: honour quality parameter to control output image size.
+    quality = str(arguments.get("quality", "standard")).lower()
+    scale = _QUALITY_SCALES.get(quality, 0.5)
+
     try:
         annotated_b64, elements = _get_annotated_screenshot()
 
+        total = len(elements)
+        truncated = False
+        if max_elements > 0 and total > max_elements:
+            elements = elements[:max_elements]
+            truncated = True
+
         _last_elements = elements
+
+        # Resize the annotated screenshot AFTER annotation so numbers remain
+        # readable (annotation was done on full-res; we just shrink the result).
+        resized_b64 = _resize_screenshot(annotated_b64, scale=scale)
 
         element_list = [
             {
@@ -245,11 +311,16 @@ def handle_screenshot(arguments: dict) -> dict:
             for e in elements
         ]
 
-        return {
-            "image": annotated_b64,
+        result: dict = {
+            "image": resized_b64,
             "elements": element_list,
             "count": len(element_list),
         }
+        if truncated:
+            result["truncated"] = True
+            result["total"] = total
+            result["returned"] = len(element_list)
+        return result
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -405,6 +476,10 @@ def handle_elements(arguments: dict) -> dict:
     Useful when Claude needs to refresh the element index without the
     overhead of image annotation.
 
+    Args:
+        max_elements: Cap the number of elements returned (default 100).
+                      Use 0 for unlimited.
+
     Returns:
         {
             "elements": [
@@ -412,7 +487,9 @@ def handle_elements(arguments: dict) -> dict:
                  "x": .., "y": .., "width": .., "height": ..},
                 ...
             ],
-            "count": <int>
+            "count": <int>,
+            "truncated": <bool>,   # present only when elements were capped
+            "total": <int>,        # total before truncation (when truncated=True)
         }
         or {"error": "<message>"} on failure.
     """
@@ -423,9 +500,18 @@ def handle_elements(arguments: dict) -> dict:
     except RuntimeError as exc:
         return {"error": str(exc)}
 
+    # BUG V5-2 FIX: honour max_elements cap (default 100; 0 = unlimited).
+    max_elements = int(arguments.get("max_elements", 100))
+
     try:
         tree_xml = _annotator.get_element_tree()
         elements = _annotator.parse_elements(tree_xml)
+
+        total = len(elements)
+        truncated = False
+        if max_elements > 0 and total > max_elements:
+            elements = elements[:max_elements]
+            truncated = True
 
         _last_elements = elements
 
@@ -442,9 +528,110 @@ def handle_elements(arguments: dict) -> dict:
             for e in elements
         ]
 
-        return {"elements": element_list, "count": len(element_list)}
+        result: dict = {"elements": element_list, "count": len(element_list)}
+        if truncated:
+            result["truncated"] = True
+            result["total"] = total
+            result["returned"] = len(element_list)
+        return result
     except Exception as exc:
         return {"error": str(exc)}
+
+
+# BUG V5-3 FIX: appearance toggle and generic simctl access.
+
+def handle_set_appearance(arguments: dict) -> dict:
+    """Toggle dark/light mode on the cloned simulator.
+
+    Args:
+        mode: "dark" or "light" (default "dark").
+
+    Returns:
+        {"status": "ok", "appearance": "<mode>"}
+        or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    mode = str(arguments.get("mode", "dark")).lower()
+    if mode not in ("dark", "light"):
+        return {"error": "mode must be 'dark' or 'light'"}
+
+    result = subprocess.run(
+        ["xcrun", "simctl", "ui", _session._clone_udid, "appearance", mode],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return {"error": f"simctl failed: {result.stderr.strip()}"}
+    return {"status": "ok", "appearance": mode}
+
+
+def handle_simctl(arguments: dict) -> dict:
+    """Run an arbitrary simctl subcommand on the cloned simulator.
+
+    The clone's UDID is injected automatically wherever the literal
+    string ``<udid>`` appears in the command string — or prepended as
+    the first positional argument after the subcommand keyword for
+    well-known single-UDID commands (``ui``, ``status_bar``,
+    ``location``, ``push``, ``privacy``).
+
+    Args:
+        command: Simctl subcommand and arguments as a single string.
+                 Examples:
+                   "ui <udid> appearance dark"
+                   "status_bar <udid> override --time 9:41"
+                   "ui appearance light"  (UDID auto-inserted)
+
+    Returns:
+        {"status": "ok", "stdout": "...", "stderr": "..."}
+        or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    command = str(arguments.get("command", "")).strip()
+    if not command:
+        return {"error": "command is required"}
+
+    udid = _session._clone_udid
+
+    # Replace placeholder token with the real UDID.
+    if "<udid>" in command:
+        command = command.replace("<udid>", udid)
+    else:
+        # Auto-insert UDID for known single-UDID subcommands.
+        _UDID_SUBCOMMANDS = {"ui", "status_bar", "location", "push", "privacy"}
+        parts = command.split()
+        if parts and parts[0] in _UDID_SUBCOMMANDS:
+            parts.insert(1, udid)
+            command = " ".join(parts)
+
+    full_cmd = ["xcrun", "simctl"] + command.split()
+    try:
+        result = subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"simctl command timed out after 30s: {command}"}
+    except Exception as exc:
+        return {"error": f"simctl execution error: {exc}"}
+
+    if result.returncode != 0:
+        return {
+            "error": f"simctl exited with code {result.returncode}",
+            "stderr": result.stderr.strip(),
+            "stdout": result.stdout.strip(),
+        }
+    return {"status": "ok", "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
 
 
 # ---------------------------------------------------------------------------
@@ -534,11 +721,17 @@ def create_server() -> Any:
             "Returns a base64 PNG with numbered red bounding boxes overlaid on "
             "every interactive element, plus a structured element list. "
             "Use the element index numbers with ios_tap to interact. "
-            "This is the primary perception tool — call it before tapping."
+            "This is the primary perception tool — call it before tapping. "
+            "max_elements caps the returned element count (default 100; 0 = unlimited). "
+            "quality controls image size: 'standard' (50%, default), 'full' (no resize), "
+            "'thumbnail' (25%)."
         ),
     )
-    async def ios_screenshot() -> str:
-        result = handle_screenshot({})
+    async def ios_screenshot(
+        max_elements: int = 100,
+        quality: str = "standard",
+    ) -> str:
+        result = handle_screenshot({"max_elements": max_elements, "quality": quality})
         return json.dumps(result, default=_json_serialize)
 
     # ── Tool: ios_tap ──────────────────────────────────────────────────────
@@ -605,12 +798,48 @@ def create_server() -> Any:
         description=(
             "Get the current interactive element list without capturing a screenshot. "
             "Faster than ios_screenshot when you only need element indices and labels. "
-            "Also updates the element cache used by ios_tap."
+            "Also updates the element cache used by ios_tap. "
+            "max_elements caps the returned element count (default 100; 0 = unlimited)."
         ),
     )
-    async def ios_elements() -> str:
-        result = handle_elements({})
+    async def ios_elements(max_elements: int = 100) -> str:
+        result = handle_elements({"max_elements": max_elements})
         return json.dumps(result, default=_json_serialize)
+
+    # ── Tool: ios_set_appearance ───────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_set_appearance",
+        description=(
+            "Toggle dark or light mode on the cloned iOS Simulator. "
+            "mode must be 'dark' or 'light' (default 'dark'). "
+            "Requires an active session (ios_start_session). "
+            "After changing appearance, call ios_screenshot to see the updated screen."
+        ),
+    )
+    async def ios_set_appearance(mode: str = "dark") -> str:
+        result = handle_set_appearance({"mode": mode})
+        return json.dumps(result)
+
+    # ── Tool: ios_simctl ───────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_simctl",
+        description=(
+            "Run an arbitrary simctl subcommand on the cloned simulator. "
+            "The clone UDID is inserted automatically — use '<udid>' as a placeholder "
+            "or omit it for well-known single-UDID subcommands (ui, status_bar, "
+            "location, push, privacy). "
+            "Examples: "
+            "'ui <udid> appearance dark', "
+            "'status_bar <udid> override --time 9:41', "
+            "'ui appearance light' (UDID auto-inserted). "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_simctl(command: str) -> str:
+        result = handle_simctl({"command": command})
+        return json.dumps(result)
 
     return mcp
 
