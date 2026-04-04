@@ -3,10 +3,9 @@
 Overlays numbered labels on interactive UI elements detected from the
 accessibility tree. Claude picks a number instead of guessing coordinates.
 
-Element tree source (priority order):
-  1. SpecterQA XCTest runner  — GET /source on our Swift runner (preferred)
-  2. WebDriverAgent (WDA)     — GET /session/<id>/source (optional fallback,
-     requires wda_url and session_id at construction time)
+Element tree source:
+  SpecterQA XCTest runner — GET /source on our Swift runner (required).
+  Provide ``runner_url`` (e.g. ``"http://localhost:8222"``).
 
 Research shows SoM prompting improves UI agent accuracy from ~50% to ~90%+
 by eliminating coordinate prediction entirely.
@@ -15,6 +14,7 @@ INIT-2026-493 — SpecterQA SoM annotator.
 INIT-2026-506 — XCTest runner /source integration.
 INIT-2026-508 — Remove WDA fallback from SoM pipeline.
 INIT-2026-509 — Restore WDA as optional fallback with timeout guard.
+INIT-2026-R&D — Eliminate JSON→XML→parse roundtrip; direct JSON parsing.
 """
 
 from __future__ import annotations
@@ -22,8 +22,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import socket
-import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -114,103 +112,85 @@ _NOISE_LABEL_FRAGMENTS: tuple[str, ...] = (
 class SoMAnnotator:
     """Annotates screenshots with numbered labels from the accessibility tree.
 
-    The XCTest runner is the preferred source.  Provide ``runner_url`` (e.g.
-    ``"http://localhost:8222"``); the annotator calls ``GET /source`` directly.
-
-    When ``runner_url`` is not set and ``wda_url`` + ``session_id`` are
-    provided, the annotator falls back to WebDriverAgent's ``/source``
-    endpoint (with a 10-second timeout and 2-retry cap).
+    Requires the SpecterQA XCTest runner.  Provide ``runner_url`` (e.g.
+    ``"http://localhost:8222"``); the annotator calls ``GET /source`` and
+    parses the runner's JSON element tree directly — no XML roundtrip.
 
     Usage::
 
-        # Preferred: XCTest runner
         annotator = SoMAnnotator(runner_url="http://localhost:8222")
-
-        # Optional WDA fallback (legacy):
-        annotator = SoMAnnotator(wda_url="http://localhost:8100",
-                                 session_id="abc123")
-
         elements, annotated_b64 = annotator.annotate(screenshot_b64, img_w, img_h)
 
     Args:
         runner_url: Base URL of our XCTest runner (e.g.
-            ``"http://localhost:8222"``).  Takes priority over WDA when set.
-        wda_url: Base URL of a running WebDriverAgent instance (e.g.
-            ``"http://localhost:8100"``).  Used only when ``runner_url`` is
-            not configured.  Requires ``session_id``.
-        session_id: WDA session ID returned by ``POST /session``.  Required
-            when ``wda_url`` is provided.
+            ``"http://localhost:8222"``).
     """
 
     def __init__(
         self,
         runner_url: Optional[str] = None,
-        wda_url: Optional[str] = None,
-        session_id: Optional[str] = None,
     ) -> None:
         self.runner_url = runner_url.rstrip("/") if runner_url else None
-        self.wda_url = wda_url.rstrip("/") if wda_url else None
-        self.session_id = session_id
 
     # ------------------------------------------------------------------
     # Network — fetch element tree
     # ------------------------------------------------------------------
 
     def get_element_tree(self) -> str:
-        """Fetch the accessibility element tree.
+        """Fetch the accessibility element tree as XML.
 
-        Source selection:
-        1. XCTest runner ``GET /source`` — when ``runner_url`` is set.
-        2. WDA ``GET /session/<id>/source`` — when ``wda_url`` + ``session_id``
-           are set (10-second timeout, 2-retry cap).
+        Calls ``GET /source`` on the XCTest runner and returns an XML string
+        compatible with :meth:`parse_elements`.
+
+        For direct ``UIElement`` parsing without an XML roundtrip, use
+        :meth:`get_elements_from_runner` instead.
 
         Returns:
-            Raw XML string of the current UI hierarchy, compatible with
-            :meth:`parse_elements`.
+            Raw XML string of the current UI hierarchy.
 
         Raises:
-            RuntimeError: If neither runner nor WDA is configured, or if the
-                request fails after all retries.
+            RuntimeError: If ``runner_url`` is not configured, or if the
+                request fails.
         """
-        if self.runner_url:
-            return self._get_element_tree_from_runner()
-        if self.wda_url and self.session_id:
-            return self._get_element_tree_from_wda()
-        raise RuntimeError(
-            "SoMAnnotator has no element tree source configured. "
-            "Provide runner_url (XCTest runner) or wda_url + session_id (WDA fallback). "
-            "Build the runner: specterqa-ios runner build"
-        )
+        if not self.runner_url:
+            raise RuntimeError(
+                "SoMAnnotator has no element tree source configured. "
+                "Provide runner_url (XCTest runner). "
+                "Build the runner: specterqa-ios runner build"
+            )
+        return self._get_element_tree_from_runner()
 
-    def _get_element_tree_from_runner(self) -> str:
-        """Fetch element tree from our XCTest runner's ``/source`` endpoint.
-
-        The runner returns either:
-        - JSON with an ``"xml"`` key: ``{"xml": "<AppElement ...>"}``
-        - Plain XML text directly (if the runner version omits the wrapper)
-
-        Returns:
-            Raw XML string.
+    def _fetch_runner_source_raw(self) -> bytes:
+        """Fetch raw bytes from ``GET /source`` on the XCTest runner.
 
         Raises:
-            RuntimeError: On network failure or empty response.
+            RuntimeError: On network failure.
         """
         url = f"{self.runner_url}/source"
         try:
             with urllib.request.urlopen(url, timeout=15) as resp:
-                raw = resp.read()
+                return resp.read()
         except Exception as exc:
             raise RuntimeError(
                 f"XCTest runner /source request failed at {url}: {exc}"
             ) from exc
 
-        # The runner returns JSON (array of element dicts with children).
-        # The annotator's parse_elements() expects WDA-style XML.
-        # Convert the runner's JSON to XML so the existing parser works.
+    def _get_element_tree_from_runner(self) -> str:
+        """Fetch element tree from our XCTest runner's ``/source`` endpoint.
+
+        Returns:
+            Raw XML string (converts runner JSON to XML for ``parse_elements``
+            compatibility).
+
+        Raises:
+            RuntimeError: On network failure or empty response.
+        """
+        raw = self._fetch_runner_source_raw()
+
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            # Maybe it's already XML (older runner or WDA format).
+            # Not JSON — treat as raw XML (older runner or WDA format).
             xml_source = raw.decode("utf-8", errors="replace").strip()
             if not xml_source:
                 raise RuntimeError(
@@ -221,10 +201,8 @@ class SoMAnnotator:
 
         # JSON response — convert to XML for parse_elements().
         if isinstance(data, list):
-            # Array of element trees — wrap in a root.
             xml_source = self._json_elements_to_xml(data)
         elif isinstance(data, dict):
-            # Single element or {"xml": "..."} envelope.
             if "xml" in data or "value" in data:
                 xml_source = data.get("xml") or data.get("value") or ""
             elif "error" in data:
@@ -240,6 +218,62 @@ class SoMAnnotator:
                 f"Raw response: {raw[:200]!r}"
             )
         return xml_source
+
+    def get_elements_from_runner(self) -> list[UIElement]:
+        """Fetch the element tree and parse directly from JSON — no XML roundtrip.
+
+        Preferred over ``get_element_tree()`` + ``parse_elements()`` when the
+        runner returns JSON.  Falls back to XML parsing when the runner returns
+        XML (older runner versions).
+
+        Returns:
+            List of interactive ``UIElement`` objects.
+
+        Raises:
+            RuntimeError: If ``runner_url`` is not set or the request fails.
+        """
+        if not self.runner_url:
+            raise RuntimeError(
+                "SoMAnnotator has no element tree source configured. "
+                "Provide runner_url (XCTest runner). "
+                "Build the runner: specterqa-ios runner build"
+            )
+
+        raw = self._fetch_runner_source_raw()
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # Raw XML from an older runner — fall back to XML parser.
+            xml_source = raw.decode("utf-8", errors="replace").strip()
+            if not xml_source:
+                raise RuntimeError(
+                    f"XCTest runner /source returned empty content. "
+                    f"Raw response: {raw[:200]!r}"
+                )
+            return self.parse_elements(xml_source)
+
+        # Normalise to a list of root element dicts.
+        if isinstance(data, list):
+            roots = data
+        elif isinstance(data, dict):
+            if "xml" in data or "value" in data:
+                # Envelope — fall back to XML path.
+                xml_source = data.get("xml") or data.get("value") or ""
+                if not xml_source:
+                    raise RuntimeError(f"Runner /source returned empty envelope: {data}")
+                return self.parse_elements(xml_source)
+            elif "error" in data:
+                raise RuntimeError(f"Runner /source error: {data}")
+            else:
+                roots = [data]
+        else:
+            raise RuntimeError(
+                f"XCTest runner /source returned unexpected type {type(data).__name__}. "
+                f"Raw: {raw[:200]!r}"
+            )
+
+        return self.parse_elements_from_json(roots)
 
     @staticmethod
     def _json_elements_to_xml(elements: list[dict], max_depth: int = 5) -> str:
@@ -292,42 +326,6 @@ class SoMAnnotator:
             return f"<{tag} {attr_str}/>"
 
         return "".join(_convert(e, depth=0) for e in elements)
-
-    def _get_element_tree_from_wda(self) -> str:
-        """Fetch element tree from WDA with timeout guard.
-
-        Uses a 10-second per-attempt timeout and retries at most 2 times before
-        giving up.  This prevents the annotator from hanging indefinitely when
-        WDA becomes unresponsive mid-test.
-
-        Returns:
-            Raw XML string from WDA ``/session/<id>/source``.
-
-        Raises:
-            RuntimeError: When ``session_id`` is not set, or when all retries
-                are exhausted due to network/timeout errors.
-        """
-        if not self.session_id:
-            raise RuntimeError("No WDA session ID configured.")
-
-        url = f"{self.wda_url}/session/{self.session_id}/source"
-        max_retries = 2
-
-        for attempt in range(max_retries):
-            try:
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read())
-                return data.get("value", "")
-            except (urllib.error.URLError, socket.timeout) as exc:
-                if attempt < max_retries - 1:
-                    continue
-                raise RuntimeError(
-                    f"WDA /source timed out after {max_retries} attempts: {exc}"
-                ) from exc
-
-        # Unreachable — loop always returns or raises, but satisfies type checkers.
-        raise RuntimeError("WDA fallback exhausted unexpectedly.")  # pragma: no cover
 
     # ------------------------------------------------------------------
     # Parsing — extract interactive elements
@@ -436,6 +434,97 @@ class SoMAnnotator:
                 _walk(child, parent_label=this_label if this_label else parent_label)
 
         _walk(root)
+        return elements
+
+    def parse_elements_from_json(self, json_data: list[dict]) -> list[UIElement]:
+        """Parse runner JSON element tree directly, skipping XML conversion.
+
+        Equivalent to ``parse_elements`` but operates on the runner's native
+        JSON structure, avoiding the ``_json_elements_to_xml`` → ``ET.fromstring``
+        roundtrip.  Use this (via :meth:`get_elements_from_runner`) whenever
+        the runner returns JSON.
+
+        Args:
+            json_data: List of root element dicts from the runner's ``/source``
+                       JSON response.  Each dict may have a ``"children"`` list.
+
+        Returns:
+            List of ``UIElement`` objects in document order (top → bottom,
+            left → right), with ``index`` starting at 1.
+        """
+        _SECONDARY_TYPES = frozenset({
+            "XCUIElementTypeStaticText",
+            "XCUIElementTypeImage",
+        })
+
+        elements: list[UIElement] = []
+        index = 1
+
+        def _walk(elem: dict, parent_label: str = "") -> None:
+            nonlocal index
+            type_label = elem.get("typeLabel", "other")
+            tag = f"XCUIElementType{type_label[0].upper()}{type_label[1:]}"
+
+            if tag in _INTERACTIVE_TYPES:
+                label = elem.get("label", "") or ""
+                raw_value = elem.get("value", "")
+                value = str(raw_value) if raw_value is not None else ""
+                if value == "<null>":
+                    value = ""
+                enabled = elem.get("enabled", True)
+                frame = elem.get("frame", {})
+                x = float(frame.get("x", 0))
+                y = float(frame.get("y", 0))
+                w = float(frame.get("width", 0))
+                h = float(frame.get("height", 0))
+                visible = True  # runner doesn't track visibility — assume visible
+
+                label_lower = label.lower()
+                is_noise = any(f in label_lower for f in _NOISE_LABEL_FRAGMENTS)
+
+                if (
+                    visible
+                    and enabled
+                    and (label or value)
+                    and w > _MIN_SIZE
+                    and h > _MIN_SIZE
+                    and y >= 0
+                    and y < 1400
+                    and not is_noise
+                ):
+                    child_redundant = (
+                        tag in _SECONDARY_TYPES
+                        and label
+                        and label == parent_label
+                    )
+                    pos_duplicate = any(
+                        e.label == label and abs(e.y - y) < 10
+                        for e in elements
+                    )
+
+                    if not child_redundant and not pos_duplicate:
+                        elements.append(
+                            UIElement(
+                                index=index,
+                                element_type=tag.replace("XCUIElementType", ""),
+                                label=label,
+                                value=value,
+                                x=x,
+                                y=y,
+                                width=w,
+                                height=h,
+                                visible=visible,
+                                enabled=enabled,
+                            )
+                        )
+                        index += 1
+
+            this_label = elem.get("label", "") or ""
+            for child in elem.get("children", []):
+                _walk(child, this_label if this_label else parent_label)
+
+        for root in json_data:
+            _walk(root)
         return elements
 
     # ------------------------------------------------------------------
@@ -574,8 +663,7 @@ class SoMAnnotator:
             (index-1 based, i.e. ``elements[0].index == 1``) and the
             base-64 annotated PNG string.
         """
-        xml_source = self.get_element_tree()
-        elements = self.parse_elements(xml_source)
+        elements = self.get_elements_from_runner()
         annotated = self.annotate_image(
             screenshot_b64, img_w, img_h, elements, device_w, device_h
         )

@@ -190,18 +190,23 @@ class XCTestBackend:
     # Gesture API
     # ------------------------------------------------------------------
 
-    def tap(self, x: float, y: float) -> dict[str, Any]:
+    def tap(self, x: float, y: float, duration: float = 0.0) -> dict[str, Any]:
         """Tap at device-point coordinates.
 
         Args:
             x: Horizontal position in logical points.
             y: Vertical position in logical points.
+            duration: Hold duration in seconds (default 0.0 = normal tap).
+                      Use > 0.5 for a long-press gesture.
 
         Returns:
             Runner response dict (``{"success": True}`` on success).
         """
-        logger.debug("tap(%.1f, %.1f)", x, y)
-        return self._post("/tap", {"x": float(x), "y": float(y)})
+        logger.debug("tap(%.1f, %.1f, duration=%.2f)", x, y, duration)
+        payload: dict[str, Any] = {"x": float(x), "y": float(y)}
+        if duration > 0.0:
+            payload["duration"] = float(duration)
+        return self._post("/tap", payload)
 
     def swipe(
         self,
