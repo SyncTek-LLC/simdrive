@@ -15,6 +15,8 @@ Tools:
     ios_stop_session     Stop runner and clean up clone
     ios_screenshot       Annotated screenshot with numbered elements
     ios_tap              Tap element by index number
+    ios_long_press       Long-press element by index (context menus, drag init)
+    ios_press_key        Press a keyboard key (return, escape, delete, tab, ...)
     ios_swipe            Swipe in a direction
     ios_swipe_back       iOS back navigation gesture
     ios_type             Type text into focused field
@@ -33,6 +35,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +51,7 @@ _session = None          # TestSession instance
 _backend = None          # XCTestBackend instance
 _annotator = None        # SoMAnnotator instance
 _last_elements: list = []  # Element cache from last ios_screenshot / ios_elements call
+_session_lock = threading.Lock()  # Serialises start/stop to prevent race conditions
 
 
 def _require_session() -> None:
@@ -170,57 +174,60 @@ def handle_start_session(arguments: dict) -> dict:
     """
     global _session, _backend, _annotator, _last_elements
 
-    # License check — validates key or allows trial/founder bypass.
-    # BUG V5-1 FIX: if the caller passes license_key="founder" as an argument,
-    # inject it into the environment so LicenseValidator's founder bypass fires.
-    from specterqa.ios.license.validator import LicenseValidator
-    license_key = arguments.get("license_key", os.environ.get("SPECTERQA_LICENSE_KEY", ""))
-    if str(license_key).strip().lower() == "founder":
-        os.environ["SPECTERQA_IOS_LICENSE"] = "founder"
-    validator = LicenseValidator(license_key=license_key)
-    license_result = validator.validate()
-    if not license_result.get("valid"):
-        return {"error": "Invalid license. Set SPECTERQA_IOS_LICENSE=founder or provide a valid key."}
+    with _session_lock:
+        # License check — validates key or allows trial/founder bypass.
+        # BUG V5-1 FIX: if the caller passes license_key="founder" as an argument,
+        # inject it into the environment so LicenseValidator's founder bypass fires.
+        from specterqa.ios.license.validator import LicenseValidator
+        license_key = arguments.get("license_key", os.environ.get("SPECTERQA_LICENSE_KEY", ""))
+        if str(license_key).strip().lower() == "founder":
+            os.environ["SPECTERQA_IOS_LICENSE"] = "founder"
+        validator = LicenseValidator(license_key=license_key)
+        license_result = validator.validate()
+        if not license_result.get("valid"):
+            return {"error": "Invalid license. Set SPECTERQA_IOS_LICENSE=founder or provide a valid key."}
 
-    bundle_id = arguments.get("bundle_id")
-    if not bundle_id:
-        return {"error": "bundle_id is required"}
+        bundle_id = arguments.get("bundle_id")
+        if not bundle_id:
+            return {"error": "bundle_id is required"}
 
-    device_id = arguments.get("device_id", "booted")
-    app_path = arguments.get("app_path")
+        device_id = arguments.get("device_id", "booted")
+        app_path = arguments.get("app_path")
 
-    from specterqa.ios.session_manager import TestSession
-    from specterqa.ios.backends.xctest_client import XCTestBackend
-    from specterqa.ios.som_annotator import SoMAnnotator
+        from specterqa.ios.session_manager import TestSession
+        from specterqa.ios.backends.xctest_client import XCTestBackend
+        from specterqa.ios.som_annotator import SoMAnnotator
 
-    try:
-        _session = TestSession(
-            source_udid=device_id,
-            bundle_id=bundle_id,
-            app_path=app_path,
-        )
-        _session.start()
+        try:
+            clone = arguments.get("clone", False)
+            _session = TestSession(
+                source_udid=device_id,
+                bundle_id=bundle_id,
+                app_path=app_path,
+                clone=bool(clone),
+            )
+            _session.start()
 
-        port = _session._port
-        runner_url = _session.runner_url
+            port = _session._port
+            runner_url = _session.runner_url
 
-        _backend = XCTestBackend(port=port)
-        _annotator = SoMAnnotator(runner_url=runner_url)
-        _last_elements = []
+            _backend = XCTestBackend(port=port)
+            _annotator = SoMAnnotator(runner_url=runner_url)
+            _last_elements = []
 
-        return {
-            "status": "ok",
-            "clone_udid": _session._clone_udid,
-            "port": port,
-            "runner_url": runner_url,
-        }
-    except Exception as exc:
-        # Clean up partial state on failure
-        _session = None
-        _backend = None
-        _annotator = None
-        _last_elements = []
-        return {"error": str(exc)}
+            return {
+                "status": "ok",
+                "clone_udid": _session._target_udid,
+                "port": port,
+                "runner_url": runner_url,
+            }
+        except Exception as exc:
+            # Clean up partial state on failure
+            _session = None
+            _backend = None
+            _annotator = None
+            _last_elements = []
+            return {"error": str(exc)}
 
 
 def handle_stop_session(arguments: dict) -> dict:
@@ -231,16 +238,17 @@ def handle_stop_session(arguments: dict) -> dict:
     """
     global _session, _backend, _annotator, _last_elements
 
-    if _session is not None:
-        try:
-            _session.stop()
-        except Exception as exc:
-            logger.warning("Error stopping session: %s", exc)
+    with _session_lock:
+        if _session is not None:
+            try:
+                _session.stop()
+            except Exception as exc:
+                logger.warning("Error stopping session: %s", exc)
 
-    _session = None
-    _backend = None
-    _annotator = None
-    _last_elements = []
+        _session = None
+        _backend = None
+        _annotator = None
+        _last_elements = []
 
     return {"status": "stopped"}
 
@@ -504,8 +512,8 @@ def handle_elements(arguments: dict) -> dict:
     max_elements = int(arguments.get("max_elements", 100))
 
     try:
-        tree_xml = _annotator.get_element_tree()
-        elements = _annotator.parse_elements(tree_xml)
+        # Use JSON-direct path to skip the XML roundtrip.
+        elements = _annotator.get_elements_from_runner()
 
         total = len(elements)
         truncated = False
@@ -538,6 +546,102 @@ def handle_elements(arguments: dict) -> dict:
         return {"error": str(exc)}
 
 
+def _find_element(element_index: int | None):
+    """Look up an element by index in the last-captured element cache.
+
+    Args:
+        element_index: Integer index from the last ``ios_screenshot`` or
+                       ``ios_elements`` call.
+
+    Returns:
+        The matching ``UIElement``, or ``None`` if not found.
+    """
+    if element_index is None:
+        return None
+    return next((e for e in _last_elements if e.index == element_index), None)
+
+
+def handle_press_key(arguments: dict) -> dict:
+    """Press a named keyboard key on the focused element.
+
+    Args:
+        key: Key name string — e.g. "return", "escape", "delete", "tab",
+             "space".  Forwarded directly to the XCTest runner's ``/key``
+             endpoint.
+
+    Returns:
+        {"status": "ok", "key": "<key>"}
+        or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    key = arguments.get("key", "")
+    if not key:
+        return {"error": "key is required (return, escape, delete, tab, space, etc.)"}
+
+    try:
+        _backend.press_key(key)
+    except Exception as exc:
+        return {"error": f"press_key failed: {exc}"}
+
+    return {"status": "ok", "key": key}
+
+
+def handle_long_press(arguments: dict) -> dict:
+    """Long-press an element by its index number.
+
+    Args:
+        element_index: Integer index from the last ``ios_screenshot`` call
+                       (required).
+        duration:      Hold duration in seconds (default 1.0).  Must be > 0.
+
+    Returns:
+        {"status": "ok", "label": "<label>", "duration": <float>}
+        or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    element_index = arguments.get("element_index")
+    if element_index is None:
+        return {"error": "element_index is required"}
+
+    try:
+        element_index = int(element_index)
+    except (TypeError, ValueError):
+        return {"error": f"element_index must be an integer, got: {element_index!r}"}
+
+    duration = float(arguments.get("duration", 1.0))
+    if duration <= 0:
+        return {"error": "duration must be > 0"}
+
+    target = _find_element(element_index)
+    if target is None:
+        valid_indices = [e.index for e in _last_elements]
+        return {
+            "error": (
+                f"Element {element_index} not found. "
+                f"Call ios_screenshot first to refresh elements. "
+                f"Valid indices: {valid_indices}"
+            )
+        }
+
+    cx = target.x + target.width / 2
+    cy = target.y + target.height / 2
+
+    try:
+        _backend.tap(cx, cy, duration=duration)
+    except Exception as exc:
+        return {"error": f"Long press failed: {exc}"}
+
+    return {"status": "ok", "label": target.label, "duration": duration}
+
+
 # BUG V5-3 FIX: appearance toggle and generic simctl access.
 
 def handle_set_appearance(arguments: dict) -> dict:
@@ -560,7 +664,7 @@ def handle_set_appearance(arguments: dict) -> dict:
         return {"error": "mode must be 'dark' or 'light'"}
 
     result = subprocess.run(
-        ["xcrun", "simctl", "ui", _session._clone_udid, "appearance", mode],
+        ["xcrun", "simctl", "ui", _session._target_udid, "appearance", mode],
         capture_output=True,
         text=True,
         timeout=10,
@@ -599,7 +703,7 @@ def handle_simctl(arguments: dict) -> dict:
     if not command:
         return {"error": "command is required"}
 
-    udid = _session._clone_udid
+    udid = _session._target_udid
 
     # Replace placeholder token with the real UDID.
     if "<udid>" in command:
@@ -663,8 +767,8 @@ def create_server() -> Any:
             "SpecterQA iOS exposes direct simulator control primitives. "
             "Claude Code is the reasoning engine — no AI orchestration happens here. "
             "Workflow: ios_start_session → ios_screenshot (see annotated screen + "
-            "numbered elements) → ios_tap / ios_swipe / ios_type → repeat → "
-            "ios_stop_session. "
+            "numbered elements) → ios_tap / ios_long_press / ios_swipe / ios_type / "
+            "ios_press_key → repeat → ios_stop_session. "
             "Use ios_elements for a fast element refresh without a screenshot. "
             "Requires macOS with Xcode 15+ and a compiled XCTest runner."
         ),
@@ -675,14 +779,13 @@ def create_server() -> Any:
     @mcp.tool(
         name="ios_start_session",
         description=(
-            "Start the XCTest runner on a cloned iOS Simulator. "
-            "Clones the source device, boots the clone headless, deploys the runner, "
-            "and waits for health. Call this once before any other ios_* tools. "
+            "Start the XCTest runner on an iOS Simulator. "
+            "Deploys the runner directly to the booted sim (fast, ~5s). "
+            "Set clone=true for full isolation (clones the sim, ~15s, use for CI). "
             "bundle_id is required (e.g. 'com.example.MyApp'). "
             "device_id defaults to 'booted'. "
             "app_path is an optional path to a .app bundle to install. "
-            "license_key is optional — falls back to the SPECTERQA_IOS_LICENSE env var; "
-            "omit for trial mode (1 simulator) or set to 'founder' for dogfood access."
+            "license_key is optional — omit for trial mode or set to 'founder'."
         ),
     )
     async def ios_start_session(
@@ -690,12 +793,14 @@ def create_server() -> Any:
         device_id: str = "booted",
         app_path: str | None = None,
         license_key: str | None = None,
+        clone: bool = False,
     ) -> str:
         result = handle_start_session({
             "bundle_id": bundle_id,
             "device_id": device_id,
             "app_path": app_path,
             "license_key": license_key or "",
+            "clone": clone,
         })
         return json.dumps(result)
 
@@ -819,6 +924,38 @@ def create_server() -> Any:
     )
     async def ios_set_appearance(mode: str = "dark") -> str:
         result = handle_set_appearance({"mode": mode})
+        return json.dumps(result)
+
+    # ── Tool: ios_press_key ────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_press_key",
+        description=(
+            "Press a named keyboard key on the iOS Simulator. "
+            "Use this after tapping a text field to send control keys: "
+            "'return' (submit/next field), 'escape' (dismiss), "
+            "'delete' (backspace), 'tab' (next field), 'space', etc. "
+            "key is required."
+        ),
+    )
+    async def ios_press_key(key: str) -> str:
+        result = handle_press_key({"key": key})
+        return json.dumps(result)
+
+    # ── Tool: ios_long_press ───────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_long_press",
+        description=(
+            "Long-press an element by its index number from the last screenshot. "
+            "Use for context menus, drag initiation, or any gesture requiring a "
+            "sustained hold. "
+            "element_index is required (integer from ios_screenshot). "
+            "duration is the hold time in seconds (default 1.0)."
+        ),
+    )
+    async def ios_long_press(element_index: int, duration: float = 1.0) -> str:
+        result = handle_long_press({"element_index": element_index, "duration": duration})
         return json.dumps(result)
 
     # ── Tool: ios_simctl ───────────────────────────────────────────────────
