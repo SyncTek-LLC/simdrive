@@ -47,6 +47,9 @@ ios_simulator = "specterqa.ios.sim_driver:SimDriver"
 [project.entry-points."specterqa.cli_extensions"]
 ios = "specterqa.ios.cli:ios_command_group"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["specterqa*"]
