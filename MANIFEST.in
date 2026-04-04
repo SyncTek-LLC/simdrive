@@ -1,0 +1,5 @@
+recursive-include runner/Sources *.swift
+include runner/SpecterQARunner.xcodeproj/project.pbxproj
+include runner/Package.swift
+include runner/build.sh
+include runner/launch.sh
