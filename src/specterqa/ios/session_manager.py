@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -25,7 +26,8 @@ logger = logging.getLogger("specterqa.ios.session_manager")
 _PORT_RANGE = range(8222, 8231)
 
 # Health check poll interval and timeout.
-_HEALTH_POLL_INTERVAL_S = 1.0
+# 0.5s interval catches runner readiness ~2x faster than 1s without hammering the port.
+_HEALTH_POLL_INTERVAL_S = 0.5
 _HEALTH_TIMEOUT_S = 60.0
 
 # Default location where `runner build` places the xctestrun file.
@@ -170,16 +172,19 @@ class TestSession:
         app_path: Optional[str] = None,
         bundle_id: Optional[str] = None,
         runner_build_dir: Optional[Path] = None,
+        clone: bool = False,
     ) -> None:
         self.source_udid = source_udid
         self.app_path = app_path
         self.bundle_id = bundle_id
+        self.clone = clone
         self._runner_build_dir = runner_build_dir or _DEFAULT_RUNNER_BUILD_DIR
 
         self._clone_udid: Optional[str] = None
         self._clone_name: Optional[str] = None
         self._runner_process: Optional[subprocess.Popen] = None
         self._port: int = 8222
+        self._target_udid: Optional[str] = None  # the sim we actually deploy to
 
     # ------------------------------------------------------------------
     # Public API
@@ -236,6 +241,34 @@ class TestSession:
     # Internal — start sequence
     # ------------------------------------------------------------------
 
+    def _cleanup_stale_clones(self) -> None:
+        """Delete leftover specterqa-test-* clones from previous runs.
+
+        Stale clones accumulate when sessions are interrupted (e.g. crashes,
+        SIGKILL).  Removing them before creating a new one keeps the device
+        list tidy and avoids UDID collisions.
+        """
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "-j"],
+            capture_output=True,
+            text=True,
+        )
+        try:
+            devices = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return
+        for runtime_devices in devices.get("devices", {}).values():
+            for device in runtime_devices:
+                if device.get("name", "").startswith("specterqa-test-"):
+                    udid = device["udid"]
+                    try:
+                        if device.get("state") == "Booted":
+                            _simctl("shutdown", udid, check=False)
+                        _simctl("delete", udid, check=False)
+                        logger.info("Cleaned up stale clone: %s (%s)", device["name"], udid)
+                    except Exception as exc:
+                        logger.warning("Could not clean up stale clone %s: %s", udid, exc)
+
     def _is_sim_booted(self, udid: str) -> bool:
         """Check if a simulator is in Booted state.
 
@@ -263,71 +296,99 @@ class TestSession:
     def _start(self) -> None:
         """Internal start implementation (called by start() with error cleanup).
 
-        Preserves the user's simulator state: if the source sim was booted before
-        cloning, it is re-booted after the clone completes so the user's environment
-        is left unchanged.  This resolves the simctl catch-22 where ``clone``
-        requires a SHUTDOWN simulator but the CLI may have discovered the UDID via
-        a booted device.
+        Two modes:
+        - **Direct mode** (default, ``clone=False``): Deploy runner directly to the
+          booted simulator.  Faster (~5s startup).  XCTest runner doesn't steal the
+          mouse — user can keep working.  App state is shared with the user's sim.
+        - **Clone mode** (``clone=True``): Clone the sim for full isolation.
+          Slower (~15s startup) but app state is disposable.  Use for CI or when
+          test actions (login, delete) would corrupt the user's data.
         """
         # Step 1 — resolve "booted" to a real UDID.
         source = self._resolve_udid(self.source_udid)
         logger.info("Source simulator: %s", source)
 
-        # Step 2 — preserve boot state and ensure source is shutdown before clone.
-        # simctl clone requires the source to be in Shutdown state (error 405 if Booted).
-        was_booted = self._is_sim_booted(source)
-        if was_booted:
-            logger.info(
-                "Source simulator is booted — shutting down temporarily for clone..."
-            )
-            _simctl("shutdown", source)
+        if self.clone:
+            self._start_clone_mode(source)
+        else:
+            self._start_direct_mode(source)
 
-        # Step 3 — clone.
+        # Common — deploy runner and wait for health (both modes).
+        self._port = _find_free_port()
+        self._deploy_runner()
+
+        health_url = f"{self.runner_url}/health"
+        logger.info("Waiting for runner health at %s...", health_url)
+        _wait_for_health(health_url, timeout_s=_HEALTH_TIMEOUT_S)
+        logger.info("Runner is healthy on port %d", self._port)
+
+    def _start_direct_mode(self, source_udid: str) -> None:
+        """Deploy runner directly to the booted simulator — no cloning."""
+        logger.info("Direct mode — deploying to %s (no clone)", source_udid)
+        self._target_udid = source_udid
+
+        # Ensure the sim is booted.
+        if not self._is_sim_booted(source_udid):
+            logger.info("Simulator not booted — booting...")
+            _simctl("boot", source_udid)
+            time.sleep(3)
+
+        # Install app if provided.
+        if self.app_path:
+            resolved = Path(self.app_path).resolve()
+            logger.info("Installing %s on %s...", resolved.name, source_udid)
+            _simctl("install", source_udid, str(resolved))
+            logger.info("Launching %s...", self.bundle_id)
+            _simctl("launch", source_udid, self.bundle_id)
+            time.sleep(2)
+
+    def _start_clone_mode(self, source_udid: str) -> None:
+        """Clone the sim, boot the clone, deploy runner to clone."""
+        # Clean up stale clones from previous interrupted sessions.
+        self._cleanup_stale_clones()
+
+        # Shutdown source for cloning (simctl clone requires Shutdown state).
+        was_booted = self._is_sim_booted(source_udid)
+        if was_booted:
+            logger.info("Shutting down source for clone...")
+            _simctl("shutdown", source_udid)
+
+        # Clone.
         clone_name = f"specterqa-test-{uuid.uuid4().hex[:8]}"
         self._clone_name = clone_name
         logger.info("Cloning simulator as '%s'...", clone_name)
-        result = _simctl("clone", source, clone_name)
-        # simctl clone prints the new UDID to stdout.
+        result = _simctl("clone", source_udid, clone_name)
         self._clone_udid = result.stdout.strip()
         if not self._clone_udid:
             raise SessionError(
                 f"simctl clone did not return a UDID. stdout={result.stdout!r}"
             )
+        self._target_udid = self._clone_udid
         logger.info("Clone UDID: %s", self._clone_udid)
 
-        # Step 4 — restore the original simulator's state so the user's environment
-        # is unaffected.  Do this before booting the clone so both can boot in parallel.
+        # Boot source and clone in parallel.
+        source_boot_thread: Optional[threading.Thread] = None
         if was_booted:
-            logger.info("Restoring original simulator boot state...")
-            _simctl("boot", source)
+            source_boot_thread = threading.Thread(
+                target=lambda: _simctl("boot", source_udid),
+                daemon=True,
+            )
+            source_boot_thread.start()
 
-        # Step 5 — boot the clone headless (no Simulator.app window).
-        logger.info("Booting clone headless...")
         _simctl("boot", self._clone_udid)
-        # Springboard needs time to settle after boot — launching apps too
-        # early gets "request denied by SBMainWorkspace".
-        logger.info("Waiting for Springboard to settle...")
-        time.sleep(8)
+        if source_boot_thread is not None:
+            source_boot_thread.join()
 
-        # Step 6 — install and launch app (optional).
+        time.sleep(3)
+
+        # Install and launch app on clone.
         if self.app_path:
             resolved = Path(self.app_path).resolve()
             logger.info("Installing %s on %s...", resolved.name, self._clone_udid)
             _simctl("install", self._clone_udid, str(resolved))
             logger.info("Launching %s...", self.bundle_id)
             _simctl("launch", self._clone_udid, self.bundle_id)
-            # Give the app time to reach foreground.
             time.sleep(2)
-
-        # Step 7 — deploy XCTest runner.
-        self._port = _find_free_port()
-        self._deploy_runner()
-
-        # Step 8 — wait for health.
-        health_url = f"{self.runner_url}/health"
-        logger.info("Waiting for runner health at %s...", health_url)
-        _wait_for_health(health_url, timeout_s=_HEALTH_TIMEOUT_S)
-        logger.info("Runner is healthy on port %d", self._port)
 
     def _resolve_udid(self, udid: str) -> str:
         """Resolve ``"booted"`` to the actual UDID of the booted simulator.
@@ -386,7 +447,7 @@ class TestSession:
         cmd = [
             "xcodebuild", "test-without-building",
             "-xctestrun", str(xctestrun),
-            "-destination", f"id={self._clone_udid}",
+            "-destination", f"id={self._target_udid or self._clone_udid}",
         ]
 
         logger.info("Deploying runner: %s", " ".join(cmd))
@@ -440,7 +501,7 @@ class TestSession:
     # ------------------------------------------------------------------
 
     def _teardown(self) -> None:
-        """Kill the runner process and remove the cloned simulator."""
+        """Kill the runner process and clean up (delete clone if in clone mode)."""
         # Kill the xcodebuild process.
         if self._runner_process is not None:
             try:
@@ -450,7 +511,8 @@ class TestSession:
                 logger.warning("Could not terminate runner process: %s", exc)
             self._runner_process = None
 
-        # Shutdown and delete the clone.
+        # In clone mode: shutdown and delete the clone.
+        # In direct mode: don't touch the user's simulator.
         if self._clone_udid is not None:
             try:
                 _simctl("shutdown", self._clone_udid, check=False)
@@ -463,6 +525,8 @@ class TestSession:
                 logger.warning("simctl delete failed: %s", exc)
             self._clone_udid = None
             self._clone_name = None
+
+        self._target_udid = None
 
     # ------------------------------------------------------------------
     # Dunder helpers
