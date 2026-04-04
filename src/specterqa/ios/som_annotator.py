@@ -242,7 +242,7 @@ class SoMAnnotator:
         return xml_source
 
     @staticmethod
-    def _json_elements_to_xml(elements: list[dict]) -> str:
+    def _json_elements_to_xml(elements: list[dict], max_depth: int = 5) -> str:
         """Convert the runner's JSON element tree to WDA-style XML.
 
         The runner returns:
@@ -254,8 +254,18 @@ class SoMAnnotator:
           <XCUIElementTypeApplication label="Example Reader" x="0" y="0" width="390" height="844" enabled="true" visible="true">
             ...children...
           </XCUIElementTypeApplication>
+
+        Args:
+            elements:  List of element dicts from the runner's /source JSON.
+            max_depth: Maximum recursion depth when traversing ``children``.
+                       Limits tree depth to prevent timeouts on screens with
+                       2000+ elements (default 5 levels deep).  Set to 0 for
+                       unlimited (may be slow on deep/large trees).
         """
-        def _convert(elem: dict) -> str:
+        def _xml_escape(s: str) -> str:
+            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+        def _convert(elem: dict, depth: int) -> str:
             type_label = elem.get("typeLabel", "other")
             # Map to XCUIElementType tag names used by WDA XML.
             tag = f"XCUIElementType{type_label[0].upper()}{type_label[1:]}"
@@ -275,15 +285,13 @@ class SoMAnnotator:
 
             attr_str = " ".join(f'{k}="{_xml_escape(v)}"' for k, v in attrs.items() if v)
             children = elem.get("children", [])
-            if children:
-                child_xml = "".join(_convert(c) for c in children)
+            # BUG V5-2 FIX: honour max_depth to cap recursion on huge trees.
+            if children and (max_depth <= 0 or depth < max_depth):
+                child_xml = "".join(_convert(c, depth + 1) for c in children)
                 return f"<{tag} {attr_str}>{child_xml}</{tag}>"
             return f"<{tag} {attr_str}/>"
 
-        def _xml_escape(s: str) -> str:
-            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-        return "".join(_convert(e) for e in elements)
+        return "".join(_convert(e, depth=0) for e in elements)
 
     def _get_element_tree_from_wda(self) -> str:
         """Fetch element tree from WDA with timeout guard.
