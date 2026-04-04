@@ -124,15 +124,25 @@ def handle_start_session(arguments: dict) -> dict:
     """Start the XCTest runner on a cloned simulator.
 
     Args:
-        bundle_id: Bundle ID of the app under test (required).
-        device_id:  Source simulator UDID or "booted" (default "booted").
-        app_path:   Path to a .app bundle to install before starting (optional).
+        bundle_id:   Bundle ID of the app under test (required).
+        device_id:   Source simulator UDID or "booted" (default "booted").
+        app_path:    Path to a .app bundle to install before starting (optional).
+        license_key: SpecterQA license key (optional — falls back to
+                     ``SPECTERQA_IOS_LICENSE`` env var; omit for trial mode).
 
     Returns:
         {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
         or {"error": "<message>"} on failure.
     """
     global _session, _backend, _annotator, _last_elements
+
+    # License check — validates key or allows trial/founder bypass
+    from specterqa.ios.license.validator import LicenseValidator
+    license_key = arguments.get("license_key", os.environ.get("SPECTERQA_LICENSE_KEY", ""))
+    validator = LicenseValidator(license_key=license_key)
+    license_result = validator.validate()
+    if not license_result.get("valid"):
+        return {"error": "Invalid license. Set SPECTERQA_IOS_LICENSE=founder or provide a valid key."}
 
     bundle_id = arguments.get("bundle_id")
     if not bundle_id:
@@ -483,18 +493,22 @@ def create_server() -> Any:
             "and waits for health. Call this once before any other ios_* tools. "
             "bundle_id is required (e.g. 'com.example.MyApp'). "
             "device_id defaults to 'booted'. "
-            "app_path is an optional path to a .app bundle to install."
+            "app_path is an optional path to a .app bundle to install. "
+            "license_key is optional — falls back to the SPECTERQA_IOS_LICENSE env var; "
+            "omit for trial mode (1 simulator) or set to 'founder' for dogfood access."
         ),
     )
     async def ios_start_session(
         bundle_id: str,
         device_id: str = "booted",
         app_path: str | None = None,
+        license_key: str | None = None,
     ) -> str:
         result = handle_start_session({
             "bundle_id": bundle_id,
             "device_id": device_id,
             "app_path": app_path,
+            "license_key": license_key or "",
         })
         return json.dumps(result)
 
