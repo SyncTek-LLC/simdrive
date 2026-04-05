@@ -11,8 +11,8 @@ Usage:
     specterqa ios serve          # via CLI serve command
 
 Tools:
-    ios_start_session    Start XCTest runner on a cloned simulator
-    ios_stop_session     Stop runner and clean up clone
+    ios_start_session    Start XCTest runner on the iOS Simulator
+    ios_stop_session     Stop the XCTest runner and clean up
     ios_screenshot       Annotated screenshot with numbered elements
     ios_tap              Tap element by index number
     ios_long_press       Long-press element by index (context menus, drag init)
@@ -21,8 +21,8 @@ Tools:
     ios_swipe_back       iOS back navigation gesture
     ios_type             Type text into focused field
     ios_elements         Get element list without screenshot
-    ios_set_appearance   Toggle dark/light mode on the cloned simulator
-    ios_simctl           Run arbitrary simctl subcommand on the clone
+    ios_set_appearance   Toggle dark/light mode on the simulator
+    ios_simctl           Run arbitrary simctl subcommand on the simulator
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -159,7 +159,7 @@ def _resize_screenshot(b64_png: str, scale: float = 0.5) -> str:
 
 
 def handle_start_session(arguments: dict) -> dict:
-    """Start the XCTest runner on a cloned simulator.
+    """Start the XCTest runner on the booted simulator.
 
     Args:
         bundle_id:   Bundle ID of the app under test (required).
@@ -231,7 +231,7 @@ def handle_start_session(arguments: dict) -> dict:
 
 
 def handle_stop_session(arguments: dict) -> dict:
-    """Stop the runner and delete the cloned simulator.
+    """Stop the runner and clean up resources.
 
     Returns:
         {"status": "stopped"}
@@ -645,7 +645,7 @@ def handle_long_press(arguments: dict) -> dict:
 # BUG V5-3 FIX: appearance toggle and generic simctl access.
 
 def handle_set_appearance(arguments: dict) -> dict:
-    """Toggle dark/light mode on the cloned simulator.
+    """Toggle dark/light mode on the simulator.
 
     Args:
         mode: "dark" or "light" (default "dark").
@@ -675,9 +675,9 @@ def handle_set_appearance(arguments: dict) -> dict:
 
 
 def handle_simctl(arguments: dict) -> dict:
-    """Run an arbitrary simctl subcommand on the cloned simulator.
+    """Run an arbitrary simctl subcommand on the simulator.
 
-    The clone's UDID is injected automatically wherever the literal
+    The simulator's UDID is injected automatically wherever the literal
     string ``<udid>`` appears in the command string — or prepended as
     the first positional argument after the subcommand keyword for
     well-known single-UDID commands (``ui``, ``status_bar``,
@@ -779,9 +779,8 @@ def create_server() -> Any:
     @mcp.tool(
         name="ios_start_session",
         description=(
-            "Start the XCTest runner on an iOS Simulator. "
-            "Deploys the runner directly to the booted sim (fast, ~5s). "
-            "Set clone=true for full isolation (clones the sim, ~15s, use for CI). "
+            "Start the XCTest runner on the booted iOS Simulator. "
+            "Deploys directly to the booted sim — no cloning, full networking. "
             "bundle_id is required (e.g. 'com.example.MyApp'). "
             "device_id defaults to 'booted'. "
             "app_path is an optional path to a .app bundle to install. "
@@ -809,8 +808,8 @@ def create_server() -> Any:
     @mcp.tool(
         name="ios_stop_session",
         description=(
-            "Stop the XCTest runner and delete the cloned simulator. "
-            "Always call this when testing is complete to free resources."
+            "Stop the XCTest runner and clean up. "
+            "Call this when testing is complete."
         ),
     )
     async def ios_stop_session() -> str:
@@ -916,7 +915,7 @@ def create_server() -> Any:
     @mcp.tool(
         name="ios_set_appearance",
         description=(
-            "Toggle dark or light mode on the cloned iOS Simulator. "
+            "Toggle dark or light mode on the iOS Simulator. "
             "mode must be 'dark' or 'light' (default 'dark'). "
             "Requires an active session (ios_start_session). "
             "After changing appearance, call ios_screenshot to see the updated screen."
@@ -963,8 +962,8 @@ def create_server() -> Any:
     @mcp.tool(
         name="ios_simctl",
         description=(
-            "Run an arbitrary simctl subcommand on the cloned simulator. "
-            "The clone UDID is inserted automatically — use '<udid>' as a placeholder "
+            "Run an arbitrary simctl subcommand on the simulator. "
+            "The simulator UDID is inserted automatically — use '<udid>' as a placeholder "
             "or omit it for well-known single-UDID subcommands (ui, status_bar, "
             "location, push, privacy). "
             "Examples: "
