@@ -241,6 +241,30 @@ class TestSession:
     # Internal — start sequence
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _kill_stale_runners() -> None:
+        """Kill any orphaned xcodebuild test-without-building processes.
+
+        When MCP connections drop or ios_stop_session isn't called, the old
+        xcodebuild process keeps running. Starting a new one on the same sim
+        causes resource contention and crashes.
+        """
+        import signal
+
+        result = subprocess.run(
+            ["pgrep", "-f", "xcodebuild.*test-without-building"],
+            capture_output=True, text=True,
+        )
+        for pid_str in result.stdout.strip().split("\n"):
+            pid_str = pid_str.strip()
+            if pid_str:
+                try:
+                    pid = int(pid_str)
+                    os.kill(pid, signal.SIGKILL)
+                    logger.info("Killed stale xcodebuild process: %d", pid)
+                except (ValueError, ProcessLookupError, PermissionError) as exc:
+                    logger.warning("Could not kill stale runner PID %s: %s", pid_str, exc)
+
     def _cleanup_stale_clones(self) -> None:
         """Delete leftover specterqa-test-* clones from previous runs.
 
@@ -304,6 +328,9 @@ class TestSession:
           Slower (~15s startup) but app state is disposable.  Use for CI or when
           test actions (login, delete) would corrupt the user's data.
         """
+        # Step 0 — kill stale xcodebuild processes from previous sessions.
+        self._kill_stale_runners()
+
         # Step 1 — resolve "booted" to a real UDID.
         source = self._resolve_udid(self.source_udid)
         logger.info("Source simulator: %s", source)
@@ -501,18 +528,31 @@ class TestSession:
     # ------------------------------------------------------------------
 
     def _teardown(self) -> None:
-        """Kill the runner process and clean up (delete clone if in clone mode)."""
-        # Kill the xcodebuild process.
+        """Kill the runner process and clean up.
+
+        In direct mode: SIGKILL xcodebuild (not SIGTERM — SIGTERM triggers
+        xcodebuild's cleanup which shuts down the sim), then re-boot the sim
+        if xcodebuild killed it.
+
+        In clone mode: shutdown and delete the clone.
+        """
+        target = self._target_udid
+        is_direct = self._clone_udid is None
+
+        # Kill xcodebuild — use SIGKILL in direct mode to prevent it from
+        # shutting down the user's simulator during its cleanup sequence.
         if self._runner_process is not None:
             try:
-                self._runner_process.terminate()
+                if is_direct:
+                    self._runner_process.kill()   # SIGKILL — no cleanup
+                else:
+                    self._runner_process.terminate()  # SIGTERM — let it clean up clone
                 self._runner_process.wait(timeout=5)
             except Exception as exc:
-                logger.warning("Could not terminate runner process: %s", exc)
+                logger.warning("Could not stop runner process: %s", exc)
             self._runner_process = None
 
-        # In clone mode: shutdown and delete the clone.
-        # In direct mode: don't touch the user's simulator.
+        # Clone mode: shutdown and delete the clone.
         if self._clone_udid is not None:
             try:
                 _simctl("shutdown", self._clone_udid, check=False)
@@ -525,6 +565,16 @@ class TestSession:
                 logger.warning("simctl delete failed: %s", exc)
             self._clone_udid = None
             self._clone_name = None
+
+        # Direct mode: re-boot the sim if xcodebuild's death killed it.
+        if is_direct and target:
+            time.sleep(1)
+            if not self._is_sim_booted(target):
+                logger.info("Re-booting simulator %s after runner teardown...", target)
+                try:
+                    _simctl("boot", target, check=False)
+                except Exception as exc:
+                    logger.warning("Re-boot failed: %s", exc)
 
         self._target_udid = None
 
