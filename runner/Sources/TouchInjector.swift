@@ -53,6 +53,11 @@ final class TouchInjector {
     }
 
     /// Type arbitrary text into the currently focused element.
+    ///
+    /// On iOS 26+ simulators, ``XCUIApplication.typeText()`` crashes if the
+    /// software keyboard is not visible. The session manager disables the
+    /// hardware keyboard preference before deploying the runner, so the
+    /// software keyboard should always appear when a text field is focused.
     func typeText(_ text: String) {
         app.typeText(text)
     }
