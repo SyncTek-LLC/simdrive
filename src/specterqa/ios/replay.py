@@ -54,6 +54,14 @@ class ReplayStep:
     duration: Optional[float] = None
     # Checkpoint — expected element labels visible after this action completes
     expect_elements: list[str] = field(default_factory=list)
+    # Rich assertions (checked after the action's UI settles)
+    expect_not_elements: list[str] = field(default_factory=list)
+    expect_element_value: dict = field(default_factory=dict)  # {"label": "expected_value"}
+    expect_element_count: dict = field(default_factory=dict)  # {"Button": 3}
+    # Wait for element before executing this step
+    wait_for: Optional[dict] = None  # {"label": "Read", "timeout": 10}
+    # Per-step timeout override (seconds); None = use session default
+    step_timeout: Optional[float] = None
 
 
 @dataclass
@@ -65,6 +73,9 @@ class ReplaySession:
     device_id: str = "booted"
     recorded_at: str = ""
     steps: list[ReplayStep] = field(default_factory=list)
+    # Replay-level defaults
+    settle_timeout: float = 2.0   # seconds to wait for UI to settle before assertions
+    step_timeout: float = 10.0    # default per-step execution timeout (seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +208,7 @@ class ReplayRecorder:
                 for k, v in raw.items()
                 if v is not None
                 and v != []
+                and v != {}
                 and not (k == "timestamp" and v == 0.0)
                 and k != "timestamp"  # timestamps are write-only; omit from replay
             }
@@ -243,6 +255,8 @@ class ReplayPlayer:
         self.device_id: str = r.get("device_id", "booted")
         self.name: str = r.get("name", self.path.stem)
         self.steps: list[dict] = r.get("steps", [])
+        self.settle_timeout: float = float(r.get("settle_timeout", 2.0))
+        self.step_timeout: float = float(r.get("step_timeout", 10.0))
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -251,70 +265,221 @@ class ReplayPlayer:
         """Return the first element whose label matches *label*, or None."""
         return next((e for e in elements if e.label == label), None)
 
+    @staticmethod
+    def resolve_vars(text: str, variables: dict) -> str:
+        """Substitute ${VAR} placeholders in *text* from *variables* dict."""
+        for key, value in variables.items():
+            text = text.replace(f"${{{key}}}", str(value))
+        return text
+
+    def _resolve_step_vars(self, step: dict, variables: dict) -> dict:
+        """Return a shallow copy of *step* with variable substitution applied."""
+        if not variables:
+            return step
+        resolved = dict(step)
+        for field in ("element_label", "text", "key"):
+            if field in resolved and isinstance(resolved[field], str):
+                resolved[field] = self.resolve_vars(resolved[field], variables)
+        return resolved
+
+    def _wait_for_label(self, annotator, label: str, timeout: float) -> bool:
+        """Poll until an element with *label* appears; return True if found."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                elements = annotator.get_elements_from_runner()
+                if any(label.lower() in e.label.lower() for e in elements):
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.5)
+        return False
+
     def _execute_step(
         self,
         step: dict,
         backend,
         annotator,
         result: dict,
+        variables: Optional[dict] = None,
     ) -> dict:
         """Execute one step and return a step-result dict."""
+        if variables:
+            step = self._resolve_step_vars(step, variables)
+
         action = step["action"]
         step_result: dict = {"action": action, "passed": True, "error": None}
 
-        try:
-            if action == "tap":
-                self._exec_tap(step, backend, annotator, result)
+        # Per-step timeout — wrap execution in a thread with join timeout
+        step_timeout = float(step.get("step_timeout") or self.step_timeout)
 
-            elif action == "swipe":
-                direction = step.get("direction", "down")
-                cx, cy, offset = 195, 422, 200
-                coords = {
-                    "down":  (cx, cy + offset, cx, cy - offset),
-                    "up":    (cx, cy - offset, cx, cy + offset),
-                    "left":  (cx + offset, cy, cx - offset, cy),
-                    "right": (cx - offset, cy, cx + offset, cy),
-                }
-                x1, y1, x2, y2 = coords.get(direction, coords["down"])
-                backend.swipe(x1, y1, x2, y2)
+        import threading
 
-            elif action == "swipe_back":
-                backend.swipe_back()
+        exec_error: list = []  # mutable container for thread result
 
-            elif action == "type":
-                backend.type_text(step.get("text", ""))
+        def _do_execute() -> None:
+            try:
+                if action == "tap":
+                    self._exec_tap(step, backend, annotator, result)
 
-            elif action == "press_key":
-                backend.press_key(step.get("key", ""))
+                elif action == "swipe":
+                    direction = step.get("direction", "down")
+                    cx, cy, offset = 195, 422, 200
+                    coords = {
+                        "down":  (cx, cy + offset, cx, cy - offset),
+                        "up":    (cx, cy - offset, cx, cy + offset),
+                        "left":  (cx + offset, cy, cx - offset, cy),
+                        "right": (cx - offset, cy, cx + offset, cy),
+                    }
+                    x1, y1, x2, y2 = coords.get(direction, coords["down"])
+                    backend.swipe(x1, y1, x2, y2)
 
-            elif action == "long_press":
-                self._exec_long_press(step, backend, annotator, result)
+                elif action == "swipe_back":
+                    backend.swipe_back()
 
-            else:
+                elif action == "type":
+                    backend.type_text(step.get("text", ""))
+
+                elif action == "press_key":
+                    backend.press_key(step.get("key", ""))
+
+                elif action == "long_press":
+                    self._exec_long_press(step, backend, annotator, result)
+
+                else:
+                    exec_error.append(("unknown", f"Unknown action: {action!r}"))
+                    return
+
+            except Exception as exc:
+                exec_error.append(("exception", str(exc)))
+
+        # Wait-for-element before executing this step
+        wait_for = step.get("wait_for")
+        if wait_for:
+            wf_label = wait_for.get("label", "")
+            wf_timeout = float(wait_for.get("timeout", 10))
+            if wf_label and not self._wait_for_label(annotator, wf_label, wf_timeout):
                 step_result["passed"] = False
-                step_result["error"] = f"Unknown action: {action!r}"
+                step_result["error"] = f"wait_for: element '{wf_label}' not found within {wf_timeout}s"
                 if result["exit_code"] == 0:
                     result["exit_code"] = 1
                 return step_result
 
-            # Checkpoint — verify expected labels are present in the UI
-            expect = step.get("expect_elements", [])
-            if expect:
-                time.sleep(0.5)  # let UI settle before asserting
-                elements = annotator.get_elements_from_runner()
-                found_labels = {e.label for e in elements}
-                missing = [lbl for lbl in expect if lbl not in found_labels]
-                if missing:
-                    step_result["passed"] = False
-                    step_result["error"] = f"Missing expected elements: {missing}"
-                    if result["exit_code"] == 0:
-                        result["exit_code"] = 1
+        t = threading.Thread(target=_do_execute, daemon=True)
+        t.start()
+        t.join(timeout=step_timeout)
 
-        except Exception as exc:
+        if t.is_alive():
             step_result["passed"] = False
-            step_result["error"] = str(exc)
+            step_result["error"] = f"Step timed out after {step_timeout}s"
             if result["exit_code"] == 0:
                 result["exit_code"] = 1
+            return step_result
+
+        if exec_error:
+            kind, msg = exec_error[0]
+            step_result["passed"] = False
+            step_result["error"] = msg
+            if result["exit_code"] == 0:
+                result["exit_code"] = 1 if kind == "exception" else 1
+            return step_result
+
+        # ── Assertions (with settle + retry) ─────────────────────────────
+
+        # Let UI settle before checking assertions
+        settle = self.settle_timeout
+        if settle > 0:
+            time.sleep(min(settle, 1.0))  # initial settle
+
+        expect = step.get("expect_elements", [])
+        if expect:
+            # Retry up to 3 times with 1s between
+            missing = list(expect)
+            for _attempt in range(3):
+                try:
+                    elements = annotator.get_elements_from_runner()
+                    found_labels = {e.label for e in elements}
+                    missing = [lbl for lbl in expect if lbl not in found_labels]
+                    if not missing:
+                        break
+                except Exception:
+                    pass
+                if missing:
+                    time.sleep(1.0)
+            if missing:
+                step_result["passed"] = False
+                step_result["error"] = f"Missing expected elements: {missing}"
+                if result["exit_code"] == 0:
+                    result["exit_code"] = 1
+
+        expect_not = step.get("expect_not_elements", [])
+        if expect_not:
+            try:
+                elements = annotator.get_elements_from_runner()
+                found_labels = {e.label for e in elements}
+                present = [lbl for lbl in expect_not if lbl in found_labels]
+                if present:
+                    step_result["passed"] = False
+                    step_result["error"] = f"Elements that should NOT be present: {present}"
+                    if result["exit_code"] == 0:
+                        result["exit_code"] = 1
+            except Exception as exc:
+                step_result["passed"] = False
+                step_result["error"] = f"expect_not_elements check failed: {exc}"
+                if result["exit_code"] == 0:
+                    result["exit_code"] = 1
+
+        expect_value = step.get("expect_element_value", {})
+        if expect_value:
+            try:
+                elements = annotator.get_elements_from_runner()
+                for lbl, expected_val in expect_value.items():
+                    target = next(
+                        (e for e in elements if lbl.lower() in e.label.lower()), None
+                    )
+                    if target is None:
+                        step_result["passed"] = False
+                        step_result["error"] = f"expect_element_value: element '{lbl}' not found"
+                        if result["exit_code"] == 0:
+                            result["exit_code"] = 1
+                    else:
+                        actual_val = getattr(target, "value", "") or ""
+                        if str(expected_val) not in str(actual_val):
+                            step_result["passed"] = False
+                            step_result["error"] = (
+                                f"expect_element_value: '{lbl}' value '{actual_val}' "
+                                f"does not contain '{expected_val}'"
+                            )
+                            if result["exit_code"] == 0:
+                                result["exit_code"] = 1
+            except Exception as exc:
+                step_result["passed"] = False
+                step_result["error"] = f"expect_element_value check failed: {exc}"
+                if result["exit_code"] == 0:
+                    result["exit_code"] = 1
+
+        expect_count = step.get("expect_element_count", {})
+        if expect_count:
+            try:
+                elements = annotator.get_elements_from_runner()
+                for elem_type, expected_count in expect_count.items():
+                    actual_count = sum(
+                        1 for e in elements
+                        if e.element_type.lower() == elem_type.lower()
+                    )
+                    if actual_count != int(expected_count):
+                        step_result["passed"] = False
+                        step_result["error"] = (
+                            f"expect_element_count: expected {expected_count} '{elem_type}' "
+                            f"elements, found {actual_count}"
+                        )
+                        if result["exit_code"] == 0:
+                            result["exit_code"] = 1
+            except Exception as exc:
+                step_result["passed"] = False
+                step_result["error"] = f"expect_element_count check failed: {exc}"
+                if result["exit_code"] == 0:
+                    result["exit_code"] = 1
 
         return step_result
 
@@ -363,11 +528,13 @@ class ReplayPlayer:
 
     # ── Public API ────────────────────────────────────────────────────────
 
-    def run(self, verbose: bool = False) -> dict:
+    def run(self, verbose: bool = False, variables: Optional[dict] = None) -> dict:
         """Execute the replay and return a result summary dict.
 
         Args:
-            verbose: If True, print per-step status to stdout.
+            verbose:   If True, print per-step status to stdout.
+            variables: Optional dict of ${VAR} substitutions for replay values.
+                       Keys are variable names (without braces), values are strings.
 
         Returns:
             {
@@ -381,6 +548,8 @@ class ReplayPlayer:
         from specterqa.ios.session_manager import TestSession
         from specterqa.ios.backends.xctest_client import XCTestBackend
         from specterqa.ios.som_annotator import SoMAnnotator
+
+        vars_dict: dict = variables or {}
 
         result: dict = {
             "name": self.name,
@@ -410,7 +579,9 @@ class ReplayPlayer:
                 if verbose:
                     print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
 
-                step_result = self._execute_step(step, backend, annotator, result)
+                step_result = self._execute_step(
+                    step, backend, annotator, result, variables=vars_dict
+                )
 
                 if not step_result["passed"]:
                     result["passed"] = False
