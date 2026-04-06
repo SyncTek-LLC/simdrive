@@ -463,10 +463,15 @@ def handle_screenshot(arguments: dict) -> dict:
 
 
 def handle_tap(arguments: dict) -> dict:
-    """Tap an element by its index number from the last screenshot.
+    """Tap an element by its index number OR by label.
 
     Args:
-        element_index: Integer index shown in the annotated screenshot (required).
+        element_index: Integer index shown in the annotated screenshot.
+                       Use this OR label — not both.
+        label:         Case-insensitive substring to match against element labels.
+                       Preferred over element_index when available (label-stable tapping).
+        type:          Optional element type filter when using label (e.g. "Button").
+                       Only applies when label is provided.
 
     Returns:
         {"status": "ok", "tapped": "<label>", "x": <cx>, "y": <cy>}
@@ -479,27 +484,54 @@ def handle_tap(arguments: dict) -> dict:
     except RuntimeError as exc:
         return {"error": str(exc)}
 
+    label = arguments.get("label")
+    element_type_filter = arguments.get("type")
     element_index = arguments.get("element_index")
-    if element_index is None:
-        return {"error": "element_index is required"}
 
-    try:
-        element_index = int(element_index)
-    except (TypeError, ValueError):
-        return {"error": f"element_index must be an integer, got: {element_index!r}"}
+    target = None
 
-    # Locate the element in the last-captured list
-    target = next((e for e in _last_elements if e.index == element_index), None)
+    # Label-based lookup (preferred — more stable across UI changes)
+    if label is not None:
+        label_lower = label.lower()
+        candidates = [e for e in _last_elements if label_lower in e.label.lower()]
+        if element_type_filter:
+            type_lower = element_type_filter.lower()
+            type_filtered = [e for e in candidates if e.element_type.lower() == type_lower]
+            if type_filtered:
+                candidates = type_filtered
+        if candidates:
+            target = candidates[0]
+        # Fall through to element_index if no label match and index provided
+        if target is None and element_index is None:
+            return {
+                "error": (
+                    f"No element found with label containing '{label}'"
+                    + (f" and type '{element_type_filter}'" if element_type_filter else "")
+                    + f". Call ios_screenshot first to refresh elements."
+                )
+            }
 
+    # Index-based lookup (fallback or explicit)
     if target is None:
-        valid_indices = [e.index for e in _last_elements]
-        return {
-            "error": (
-                f"Element {element_index} not found. "
-                f"Call ios_screenshot first to refresh elements. "
-                f"Valid indices: {valid_indices}"
-            )
-        }
+        if element_index is None:
+            return {"error": "element_index or label is required"}
+
+        try:
+            element_index = int(element_index)
+        except (TypeError, ValueError):
+            return {"error": f"element_index must be an integer, got: {element_index!r}"}
+
+        target = next((e for e in _last_elements if e.index == element_index), None)
+
+        if target is None:
+            valid_indices = [e.index for e in _last_elements]
+            return {
+                "error": (
+                    f"Element {element_index} not found. "
+                    f"Call ios_screenshot first to refresh elements. "
+                    f"Valid indices: {valid_indices}"
+                )
+            }
 
     cx = target.x + target.width / 2
     cy = target.y + target.height / 2
@@ -511,7 +543,7 @@ def handle_tap(arguments: dict) -> dict:
 
     # Record the tap for replay
     if _recorder is not None:
-        _recorder.record_tap(element_index, target.label, cx, cy)
+        _recorder.record_tap(target.index, target.label, cx, cy)
 
     # Auto-checkpoint: capture element state after action for replay verification
     _auto_checkpoint()
@@ -521,6 +553,168 @@ def handle_tap(arguments: dict) -> dict:
         "tapped": target.label,
         "x": cx,
         "y": cy,
+    }
+
+
+def handle_wait(arguments: dict) -> dict:
+    """Sleep for a specified number of seconds (capped at 30s).
+
+    Args:
+        seconds: Time to wait in seconds (default 1.0, max 30.0).
+
+    Returns:
+        {"status": "ok", "waited": <seconds>}
+    """
+    import time as _time
+    seconds = min(float(arguments.get("seconds", 1.0)), 30.0)
+    _time.sleep(seconds)
+    return {"status": "ok", "waited": seconds}
+
+
+def handle_wait_for_element(arguments: dict) -> dict:
+    """Poll the element tree until an element matching *label* appears.
+
+    Args:
+        label:   Case-insensitive substring to match against element labels (required).
+        timeout: Maximum wait in seconds (default 10, max 30).
+
+    Returns:
+        {"status": "found", "label": "<matched label>", "index": <int>}
+        or {"status": "not_found", "label": "<label>", "timeout": <seconds>}
+        or {"error": "<message>"} when no session is active.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    label = str(arguments.get("label", ""))
+    if not label:
+        return {"error": "label is required"}
+
+    timeout = min(float(arguments.get("timeout", 10)), 30.0)
+    poll_interval = 0.5
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        try:
+            elements = _annotator.get_elements_from_runner()
+            for e in elements:
+                if label.lower() in e.label.lower():
+                    return {"status": "found", "label": e.label, "index": e.index}
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+
+    return {"status": "not_found", "label": label, "timeout": timeout}
+
+
+def handle_start_recording(arguments: dict) -> dict:
+    """Clear the recorder's step list to start a fresh recording.
+
+    Useful when you want to discard earlier exploratory steps and record
+    only the clean, successful flow.
+
+    Returns:
+        {"status": "ok", "message": "Recording started fresh"}
+        or {"error": "<message>"} when no session is active.
+    """
+    global _recorder
+    if _recorder is None:
+        return {"error": "No active session. Call ios_start_session first."}
+    _recorder.session.steps.clear()
+    return {"status": "ok", "message": "Recording started fresh — previous steps cleared"}
+
+
+def handle_stop_recording(arguments: dict) -> dict:
+    """Save the replay AND clear the recorder (marks end-of-recording).
+
+    Equivalent to ios_save_replay followed by clearing the step buffer.
+    The session remains active — you can keep testing; a new ios_start_recording
+    will start fresh for the next flow.
+
+    Args:
+        name: Human-readable test name used as filename stem (default "replay").
+        path: Override output path (default: .specterqa/replays/<name>.yaml).
+
+    Returns:
+        {"status": "ok", "path": "...", "steps": <count>}
+        or {"error": "<message>"} on failure.
+    """
+    global _recorder
+    result = handle_save_replay(arguments)
+    if "error" not in result and _recorder is not None:
+        _recorder.session.steps.clear()
+    return result
+
+
+def handle_accessibility_audit(arguments: dict) -> dict:
+    """Audit the current screen for common accessibility issues.
+
+    Checks performed:
+    - Missing labels on interactive elements
+    - Touch targets smaller than 44x44 pt (Apple HIG minimum)
+    - Duplicate accessibility labels (ambiguous for screen readers)
+
+    Returns:
+        {"issues": [...], "count": <int>, "elements_checked": <int>}
+        Each issue has: {"type": str, "label": str, ...extra context}
+        or {"error": "<message>"} when no session is active.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    try:
+        elements = _annotator.get_elements_from_runner()
+    except Exception as exc:
+        return {"error": f"Failed to fetch elements: {exc}"}
+
+    interactive_types = {
+        "Button", "TextField", "SecureTextField", "Switch",
+        "Slider", "Link", "MenuItem", "Cell",
+    }
+
+    issues = []
+
+    for e in elements:
+        # Missing label on an interactive element
+        if not e.label and e.element_type in interactive_types:
+            issues.append({
+                "type": "missing_label",
+                "element_type": e.element_type,
+                "index": e.index,
+                "frame": f"{e.x},{e.y} {e.width}x{e.height}",
+            })
+
+        # Touch target too small
+        if e.width < 44 or e.height < 44:
+            issues.append({
+                "type": "small_target",
+                "label": e.label or f"[{e.element_type}@{e.index}]",
+                "element_type": e.element_type,
+                "size": f"{e.width}x{e.height}",
+                "index": e.index,
+            })
+
+    # Duplicate labels
+    labels = [e.label for e in elements if e.label]
+    seen: dict[str, int] = {}
+    for lbl in labels:
+        seen[lbl] = seen.get(lbl, 0) + 1
+    for lbl, count in seen.items():
+        if count > 1:
+            issues.append({
+                "type": "duplicate_label",
+                "label": lbl,
+                "count": count,
+            })
+
+    return {
+        "issues": issues,
+        "count": len(issues),
+        "elements_checked": len(elements),
     }
 
 
@@ -947,24 +1141,40 @@ WORKFLOW (follow this sequence):
    - ios_elements returns just the element list (faster, no image)
    - Use element index numbers for tapping
 
-3. INTERACT: ios_tap(element_index=N), ios_swipe(direction="down"),
+3. INTERACT: ios_tap(label="Save"), ios_swipe(direction="down"),
    ios_type(text="hello"), ios_press_key(key="return"), ios_swipe_back()
+   - PREFER label-based tapping: ios_tap(label="Login Button") — more stable than indices
+   - Use type= to narrow label matches: ios_tap(label="Cancel", type="Button")
+   - Fall back to element_index only when no meaningful label exists
    - After each interaction, call ios_screenshot to see the result
    - Verify the expected screen appeared before proceeding
 
-4. SAVE: ios_save_replay(name="descriptive-name")
+3b. WAIT: ios_wait(seconds=1.0) or ios_wait_for_element(label="Home")
+   - Use ios_wait_for_element after navigations that load content asynchronously
+   - Use ios_wait for fixed delays (animations, splash screens)
+
+4. RECORD: ios_start_recording() / ios_stop_recording(name="...")
+   - ios_start_recording() clears exploratory steps — call before the clean flow
+   - ios_stop_recording(name="login-flow") saves AND clears (marks end of flow)
+   - ios_save_replay(name="...") saves without clearing (keep recording)
+
+5. SAVE: ios_save_replay(name="descriptive-name")
    - ALWAYS save a replay after a successful test flow
    - The replay can run in CI without AI: specterqa-ios replay <file>
    - Saves to .specterqa/replays/<name>.yaml
    - Include checkpoints automatically from current element state
 
-5. CLEANUP: ios_stop_session()
+6. AUDIT: ios_accessibility_audit()
+   - Run on each key screen to surface missing labels, small targets, duplicate labels
+
+7. CLEANUP: ios_stop_session()
    - Always call this when done testing
 
 TIPS:
 - Take a screenshot BEFORE and AFTER every tap to verify the action worked
 - If an element isn't visible, try ios_swipe(direction="down") to scroll
 - Use ios_elements() for fast element checks without screenshots
+- Use ios_wait_for_element(label="...") after navigations — never assume instant load
 - Name replays descriptively: "settings-privacy-toggles" not "test1"
 - One replay per user flow — keep them focused and short
 
@@ -972,6 +1182,14 @@ PROVIDERS:
 - Local simulator (default) — requires macOS + Xcode
 - BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + ACCESS_KEY
 - CI replay — specterqa-ios replay <file> (no AI needed)
+
+KNOWN LIMITATION — WKWebView content:
+XCTest's accessibility tree does not expose the DOM inside WKWebView web views.
+Native app elements (navigation bars, buttons, sheets) remain accessible.
+For web content inside the app, use ios_simctl to run arbitrary simctl commands,
+or prefer apps with a native UI. XCTest's app.webViews.element query can interact
+with the WebView container but not individual web DOM nodes. A JavaScript bridge
+would require app-side instrumentation (out of scope for SpecterQA).
 """,
     )
 
@@ -1044,14 +1262,102 @@ PROVIDERS:
     @mcp.tool(
         name="ios_tap",
         description=(
-            "Tap an element by its index number shown in the annotated screenshot. "
-            "Call ios_screenshot first to get the current element list, then pass "
-            "the element_index of the element you want to tap. "
-            "element_index is required (integer matching an index from ios_screenshot)."
+            "Tap an element by LABEL (preferred) or by index number. "
+            "PREFERRED: use label='Save' to tap the element whose label contains 'Save'. "
+            "Label matching is case-insensitive substring match. "
+            "Optional type='Button' narrows the match to a specific element type. "
+            "FALLBACK: use element_index=N (integer from ios_screenshot) when no label is available. "
+            "Call ios_screenshot first to populate the element cache."
         ),
     )
-    async def ios_tap(element_index: int) -> str:
-        result = handle_tap({"element_index": element_index})
+    async def ios_tap(
+        element_index: int | None = None,
+        label: str | None = None,
+        type: str | None = None,
+    ) -> str:
+        result = handle_tap({
+            "element_index": element_index,
+            "label": label,
+            "type": type,
+        })
+        return json.dumps(result)
+
+    # ── Tool: ios_wait ─────────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_wait",
+        description=(
+            "Wait (sleep) for a specified number of seconds. "
+            "Use after interactions that trigger animations or async loading. "
+            "seconds defaults to 1.0; capped at 30. "
+            "For waiting until a specific element appears, use ios_wait_for_element instead."
+        ),
+    )
+    async def ios_wait(seconds: float = 1.0) -> str:
+        result = handle_wait({"seconds": seconds})
+        return json.dumps(result)
+
+    # ── Tool: ios_wait_for_element ─────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_wait_for_element",
+        description=(
+            "Poll the element tree until an element matching label appears, or timeout expires. "
+            "label is a case-insensitive substring matched against element labels (required). "
+            "timeout is the maximum wait in seconds (default 10, max 30). "
+            "Returns {status: 'found', label, index} on success or {status: 'not_found'} on timeout. "
+            "Use this instead of ios_wait when you need to wait for a specific UI element."
+        ),
+    )
+    async def ios_wait_for_element(label: str, timeout: float = 10.0) -> str:
+        result = handle_wait_for_element({"label": label, "timeout": timeout})
+        return json.dumps(result)
+
+    # ── Tool: ios_start_recording ──────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_start_recording",
+        description=(
+            "Clear the recorder's step buffer to start a fresh recording. "
+            "Use this after exploratory taps to discard those steps and begin "
+            "recording only the clean, successful test flow. "
+            "The session continues — no restart needed."
+        ),
+    )
+    async def ios_start_recording() -> str:
+        result = handle_start_recording({})
+        return json.dumps(result)
+
+    # ── Tool: ios_stop_recording ───────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_stop_recording",
+        description=(
+            "Save the current recording as a replay YAML file AND clear the step buffer. "
+            "Equivalent to ios_save_replay followed by clearing steps. "
+            "name is the test name / filename stem (default 'replay'). "
+            "path overrides the output location (default: .specterqa/replays/<name>.yaml). "
+            "Use ios_save_replay if you want to keep recording after saving."
+        ),
+    )
+    async def ios_stop_recording(name: str = "replay", path: str = "") -> str:
+        result = handle_stop_recording({"name": name, "path": path or ""})
+        return json.dumps(result)
+
+    # ── Tool: ios_accessibility_audit ─────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_accessibility_audit",
+        description=(
+            "Audit the current screen for common accessibility issues. "
+            "Checks: missing labels on interactive elements, touch targets < 44x44 pt, "
+            "and duplicate accessibility labels. "
+            "Returns a list of issues with type, label, and context. "
+            "Run after navigating to each key screen to build an accessibility report."
+        ),
+    )
+    async def ios_accessibility_audit() -> str:
+        result = handle_accessibility_audit({})
         return json.dumps(result)
 
     # ── Tool: ios_swipe ────────────────────────────────────────────────────
