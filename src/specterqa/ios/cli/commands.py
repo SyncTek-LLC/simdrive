@@ -1665,6 +1665,71 @@ def wda_start(
 
 
 # ---------------------------------------------------------------------------
+# specterqa ios replay
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.command("replay")
+@click.argument("replay_file", type=click.Path(exists=True))
+@click.option("--verbose", "-v", is_flag=True, default=False, help="Print per-step status.")
+def replay(replay_file: str, verbose: bool) -> None:
+    """Replay a recorded test session without AI.
+
+    REPLAY_FILE is the path to a .yaml file produced by ios_save_replay.
+
+    Loads the replay, starts the XCTest runner, executes each recorded action,
+    and verifies any checkpoints (expected visible elements) after each step.
+
+    Exit codes:
+
+    \b
+      0  — all steps passed
+      1  — one or more steps failed
+      2  — UI changed since recording (element not found — re-record recommended)
+
+    Example:
+
+    \b
+      specterqa-ios replay tests/settings-smoke.yaml
+      specterqa-ios replay tests/settings-smoke.yaml --verbose
+    """
+    from specterqa.ios.replay import ReplayPlayer
+
+    player = ReplayPlayer(replay_file)
+
+    if verbose:
+        console.print(f"[bold]Replaying:[/bold] {player.name}")
+        console.print(f"[dim]Bundle:[/dim]  {player.bundle_id}")
+        console.print(f"[dim]Steps:[/dim]   {len(player.steps)}")
+        console.print()
+
+    result = player.run(verbose=verbose)
+
+    passed_count = sum(1 for s in result["steps"] if s["passed"])
+    total = len(result["steps"])
+
+    if result.get("error") and not result["steps"]:
+        # Session-level failure (e.g. runner failed to start)
+        console.print(f"[bold red]ERROR[/bold red] — {result['error']}")
+        raise SystemExit(1)
+
+    if result["passed"]:
+        console.print(f"[bold green]PASS[/bold green] — {passed_count}/{total} steps")
+    else:
+        console.print(f"[bold red]FAIL[/bold red] — {passed_count}/{total} steps")
+        for step in result["steps"]:
+            if not step["passed"]:
+                console.print(f"  [red]{step['action']}[/red]: {step['error']}")
+        if result["exit_code"] == 2:
+            console.print(
+                "\n[yellow]Exit code 2:[/yellow] UI appears to have changed since "
+                "this replay was recorded. Re-record the journey to update it."
+            )
+
+    raise SystemExit(result["exit_code"])
+
+
+# ---------------------------------------------------------------------------
 # Standalone entry point
 # ---------------------------------------------------------------------------
 
