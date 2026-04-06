@@ -12,6 +12,8 @@
 		AA000003 /* TouchInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000003 /* TouchInjector.swift */; };
 		AA000004 /* RequestParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000004 /* RequestParser.swift */; };
 		AA000005 /* AccessibilityTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000005 /* AccessibilityTree.swift */; };
+		AA000006 /* SpecterQAElementQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000006 /* SpecterQAElementQuery.swift */; };
+		AA000007 /* SpecterQAScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000007 /* SpecterQAScreenshot.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,6 +22,8 @@
 		BB000003 /* TouchInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchInjector.swift; sourceTree = "<group>"; };
 		BB000004 /* RequestParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestParser.swift; sourceTree = "<group>"; };
 		BB000005 /* AccessibilityTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTree.swift; sourceTree = "<group>"; };
+		BB000006 /* SpecterQAElementQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQAElementQuery.swift; sourceTree = "<group>"; };
+		BB000007 /* SpecterQAScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQAScreenshot.swift; sourceTree = "<group>"; };
 		CC000001 /* SpecterQARunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpecterQARunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -50,6 +54,8 @@
 				BB000003 /* TouchInjector.swift */,
 				BB000004 /* RequestParser.swift */,
 				BB000005 /* AccessibilityTree.swift */,
+				BB000006 /* SpecterQAElementQuery.swift */,
+				BB000007 /* SpecterQAScreenshot.swift */,
 			);
 			name = Sources;
 			path = Sources;
@@ -126,6 +132,8 @@
 				AA000003 /* TouchInjector.swift in Sources */,
 				AA000004 /* RequestParser.swift in Sources */,
 				AA000005 /* AccessibilityTree.swift in Sources */,
+				AA000006 /* SpecterQAElementQuery.swift in Sources */,
+				AA000007 /* SpecterQAScreenshot.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
