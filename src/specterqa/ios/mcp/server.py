@@ -61,6 +61,20 @@ def _require_session() -> None:
         raise RuntimeError("No active session. Call ios_start_session first.")
 
 
+def _auto_checkpoint() -> None:
+    """Capture current element state as a replay checkpoint after an action."""
+    if _recorder is not None and _annotator is not None:
+        try:
+            import time
+            time.sleep(0.3)  # let UI settle
+            elements = _annotator.get_elements_from_runner()
+            labels = [e.label for e in elements[:15] if e.label]
+            if labels:
+                _recorder.add_checkpoint(labels)
+        except Exception:
+            pass
+
+
 def _get_annotated_screenshot() -> tuple[str, list]:
     """Capture a screenshot, fetch the element tree, annotate, and return both.
 
@@ -232,6 +246,22 @@ def handle_start_session(arguments: dict) -> dict:
 
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
+
+        # Auto-build runner if not built
+        from specterqa.ios.session_manager import _find_xctestrun, _DEFAULT_RUNNER_BUILD_DIR
+        if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None:
+            logger.info("Runner not built — building automatically...")
+            try:
+                runner_dir = Path(__file__).parent.parent.parent.parent / "runner"
+                build_sh = runner_dir / "build.sh"
+                if build_sh.exists():
+                    subprocess.run(
+                        ["bash", str(build_sh)],
+                        capture_output=True, text=True, timeout=120,
+                        cwd=str(runner_dir),
+                    )
+            except Exception as exc:
+                logger.warning("Auto-build failed: %s", exc)
 
         # Auto-detect provider: local sim or BrowserStack
         provider = "local"
@@ -483,6 +513,9 @@ def handle_tap(arguments: dict) -> dict:
     if _recorder is not None:
         _recorder.record_tap(element_index, target.label, cx, cy)
 
+    # Auto-checkpoint: capture element state after action for replay verification
+    _auto_checkpoint()
+
     return {
         "status": "ok",
         "tapped": target.label,
@@ -535,6 +568,9 @@ def handle_swipe(arguments: dict) -> dict:
     if _recorder is not None:
         _recorder.record_swipe(direction)
 
+    # Auto-checkpoint: capture element state after action for replay verification
+    _auto_checkpoint()
+
     return {"status": "ok", "direction": direction}
 
 
@@ -558,6 +594,9 @@ def handle_swipe_back(arguments: dict) -> dict:
     # Record the swipe-back for replay
     if _recorder is not None:
         _recorder.record_swipe_back()
+
+    # Auto-checkpoint: capture element state after action for replay verification
+    _auto_checkpoint()
 
     return {"status": "ok"}
 
@@ -589,6 +628,9 @@ def handle_type(arguments: dict) -> dict:
     # Record the type action for replay
     if _recorder is not None:
         _recorder.record_type(text)
+
+    # Auto-checkpoint: capture element state after action for replay verification
+    _auto_checkpoint()
 
     return {"status": "ok", "typed": text}
 
@@ -706,6 +748,9 @@ def handle_press_key(arguments: dict) -> dict:
     if _recorder is not None:
         _recorder.record_press_key(key)
 
+    # Auto-checkpoint: capture element state after action for replay verification
+    _auto_checkpoint()
+
     return {"status": "ok", "key": key}
 
 
@@ -761,6 +806,9 @@ def handle_long_press(arguments: dict) -> dict:
     # Record the long press for replay
     if _recorder is not None:
         _recorder.record_long_press(element_index, target.label, cx, cy, duration)
+
+    # Auto-checkpoint: capture element state after action for replay verification
+    _auto_checkpoint()
 
     return {"status": "ok", "label": target.label, "duration": duration}
 
@@ -886,15 +934,45 @@ def create_server() -> Any:
 
     mcp = FastMCP(
         "specterqa-ios",
-        instructions=(
-            "SpecterQA iOS exposes direct simulator control primitives. "
-            "Claude Code is the reasoning engine — no AI orchestration happens here. "
-            "Workflow: ios_start_session → ios_screenshot (see annotated screen + "
-            "numbered elements) → ios_tap / ios_long_press / ios_swipe / ios_type / "
-            "ios_press_key → repeat → ios_stop_session. "
-            "Use ios_elements for a fast element refresh without a screenshot. "
-            "Requires macOS with Xcode 15+ and a compiled XCTest runner."
-        ),
+        instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
+
+WORKFLOW (follow this sequence):
+
+1. START: ios_start_session(bundle_id="com.example.App")
+   - Deploys the XCTest runner to the booted simulator
+   - The app launches automatically
+
+2. OBSERVE: ios_screenshot() or ios_elements()
+   - ios_screenshot returns an annotated image with numbered elements
+   - ios_elements returns just the element list (faster, no image)
+   - Use element index numbers for tapping
+
+3. INTERACT: ios_tap(element_index=N), ios_swipe(direction="down"),
+   ios_type(text="hello"), ios_press_key(key="return"), ios_swipe_back()
+   - After each interaction, call ios_screenshot to see the result
+   - Verify the expected screen appeared before proceeding
+
+4. SAVE: ios_save_replay(name="descriptive-name")
+   - ALWAYS save a replay after a successful test flow
+   - The replay can run in CI without AI: specterqa-ios replay <file>
+   - Saves to .specterqa/replays/<name>.yaml
+   - Include checkpoints automatically from current element state
+
+5. CLEANUP: ios_stop_session()
+   - Always call this when done testing
+
+TIPS:
+- Take a screenshot BEFORE and AFTER every tap to verify the action worked
+- If an element isn't visible, try ios_swipe(direction="down") to scroll
+- Use ios_elements() for fast element checks without screenshots
+- Name replays descriptively: "settings-privacy-toggles" not "test1"
+- One replay per user flow — keep them focused and short
+
+PROVIDERS:
+- Local simulator (default) — requires macOS + Xcode
+- BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + ACCESS_KEY
+- CI replay — specterqa-ios replay <file> (no AI needed)
+""",
     )
 
     # ── Tool: ios_start_session ────────────────────────────────────────────

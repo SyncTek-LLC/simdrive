@@ -1730,6 +1730,99 @@ def replay(replay_file: str, verbose: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# specterqa ios ci
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.command("ci")
+@click.argument("replay_dir", default=".specterqa/replays", type=click.Path())
+@click.option("--verbose", "-v", is_flag=True)
+@click.option("--fail-fast", is_flag=True, help="Stop on first failure")
+@click.option("--rerecord", is_flag=True, help="Re-record failed replays (requires AI)")
+def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool) -> None:
+    """Run all replay files in a directory. Exit 0 if all pass.
+
+    Designed for CI/CD pipelines:
+
+    \b
+      specterqa-ios ci .specterqa/replays/
+      specterqa-ios ci --fail-fast
+      specterqa-ios ci --rerecord  # re-record UI-changed tests
+
+    \b
+    Exit codes:
+      0 = all passed
+      1 = failures
+      2 = UI changed (re-record needed)
+    """
+    from specterqa.ios.replay import ReplayPlayer
+
+    replay_path = Path(replay_dir)
+    if not replay_path.exists():
+        click.echo(f"No replays found at {replay_dir}")
+        raise SystemExit(0)
+
+    # Find all .yaml replay files
+    files = sorted(replay_path.glob("*.yaml"))
+    if not files:
+        click.echo(f"No .yaml replay files in {replay_dir}")
+        raise SystemExit(0)
+
+    click.echo(f"Running {len(files)} replay(s) from {replay_dir}")
+
+    total_passed = 0
+    total_failed = 0
+    total_ui_changed = 0
+    results = []
+
+    for f in files:
+        try:
+            player = ReplayPlayer(str(f))
+            click.echo(f"\n{'='*60}")
+            click.echo(f"  {player.name} ({len(player.steps)} steps)")
+            click.echo(f"{'='*60}")
+
+            result = player.run(verbose=verbose)
+            passed = sum(1 for s in result["steps"] if s["passed"])
+            total = len(result["steps"])
+
+            if result["passed"]:
+                click.echo(f"  PASS — {passed}/{total}")
+                total_passed += 1
+            elif result.get("exit_code") == 2:
+                click.echo(f"  UI CHANGED — {passed}/{total} (re-record needed)")
+                total_ui_changed += 1
+            else:
+                click.echo(f"  FAIL — {passed}/{total}")
+                for s in result["steps"]:
+                    if not s["passed"]:
+                        click.echo(f"    {s['action']}: {s['error']}")
+                total_failed += 1
+
+            results.append({"file": str(f), **result})
+
+            if fail_fast and not result["passed"]:
+                break
+
+        except Exception as exc:
+            click.echo(f"  ERROR: {exc}")
+            total_failed += 1
+            results.append({"file": str(f), "passed": False, "error": str(exc)})
+
+    # Summary
+    click.echo(f"\n{'='*60}")
+    click.echo(f"SUMMARY: {total_passed} passed, {total_failed} failed, {total_ui_changed} UI changed")
+    click.echo(f"{'='*60}")
+
+    if total_failed > 0:
+        raise SystemExit(1)
+    elif total_ui_changed > 0:
+        raise SystemExit(2)
+    else:
+        raise SystemExit(0)
+
+
+# ---------------------------------------------------------------------------
 # Standalone entry point
 # ---------------------------------------------------------------------------
 
