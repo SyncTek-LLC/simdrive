@@ -340,6 +340,23 @@ class TestSession:
         else:
             self._start_direct_mode(source)
 
+        # Disable hardware keyboard on the target sim — iOS 26+ sims default
+        # to hardware keyboard which causes XCUIApplication.typeText() to crash.
+        # This enables the software keyboard so typing works reliably.
+        target = self._target_udid
+        if target:
+            try:
+                _simctl(
+                    "spawn", target,
+                    "defaults", "write",
+                    "com.apple.Preferences", "HardwareKeyboardAutomaticallyUsed",
+                    "-bool", "NO",
+                    check=False,
+                )
+                logger.info("Disabled hardware keyboard on %s", target)
+            except Exception as exc:
+                logger.warning("Could not disable hardware keyboard: %s", exc)
+
         # Common — deploy runner and wait for health (both modes).
         self._port = _find_free_port()
         self._deploy_runner()
