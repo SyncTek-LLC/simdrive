@@ -52,6 +52,7 @@ _backend = None          # XCTestBackend instance
 _annotator = None        # SoMAnnotator instance
 _last_elements: list = []  # Element cache from last ios_screenshot / ios_elements call
 _session_lock = threading.Lock()  # Serialises start/stop to prevent race conditions
+_recorder = None         # ReplayRecorder instance (None when recording is not active)
 
 
 def _require_session() -> None:
@@ -158,6 +159,44 @@ def _resize_screenshot(b64_png: str, scale: float = 0.5) -> str:
 # ---------------------------------------------------------------------------
 
 
+def handle_save_replay(arguments: dict) -> dict:
+    """Save the recorded session as a replay YAML file.
+
+    Args:
+        name: Human-readable test name used as the filename stem (default "replay").
+        path: Override the output path; defaults to .specterqa/replays/<name>.yaml.
+
+    Returns:
+        {"status": "ok", "path": "<absolute path>", "steps": <count>}
+        or {"error": "<message>"} on failure.
+    """
+    global _recorder, _last_elements
+
+    if _recorder is None:
+        return {"error": "No active recording. Start a session first."}
+
+    name = str(arguments.get("name", "replay")).strip() or "replay"
+    path = str(arguments.get("path", "")).strip()
+    if not path:
+        path = f".specterqa/replays/{name}.yaml"
+
+    try:
+        # Snapshot the current element labels as a checkpoint on the last step
+        if _last_elements and _recorder.session.steps:
+            labels = [e.label for e in _last_elements[:10] if e.label]
+            if labels:
+                _recorder.add_checkpoint(labels)
+
+        saved = _recorder.save(path, name=name)
+        return {
+            "status": "ok",
+            "path": str(saved.resolve()),
+            "steps": len(_recorder.session.steps),
+        }
+    except Exception as exc:
+        return {"error": f"Failed to save replay: {exc}"}
+
+
 def handle_start_session(arguments: dict) -> dict:
     """Start the XCTest runner on the booted simulator.
 
@@ -172,7 +211,7 @@ def handle_start_session(arguments: dict) -> dict:
         {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
         or {"error": "<message>"} on failure.
     """
-    global _session, _backend, _annotator, _last_elements
+    global _session, _backend, _annotator, _last_elements, _recorder
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
@@ -215,6 +254,10 @@ def handle_start_session(arguments: dict) -> dict:
             _annotator = SoMAnnotator(runner_url=runner_url)
             _last_elements = []
 
+            # Start recording — every subsequent tool call will be captured
+            from specterqa.ios.replay import ReplayRecorder
+            _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
+
             return {
                 "status": "ok",
                 "clone_udid": _session._target_udid,
@@ -227,6 +270,7 @@ def handle_start_session(arguments: dict) -> dict:
             _backend = None
             _annotator = None
             _last_elements = []
+            _recorder = None
             return {"error": str(exc)}
 
 
@@ -236,7 +280,7 @@ def handle_stop_session(arguments: dict) -> dict:
     Returns:
         {"status": "stopped"}
     """
-    global _session, _backend, _annotator, _last_elements
+    global _session, _backend, _annotator, _last_elements, _recorder
 
     with _session_lock:
         if _session is not None:
@@ -249,6 +293,7 @@ def handle_stop_session(arguments: dict) -> dict:
         _backend = None
         _annotator = None
         _last_elements = []
+        _recorder = None
 
     return {"status": "stopped"}
 
@@ -380,6 +425,10 @@ def handle_tap(arguments: dict) -> dict:
     except Exception as exc:
         return {"error": f"Tap failed: {exc}"}
 
+    # Record the tap for replay
+    if _recorder is not None:
+        _recorder.record_tap(element_index, target.label, cx, cy)
+
     return {
         "status": "ok",
         "tapped": target.label,
@@ -428,6 +477,10 @@ def handle_swipe(arguments: dict) -> dict:
     except Exception as exc:
         return {"error": f"Swipe failed: {exc}"}
 
+    # Record the swipe for replay
+    if _recorder is not None:
+        _recorder.record_swipe(direction)
+
     return {"status": "ok", "direction": direction}
 
 
@@ -447,6 +500,10 @@ def handle_swipe_back(arguments: dict) -> dict:
         _backend.swipe_back()
     except Exception as exc:
         return {"error": f"Swipe-back failed: {exc}"}
+
+    # Record the swipe-back for replay
+    if _recorder is not None:
+        _recorder.record_swipe_back()
 
     return {"status": "ok"}
 
@@ -474,6 +531,10 @@ def handle_type(arguments: dict) -> dict:
         _backend.type_text(text)
     except Exception as exc:
         return {"error": f"Type failed: {exc}"}
+
+    # Record the type action for replay
+    if _recorder is not None:
+        _recorder.record_type(text)
 
     return {"status": "ok", "typed": text}
 
@@ -587,6 +648,10 @@ def handle_press_key(arguments: dict) -> dict:
     except Exception as exc:
         return {"error": f"press_key failed: {exc}"}
 
+    # Record the key press for replay
+    if _recorder is not None:
+        _recorder.record_press_key(key)
+
     return {"status": "ok", "key": key}
 
 
@@ -638,6 +703,10 @@ def handle_long_press(arguments: dict) -> dict:
         _backend.tap(cx, cy, duration=duration)
     except Exception as exc:
         return {"error": f"Long press failed: {exc}"}
+
+    # Record the long press for replay
+    if _recorder is not None:
+        _recorder.record_long_press(element_index, target.label, cx, cy, duration)
 
     return {"status": "ok", "label": target.label, "duration": duration}
 
@@ -955,6 +1024,27 @@ def create_server() -> Any:
     )
     async def ios_long_press(element_index: int, duration: float = 1.0) -> str:
         result = handle_long_press({"element_index": element_index, "duration": duration})
+        return json.dumps(result)
+
+    # ── Tool: ios_save_replay ──────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_save_replay",
+        description=(
+            "Save the current session as a deterministic replay YAML file. "
+            "The replay can be run in CI without AI: "
+            "  specterqa-ios replay <file.yaml>. "
+            "name is the human-readable test name used as the filename stem "
+            "(default: 'replay'). "
+            "path overrides the output location "
+            "(default: .specterqa/replays/<name>.yaml). "
+            "Recording starts automatically when ios_start_session is called — "
+            "every tap, swipe, type, press_key, and long_press is captured. "
+            "Call this tool when the test journey is complete."
+        ),
+    )
+    async def ios_save_replay(name: str = "replay", path: str = "") -> str:
+        result = handle_save_replay({"name": name, "path": path or ""})
         return json.dumps(result)
 
     # ── Tool: ios_simctl ───────────────────────────────────────────────────
