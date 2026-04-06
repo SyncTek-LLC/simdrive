@@ -233,9 +233,57 @@ def handle_start_session(arguments: dict) -> dict:
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
 
+        # Auto-detect provider: local sim or BrowserStack
+        provider = "local"
+        from specterqa.ios.backends.browserstack import BrowserStackBackend
+        if BrowserStackBackend.is_available():
+            # Check if a local sim is booted
+            sim_check = subprocess.run(
+                ["xcrun", "simctl", "list", "devices", "booted", "-j"],
+                capture_output=True, text=True,
+            )
+            has_local_sim = '"state" : "Booted"' in sim_check.stdout
+            if not has_local_sim:
+                provider = "browserstack"
+
+        # Explicit env-var override wins over auto-detection
+        env_provider = os.environ.get("SPECTERQA_PROVIDER", "").lower()
+        if env_provider in ("browserstack", "bs"):
+            provider = "browserstack"
+        elif env_provider == "local":
+            provider = "local"
+
+        from specterqa.ios.som_annotator import SoMAnnotator
+
+        if provider == "browserstack":
+            try:
+                bs = BrowserStackBackend()
+                if app_path:
+                    bs.upload_app(app_path)
+                session_id = bs.start_session(bundle_id)
+                _backend = bs
+                _annotator = SoMAnnotator()
+                _last_elements = []
+
+                from specterqa.ios.replay import ReplayRecorder
+                _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
+
+                return {
+                    "status": "ok",
+                    "provider": "browserstack",
+                    "session_id": session_id,
+                    "device": bs.device,
+                    "os_version": bs.os_version,
+                }
+            except Exception as exc:
+                _backend = None
+                _annotator = None
+                _last_elements = []
+                _recorder = None
+                return {"error": str(exc)}
+
         from specterqa.ios.session_manager import TestSession
         from specterqa.ios.backends.xctest_client import XCTestBackend
-        from specterqa.ios.som_annotator import SoMAnnotator
 
         try:
             clone = arguments.get("clone", False)
@@ -283,7 +331,13 @@ def handle_stop_session(arguments: dict) -> dict:
     global _session, _backend, _annotator, _last_elements, _recorder
 
     with _session_lock:
-        if _session is not None:
+        from specterqa.ios.backends.browserstack import BrowserStackBackend
+        if isinstance(_backend, BrowserStackBackend):
+            try:
+                _backend.stop()
+            except Exception as exc:
+                logger.warning("Error stopping BrowserStack session: %s", exc)
+        elif _session is not None:
             try:
                 _session.stop()
             except Exception as exc:

@@ -31,6 +31,7 @@ Usage::
 
 from __future__ import annotations
 
+from specterqa.ios.backends.browserstack import BrowserStackBackend
 from specterqa.ios.backends.cgevents import CGEventBackend
 from specterqa.ios.backends.indigo_hid import IndigoHIDBackend
 from specterqa.ios.backends.selector import BackendSelector
@@ -43,4 +44,5 @@ __all__ = [
     "IndigoHIDBackend",
     "CGEventBackend",
     "BackendSelector",
+    "BrowserStackBackend",
 ]
