@@ -1672,7 +1672,17 @@ def wda_start(
 @ios_command_group.command("replay")
 @click.argument("replay_file", type=click.Path(exists=True))
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Print per-step status.")
-def replay(replay_file: str, verbose: bool) -> None:
+@click.option(
+    "--var",
+    "variables",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=(
+        "Set a replay variable for ${VAR} substitution. "
+        "May be repeated: --var USERNAME=alice --var ENV=staging"
+    ),
+)
+def replay(replay_file: str, verbose: bool, variables: tuple) -> None:
     """Replay a recorded test session without AI.
 
     REPLAY_FILE is the path to a .yaml file produced by ios_save_replay.
@@ -1692,8 +1702,18 @@ def replay(replay_file: str, verbose: bool) -> None:
     \b
       specterqa-ios replay tests/settings-smoke.yaml
       specterqa-ios replay tests/settings-smoke.yaml --verbose
+      specterqa-ios replay tests/login.yaml --var USERNAME=alice --var PASSWORD=secret
     """
     from specterqa.ios.replay import ReplayPlayer
+
+    # Parse --var KEY=VALUE pairs into a dict
+    vars_dict: dict = {}
+    for item in variables:
+        if "=" in item:
+            k, _, v = item.partition("=")
+            vars_dict[k.strip()] = v
+        else:
+            console.print(f"[yellow]Warning:[/yellow] --var {item!r} ignored (expected KEY=VALUE format)")
 
     player = ReplayPlayer(replay_file)
 
@@ -1701,9 +1721,11 @@ def replay(replay_file: str, verbose: bool) -> None:
         console.print(f"[bold]Replaying:[/bold] {player.name}")
         console.print(f"[dim]Bundle:[/dim]  {player.bundle_id}")
         console.print(f"[dim]Steps:[/dim]   {len(player.steps)}")
+        if vars_dict:
+            console.print(f"[dim]Variables:[/dim] {vars_dict}")
         console.print()
 
-    result = player.run(verbose=verbose)
+    result = player.run(verbose=verbose, variables=vars_dict if vars_dict else None)
 
     passed_count = sum(1 for s in result["steps"] if s["passed"])
     total = len(result["steps"])
