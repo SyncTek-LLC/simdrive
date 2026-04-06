@@ -1,9 +1,14 @@
 import Foundation
 
 /// Parsed representation of a single HTTP/1.1 request.
+///
+/// v2 addition: `query` dict for parsed URL query string parameters
+/// (e.g. GET /screenshot?scale=0.5&format=jpeg → query["scale"] = "0.5").
 struct HTTPRequest {
     let method:  String
     let path:    String
+    /// Parsed query string parameters from the URL (e.g. ?key=value).
+    let query:   [String: String]
     let headers: [String: String]
     /// Decoded JSON body as a dictionary. Empty for requests with no body.
     let json:    [String: Any]
@@ -16,11 +21,11 @@ struct HTTPRequest {
 ///   - Request line  (METHOD path HTTP/1.1)
 ///   - Header lines  (Key: Value)
 ///   - JSON body     (decoded via JSONSerialization)
+///   - Query string  (?key=value&key2=value2, percent-decoded)
 ///
 /// Does not support:
 ///   - Chunked transfer encoding
 ///   - Multipart bodies
-///   - Query strings beyond the raw path string
 ///
 enum RequestParser {
 
@@ -49,7 +54,6 @@ enum RequestParser {
             headerBlock = String(text[text.startIndex ..< range.lowerBound])
             bodyText    = String(text[range.upperBound...])
         } else {
-            // No body separator — treat the entire text as headers.
             headerBlock = text
             bodyText    = ""
         }
@@ -65,8 +69,24 @@ enum RequestParser {
         let requestParts = requestLine.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
         guard requestParts.count >= 2 else { return nil }
 
-        let method = String(requestParts[0]).uppercased()
-        let path   = String(requestParts[1])
+        let method   = String(requestParts[0]).uppercased()
+        let fullPath = String(requestParts[1])
+
+        // Split path and query string
+        var path  = fullPath
+        var query: [String: String] = [:]
+        if let qIdx = fullPath.firstIndex(of: "?") {
+            path = String(fullPath[fullPath.startIndex..<qIdx])
+            let queryStr = String(fullPath[fullPath.index(after: qIdx)...])
+            for pair in queryStr.components(separatedBy: "&") {
+                let kv = pair.components(separatedBy: "=")
+                if kv.count == 2 {
+                    let key = kv[0].removingPercentEncoding ?? kv[0]
+                    let val = kv[1].removingPercentEncoding ?? kv[1]
+                    query[key] = val
+                }
+            }
+        }
 
         // Parse headers (lines after the request line, up to blank line).
         var headers: [String: String] = [:]
@@ -91,6 +111,7 @@ enum RequestParser {
         return HTTPRequest(
             method:  method,
             path:    path,
+            query:   query,
             headers: headers,
             json:    jsonBody
         )
