@@ -1,0 +1,29 @@
+# SpecterQA iOS Replay — Example 02: Login Form with Waits and Assertions
+#
+# Demonstrates: waitFor, inputText, assertVisible, assertNotVisible,
+#               settle_timeout, and variable substitution (${USERNAME}).
+# Use case:     Login flow with async content loading — waits for elements
+#               rather than sleeping, making the test resilient to slow devices.
+# Run with:     specterqa-ios replay examples/02-form-with-waits.yaml
+#               specterqa-ios replay examples/02-form-with-waits.yaml --var USERNAME=alice
+# In CI:        USERNAME=ci_user specterqa-ios ci examples/
+
+replay:
+  name: login-flow
+  bundle_id: com.example.MyApp
+  settle_timeout: 3
+  variables:
+    USERNAME: ${USERNAME:-testuser}
+  steps:
+    - tapOn: "Sign In"
+    - waitFor: "Username"
+    - tapOn: "Username"
+    - inputText: "${USERNAME}"
+    - tapOn: "Password"
+    - inputText: "secret123"
+    - tapOn: "Submit"
+    - waitFor:
+        label: "Welcome"
+        timeout: 15
+    - assertVisible: "Welcome"
+    - assertNotVisible: "Sign In"

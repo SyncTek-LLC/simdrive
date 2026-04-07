@@ -1,0 +1,36 @@
+# SpecterQA iOS Replay — Example 03: Conditional Branching
+#
+# Demonstrates: if_element_visible guards, skip_to step references, and
+#               handling variable app state (e.g. borrowed vs. available books).
+# Use case:     Real-world apps have state — a book may already be borrowed.
+#               This replay handles both paths without failing on either.
+# Run with:     specterqa-ios replay examples/03-conditional-branching.yaml
+# Tip:          Use if_element_visible to build resilient replays that adapt
+#               to the current app state rather than assuming a clean slate.
+
+replay:
+  name: borrow-or-read
+  bundle_id: com.example.MyApp
+  steps:
+    - tapOn: "Catalog"
+    - waitFor: "Featured Books"
+    - tapOn: "The Great Gatsby"
+
+    # Branch: tap "Borrow" if the book is available, skip to reading if already borrowed
+    - action: tap
+      label: "Borrow"
+      if_element_visible: "Borrow"
+
+    - action: skip_to
+      step_id: open_book
+      if_element_visible: "Read"
+
+    - waitFor:
+        label: "Read"
+        timeout: 30
+
+    - action: tap
+      label: "Read"
+      step_id: open_book
+
+    - assertVisible: "Chapter 1"
