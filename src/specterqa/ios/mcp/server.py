@@ -574,7 +574,7 @@ def handle_wait(arguments: dict) -> dict:
         {"status": "ok", "waited": <seconds>}
     """
     import time as _time
-    seconds = min(float(arguments.get("seconds", 1.0)), 30.0)
+    seconds = max(0.0, min(float(arguments.get("seconds", 1.0)), 30.0))
     _time.sleep(seconds)
     return {"status": "ok", "waited": seconds}
 

@@ -3,3 +3,7 @@ include runner/SpecterQARunner.xcodeproj/project.pbxproj
 include runner/Package.swift
 include runner/build.sh
 include runner/launch.sh
+recursive-include examples *.yaml *.yml *.md
+recursive-include tests *.py
+include README.md
+include LICENSE
