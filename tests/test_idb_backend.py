@@ -10,7 +10,6 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import shutil
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +20,7 @@ import pytest
 
 try:
     from specterqa.ios.parallel.idb_backend import IdbInputBackend  # type: ignore[import]
+
     _IDB_AVAILABLE = True
 except ImportError:
     _IDB_AVAILABLE = False
@@ -65,9 +65,7 @@ class TestIdbInputBackendConstructor:
         """The UDID passed to the constructor is accessible on the instance."""
         backend = _make_backend(udid=_TEST_UDID)
         stored = getattr(backend, "udid", None) or getattr(backend, "_udid", None)
-        assert stored == _TEST_UDID, (
-            f"Expected udid={_TEST_UDID!r}, got {stored!r}"
-        )
+        assert stored == _TEST_UDID, f"Expected udid={_TEST_UDID!r}, got {stored!r}"
 
 
 # ===========================================================================
@@ -104,12 +102,9 @@ class TestIdbInputBackendTap:
     def test_tap_raises_runtime_error_when_idb_not_installed(self):
         """tap() raises RuntimeError with a helpful message when idb is not on PATH."""
         backend = _make_backend()
-        with patch("shutil.which", return_value=None), \
-             pytest.raises(RuntimeError) as exc_info:
+        with patch("shutil.which", return_value=None), pytest.raises(RuntimeError) as exc_info:
             backend.tap(x=100, y=200)
-        assert "idb" in str(exc_info.value).lower(), (
-            "RuntimeError message should mention 'idb'"
-        )
+        assert "idb" in str(exc_info.value).lower(), "RuntimeError message should mention 'idb'"
 
 
 # ===========================================================================
@@ -135,9 +130,7 @@ class TestIdbInputBackendSwipe:
         assert "600" in cmd_str  # y1
         assert "200" in cmd_str  # y2
         # Duration must appear somewhere (as a float or string)
-        assert "0.5" in cmd_str or "0.50" in cmd_str, (
-            f"duration=0.5 not found in swipe command: {cmd_str!r}"
-        )
+        assert "0.5" in cmd_str or "0.50" in cmd_str, f"duration=0.5 not found in swipe command: {cmd_str!r}"
 
 
 # ===========================================================================
@@ -160,9 +153,9 @@ class TestIdbInputBackendTypeText:
         assert "idb" in cmd_str
         assert _TEST_UDID in cmd_str
         # The text content should be passed somewhere
-        assert "hello idb" in cmd_str or all(
-            w in cmd_str for w in ["hello", "idb"]
-        ), f"Text not found in command: {cmd_str!r}"
+        assert "hello idb" in cmd_str or all(w in cmd_str for w in ["hello", "idb"]), (
+            f"Text not found in command: {cmd_str!r}"
+        )
 
 
 # ===========================================================================
@@ -217,6 +210,4 @@ class TestIdbInputBackendIsAvailable:
             except RuntimeError as exc:
                 msg = str(exc).lower()
                 # Message should guide the user — mention idb and ideally install/path
-                assert "idb" in msg, (
-                    f"RuntimeError should mention 'idb', got: {exc!r}"
-                )
+                assert "idb" in msg, f"RuntimeError should mention 'idb', got: {exc!r}"

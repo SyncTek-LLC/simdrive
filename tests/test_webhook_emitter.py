@@ -22,6 +22,7 @@ import pytest
 
 try:
     from specterqa.ios.webhooks.emitter import WebhookEmitter  # type: ignore[import]
+
     _EMITTER_AVAILABLE = True
 except ImportError:
     _EMITTER_AVAILABLE = False
@@ -134,9 +135,7 @@ class TestEmitSignature:
         with patch("requests.post", side_effect=capture_post):
             emitter.emit(event_type="test.completed", payload={"run_id": "r-001"})
 
-        assert "X-Signature" in captured_headers, (
-            "X-Signature header not present when secret is configured"
-        )
+        assert "X-Signature" in captured_headers, "X-Signature header not present when secret is configured"
 
     def test_emit_does_not_add_x_signature_when_no_secret(self):
         emitter = WebhookEmitter(webhook_url=_WEBHOOK_URL)  # no secret
@@ -162,9 +161,5 @@ class TestSign:
         emitter = WebhookEmitter(webhook_url=_WEBHOOK_URL, secret=_SECRET)
         body = b'{"event_type":"test.completed","run_id":"r-001"}'
         result = emitter._sign(body)
-        expected = hmac.new(
-            _SECRET.encode("utf-8"), body, hashlib.sha256
-        ).hexdigest()
-        assert result == expected, (
-            f"_sign() returned {result!r}, expected {expected!r}"
-        )
+        expected = hmac.new(_SECRET.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        assert result == expected, f"_sign() returned {result!r}, expected {expected!r}"

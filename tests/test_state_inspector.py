@@ -10,11 +10,8 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Any
-from unittest import mock
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -24,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.drivers.simulator.state import StateInspector  # type: ignore[import]
+
     _STATE_AVAILABLE = True
 except ImportError:
     _STATE_AVAILABLE = False
@@ -39,6 +37,7 @@ needs_state = pytest.mark.skipif(
 # Mock builder helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_subprocess_result(stdout: str = "", returncode: int = 0) -> MagicMock:
     """Build a mock subprocess.CompletedProcess result."""
     result = MagicMock()
@@ -49,7 +48,9 @@ def _make_subprocess_result(stdout: str = "", returncode: int = 0) -> MagicMock:
 
 
 # Fixture data — simctl outputs
-CONTAINER_PATH_OUTPUT = "/Users/runner/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Data/Application/DEF456\n"
+CONTAINER_PATH_OUTPUT = (
+    "/Users/runner/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Data/Application/DEF456\n"
+)
 
 # plist-style output from `defaults read`
 DEFAULTS_READ_OUTPUT = """\
@@ -271,11 +272,12 @@ class TestSnapshot:
         (documents / "file1.txt").touch()
         (documents / "file2.txt").touch()
 
-        with patch.object(inspector, "_get_container_path", return_value=str(container)), \
-             patch.object(inspector, "read_defaults", return_value={"theme": "dark"}), \
-             patch.object(inspector, "has_auth_token", return_value=True), \
-             patch.object(inspector, "list_documents", return_value=["file1.txt", "file2.txt"]):
-
+        with (
+            patch.object(inspector, "_get_container_path", return_value=str(container)),
+            patch.object(inspector, "read_defaults", return_value={"theme": "dark"}),
+            patch.object(inspector, "has_auth_token", return_value=True),
+            patch.object(inspector, "list_documents", return_value=["file1.txt", "file2.txt"]),
+        ):
             snap = inspector.snapshot()
 
         assert isinstance(snap, dict)

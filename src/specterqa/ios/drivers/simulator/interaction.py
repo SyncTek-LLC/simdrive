@@ -92,13 +92,53 @@ _KEY_CODES: dict[str, int] = {
 
 # Character → key code for ASCII typing fallback
 _CHAR_KEY_CODES: dict[str, int] = {
-    "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7,
-    "c": 8, "v": 9, "b": 11, "q": 12, "w": 13, "e": 14, "r": 15,
-    "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22,
-    "5": 23, "=": 24, "9": 25, "7": 26, "-": 27, "8": 28, "0": 29,
-    "]": 30, "o": 31, "u": 32, "[": 33, "i": 34, "p": 35, "l": 37,
-    "j": 38, "'": 39, "k": 40, ";": 41, "\\": 42, ",": 43, "/": 44,
-    "n": 45, "m": 46, ".": 47, " ": 49,
+    "a": 0,
+    "s": 1,
+    "d": 2,
+    "f": 3,
+    "h": 4,
+    "g": 5,
+    "z": 6,
+    "x": 7,
+    "c": 8,
+    "v": 9,
+    "b": 11,
+    "q": 12,
+    "w": 13,
+    "e": 14,
+    "r": 15,
+    "y": 16,
+    "t": 17,
+    "1": 18,
+    "2": 19,
+    "3": 20,
+    "4": 21,
+    "6": 22,
+    "5": 23,
+    "=": 24,
+    "9": 25,
+    "7": 26,
+    "-": 27,
+    "8": 28,
+    "0": 29,
+    "]": 30,
+    "o": 31,
+    "u": 32,
+    "[": 33,
+    "i": 34,
+    "p": 35,
+    "l": 37,
+    "j": 38,
+    "'": 39,
+    "k": 40,
+    ";": 41,
+    "\\": 42,
+    ",": 43,
+    "/": 44,
+    "n": 45,
+    "m": 46,
+    ".": 47,
+    " ": 49,
 }
 
 # Modifier name → CGEvent flag value
@@ -204,7 +244,7 @@ class InteractionLayer:
         )
 
         sim_windows = []
-        for w in (windows or []):
+        for w in windows or []:
             owner = w.get("kCGWindowOwnerName", "")
             if "Simulator" not in owner:
                 continue
@@ -214,17 +254,16 @@ class InteractionLayer:
             height = float(bounds.get("Height", 0))
             # Main window: layer 0, fully opaque, tall enough to be the device
             if layer == 0 and alpha >= 1.0 and height > 200:
-                sim_windows.append({
-                    "bounds": bounds,
-                    "name": w.get("kCGWindowName", ""),
-                    "height": height,
-                })
+                sim_windows.append(
+                    {
+                        "bounds": bounds,
+                        "name": w.get("kCGWindowName", ""),
+                        "height": height,
+                    }
+                )
 
         if not sim_windows:
-            raise RuntimeError(
-                "Simulator.app window not found. "
-                "Make sure the iOS Simulator is running and visible."
-            )
+            raise RuntimeError("Simulator.app window not found. Make sure the iOS Simulator is running and visible.")
 
         # Tallest window is the device window (not toolbar/panel)
         best = max(sim_windows, key=lambda w: w["height"])
@@ -308,10 +347,18 @@ class InteractionLayer:
         screen_y = float(win_y + title_bar + img_y * scale_y)
 
         logger.debug(
-            "coords: img(%s,%s)/%sx%s → screen(%.1f,%.1f) "
-            "[win@(%.0f,%.0f) %.0fx%.0f titlebar=%.0f]",
-            img_x, img_y, img_w, img_h, screen_x, screen_y,
-            win_x, win_y, win_w, win_h, title_bar,
+            "coords: img(%s,%s)/%sx%s → screen(%.1f,%.1f) [win@(%.0f,%.0f) %.0fx%.0f titlebar=%.0f]",
+            img_x,
+            img_y,
+            img_w,
+            img_h,
+            screen_x,
+            screen_y,
+            win_x,
+            win_y,
+            win_w,
+            win_h,
+            title_bar,
         )
 
         return screen_x, screen_y
@@ -507,10 +554,7 @@ class InteractionLayer:
         """
         key_lower = key.lower()
         if key_lower not in _KEY_CODES:
-            raise ValueError(
-                f"Unknown key name {key!r}. "
-                f"Supported keys: {sorted(_KEY_CODES)}"
-            )
+            raise ValueError(f"Unknown key name {key!r}. Supported keys: {sorted(_KEY_CODES)}")
         key_code = _KEY_CODES[key_lower]
         down = Quartz.CGEventCreateKeyboardEvent(None, key_code, True)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)

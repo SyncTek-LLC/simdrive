@@ -24,7 +24,7 @@ import io
 import json
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
@@ -34,14 +34,14 @@ from PIL import Image, ImageDraw, ImageFont
 class UIElement:
     """A single interactive UI element from the accessibility tree."""
 
-    index: int           # SoM number (1, 2, 3, ...)
-    element_type: str    # Button, Cell, StaticText, etc. (XCUIElementType prefix stripped)
-    label: str           # Accessibility label
-    value: str           # Current value (for text fields, switches)
-    x: float             # Device-point x (top-left)
-    y: float             # Device-point y (top-left)
-    width: float         # Device-point width
-    height: float        # Device-point height
+    index: int  # SoM number (1, 2, 3, ...)
+    element_type: str  # Button, Cell, StaticText, etc. (XCUIElementType prefix stripped)
+    label: str  # Accessibility label
+    value: str  # Current value (for text fields, switches)
+    x: float  # Device-point x (top-left)
+    y: float  # Device-point y (top-left)
+    width: float  # Device-point width
+    height: float  # Device-point height
     enabled: bool = True
     visible: bool = True
 
@@ -72,24 +72,26 @@ class UIElement:
 
 
 # Element types the agent can meaningfully interact with.
-_INTERACTIVE_TYPES: frozenset[str] = frozenset({
-    "XCUIElementTypeButton",
-    "XCUIElementTypeCell",
-    "XCUIElementTypeLink",
-    "XCUIElementTypeTextField",
-    "XCUIElementTypeSecureTextField",
-    "XCUIElementTypeSwitch",
-    "XCUIElementTypeSlider",
-    "XCUIElementTypeImage",
-    "XCUIElementTypeStaticText",
-    "XCUIElementTypeSearchField",
-    "XCUIElementTypeSegmentedControl",
-    "XCUIElementTypeTab",
-    "XCUIElementTypeTabBar",
-    "XCUIElementTypeNavigationBar",
-    "XCUIElementTypePickerWheel",
-    "XCUIElementTypeToggle",
-})
+_INTERACTIVE_TYPES: frozenset[str] = frozenset(
+    {
+        "XCUIElementTypeButton",
+        "XCUIElementTypeCell",
+        "XCUIElementTypeLink",
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeSecureTextField",
+        "XCUIElementTypeSwitch",
+        "XCUIElementTypeSlider",
+        "XCUIElementTypeImage",
+        "XCUIElementTypeStaticText",
+        "XCUIElementTypeSearchField",
+        "XCUIElementTypeSegmentedControl",
+        "XCUIElementTypeTab",
+        "XCUIElementTypeTabBar",
+        "XCUIElementTypeNavigationBar",
+        "XCUIElementTypePickerWheel",
+        "XCUIElementTypeToggle",
+    }
+)
 
 # Minimum element dimension (device points) — filters out invisible sentinels.
 _MIN_SIZE = 5
@@ -171,9 +173,7 @@ class SoMAnnotator:
             with urllib.request.urlopen(url, timeout=15) as resp:
                 return resp.read()
         except Exception as exc:
-            raise RuntimeError(
-                f"XCTest runner /source request failed at {url}: {exc}"
-            ) from exc
+            raise RuntimeError(f"XCTest runner /source request failed at {url}: {exc}") from exc
 
     def _get_element_tree_from_runner(self) -> str:
         """Fetch element tree from our XCTest runner's ``/source`` endpoint.
@@ -193,10 +193,7 @@ class SoMAnnotator:
             # Not JSON — treat as raw XML (older runner or WDA format).
             xml_source = raw.decode("utf-8", errors="replace").strip()
             if not xml_source:
-                raise RuntimeError(
-                    f"XCTest runner /source returned empty content. "
-                    f"Raw response: {raw[:200]!r}"
-                )
+                raise RuntimeError(f"XCTest runner /source returned empty content. Raw response: {raw[:200]!r}")
             return xml_source
 
         # JSON response — convert to XML for parse_elements().
@@ -213,10 +210,7 @@ class SoMAnnotator:
             xml_source = ""
 
         if not xml_source:
-            raise RuntimeError(
-                f"XCTest runner /source returned empty content. "
-                f"Raw response: {raw[:200]!r}"
-            )
+            raise RuntimeError(f"XCTest runner /source returned empty content. Raw response: {raw[:200]!r}")
         return xml_source
 
     def get_elements_from_runner(self) -> list[UIElement]:
@@ -247,10 +241,7 @@ class SoMAnnotator:
             # Raw XML from an older runner — fall back to XML parser.
             xml_source = raw.decode("utf-8", errors="replace").strip()
             if not xml_source:
-                raise RuntimeError(
-                    f"XCTest runner /source returned empty content. "
-                    f"Raw response: {raw[:200]!r}"
-                )
+                raise RuntimeError(f"XCTest runner /source returned empty content. Raw response: {raw[:200]!r}")
             return self.parse_elements(xml_source)
 
         # Normalise to a list of root element dicts.
@@ -269,8 +260,7 @@ class SoMAnnotator:
                 roots = [data]
         else:
             raise RuntimeError(
-                f"XCTest runner /source returned unexpected type {type(data).__name__}. "
-                f"Raw: {raw[:200]!r}"
+                f"XCTest runner /source returned unexpected type {type(data).__name__}. Raw: {raw[:200]!r}"
             )
 
         return self.parse_elements_from_json(roots)
@@ -296,6 +286,7 @@ class SoMAnnotator:
                        2000+ elements (default 5 levels deep).  Set to 0 for
                        unlimited (may be slow on deep/large trees).
         """
+
         def _xml_escape(s: str) -> str:
             return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
@@ -307,7 +298,9 @@ class SoMAnnotator:
             frame = elem.get("frame", {})
             attrs = {
                 "label": str(elem.get("label", "") or ""),
-                "value": str(elem.get("value", "") or "") if elem.get("value") is not None and str(elem.get("value")) != "<null>" else "",
+                "value": str(elem.get("value", "") or "")
+                if elem.get("value") is not None and str(elem.get("value")) != "<null>"
+                else "",
                 "identifier": str(elem.get("identifier", "") or ""),
                 "enabled": "true" if elem.get("enabled", True) else "false",
                 "visible": "true",  # runner doesn't track visibility — assume visible
@@ -356,10 +349,12 @@ class SoMAnnotator:
         """
         # Types that are almost always child-label duplicates of their parent
         # button/cell — only include if they have no interactive parent above.
-        _SECONDARY_TYPES = frozenset({
-            "XCUIElementTypeStaticText",
-            "XCUIElementTypeImage",
-        })
+        _SECONDARY_TYPES = frozenset(
+            {
+                "XCUIElementTypeStaticText",
+                "XCUIElementTypeImage",
+            }
+        )
 
         root = ET.fromstring(xml_source)
         elements: list[UIElement] = []
@@ -399,17 +394,10 @@ class SoMAnnotator:
                     # Drop secondary-type children whose label duplicates the
                     # parent (e.g. child StaticText "General" under Button
                     # "General") — they add visual noise without value.
-                    child_redundant = (
-                        tag in _SECONDARY_TYPES
-                        and label
-                        and label == parent_label
-                    )
+                    child_redundant = tag in _SECONDARY_TYPES and label and label == parent_label
 
                     # Drop position duplicates (same label, nearly same Y).
-                    pos_duplicate = any(
-                        e.label == label and abs(e.y - y) < 10
-                        for e in elements
-                    )
+                    pos_duplicate = any(e.label == label and abs(e.y - y) < 10 for e in elements)
 
                     if not child_redundant and not pos_duplicate:
                         elements.append(
@@ -452,10 +440,12 @@ class SoMAnnotator:
             List of ``UIElement`` objects in document order (top → bottom,
             left → right), with ``index`` starting at 1.
         """
-        _SECONDARY_TYPES = frozenset({
-            "XCUIElementTypeStaticText",
-            "XCUIElementTypeImage",
-        })
+        _SECONDARY_TYPES = frozenset(
+            {
+                "XCUIElementTypeStaticText",
+                "XCUIElementTypeImage",
+            }
+        )
 
         elements: list[UIElement] = []
         index = 1
@@ -492,15 +482,8 @@ class SoMAnnotator:
                     and y < 1400
                     and not is_noise
                 ):
-                    child_redundant = (
-                        tag in _SECONDARY_TYPES
-                        and label
-                        and label == parent_label
-                    )
-                    pos_duplicate = any(
-                        e.label == label and abs(e.y - y) < 10
-                        for e in elements
-                    )
+                    child_redundant = tag in _SECONDARY_TYPES and label and label == parent_label
+                    pos_duplicate = any(e.label == label and abs(e.y - y) < 10 for e in elements)
 
                     if not child_redundant and not pos_duplicate:
                         elements.append(
@@ -582,11 +565,9 @@ class SoMAnnotator:
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         ]
         font = ImageFont.load_default()
-        small_font = font
         for fp in font_paths:
             try:
                 font = ImageFont.truetype(fp, 22)
-                small_font = ImageFont.truetype(fp, 14)
                 break
             except Exception:
                 continue
@@ -664,9 +645,7 @@ class SoMAnnotator:
             base-64 annotated PNG string.
         """
         elements = self.get_elements_from_runner()
-        annotated = self.annotate_image(
-            screenshot_b64, img_w, img_h, elements, device_w, device_h
-        )
+        annotated = self.annotate_image(screenshot_b64, img_w, img_h, elements, device_w, device_h)
         return elements, annotated
 
     # ------------------------------------------------------------------
@@ -692,6 +671,7 @@ class SoMAnnotator:
             i.e. the screen is effectively unchanged.
             ``True`` (changed) in all other cases, including parse failures.
         """
+
         def _extract_signatures(xml_source: str) -> set[tuple[str, int]]:
             sigs: set[tuple[str, int]] = set()
             try:

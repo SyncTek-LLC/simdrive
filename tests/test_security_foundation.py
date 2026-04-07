@@ -11,11 +11,9 @@ Modules under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import dataclasses
 import os
 from dataclasses import dataclass
 from typing import Any
-from unittest import mock
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +26,7 @@ import pytest
 
 try:
     from specterqa.ios.security.redactor import DataRedactor  # type: ignore[import]
+
     _REDACTOR_AVAILABLE = True
 except ImportError:
     _REDACTOR_AVAILABLE = False
@@ -35,6 +34,7 @@ except ImportError:
 
 try:
     from specterqa.ios.security.credentials import CredentialContext  # type: ignore[import]
+
     _CREDENTIALS_AVAILABLE = True
 except ImportError:
     _CREDENTIALS_AVAILABLE = False
@@ -57,6 +57,7 @@ needs_credentials = pytest.mark.skipif(
 # structure: it must have at minimum `message`, `timestamp`, `level`, and
 # `subsystem` fields.
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class MockLogEntry:
@@ -90,10 +91,7 @@ class TestDataRedactorBearerToken:
     def test_redact_bearer_in_log_line(self):
         """A full log line containing a Bearer token is redacted correctly."""
         redactor = DataRedactor()
-        line = (
-            "2026-03-28 10:00:00 [DEBUG] Request sent. "
-            "Headers: {'Authorization': 'Bearer sk-ant-api03-xyz987'}"
-        )
+        line = "2026-03-28 10:00:00 [DEBUG] Request sent. Headers: {'Authorization': 'Bearer sk-ant-api03-xyz987'}"
         result = redactor.redact(line)
         assert "sk-ant-api03-xyz987" not in result
         assert "[REDACTED]" in result
@@ -150,11 +148,7 @@ class TestDataRedactorMultipleAndEdgeCases:
     def test_redact_multiple_patterns_in_one_string(self):
         """A string with Bearer token + email + password is fully sanitised."""
         redactor = DataRedactor()
-        raw = (
-            "Authorization: Bearer tok3n_xyz | "
-            "email: admin@corp.com | "
-            "password=hunter2"
-        )
+        raw = "Authorization: Bearer tok3n_xyz | email: admin@corp.com | password=hunter2"
         result = redactor.redact(raw)
         assert "tok3n_xyz" not in result
         assert "admin@corp.com" not in result
@@ -192,11 +186,7 @@ class TestDataRedactorMultipleAndEdgeCases:
     def test_redact_multiline_text(self):
         """Multi-line string with tokens on different lines are all redacted."""
         redactor = DataRedactor()
-        raw = (
-            "line1: nothing sensitive\n"
-            "line2: Bearer multi_line_tok3n\n"
-            "line3: user@multiline.com\n"
-        )
+        raw = "line1: nothing sensitive\nline2: Bearer multi_line_tok3n\nline3: user@multiline.com\n"
         result = redactor.redact(raw)
         assert "multi_line_tok3n" not in result
         assert "user@multiline.com" not in result
@@ -245,13 +235,7 @@ class TestDataRedactorDict:
     def test_redact_dict_nested(self):
         """Sensitive values nested multiple levels deep are all redacted."""
         redactor = DataRedactor()
-        data = {
-            "auth": {
-                "credentials": {
-                    "access_token": "deep_nested_token_xyz"
-                }
-            }
-        }
+        data = {"auth": {"credentials": {"access_token": "deep_nested_token_xyz"}}}
         result = redactor.redact_dict(data)
         nested_val = result["auth"]["credentials"]["access_token"]
         assert "deep_nested_token_xyz" not in nested_val
@@ -467,10 +451,7 @@ class TestCredentialContextFromEnv:
     def test_from_env_missing_api_key_raises(self):
         """from_env() raises an appropriate error when the API key env var is absent."""
         # Remove both common spellings to ensure no fallthrough
-        env_without_key = {
-            k: v for k, v in os.environ.items()
-            if not k.startswith("SPECTERQA_")
-        }
+        env_without_key = {k: v for k, v in os.environ.items() if not k.startswith("SPECTERQA_")}
         with patch.dict(os.environ, env_without_key, clear=True):
             with pytest.raises((KeyError, ValueError, EnvironmentError, Exception)):
                 CredentialContext.from_env()

@@ -12,13 +12,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
-import re
-import threading
 import time
-from dataclasses import dataclass, field
 from io import StringIO
-from typing import Callable
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,6 +28,7 @@ try:
         LogEntry,
         LogWatcher,
     )
+
     _CONSOLE_AVAILABLE = True
 except ImportError:
     _CONSOLE_AVAILABLE = False
@@ -48,6 +45,7 @@ needs_console = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Helpers — build LogEntry fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_entry(
     message: str = "Test log message",
@@ -80,15 +78,17 @@ def _make_json_log_line(
     thread_id: int = 1234,
 ) -> str:
     """Build a JSON log line matching xcrun simctl log stream --style json output."""
-    return json.dumps({
-        "timestamp": timestamp,
-        "messageType": level,
-        "subsystem": subsystem,
-        "category": category,
-        "eventMessage": message,
-        "processImagePath": f"/usr/bin/{process}",
-        "threadID": thread_id,
-    })
+    return json.dumps(
+        {
+            "timestamp": timestamp,
+            "messageType": level,
+            "subsystem": subsystem,
+            "category": category,
+            "eventMessage": message,
+            "processImagePath": f"/usr/bin/{process}",
+            "threadID": thread_id,
+        }
+    )
 
 
 # ===========================================================================
@@ -255,9 +255,7 @@ class TestConsoleMonitorRingBuffer:
             monitor.stop()
 
         all_entries = monitor.recent(seconds=9999)
-        assert len(all_entries) <= 5, (
-            f"Ring buffer should hold at most 5 entries; got {len(all_entries)}"
-        )
+        assert len(all_entries) <= 5, f"Ring buffer should hold at most 5 entries; got {len(all_entries)}"
 
     def test_ring_buffer_is_thread_safe(self):
         """Concurrent writes via ThreadPoolExecutor do not corrupt the buffer."""
@@ -299,10 +297,10 @@ class TestConsoleMonitorRecent:
         """Inject a set of known entries directly into the monitor."""
         now = time.time()
         entries = [
-            _make_entry(message="old entry",   level="info",    category="ui",       timestamp=_fmt_ts(now - 120)),
-            _make_entry(message="recent info",  level="info",    category="network",  timestamp=_fmt_ts(now - 3)),
-            _make_entry(message="recent debug", level="debug",   category="network",  timestamp=_fmt_ts(now - 2)),
-            _make_entry(message="recent error", level="error",   category="auth",     timestamp=_fmt_ts(now - 1)),
+            _make_entry(message="old entry", level="info", category="ui", timestamp=_fmt_ts(now - 120)),
+            _make_entry(message="recent info", level="info", category="network", timestamp=_fmt_ts(now - 3)),
+            _make_entry(message="recent debug", level="debug", category="network", timestamp=_fmt_ts(now - 2)),
+            _make_entry(message="recent error", level="error", category="auth", timestamp=_fmt_ts(now - 1)),
         ]
         for e in entries:
             monitor._add_entry(e)  # type: ignore[attr-defined]
@@ -322,9 +320,7 @@ class TestConsoleMonitorRecent:
         monitor = ConsoleMonitor(buffer_size=100)
         self._populate_monitor(monitor)
         results = monitor.recent(seconds=9999, level="error")
-        assert all(e.level == "error" for e in results), (
-            "recent(level='error') returned non-error entries"
-        )
+        assert all(e.level == "error" for e in results), "recent(level='error') returned non-error entries"
 
     def test_recent_filters_by_category(self):
         """recent(category='network') returns only entries with that category."""
@@ -339,6 +335,7 @@ class TestConsoleMonitorRecent:
 def _fmt_ts(epoch: float) -> str:
     """Format a Unix timestamp as ISO 8601 for use in LogEntry."""
     import datetime
+
     return datetime.datetime.utcfromtimestamp(epoch).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
@@ -355,10 +352,10 @@ class TestConsoleMonitorErrors:
         """errors() returns only entries with level 'error' or 'fault'."""
         monitor = ConsoleMonitor(buffer_size=100, error_buffer_size=50)
         now = time.time()
-        monitor._add_entry(_make_entry(message="normal info",  level="info",  timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
-        monitor._add_entry(_make_entry(message="an error",     level="error", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
-        monitor._add_entry(_make_entry(message="a fault",      level="fault", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
-        monitor._add_entry(_make_entry(message="debug line",   level="debug", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
+        monitor._add_entry(_make_entry(message="normal info", level="info", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
+        monitor._add_entry(_make_entry(message="an error", level="error", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
+        monitor._add_entry(_make_entry(message="a fault", level="fault", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
+        monitor._add_entry(_make_entry(message="debug line", level="debug", timestamp=_fmt_ts(now - 1)))  # type: ignore[attr-defined]
         results = monitor.errors(seconds=60)
         assert all(e.level in ("error", "fault") for e in results), (
             "errors() must return only error/fault level entries"
@@ -421,8 +418,8 @@ class TestConsoleMonitorSummary:
         """summary() returns total_entries, errors_count, by_level, by_subsystem."""
         monitor = ConsoleMonitor(buffer_size=100, error_buffer_size=50)
         entries = [
-            _make_entry(message="m1", level="info",  subsystem="com.app.auth"),
-            _make_entry(message="m2", level="info",  subsystem="com.app.ui"),
+            _make_entry(message="m1", level="info", subsystem="com.app.auth"),
+            _make_entry(message="m2", level="info", subsystem="com.app.ui"),
             _make_entry(message="m3", level="error", subsystem="com.app.auth"),
             _make_entry(message="m4", level="debug", subsystem="com.app.net"),
         ]
@@ -470,9 +467,7 @@ class TestConsoleMonitorStartStop:
         assert "simctl" in cmd_str, f"Expected 'simctl' in command: {cmd_str}"
         assert "log" in cmd_str, f"Expected 'log' in command: {cmd_str}"
         assert "stream" in cmd_str, f"Expected 'stream' in command: {cmd_str}"
-        assert "--level" in cmd_str or "debug" in cmd_str, (
-            f"Expected '--level debug' in command: {cmd_str}"
-        )
+        assert "--level" in cmd_str or "debug" in cmd_str, f"Expected '--level debug' in command: {cmd_str}"
         assert "json" in cmd_str, f"Expected '--style json' in command: {cmd_str}"
 
     def test_stop_kills_subprocess_and_joins_thread(self):

@@ -109,18 +109,12 @@ class CredentialContext:
         if key in self._credentials:
             value = self._credentials[key]
             if value is None:
-                raise KeyError(
-                    f"Credential {key!r} has a None value; "
-                    "get() never returns None."
-                )
+                raise KeyError(f"Credential {key!r} has a None value; get() never returns None.")
             return value  # type: ignore[return-value]
         if key == "api_key":
             return self._api_key
         available = ", ".join(sorted(self._credentials.keys())) or "(none)"
-        raise KeyError(
-            f"Credential {key!r} not found. "
-            f"Available keys: {available}"
-        )
+        raise KeyError(f"Credential {key!r} not found. Available keys: {available}")
 
     def resolve_template(self, text: str) -> str:
         """Resolve ``${KEY}`` placeholders in *text* using stored credentials.
@@ -140,6 +134,7 @@ class CredentialContext:
             KeyError: If any placeholder key is not present in the credential
                 store.  The exception message identifies the missing key.
         """
+
         def _replace(match: re.Match[str]) -> str:
             key = match.group(1)
             # Skip keys that start with '{' — these are escaped-brace edge
@@ -205,7 +200,7 @@ class CredentialContext:
         product_credentials: dict[str, str] = {}
         for var_name, var_value in os.environ.items():
             if var_name.startswith(env_prefix) and var_name != api_key_var:
-                stripped_name = var_name[len(env_prefix):]
+                stripped_name = var_name[len(env_prefix) :]
                 product_credentials[stripped_name] = var_value
 
         return cls(api_key=api_key, product_credentials=product_credentials)
@@ -226,10 +221,7 @@ class CredentialContext:
             ``"CredentialContext(keys=N, api_key=unset)"``.
         """
         api_key_status = "set" if self._api_key else "unset"
-        return (
-            f"CredentialContext(keys={len(self._credentials)}, "
-            f"api_key={api_key_status})"
-        )
+        return f"CredentialContext(keys={len(self._credentials)}, api_key={api_key_status})"
 
     def __str__(self) -> str:
         """Delegates to :meth:`__repr__` — never exposes credential values."""

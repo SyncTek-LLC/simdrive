@@ -26,13 +26,11 @@ INIT-2026-500 — SpecterQA iOS Headless Driver.
 
 from __future__ import annotations
 
-import io
 import json
-import socket
+import os
 import urllib.error
 import urllib.request
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -46,11 +44,7 @@ _RUNNER_HOST = "localhost"
 _RUNNER_PORT = 8222
 _RUNNER_TIMEOUT = 2  # seconds for the probe
 
-import os as _os
-
-_RUNNER_LIVE = _os.environ.get("SPECTERQA_RUNNER_LIVE", "").strip().lower() in (
-    "1", "true", "yes"
-)
+_RUNNER_LIVE = os.environ.get("SPECTERQA_RUNNER_LIVE", "").strip().lower() in ("1", "true", "yes")
 
 
 def _probe_runner() -> bool:
@@ -124,8 +118,7 @@ class TestSourceEndpointLive:
     def test_source_has_type_field(self, backend: XCTestBackend):
         """Root element must have a 'type' field (XCUIElementType…)."""
         result = backend._get("/source")
-        assert "type" in result or "children" in result, \
-            "Source tree must include 'type' or 'children'"
+        assert "type" in result or "children" in result, "Source tree must include 'type' or 'children'"
 
     def test_source_has_frame_or_bounds(self, backend: XCTestBackend):
         """Root element must expose position/size information."""
@@ -205,7 +198,7 @@ class TestScreenshotEndpointLive:
 
     def test_screenshot_has_dimensions(self, backend: XCTestBackend):
         result = backend.screenshot()
-        has_dims = ("width" in result and "height" in result)
+        has_dims = "width" in result and "height" in result
         assert has_dims, "Screenshot response must include width and height"
 
     def test_screenshot_width_is_positive(self, backend: XCTestBackend):
@@ -318,10 +311,11 @@ class TestXCTestBackendUnit:
         with patch("urllib.request.urlopen", return_value=mock_resp) as mock_open:
             backend.swipe(10.0, 20.0, 30.0, 40.0)
         body = json.loads(mock_open.call_args[0][0].data.decode())
-        assert body["x1"] == 10.0
-        assert body["y1"] == 20.0
-        assert body["x2"] == 30.0
-        assert body["y2"] == 40.0
+        # Backend uses Swift runner field names: fromX/fromY/toX/toY
+        assert body["fromX"] == 10.0
+        assert body["fromY"] == 20.0
+        assert body["toX"] == 30.0
+        assert body["toY"] == 40.0
 
     def test_swipe_default_duration(self):
         backend = XCTestBackend(port=8222)
@@ -357,9 +351,7 @@ class TestXCTestBackendUnit:
             "type": "Application",
             "label": "MyApp",
             "frame": {"x": 0, "y": 0, "width": 390, "height": 844},
-            "children": [
-                {"type": "Button", "label": "OK", "frame": {"x": 100, "y": 400, "width": 80, "height": 44}}
-            ],
+            "children": [{"type": "Button", "label": "OK", "frame": {"x": 100, "y": 400, "width": 80, "height": 44}}],
         }
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps(payload).encode()

@@ -42,6 +42,7 @@ class _UIContextStr(str):
     def __repr__(self) -> str:  # type: ignore[override]
         return str.__str__(self)
 
+
 # Number of identical consecutive screenshots before stuck detection fires.
 _STUCK_ABORT_THRESHOLD = 5
 
@@ -238,8 +239,11 @@ class IOSAIStepRunner:
                 decision: Decision = self._decider.decide(**decide_kwargs)
                 logger.info(
                     "IOSAIStepRunner: iter=%d action=%s target=%r value=%r goal_achieved=%s reasoning=%.100s",
-                    iteration, decision.action, decision.target,
-                    getattr(decision, "value", ""), decision.goal_achieved,
+                    iteration,
+                    decision.action,
+                    decision.target,
+                    getattr(decision, "value", ""),
+                    decision.goal_achieved,
                     getattr(decision, "reasoning", "")[:100],
                 )
             except BudgetExceededError as exc:
@@ -268,16 +272,18 @@ class IOSAIStepRunner:
             # ----------------------------------------------------------------
             if decision.goal_achieved or decision.action == "done":
                 # Record the done action
-                actions_taken.append({
-                    "index": iteration,
-                    "action": decision.action,
-                    "target": decision.target,
-                    "value": decision.value,
-                    "reasoning": decision.reasoning,
-                    "success": True,
-                    "error": None,
-                    "duration_ms": 0.0,
-                })
+                actions_taken.append(
+                    {
+                        "index": iteration,
+                        "action": decision.action,
+                        "target": decision.target,
+                        "value": decision.value,
+                        "reasoning": decision.reasoning,
+                        "success": True,
+                        "error": None,
+                        "duration_ms": 0.0,
+                    }
+                )
                 goal_achieved = True
                 break
 
@@ -290,30 +296,34 @@ class IOSAIStepRunner:
                 action_duration_ms = getattr(action_result, "duration_ms", None) or round(
                     (time.monotonic() - action_start) * 1000, 1
                 )
-                actions_taken.append({
-                    "index": iteration,
-                    "action": decision.action,
-                    "target": decision.target,
-                    "value": decision.value,
-                    "reasoning": decision.reasoning,
-                    "success": getattr(action_result, "success", True),
-                    "error": getattr(action_result, "error", None),
-                    "duration_ms": action_duration_ms,
-                    "ui_changed": getattr(action_result, "ui_changed", True),
-                })
+                actions_taken.append(
+                    {
+                        "index": iteration,
+                        "action": decision.action,
+                        "target": decision.target,
+                        "value": decision.value,
+                        "reasoning": decision.reasoning,
+                        "success": getattr(action_result, "success", True),
+                        "error": getattr(action_result, "error", None),
+                        "duration_ms": action_duration_ms,
+                        "ui_changed": getattr(action_result, "ui_changed", True),
+                    }
+                )
             except Exception as exc:
                 logger.error("Executor error at iteration %d: %s", iteration, exc)
-                actions_taken.append({
-                    "index": iteration,
-                    "action": decision.action,
-                    "target": decision.target,
-                    "value": getattr(decision, "value", ""),
-                    "reasoning": getattr(decision, "reasoning", ""),
-                    "success": False,
-                    "error": str(exc),
-                    "duration_ms": 0.0,
-                    "ui_changed": False,
-                })
+                actions_taken.append(
+                    {
+                        "index": iteration,
+                        "action": decision.action,
+                        "target": decision.target,
+                        "value": getattr(decision, "value", ""),
+                        "reasoning": getattr(decision, "reasoning", ""),
+                        "success": False,
+                        "error": str(exc),
+                        "duration_ms": 0.0,
+                        "ui_changed": False,
+                    }
+                )
                 # Exception counts as a consecutive backend error.
                 error_key = str(exc)
                 if error_key == _last_action_error:
@@ -323,12 +333,9 @@ class IOSAIStepRunner:
                     _consecutive_error_count = 1
                 if _consecutive_error_count >= _CONSECUTIVE_ERROR_ABORT:
                     error_msg = (
-                        f"Backend appears broken — same error repeated "
-                        f"{_consecutive_error_count} times: {error_key}"
+                        f"Backend appears broken — same error repeated {_consecutive_error_count} times: {error_key}"
                     )
-                    logger.error(
-                        "IOSAIStepRunner: aborting — %s", error_msg
-                    )
+                    logger.error("IOSAIStepRunner: aborting — %s", error_msg)
                     iteration += 1
                     break
                 iteration += 1
@@ -362,12 +369,9 @@ class IOSAIStepRunner:
 
                 if _consecutive_error_count >= _CONSECUTIVE_ERROR_ABORT:
                     error_msg = (
-                        f"Backend appears broken — same error repeated "
-                        f"{_consecutive_error_count} times: {action_error}"
+                        f"Backend appears broken — same error repeated {_consecutive_error_count} times: {action_error}"
                     )
-                    logger.error(
-                        "IOSAIStepRunner: aborting — %s", error_msg
-                    )
+                    logger.error("IOSAIStepRunner: aborting — %s", error_msg)
                     iteration += 1
                     break
             else:

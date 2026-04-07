@@ -78,9 +78,7 @@ class ScreenCapture:
 
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace") if result.stderr else ""
-            raise RuntimeError(
-                f"xcrun simctl screenshot failed (returncode={result.returncode}): {stderr}"
-            )
+            raise RuntimeError(f"xcrun simctl screenshot failed (returncode={result.returncode}): {stderr}")
 
         # Read PNG bytes
         raw_png = Path(tmp_path).read_bytes()

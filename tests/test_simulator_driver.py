@@ -10,9 +10,8 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import time
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # type: ignore[import]
+
     _DRIVER_AVAILABLE = True
 except ImportError:
     _DRIVER_AVAILABLE = False
@@ -35,6 +35,7 @@ needs_driver = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Minimal config helpers
 # ---------------------------------------------------------------------------
+
 
 def _minimal_config() -> dict[str, Any]:
     """Minimal valid config: only required keys."""
@@ -116,17 +117,18 @@ class TestSimulatorDriverConstructor:
         """All eight sub-modules are instantiated during __init__."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole, \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork, \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler") as MockPerf, \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector") as MockState, \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash, \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx, \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor") as MockRedactor:
-
-            driver = SimulatorDriver(config)
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction,
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole,
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork,
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler") as MockPerf,
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector") as MockState,
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash,
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx,
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
+            SimulatorDriver(config)
 
         MockInteraction.assert_called_once()
         MockCapture.assert_called_once()
@@ -141,17 +143,18 @@ class TestSimulatorDriverConstructor:
         """When screenshot_resize_width is absent, ScreenCapture receives 1024."""
         config = _minimal_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
-            driver = SimulatorDriver(config)
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
+            SimulatorDriver(config)
 
         # ScreenCapture must be called with resize_width=1024 (default)
         call_kwargs = MockCapture.call_args
@@ -164,17 +167,18 @@ class TestSimulatorDriverConstructor:
         """When title_bar_offset is absent, InteractionLayer receives 28."""
         config = _minimal_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
-            driver = SimulatorDriver(config)
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction,
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
+            SimulatorDriver(config)
 
         call_kwargs = MockInteraction.call_args
         all_values = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
@@ -186,16 +190,17 @@ class TestSimulatorDriverConstructor:
         """A config with only device_id and bundle_id constructs without error."""
         config = _minimal_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             driver = SimulatorDriver(config)  # must not raise
 
         assert driver is not None
@@ -205,17 +210,20 @@ class TestSimulatorDriverConstructor:
         config = _full_config()
         sentinel_redactor = MagicMock(name="SharedRedactor")
 
-        with patch("specterqa.ios.drivers.simulator.driver.DataRedactor", return_value=sentinel_redactor) as MockRedactor, \
-             patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork, \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx:
-
-            driver = SimulatorDriver(config)
+        with (
+            patch(
+                "specterqa.ios.drivers.simulator.driver.DataRedactor", return_value=sentinel_redactor
+            ),
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork,
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx,
+        ):
+            SimulatorDriver(config)
 
         # Both NetworkInspector and SimulatorAIContext must receive the same redactor object
         network_call = MockNetwork.call_args
@@ -224,12 +232,8 @@ class TestSimulatorDriverConstructor:
         network_args = list(network_call.args) + list(network_call.kwargs.values())
         ai_ctx_args = list(ai_ctx_call.args) + list(ai_ctx_call.kwargs.values())
 
-        assert sentinel_redactor in network_args, (
-            "DataRedactor not passed to NetworkInspector"
-        )
-        assert sentinel_redactor in ai_ctx_args, (
-            "DataRedactor not passed to SimulatorAIContext"
-        )
+        assert sentinel_redactor in network_args, "DataRedactor not passed to NetworkInspector"
+        assert sentinel_redactor in ai_ctx_args, "DataRedactor not passed to SimulatorAIContext"
 
 
 # ===========================================================================
@@ -243,7 +247,7 @@ class TestSimulatorDriverActionMethods:
 
     def _make_driver(self):
         """Return a SimulatorDriver with all sub-modules as MagicMocks."""
-        config = _full_config()
+        _full_config()
         mocks: dict[str, MagicMock] = {}
         patchers = []
         for target in _SUB_MODULE_PATCHES:
@@ -252,16 +256,17 @@ class TestSimulatorDriverActionMethods:
             patchers.append(patch(target, m))
             mocks[class_name] = m
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             driver = SimulatorDriver(_full_config())
 
         return driver
@@ -277,16 +282,17 @@ class TestSimulatorDriverActionMethods:
             "raw_path": "/tmp/shot.png",
         }
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             mock_capture_instance = MockCapture.return_value
             mock_capture_instance.capture.return_value = fake_capture_result
             driver = SimulatorDriver(config)
@@ -307,16 +313,17 @@ class TestSimulatorDriverActionMethods:
             "raw_path": "/tmp/shot.png",
         }
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction,
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             mock_capture_instance = MockCapture.return_value
             mock_capture_instance.capture.return_value = fake_capture_result
             mock_interaction_instance = MockInteraction.return_value
@@ -337,16 +344,17 @@ class TestSimulatorDriverActionMethods:
         """fill(text) calls self._interaction.type_text(text)."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction,
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             mock_interaction_instance = MockInteraction.return_value
             driver = SimulatorDriver(config)
 
@@ -359,16 +367,17 @@ class TestSimulatorDriverActionMethods:
         """scroll(direction, amount) calls self._interaction.swipe() with mapped coordinates."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction,
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             mock_interaction_instance = MockInteraction.return_value
             driver = SimulatorDriver(config)
 
@@ -381,16 +390,17 @@ class TestSimulatorDriverActionMethods:
         """keyboard(key) calls self._interaction.press_key(key)."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction,
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             mock_interaction_instance = MockInteraction.return_value
             driver = SimulatorDriver(config)
 
@@ -403,16 +413,17 @@ class TestSimulatorDriverActionMethods:
         """wait(seconds) sleeps for the given number of seconds."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             driver = SimulatorDriver(config)
 
         with patch("time.sleep") as mock_sleep:
@@ -432,16 +443,17 @@ class TestSimulatorDriverActionMethods:
             "raw_path": "/tmp/s.png",
         }
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             MockCapture.return_value.capture.return_value = fake_capture_result
             driver = SimulatorDriver(config)
 
@@ -477,55 +489,45 @@ class TestSimulatorDriverLifecycle:
         """start() runs xcrun simctl boot <device_id>."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole, \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork, \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash, \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"), \
-             patch("subprocess.run") as mock_run:
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
             driver = SimulatorDriver(config)
             driver.start()
 
         # Verify xcrun simctl boot was called with the device_id
-        boot_calls = [
-            c for c in mock_run.call_args_list
-            if "boot" in (c.args[0] if c.args else [])
-        ]
+        [c for c in mock_run.call_args_list if "boot" in (c.args[0] if c.args else [])]
         # At least one call should contain 'simctl' and 'boot'
-        all_simctl_cmds = [
-            c.args[0] if c.args else []
-            for c in mock_run.call_args_list
-        ]
-        boot_found = any(
-            "boot" in cmd and "simctl" in " ".join(str(x) for x in cmd)
-            for cmd in all_simctl_cmds
-        )
-        assert boot_found, (
-            f"xcrun simctl boot not called during start(). "
-            f"All calls: {all_simctl_cmds}"
-        )
+        all_simctl_cmds = [c.args[0] if c.args else [] for c in mock_run.call_args_list]
+        boot_found = any("boot" in cmd and "simctl" in " ".join(str(x) for x in cmd) for cmd in all_simctl_cmds)
+        assert boot_found, f"xcrun simctl boot not called during start(). All calls: {all_simctl_cmds}"
 
     def test_start_starts_console_monitor(self):
         """start() calls console.start() to begin log streaming."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole, \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork, \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash, \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"), \
-             patch("subprocess.run") as mock_run:
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole,
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             mock_console = MockConsole.return_value
             driver = SimulatorDriver(config)
@@ -537,17 +539,18 @@ class TestSimulatorDriverLifecycle:
         """start() starts console, network, crash monitors (and perf if enabled)."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole, \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork, \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler") as MockPerf, \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash, \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"), \
-             patch("subprocess.run") as mock_run:
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole,
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork,
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash,
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             mock_console = MockConsole.return_value
             mock_network = MockNetwork.return_value
@@ -563,17 +566,18 @@ class TestSimulatorDriverLifecycle:
         """stop() calls stop() on console, network, and crash monitors."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole, \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork, \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash, \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"), \
-             patch("subprocess.run") as mock_run:
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor") as MockConsole,
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector") as MockNetwork,
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector") as MockCrash,
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             mock_console = MockConsole.return_value
             mock_network = MockNetwork.return_value
@@ -590,67 +594,49 @@ class TestSimulatorDriverLifecycle:
         """launch_app() runs xcrun simctl launch <device_id> <bundle_id>."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"), \
-             patch("subprocess.run") as mock_run:
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             driver = SimulatorDriver(config)
             driver.launch_app()
 
-        all_cmds = [
-            c.args[0] if c.args else []
-            for c in mock_run.call_args_list
-        ]
-        launch_found = any(
-            "launch" in cmd
-            and config["bundle_id"] in cmd
-            for cmd in all_cmds
-        )
-        assert launch_found, (
-            f"xcrun simctl launch {config['bundle_id']} not found. "
-            f"All calls: {all_cmds}"
-        )
+        all_cmds = [c.args[0] if c.args else [] for c in mock_run.call_args_list]
+        launch_found = any("launch" in cmd and config["bundle_id"] in cmd for cmd in all_cmds)
+        assert launch_found, f"xcrun simctl launch {config['bundle_id']} not found. All calls: {all_cmds}"
 
     def test_terminate_app_calls_simctl_terminate(self):
         """terminate_app() runs xcrun simctl terminate <device_id> <bundle_id>."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"), \
-             patch("subprocess.run") as mock_run:
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             driver = SimulatorDriver(config)
             driver.terminate_app()
 
-        all_cmds = [
-            c.args[0] if c.args else []
-            for c in mock_run.call_args_list
-        ]
-        terminate_found = any(
-            "terminate" in cmd
-            and config["bundle_id"] in cmd
-            for cmd in all_cmds
-        )
-        assert terminate_found, (
-            f"xcrun simctl terminate {config['bundle_id']} not found. "
-            f"All calls: {all_cmds}"
-        )
+        all_cmds = [c.args[0] if c.args else [] for c in mock_run.call_args_list]
+        terminate_found = any("terminate" in cmd and config["bundle_id"] in cmd for cmd in all_cmds)
+        assert terminate_found, f"xcrun simctl terminate {config['bundle_id']} not found. All calls: {all_cmds}"
 
 
 # ===========================================================================
@@ -666,16 +652,17 @@ class TestSimulatorDriverContextAggregation:
         """get_context() delegates to self._ai_context.build_context()."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx, \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx,
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             fake_capture = {"base64": "x", "width": 1024, "height": 2048, "timestamp": 0.0, "raw_path": ""}
             MockCapture.return_value.capture.return_value = fake_capture
 
@@ -691,7 +678,7 @@ class TestSimulatorDriverContextAggregation:
 
             driver = SimulatorDriver(config)
 
-        result = driver.get_context()
+        driver.get_context()
 
         mock_ai_ctx.build_context.assert_called_once()
 
@@ -701,16 +688,17 @@ class TestSimulatorDriverContextAggregation:
 
         from unittest.mock import MagicMock
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx, \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx,
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             fake_capture = {"base64": "x", "width": 1024, "height": 2048, "timestamp": 0.0, "raw_path": ""}
             MockCapture.return_value.capture.return_value = fake_capture
 
@@ -733,16 +721,17 @@ class TestSimulatorDriverContextAggregation:
         """get_context() dict has keys: screenshot, logs, network, perf, state, crashes."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx, \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext") as MockAICtx,
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             fake_capture = {"base64": "x", "width": 1024, "height": 2048, "timestamp": 0.0, "raw_path": ""}
             MockCapture.return_value.capture.return_value = fake_capture
 
@@ -764,10 +753,7 @@ class TestSimulatorDriverContextAggregation:
         expected_keys = {"screenshot", "logs", "network", "perf", "state", "crashes"}
         result_keys_lower = {k.lower() for k in result.keys()}
         missing = expected_keys - result_keys_lower
-        assert not missing, (
-            f"get_context() result is missing expected keys: {missing}. "
-            f"Got: {set(result.keys())}"
-        )
+        assert not missing, f"get_context() result is missing expected keys: {missing}. Got: {set(result.keys())}"
 
 
 # ===========================================================================
@@ -783,16 +769,17 @@ class TestSimulatorDriverResilience:
         """An exception in one sub-module's method doesn't propagate from action methods."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer") as MockInteraction, \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture, \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture") as MockCapture,
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             MockCapture.return_value.capture.side_effect = RuntimeError("simctl failed")
             driver = SimulatorDriver(config)
 
@@ -800,31 +787,36 @@ class TestSimulatorDriverResilience:
         # a dict with success=False instead
         result = driver.screenshot()
         assert isinstance(result, dict), "screenshot() must return dict even on error"
-        assert result.get("success") is False, (
-            "screenshot() must return success=False when capture fails"
-        )
+        assert result.get("success") is False, "screenshot() must return success=False when capture fails"
 
     def test_driver_exposes_sub_modules_as_properties(self):
         """Driver exposes sub-modules via properties for direct test access."""
         config = _full_config()
 
-        with patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"), \
-             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"), \
-             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"), \
-             patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"), \
-             patch("specterqa.ios.drivers.simulator.driver.StateInspector"), \
-             patch("specterqa.ios.drivers.simulator.driver.CrashDetector"), \
-             patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"), \
-             patch("specterqa.ios.drivers.simulator.driver.DataRedactor"):
-
+        with (
+            patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
+            patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
+            patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
+            patch("specterqa.ios.drivers.simulator.driver.NetworkInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.PerfProfiler"),
+            patch("specterqa.ios.drivers.simulator.driver.StateInspector"),
+            patch("specterqa.ios.drivers.simulator.driver.CrashDetector"),
+            patch("specterqa.ios.drivers.simulator.driver.SimulatorAIContext"),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor"),
+        ):
             driver = SimulatorDriver(config)
 
         # Each sub-module must be accessible, either as a property or
         # as an attribute with an underscore-prefixed name
         sub_module_names = [
-            "_interaction", "_capture", "_console",
-            "_network", "_perf", "_state", "_crash", "_ai_context",
+            "_interaction",
+            "_capture",
+            "_console",
+            "_network",
+            "_perf",
+            "_state",
+            "_crash",
+            "_ai_context",
         ]
         for attr in sub_module_names:
             assert hasattr(driver, attr) or hasattr(driver, attr.lstrip("_")), (

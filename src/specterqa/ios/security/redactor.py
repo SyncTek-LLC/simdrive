@@ -185,8 +185,7 @@ class DataRedactor:
     # not contain the key prefix (e.g. a dict entry like
     # {"access_token": "deep_nested_token_xyz"} must still be redacted).
     _SENSITIVE_KEYS: frozenset[str] = frozenset(
-        {"access_token", "refresh_token", "password", "token", "secret",
-         "api_key", "bearer", "authorization"}
+        {"access_token", "refresh_token", "password", "token", "secret", "api_key", "bearer", "authorization"}
     )
 
     def _redact_value(self, value: Any, *, _key: str | None = None) -> Any:
@@ -209,7 +208,7 @@ class DataRedactor:
                 # is stored (preserving the dict structure).
                 prefix = f"{_key}="
                 if redacted_synthetic.startswith(prefix):
-                    return redacted_synthetic[len(prefix):]
+                    return redacted_synthetic[len(prefix) :]
                 return redacted_synthetic
             return self.redact(value)
         if isinstance(value, dict):

@@ -5,10 +5,9 @@ All tests use stdlib mocking only — no Xcode, no simulator required.
 
 from __future__ import annotations
 
-import subprocess
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -62,7 +61,7 @@ class TestReadBuildSettings:
     def test_read_build_settings_parses_output(self):
         """_read_build_settings returns a dict of key→value pairs."""
         injector = _make_injector()
-        with patch("subprocess.run", return_value=_mock_show_build_settings()) as mock_run:
+        with patch("subprocess.run", return_value=_mock_show_build_settings()):
             settings = injector._read_build_settings()
 
         assert settings["CODE_SIGN_IDENTITY"] == "Apple Development"
@@ -262,30 +261,41 @@ class TestBuild:
         return proc
 
     def test_build_calls_xcodebuild_with_project(self, tmp_path):
-        """build() invokes xcodebuild with -project pointing at the user's .xcodeproj."""
+        """build() invokes xcodebuild -project pointing at the SpecterQA runner project.
+
+        Note: build() reads settings from the *user's* project but builds the
+        *SpecterQA runner* project (SpecterQARunner.xcodeproj) with the user's
+        signing identity injected via xcconfig.
+        """
         injector = _make_injector(project_path="/user/MyApp.xcodeproj", scheme="MyApp")
         fake_xctestrun = tmp_path / "test.xctestrun"
         fake_xctestrun.touch()
 
         with (
             patch("subprocess.run") as mock_run,
-            patch.object(injector, "_read_build_settings", return_value={
-                "PRODUCT_BUNDLE_IDENTIFIER": "com.example.app",
-                "CODE_SIGN_IDENTITY": "-",
-                "DEVELOPMENT_TEAM": "",
-                "CODE_SIGNING_REQUIRED": "NO",
-                "IPHONEOS_DEPLOYMENT_TARGET": "16.0",
-            }),
+            patch.object(
+                injector,
+                "_read_build_settings",
+                return_value={
+                    "PRODUCT_BUNDLE_IDENTIFIER": "com.example.app",
+                    "CODE_SIGN_IDENTITY": "-",
+                    "DEVELOPMENT_TEAM": "",
+                    "CODE_SIGNING_REQUIRED": "NO",
+                    "IPHONEOS_DEPLOYMENT_TARGET": "16.0",
+                },
+            ),
             patch.object(injector, "_find_xctestrun", return_value=fake_xctestrun),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.write_text"),
+            patch("pathlib.Path.is_dir", return_value=True),
         ):
             mock_run.return_value = self._make_successful_build_proc()
             result = injector.build()
 
         cmd = mock_run.call_args[0][0]
         assert "-project" in cmd
-        assert "/user/MyApp.xcodeproj" in cmd
+        # build() uses the runner's xcodeproj (SpecterQARunner.xcodeproj), not the user's
+        assert any("SpecterQARunner.xcodeproj" in arg for arg in cmd)
         assert result == fake_xctestrun
 
     def test_build_passes_xcconfig(self, tmp_path):
@@ -296,12 +306,17 @@ class TestBuild:
 
         with (
             patch("subprocess.run") as mock_run,
-            patch.object(injector, "_read_build_settings", return_value={
-                "PRODUCT_BUNDLE_IDENTIFIER": "com.test.app",
-            }),
+            patch.object(
+                injector,
+                "_read_build_settings",
+                return_value={
+                    "PRODUCT_BUNDLE_IDENTIFIER": "com.test.app",
+                },
+            ),
             patch.object(injector, "_find_xctestrun", return_value=fake_xctestrun),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.write_text"),
+            patch("pathlib.Path.is_dir", return_value=True),
         ):
             mock_run.return_value = self._make_successful_build_proc()
             injector.build()
@@ -319,11 +334,16 @@ class TestBuild:
 
         with (
             patch("subprocess.run", return_value=failing_proc),
-            patch.object(injector, "_read_build_settings", return_value={
-                "PRODUCT_BUNDLE_IDENTIFIER": "com.test.app",
-            }),
+            patch.object(
+                injector,
+                "_read_build_settings",
+                return_value={
+                    "PRODUCT_BUNDLE_IDENTIFIER": "com.test.app",
+                },
+            ),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.write_text"),
+            patch("pathlib.Path.is_dir", return_value=True),
         ):
             with pytest.raises(ProjectInjectorError, match="build failed"):
                 injector.build()
@@ -338,15 +358,19 @@ class TestBuild:
 
         with (
             patch("subprocess.run") as mock_run,
-            patch.object(injector, "_read_build_settings", return_value={
-                "PRODUCT_BUNDLE_IDENTIFIER": "com.my.special.app",
-            }),
+            patch.object(
+                injector,
+                "_read_build_settings",
+                return_value={
+                    "PRODUCT_BUNDLE_IDENTIFIER": "com.my.special.app",
+                },
+            ),
             patch.object(injector, "_find_xctestrun", return_value=fake_xctestrun),
             patch("pathlib.Path.write_text"),
+            patch("pathlib.Path.is_dir", return_value=True),
         ):
             mock_run.return_value = self._make_successful_build_proc()
             # Capture mkdir calls to verify bundle_id is used in path
-            original_mkdir = Path.mkdir
 
             def tracking_mkdir(self, **kwargs):
                 created_dirs.append(self)
@@ -366,13 +390,18 @@ class TestBuild:
 
         with (
             patch("subprocess.run") as mock_run,
-            patch.object(injector, "_read_build_settings", return_value={
-                "PRODUCT_BUNDLE_IDENTIFIER": "com.test.app",
-                "CODE_SIGN_IDENTITY": "-",
-            }),
+            patch.object(
+                injector,
+                "_read_build_settings",
+                return_value={
+                    "PRODUCT_BUNDLE_IDENTIFIER": "com.test.app",
+                    "CODE_SIGN_IDENTITY": "-",
+                },
+            ),
             patch.object(injector, "_find_xctestrun", return_value=fake_xctestrun),
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.write_text"),
+            patch("pathlib.Path.is_dir", return_value=True),
         ):
             mock_run.return_value = self._make_successful_build_proc()
             injector.build(verbose=True)

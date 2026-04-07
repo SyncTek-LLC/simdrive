@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import base64
 import io
-import os
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -28,6 +26,7 @@ import yaml
 def _make_b64_png(color: str = "red", size: tuple = (100, 100)) -> str:
     """Return a base64-encoded PNG of a solid-color image."""
     from PIL import Image
+
     img = Image.new("RGB", size, color)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -232,9 +231,7 @@ class TestReplayVariables:
     def test_multiple_variables_in_one_field(self):
         from specterqa.ios.replay import ReplayPlayer
 
-        result = ReplayPlayer.resolve_vars(
-            "${FIRST} ${LAST}", {"FIRST": "John", "LAST": "Doe"}
-        )
+        result = ReplayPlayer.resolve_vars("${FIRST} ${LAST}", {"FIRST": "John", "LAST": "Doe"})
         assert result == "John Doe"
 
 
@@ -302,6 +299,9 @@ class TestVisualRegression:
 # ===========================================================================
 
 
+mcp = pytest.importorskip("mcp", reason="mcp extra not installed; run: pip install 'specterqa-ios[mcp]'")
+
+
 class TestMCPToolList:
     """Verify all 19 MCP tools are registered."""
 
@@ -321,12 +321,25 @@ class TestMCPToolList:
         tools = asyncio.run(server.list_tools())
         tool_names = {t.name for t in tools}
         expected = {
-            "ios_start_session", "ios_stop_session", "ios_screenshot",
-            "ios_tap", "ios_swipe", "ios_swipe_back", "ios_type",
-            "ios_press_key", "ios_long_press", "ios_wait",
-            "ios_wait_for_element", "ios_start_recording", "ios_stop_recording",
-            "ios_save_replay", "ios_set_appearance", "ios_simctl",
-            "ios_accessibility_audit", "ios_webview_elements", "ios_elements",
+            "ios_start_session",
+            "ios_stop_session",
+            "ios_screenshot",
+            "ios_tap",
+            "ios_swipe",
+            "ios_swipe_back",
+            "ios_type",
+            "ios_press_key",
+            "ios_long_press",
+            "ios_wait",
+            "ios_wait_for_element",
+            "ios_start_recording",
+            "ios_stop_recording",
+            "ios_save_replay",
+            "ios_set_appearance",
+            "ios_simctl",
+            "ios_accessibility_audit",
+            "ios_webview_elements",
+            "ios_elements",
         }
         missing = expected - tool_names
         assert not missing, f"Missing tools: {missing}"
@@ -335,14 +348,24 @@ class TestMCPToolList:
         from specterqa.ios.mcp import server
 
         expected_handlers = [
-            "handle_start_session", "handle_stop_session",
-            "handle_screenshot", "handle_elements",
-            "handle_tap", "handle_swipe", "handle_swipe_back",
-            "handle_type", "handle_press_key", "handle_long_press",
-            "handle_wait", "handle_wait_for_element",
-            "handle_start_recording", "handle_stop_recording",
-            "handle_save_replay", "handle_set_appearance",
-            "handle_simctl", "handle_accessibility_audit",
+            "handle_start_session",
+            "handle_stop_session",
+            "handle_screenshot",
+            "handle_elements",
+            "handle_tap",
+            "handle_swipe",
+            "handle_swipe_back",
+            "handle_type",
+            "handle_press_key",
+            "handle_long_press",
+            "handle_wait",
+            "handle_wait_for_element",
+            "handle_start_recording",
+            "handle_stop_recording",
+            "handle_save_replay",
+            "handle_set_appearance",
+            "handle_simctl",
+            "handle_accessibility_audit",
             "handle_webview_elements",
         ]
         for h in expected_handlers:
@@ -371,6 +394,7 @@ class TestTapByLabel:
 
     def teardown_method(self, method):
         import specterqa.ios.mcp.server as srv
+
         srv._backend = None
         srv._session = None
         srv._last_elements = []
@@ -378,7 +402,6 @@ class TestTapByLabel:
         srv._annotator = None
 
     def test_tap_finds_element_by_substring(self):
-        import specterqa.ios.mcp.server as srv
         from specterqa.ios.mcp.server import handle_tap
 
         elements = [_make_mock_element("Save Document", index=1)]
@@ -454,6 +477,7 @@ class TestAccessibilityAudit:
 
     def teardown_method(self, method):
         import specterqa.ios.mcp.server as srv
+
         srv._backend = None
         srv._annotator = None
         srv._session = None
@@ -466,9 +490,7 @@ class TestAccessibilityAudit:
         self._setup_annotator([el])
 
         result = handle_accessibility_audit({})
-        small_target_issues = [
-            i for i in result["issues"] if i["type"] == "small_target"
-        ]
+        small_target_issues = [i for i in result["issues"] if i["type"] == "small_target"]
         assert not small_target_issues, "StaticText must not be flagged as small_target"
 
     def test_button_below_44pt_flagged(self):
@@ -627,7 +649,6 @@ class TestInitCommand:
     """Verify init creates the expected .specterqa directory structure."""
 
     def test_init_creates_specterqa_directory(self, tmp_path):
-        import os
         from click.testing import CliRunner
         from specterqa.ios.cli.commands import ios_command_group
 
@@ -696,7 +717,7 @@ class TestValidateReplayCommand:
 
         f = self._write_replay(
             tmp_path,
-            "replay:\n  name: test\n  bundle_id: com.example\n  steps:\n    - tapOn: \"Save\"\n",
+            'replay:\n  name: test\n  bundle_id: com.example\n  steps:\n    - tapOn: "Save"\n',
         )
         runner = CliRunner()
         result = runner.invoke(ios_command_group, ["validate-replay", str(f)])
@@ -720,7 +741,7 @@ class TestValidateReplayCommand:
 
         f = self._write_replay(
             tmp_path,
-            "replay:\n  name: test\n  steps:\n    - tapOn: \"OK\"\n",
+            'replay:\n  name: test\n  steps:\n    - tapOn: "OK"\n',
         )
         runner = CliRunner()
         result = runner.invoke(ios_command_group, ["validate-replay", str(f)])
@@ -838,9 +859,7 @@ class TestExampleFiles:
         runner = CliRunner()
         for f in sorted(self._EXAMPLES_DIR.glob("*.yaml")):
             result = runner.invoke(ios_command_group, ["validate-replay", str(f)])
-            assert result.exit_code == 0, (
-                f"{f.name} failed validate-replay:\n{result.output}"
-            )
+            assert result.exit_code == 0, f"{f.name} failed validate-replay:\n{result.output}"
 
 
 # ===========================================================================
@@ -853,7 +872,8 @@ class TestWaitHandlerClamping:
 
     def test_positive_value_waited(self):
         from specterqa.ios.mcp.server import handle_wait
-        with patch("specterqa.ios.mcp.server._time" if False else "time.sleep") as mock_sleep:
+
+        with patch("specterqa.ios.mcp.server._time" if False else "time.sleep"):
             # Use the actual handler — just verify the return dict
             result = handle_wait({"seconds": 0.0})
             assert result["status"] == "ok"
@@ -862,10 +882,12 @@ class TestWaitHandlerClamping:
     def test_negative_value_clamped_to_zero(self):
         """After the fix, negative seconds must not raise ValueError."""
         import specterqa.ios.mcp.server as srv
+
         # Patch sleep to avoid actually waiting
-        with patch("time.sleep") as mock_sleep:
+        with patch("time.sleep"):
             # Re-import to pick up the patched time.sleep through the module
             import importlib
+
             importlib.reload(srv)
             result = srv.handle_wait({"seconds": -10})
         assert result["status"] == "ok"
@@ -873,8 +895,10 @@ class TestWaitHandlerClamping:
 
     def test_huge_value_clamped_to_30(self):
         import specterqa.ios.mcp.server as srv
+
         with patch("time.sleep"):
             import importlib
+
             importlib.reload(srv)
             result = srv.handle_wait({"seconds": 99999})
         assert result["status"] == "ok"
@@ -882,8 +906,10 @@ class TestWaitHandlerClamping:
 
     def test_default_one_second(self):
         import specterqa.ios.mcp.server as srv
+
         with patch("time.sleep"):
             import importlib
+
             importlib.reload(srv)
             result = srv.handle_wait({})
         assert result["waited"] == 1.0

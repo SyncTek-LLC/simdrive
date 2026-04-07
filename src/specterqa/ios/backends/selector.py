@@ -133,33 +133,25 @@ class BackendSelector:
         # Priority 1: XCTestBackend (custom Swift runner, port 8222)
         if self._check_available(XCTestBackend):
             backend = XCTestBackend(udid=self.udid)
-            logger.info(
-                "BackendSelector: selected XCTestBackend (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: selected XCTestBackend (udid=%r)", self.udid)
             return backend
 
         # Priority 2: WDADriver (Appium WebDriverAgent, port 8100)
         if self._check_available(WDADriver):
             backend = WDADriver(udid=self.udid)
-            logger.info(
-                "BackendSelector: selected WDADriver (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: selected WDADriver (udid=%r)", self.udid)
             return backend
 
         # Priority 3: IndigoHIDBackend (headless Mach IPC)
         if self._check_available(IndigoHIDBackend):
             backend = IndigoHIDBackend(udid=self.udid)
-            logger.info(
-                "BackendSelector: selected IndigoHIDBackend (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: selected IndigoHIDBackend (udid=%r)", self.udid)
             return backend
 
         # Priority 4: CGEventBackend (fallback, requires visible window)
         if self._check_available(CGEventBackend):
             backend = CGEventBackend(udid=self.udid)
-            logger.info(
-                "BackendSelector: selected CGEventBackend (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: selected CGEventBackend (udid=%r)", self.udid)
             return backend
 
         raise RuntimeError(
@@ -177,35 +169,26 @@ class BackendSelector:
 
         if key == "xctest":
             backend = XCTestBackend(udid=self.udid)
-            logger.info(
-                "BackendSelector: forced XCTestBackend (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: forced XCTestBackend (udid=%r)", self.udid)
             return backend
 
         if key == "wda":
             backend = WDADriver(udid=self.udid)
-            logger.info(
-                "BackendSelector: forced WDADriver (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: forced WDADriver (udid=%r)", self.udid)
             return backend
 
         if key == "indigo":
             backend = IndigoHIDBackend(udid=self.udid)
-            logger.info(
-                "BackendSelector: forced IndigoHIDBackend (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: forced IndigoHIDBackend (udid=%r)", self.udid)
             return backend
 
         if key == "cgevents":
             backend = CGEventBackend(udid=self.udid)
-            logger.info(
-                "BackendSelector: forced CGEventBackend (udid=%r)", self.udid
-            )
+            logger.info("BackendSelector: forced CGEventBackend (udid=%r)", self.udid)
             return backend
 
         raise ValueError(
-            f"Unknown preferred backend {self.preferred!r}. "
-            f"Valid values: 'xctest', 'wda', 'indigo', 'cgevents'."
+            f"Unknown preferred backend {self.preferred!r}. Valid values: 'xctest', 'wda', 'indigo', 'cgevents'."
         )
 
     # ------------------------------------------------------------------
@@ -213,6 +196,4 @@ class BackendSelector:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        return (
-            f"BackendSelector(udid={self.udid!r}, preferred={self.preferred!r})"
-        )
+        return f"BackendSelector(udid={self.udid!r}, preferred={self.preferred!r})"

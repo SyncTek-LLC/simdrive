@@ -12,13 +12,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
-import tempfile
-from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any
-from unittest import mock
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -28,6 +23,7 @@ import pytest
 
 try:
     from specterqa.ios.drivers.simulator.crash import CrashDetector, CrashReport  # type: ignore[import]
+
     _CRASH_AVAILABLE = True
 except ImportError:
     _CRASH_AVAILABLE = False
@@ -43,6 +39,7 @@ needs_crash = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # .ips fixture factories
 # ---------------------------------------------------------------------------
+
 
 def _make_ips_json(
     bundle_id: str = "com.example.testapp",
@@ -112,9 +109,16 @@ class TestCrashReportDataclass:
     def test_crash_report_has_all_required_fields(self):
         """CrashReport must define all specified fields as dataclass fields."""
         required_fields = {
-            "timestamp", "exception_type", "exception_code", "crashing_thread",
-            "backtrace", "last_exception", "app_version", "os_version",
-            "device", "raw_path",
+            "timestamp",
+            "exception_type",
+            "exception_code",
+            "crashing_thread",
+            "backtrace",
+            "last_exception",
+            "app_version",
+            "os_version",
+            "device",
+            "raw_path",
         }
         actual_fields = {f.name for f in dataclasses.fields(CrashReport)}
         missing = required_fields - actual_fields
@@ -148,7 +152,7 @@ class TestCheck:
 
     def test_returns_empty_list_when_no_new_crashes(self, tmp_path: Path):
         """check() returns an empty list when no new .ips files appeared after start()."""
-        existing = _write_ips_file(tmp_path, "old_crash.ips")
+        _write_ips_file(tmp_path, "old_crash.ips")
 
         detector = CrashDetector(device_id="booted", bundle_id="com.example.testapp")
 
@@ -161,7 +165,7 @@ class TestCheck:
 
     def test_detects_new_ips_file_after_baseline(self, tmp_path: Path):
         """check() returns a CrashReport for a new .ips file that appeared after start()."""
-        old_crash = _write_ips_file(tmp_path, "old_crash.ips")
+        _write_ips_file(tmp_path, "old_crash.ips")
 
         detector = CrashDetector(device_id="booted", bundle_id="com.example.testapp")
 
@@ -169,7 +173,7 @@ class TestCheck:
             detector.start()
 
             # Simulate a new crash appearing after start()
-            new_crash = _write_ips_file(
+            _write_ips_file(
                 tmp_path,
                 "new_crash.ips",
                 content=_make_ips_json(bundle_id="com.example.testapp"),
@@ -188,11 +192,13 @@ class TestCheck:
 
             # Two new crashes — one for our app, one for a different app
             _write_ips_file(
-                tmp_path, "target_app_crash.ips",
+                tmp_path,
+                "target_app_crash.ips",
                 content=_make_ips_json(bundle_id="com.example.testapp"),
             )
             _write_ips_file(
-                tmp_path, "other_app_crash.ips",
+                tmp_path,
+                "other_app_crash.ips",
                 content=_make_ips_json(bundle_id="com.other.app"),
             )
 
@@ -209,7 +215,8 @@ class TestParseIps:
     def test_extracts_exception_type_from_json(self, tmp_path: Path):
         """_parse_ips extracts exception_type from the JSON 'exception.type' field."""
         ips_path = _write_ips_file(
-            tmp_path, "test_crash.ips",
+            tmp_path,
+            "test_crash.ips",
             content=_make_ips_json(exception_type="EXC_BAD_ACCESS"),
         )
         detector = CrashDetector(device_id="booted", bundle_id="com.example.testapp")
@@ -225,7 +232,8 @@ class TestParseIps:
             "1  MyApp              0x2000 -[Foo bar] + 8",
         ]
         ips_path = _write_ips_file(
-            tmp_path, "test_crash.ips",
+            tmp_path,
+            "test_crash.ips",
             content=_make_ips_json(backtrace_frames=frames),
         )
         detector = CrashDetector(device_id="booted", bundle_id="com.example.testapp")
@@ -240,7 +248,8 @@ class TestParseIps:
         """_parse_ips extracts the NSException reason into last_exception."""
         reason = "NSInvalidArgumentException: nil object passed"
         ips_path = _write_ips_file(
-            tmp_path, "test_crash.ips",
+            tmp_path,
+            "test_crash.ips",
             content=_make_ips_json(last_exception=reason),
         )
         detector = CrashDetector(device_id="booted", bundle_id="com.example.testapp")
@@ -310,14 +319,16 @@ class TestLatestCrash:
             detector.start()
 
             _write_ips_file(
-                tmp_path, "crash_old.ips",
+                tmp_path,
+                "crash_old.ips",
                 content=_make_ips_json(
                     bundle_id="com.example.testapp",
                     timestamp="2026-03-28T08:00:00Z",
                 ),
             )
             _write_ips_file(
-                tmp_path, "crash_new.ips",
+                tmp_path,
+                "crash_new.ips",
                 content=_make_ips_json(
                     bundle_id="com.example.testapp",
                     timestamp="2026-03-28T12:00:00Z",
@@ -345,7 +356,8 @@ class TestMultipleCrashesDetected:
 
             for i in range(3):
                 _write_ips_file(
-                    tmp_path, f"crash_{i}.ips",
+                    tmp_path,
+                    f"crash_{i}.ips",
                     content=_make_ips_json(
                         bundle_id="com.example.testapp",
                         timestamp=f"2026-03-28T{10 + i}:00:00Z",
@@ -365,8 +377,9 @@ class TestBaselineIsolation:
     def test_pre_start_crashes_are_ignored(self, tmp_path: Path):
         """check() must not return crashes whose .ips files were present before start()."""
         # Write a crash BEFORE start() is called — this is in the baseline.
-        pre_existing = _write_ips_file(
-            tmp_path, "pre_existing_crash.ips",
+        _write_ips_file(
+            tmp_path,
+            "pre_existing_crash.ips",
             content=_make_ips_json(bundle_id="com.example.testapp"),
         )
 
@@ -378,6 +391,4 @@ class TestBaselineIsolation:
             # Do NOT write any new file — check should see nothing new.
             crashes = detector.check()
 
-        assert crashes == [], (
-            "Pre-existing crashes (before start()) must not appear in check() results"
-        )
+        assert crashes == [], "Pre-existing crashes (before start()) must not appear in check() results"

@@ -11,7 +11,6 @@ Module under test (to be created by CodeAtlas):
 from __future__ import annotations
 
 import json
-from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -22,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.backends.xctest_client import XCTestBackend  # type: ignore[import]
+
     _XCTEST_AVAILABLE = True
 except ImportError:
     _XCTEST_AVAILABLE = False
@@ -66,6 +66,7 @@ def _mock_http_response(body: dict, status: int = 200) -> MagicMock:
 def _mock_http_error(status: int = 500) -> MagicMock:
     """Return a mock urllib error response."""
     import urllib.error
+
     return urllib.error.HTTPError(
         url="http://localhost:8222/tap",
         code=status,
@@ -204,7 +205,7 @@ class TestXCTestBackendSwipe:
         assert "/swipe" in url, f"Expected /swipe in request URL, got: {url!r}"
 
     def test_swipe_body_contains_required_fields(self):
-        """swipe() body includes x1, y1, x2, y2, and duration."""
+        """swipe() body includes fromX, fromY, toX, toY, and duration."""
         backend = _make_backend()
         mock_resp = _mock_http_response({"success": True})
         captured_data: list[bytes] = []
@@ -220,12 +221,11 @@ class TestXCTestBackendSwipe:
 
         assert captured_data, "swipe() did not send a request body"
         body = json.loads(captured_data[0])
-        for field in ("x1", "y1", "x2", "y2"):
-            assert field in body, f"'{field}' not in swipe body: {body}"
+        # Backend serialises coordinates using Swift runner field names: fromX/fromY/toX/toY
+        for key in ("fromX", "fromY", "toX", "toY"):
+            assert key in body, f"'{key}' not in swipe body: {body}"
         # Duration may appear as 'duration' or similar key
-        duration_present = any(
-            "duration" in k.lower() for k in body
-        )
+        duration_present = any("duration" in k.lower() for k in body)
         assert duration_present, f"'duration' not found in swipe body keys: {list(body.keys())}"
 
 
@@ -432,11 +432,7 @@ class TestXCTestBackendErrorHandling:
 
         body = json.loads(captured_data[0])
         # Must NOT have multiplied to 300/600
-        assert body.get("x") != 300, (
-            "tap() must not multiply coordinates by scale factor"
-        )
-        assert body.get("y") != 600, (
-            "tap() must not multiply coordinates by scale factor"
-        )
+        assert body.get("x") != 300, "tap() must not multiply coordinates by scale factor"
+        assert body.get("y") != 600, "tap() must not multiply coordinates by scale factor"
         assert body.get("x") == pytest.approx(100)
         assert body.get("y") == pytest.approx(200)

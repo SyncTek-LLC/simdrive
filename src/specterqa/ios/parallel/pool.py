@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 class SimulatorPool:
@@ -76,10 +76,7 @@ class SimulatorPool:
         """
         with self._lock:
             if lease_id not in self._active:
-                raise ValueError(
-                    f"Unknown lease_id {lease_id!r}. "
-                    "It may have already been released or never existed."
-                )
+                raise ValueError(f"Unknown lease_id {lease_id!r}. It may have already been released or never existed.")
             lease = self._active.pop(lease_id)
 
         self._destroy_simulator(lease["udid"])

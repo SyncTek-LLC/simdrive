@@ -83,7 +83,7 @@ class SimActionExecutor:
 
         duration_ms = round((time.monotonic() - start) * 1000, 1)
         hash_after = self._snapshot_hash("after")
-        ui_changed = (hash_before != hash_after if (hash_before and hash_after) else True)
+        ui_changed = hash_before != hash_after if (hash_before and hash_after) else True
 
         return ActionResult(
             success=success and error is None,
@@ -106,7 +106,8 @@ class SimActionExecutor:
 
         m = re.search(
             r"(?:at|approximately|around|near|position)\s+(\d{1,4}(?:\.\d+)?)\s*,\s*(\d{1,4}(?:\.\d+)?)",
-            text, re.I,
+            text,
+            re.I,
         )
         if m:
             return float(m.group(1)), float(m.group(2))
