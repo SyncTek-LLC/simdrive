@@ -23,6 +23,7 @@ Tools:
     ios_elements         Get element list without screenshot
     ios_set_appearance   Toggle dark/light mode on the simulator
     ios_simctl           Run arbitrary simctl subcommand on the simulator
+    ios_webview_elements Get elements inside WKWebView content (EPUB readers, PDF viewers)
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -689,8 +690,20 @@ def handle_accessibility_audit(arguments: dict) -> dict:
                 "frame": f"{e.x},{e.y} {e.width}x{e.height}",
             })
 
-        # Touch target too small
-        if e.width < 44 or e.height < 44:
+        # Touch target too small — only flag actually-interactive element types.
+        # StaticText / Image / Other are non-interactive by design and routinely
+        # smaller than 44 pt; including them floods the report with false positives.
+        INTERACTIVE_FOR_AUDIT = {
+            "XCUIElementTypeButton", "XCUIElementTypeCell",
+            "XCUIElementTypeSwitch", "XCUIElementTypeSlider",
+            "XCUIElementTypeLink", "XCUIElementTypeTab",
+            "XCUIElementTypeMenuItem", "XCUIElementTypeRadioButton",
+            "XCUIElementTypeCheckBox",
+            # Short-form aliases (runner may omit the prefix)
+            "Button", "Cell", "Switch", "Slider",
+            "Link", "Tab", "MenuItem", "RadioButton", "CheckBox",
+        }
+        if e.element_type in INTERACTIVE_FOR_AUDIT and (e.width < 44 or e.height < 44):
             issues.append({
                 "type": "small_target",
                 "label": e.label or f"[{e.element_type}@{e.index}]",
@@ -1036,20 +1049,44 @@ def handle_set_appearance(arguments: dict) -> dict:
     if mode not in ("dark", "light"):
         return {"error": "mode must be 'dark' or 'light'"}
 
-    # Use "booted" rather than _session._target_udid: when xcodebuild is running
-    # tests the simulator IS the booted device, and xcrun simctl resolves
-    # "booted" correctly within the same process context.  Using the clone UDID
-    # directly can return "Shutdown" errors if the UDID refers to the original
-    # template sim rather than the live booted clone.
-    result = subprocess.run(
-        ["xcrun", "simctl", "ui", "booted", "appearance", mode],
+    # The "booted" alias fails when multiple simulators are booted or when
+    # xcodebuild keeps its own simulator context that simctl can't see via the
+    # "booted" shorthand.  Instead, enumerate ALL booted simulators from
+    # `simctl list devices -j` and try each UDID until one accepts the change.
+    import json as _json
+
+    list_result = subprocess.run(
+        ["xcrun", "simctl", "list", "devices", "-j"],
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=5,
     )
-    if result.returncode != 0:
-        return {"error": f"simctl failed: {result.stderr.strip()}"}
-    return {"status": "ok", "appearance": mode}
+    booted_udids: list[str] = []
+    try:
+        data = _json.loads(list_result.stdout)
+        for runtime_devs in data.get("devices", {}).values():
+            for dev in runtime_devs:
+                if dev.get("state") == "Booted":
+                    booted_udids.append(dev["udid"])
+    except Exception:
+        pass
+
+    if not booted_udids:
+        return {"error": "No booted simulators found"}
+
+    last_error = ""
+    for udid in booted_udids:
+        result = subprocess.run(
+            ["xcrun", "simctl", "ui", udid, "appearance", mode],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return {"status": "ok", "appearance": mode, "udid": udid}
+        last_error = result.stderr.strip()
+
+    return {"error": f"All booted sims rejected appearance change: {last_error}"}
 
 
 def handle_simctl(arguments: dict) -> dict:
@@ -1081,11 +1118,25 @@ def handle_simctl(arguments: dict) -> dict:
     if not command:
         return {"error": "command is required"}
 
-    # Use "booted" as the UDID for simctl — the simulator IS booted while tests
-    # are running, and "booted" is always resolved correctly by simctl.
-    # _session._target_udid may point to the original template sim (not the live
-    # clone), causing "Shutdown" errors for ui/status_bar/location subcommands.
-    udid = "booted"
+    # Enumerate booted simulators rather than using the "booted" alias, which
+    # fails when multiple sims are up or when xcodebuild holds its own context.
+    # Pick the first booted UDID; fall back to "booted" if enumeration fails.
+    import json as _json
+
+    _list = subprocess.run(
+        ["xcrun", "simctl", "list", "devices", "-j"],
+        capture_output=True, text=True, timeout=5,
+    )
+    _booted: list[str] = []
+    try:
+        _data = _json.loads(_list.stdout)
+        for _devs in _data.get("devices", {}).values():
+            for _d in _devs:
+                if _d.get("state") == "Booted":
+                    _booted.append(_d["udid"])
+    except Exception:
+        pass
+    udid = _booted[0] if _booted else "booted"
 
     # Replace placeholder token with the resolved UDID.
     if "<udid>" in command:
@@ -1118,6 +1169,25 @@ def handle_simctl(arguments: dict) -> dict:
             "stdout": result.stdout.strip(),
         }
     return {"status": "ok", "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
+
+
+def handle_webview_elements(arguments: dict) -> dict:
+    """Get elements inside WKWebView content (EPUB readers, PDF viewers, etc).
+
+    XCTest can see WKWebView descendants via the .webViews descendants chain.
+    This is the only way to interact with web content (EPUB readers, PDF viewers,
+    audiobook UI) rendered in WKWebView.
+
+    Returns:
+        {"success": True, "elements": [...], "count": <int>}
+        or {"error": "<message>"} when no session is active.
+    """
+    _require_session()
+    try:
+        result = _backend._get("/webview")
+        return result
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -1200,13 +1270,11 @@ PROVIDERS:
 - BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + ACCESS_KEY
 - CI replay — specterqa-ios replay <file> (no AI needed)
 
-KNOWN LIMITATION — WKWebView content:
-XCTest's accessibility tree does not expose the DOM inside WKWebView web views.
-Native app elements (navigation bars, buttons, sheets) remain accessible.
-For web content inside the app, use ios_simctl to run arbitrary simctl commands,
-or prefer apps with a native UI. XCTest's app.webViews.element query can interact
-with the WebView container but not individual web DOM nodes. A JavaScript bridge
-would require app-side instrumentation (out of scope for SpecterQA).
+WKWebView content:
+Use ios_webview_elements to query elements inside WKWebView (EPUB readers,
+PDF viewers, audiobook UI). XCTest's .webViews descendants chain exposes
+labelled/identified web elements. For complex DOM nodes without accessibility
+labels, a JavaScript bridge requires app-side instrumentation (out of scope).
 """,
     )
 
@@ -1520,6 +1588,29 @@ would require app-side instrumentation (out of scope for SpecterQA).
     )
     async def ios_simctl(command: str) -> str:
         result = handle_simctl({"command": command})
+        return json.dumps(result)
+
+    # ── Tool: ios_webview_elements ─────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_webview_elements",
+        description=(
+            "Get elements inside WKWebView content (EPUB readers, PDF viewers, "
+            "audiobook UI rendered in WKWebView). "
+            "Use this for testing EPUB readers, PDF viewers, audiobook UI rendered "
+            "in WKWebView. "
+            "XCTest can see WKWebView descendants via the .webViews chain — this is "
+            "the only way to interact with web content embedded in a native app. "
+            "Returns a flat list of elements found inside all WKWebView instances "
+            "currently on screen. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_webview_elements() -> str:
+        try:
+            result = handle_webview_elements({})
+        except RuntimeError as exc:
+            result = {"error": str(exc)}
         return json.dumps(result)
 
     return mcp

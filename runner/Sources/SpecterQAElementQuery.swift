@@ -117,6 +117,15 @@ final class SpecterQAElementQuery {
             }
         }
 
+        // Append web view elements (not in snapshot — XCTest accessibility tree
+        // excludes WKWebView content from snapshot but provides separate query)
+        if descriptors.count < limit {
+            let webViewElements = queryWebViewElements(limit: limit - descriptors.count)
+            for el in webViewElements {
+                descriptors.append(el)
+            }
+        }
+
         return descriptors
     }
 
@@ -151,6 +160,38 @@ final class SpecterQAElementQuery {
             walkSnapshot(child, types: types, descriptors: &descriptors,
                         limit: limit, depth: depth + 1)
         }
+    }
+
+    // MARK: - queryWebViewElements
+
+    /// Query elements inside WKWebView content. XCTest CAN see web view
+    /// elements via the .webView descendants chain — this is the only way
+    /// to interact with EPUB readers, PDF viewers, etc.
+    func queryWebViewElements(limit: Int = 100) -> [ElementDescriptor] {
+        var descriptors: [ElementDescriptor] = []
+        let webViews = self.app.webViews.allElementsBoundByIndex
+        for webView in webViews {
+            if descriptors.count >= limit { break }
+            // Walk all descendants of the web view
+            let elements = webView.descendants(matching: .any).allElementsBoundByIndex
+            for element in elements {
+                if descriptors.count >= limit { break }
+                let label = element.label
+                let ident = element.identifier
+                if label.isEmpty && ident.isEmpty { continue }
+                descriptors.append(ElementDescriptor(
+                    label: label,
+                    type: self.elementTypeName(element.elementType),
+                    identifier: ident,
+                    frame: element.frame,
+                    isEnabled: element.isEnabled,
+                    isSelected: element.isSelected,
+                    value: (element.value as? String) ?? "",
+                    index: descriptors.count
+                ))
+            }
+        }
+        return descriptors
     }
 
     // MARK: - findByLabel
