@@ -317,6 +317,19 @@ class XCTestBackend:
             self._device_height = float(result["height"])
         return result
 
+    def webview(self) -> dict[str, Any]:
+        """Fetch elements inside WKWebView content.
+
+        Queries WKWebView descendants via the XCTest .webViews chain — the
+        only way to see EPUB readers, PDF viewers, and other web content
+        embedded in the app.
+
+        Returns:
+            Dict with ``success``, ``elements`` list, and ``count``.
+        """
+        logger.debug("webview()")
+        return self._get("/webview")
+
     def shutdown(self) -> dict[str, Any]:
         """Gracefully shut down the XCTest runner process.
 

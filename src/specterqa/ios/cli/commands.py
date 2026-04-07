@@ -1761,7 +1761,12 @@ def replay(replay_file: str, verbose: bool, variables: tuple) -> None:
 @click.option("--verbose", "-v", is_flag=True)
 @click.option("--fail-fast", is_flag=True, help="Stop on first failure")
 @click.option("--rerecord", is_flag=True, help="Re-record failed replays (requires AI)")
-def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool) -> None:
+@click.option(
+    "--reuse-runner",
+    is_flag=True,
+    help="Keep XCTest runner alive across replays (~10x faster; requires all replays share the same bundle_id)",
+)
+def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_runner: bool) -> None:
     """Run all replay files in a directory. Exit 0 if all pass.
 
     Designed for CI/CD pipelines:
@@ -1769,7 +1774,8 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool) -> None:
     \b
       specterqa-ios ci .specterqa/replays/
       specterqa-ios ci --fail-fast
-      specterqa-ios ci --rerecord  # re-record UI-changed tests
+      specterqa-ios ci --reuse-runner   # keep runner alive — 10x faster
+      specterqa-ios ci --rerecord       # re-record UI-changed tests
 
     \b
     Exit codes:
@@ -1778,6 +1784,7 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool) -> None:
       2 = UI changed (re-record needed)
     """
     from specterqa.ios.replay import ReplayPlayer
+    from specterqa.ios.session_manager import TestSession
 
     replay_path = Path(replay_dir)
     if not replay_path.exists():
@@ -1797,39 +1804,93 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool) -> None:
     total_ui_changed = 0
     results = []
 
-    for f in files:
-        try:
-            player = ReplayPlayer(str(f))
-            click.echo(f"\n{'='*60}")
-            click.echo(f"  {player.name} ({len(player.steps)} steps)")
-            click.echo(f"{'='*60}")
+    def _print_replay_header(player: ReplayPlayer) -> None:
+        click.echo(f"\n{'='*60}")
+        click.echo(f"  {player.name} ({len(player.steps)} steps)")
+        click.echo(f"{'='*60}")
 
-            result = player.run(verbose=verbose)
-            passed = sum(1 for s in result["steps"] if s["passed"])
-            total = len(result["steps"])
-
-            if result["passed"]:
-                click.echo(f"  PASS — {passed}/{total}")
-                total_passed += 1
-            elif result.get("exit_code") == 2:
-                click.echo(f"  UI CHANGED — {passed}/{total} (re-record needed)")
-                total_ui_changed += 1
-            else:
-                click.echo(f"  FAIL — {passed}/{total}")
-                for s in result["steps"]:
-                    if not s["passed"]:
-                        click.echo(f"    {s['action']}: {s['error']}")
-                total_failed += 1
-
-            results.append({"file": str(f), **result})
-
-            if fail_fast and not result["passed"]:
-                break
-
-        except Exception as exc:
-            click.echo(f"  ERROR: {exc}")
+    def _record_result(result: dict, f: "Path") -> None:
+        nonlocal total_passed, total_failed, total_ui_changed
+        passed = sum(1 for s in result.get("steps", []) if s["passed"])
+        total = len(result.get("steps", []))
+        if result["passed"]:
+            click.echo(f"  PASS — {passed}/{total}")
+            total_passed += 1
+        elif result.get("exit_code") == 2:
+            click.echo(f"  UI CHANGED — {passed}/{total} (re-record needed)")
+            total_ui_changed += 1
+        else:
+            click.echo(f"  FAIL — {passed}/{total}")
+            for s in result.get("steps", []):
+                if not s["passed"]:
+                    click.echo(f"    {s['action']}: {s['error']}")
             total_failed += 1
-            results.append({"file": str(f), "passed": False, "error": str(exc)})
+        results.append({"file": str(f), **result})
+
+    if reuse_runner:
+        # ── Shared-runner mode ────────────────────────────────────────────
+        # Load first replay to obtain bundle_id / device_id, then start one
+        # TestSession and reuse it for all replays.  This avoids the ~10 s
+        # xcodebuild cold-start penalty on each replay.
+        first_player = ReplayPlayer(str(files[0]))
+        click.echo(
+            f"[reuse-runner] Starting shared session for bundle '{first_player.bundle_id}'"
+        )
+
+        # Kill any leftover xcodebuild processes before starting.
+        TestSession._kill_stale_runners()
+
+        session = TestSession(
+            bundle_id=first_player.bundle_id,
+            source_udid=first_player.device_id,
+        )
+        session.start()
+
+        try:
+            for f in files:
+                try:
+                    player = ReplayPlayer(str(f))
+                    _print_replay_header(player)
+
+                    result = player.run_with_session(session, verbose=verbose)
+                    _record_result(result, f)
+
+                    if fail_fast and not result["passed"]:
+                        break
+
+                except Exception as exc:
+                    click.echo(f"  ERROR: {exc}")
+                    total_failed += 1
+                    results.append({"file": str(f), "passed": False, "error": str(exc)})
+                    if fail_fast:
+                        break
+        finally:
+            try:
+                session.stop()
+            except Exception:
+                pass
+
+    else:
+        # ── Per-replay isolation mode (original behaviour) ─────────────
+        for f in files:
+            # Kill stale xcodebuild processes between replays to prevent
+            # port conflicts and runner state bleed-over (NEW-2 / NEW-3).
+            TestSession._kill_stale_runners()
+
+            try:
+                player = ReplayPlayer(str(f))
+                _print_replay_header(player)
+
+                result = player.run(verbose=verbose)
+                _record_result(result, f)
+
+                if fail_fast and not result["passed"]:
+                    break
+
+            except Exception as exc:
+                click.echo(f"  ERROR: {exc}")
+                total_failed += 1
+                results.append({"file": str(f), "passed": False, "error": str(exc)})
 
     # Summary
     click.echo(f"\n{'='*60}")

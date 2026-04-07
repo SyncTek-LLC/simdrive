@@ -29,6 +29,54 @@ from typing import Optional
 
 
 # ---------------------------------------------------------------------------
+# Visual regression helpers
+# ---------------------------------------------------------------------------
+
+
+def screenshot_diff(b64_a: str, b64_b: str) -> float:
+    """Return percent difference between two base64 PNGs.
+
+    Uses Pillow's ImageChops.difference to count non-zero pixels.
+    Returns 0.0 for identical images, 100.0 if sizes differ.
+    Raises ImportError if Pillow is not installed.
+
+    Args:
+        b64_a: Base-64 encoded PNG string (baseline).
+        b64_b: Base-64 encoded PNG string (current capture).
+
+    Returns:
+        Float percentage of differing pixels (0.0–100.0).
+    """
+    import base64
+    import io
+
+    from PIL import Image, ImageChops
+
+    img_a = Image.open(io.BytesIO(base64.b64decode(b64_a)))
+    img_b = Image.open(io.BytesIO(base64.b64decode(b64_b)))
+
+    if img_a.size != img_b.size:
+        return 100.0  # different sizes = 100% diff
+
+    diff = ImageChops.difference(img_a, img_b)
+    bbox = diff.getbbox()
+    if bbox is None:
+        return 0.0  # identical
+
+    # Count non-zero pixels across all channels
+    histogram = diff.histogram()
+    # Each channel contributes 256 histogram buckets; index 0 = black (no diff)
+    channels = img_a.mode  # e.g. 'RGB' = 3 channels
+    n_channels = len(channels)
+    diff_pixels = 0
+    for ch in range(n_channels):
+        offset = ch * 256
+        diff_pixels += sum(histogram[offset + i] for i in range(1, 256))
+    total_pixels = img_a.size[0] * img_a.size[1] * n_channels
+    return (diff_pixels / total_pixels) * 100
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -58,10 +106,20 @@ class ReplayStep:
     expect_not_elements: list[str] = field(default_factory=list)
     expect_element_value: dict = field(default_factory=dict)  # {"label": "expected_value"}
     expect_element_count: dict = field(default_factory=dict)  # {"Button": 3}
+    expect_element_state: dict = field(default_factory=dict)  # {"label": {"enabled": True, "selected": False}}
     # Wait for element before executing this step
     wait_for: Optional[dict] = None  # {"label": "Read", "timeout": 10}
     # Per-step timeout override (seconds); None = use session default
     step_timeout: Optional[float] = None
+    # Conditional execution — skip this step if condition is not met
+    if_element_visible: Optional[str] = None      # execute only when element is present
+    if_not_element_visible: Optional[str] = None  # execute only when element is absent
+    # Step identity and jump target for conditional branching
+    step_id: Optional[str] = None   # ID for this step (referenced by skip_to)
+    skip_to: Optional[str] = None   # action: jump to step with matching step_id
+    # Visual regression — compare current screenshot against a saved baseline
+    expect_screenshot: Optional[str] = None  # baseline filename, e.g. "home_screen.png"
+    screenshot_threshold: float = 5.0        # max allowed % pixel difference
 
 
 @dataclass
@@ -178,6 +236,33 @@ class ReplayRecorder:
         """
         if self.session.steps:
             self.session.steps[-1].expect_elements = list(element_labels)
+
+    def record_baseline_screenshot(self, name: str, b64: str, baseline_dir: str = "") -> Path:
+        """Save a baseline screenshot alongside the replay file for visual regression.
+
+        The baseline is stored as a PNG file.  During replay, steps with
+        ``expect_screenshot: <name>`` will compare the live screenshot against
+        this baseline using ``screenshot_diff()``.
+
+        Args:
+            name:         Filename for the baseline (e.g. ``"home_screen.png"``).
+                          The ``.png`` extension is added if absent.
+            b64:          Base-64 encoded PNG string to save as the baseline.
+            baseline_dir: Directory to write the file into.
+                          Defaults to ``.specterqa/baselines/``.
+
+        Returns:
+            The resolved Path of the written baseline file.
+        """
+        import base64
+
+        out_dir = Path(baseline_dir) if baseline_dir else Path(".specterqa/baselines")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not name.endswith(".png"):
+            name = f"{name}.png"
+        out_path = out_dir / name
+        out_path.write_bytes(base64.b64decode(b64))
+        return out_path
 
     # ── Persistence ───────────────────────────────────────────────────────
 
@@ -346,6 +431,19 @@ class ReplayPlayer:
                 elif action == "long_press":
                     self._exec_long_press(step, backend, annotator, result)
 
+                elif action == "wait_for_element":
+                    wf_label = step.get("label", "")
+                    wf_timeout = float(step.get("timeout", 10))
+                    if not wf_label:
+                        exec_error.append(("unknown", "wait_for_element requires 'label'"))
+                        return
+                    if not self._wait_for_label(annotator, wf_label, wf_timeout):
+                        exec_error.append((
+                            "unknown",
+                            f"Element '{wf_label}' not found within {wf_timeout}s",
+                        ))
+                    return
+
                 else:
                     exec_error.append(("unknown", f"Unknown action: {action!r}"))
                     return
@@ -481,6 +579,90 @@ class ReplayPlayer:
                 if result["exit_code"] == 0:
                     result["exit_code"] = 1
 
+        expect_state = step.get("expect_element_state", {})
+        if expect_state:
+            try:
+                elements = annotator.get_elements_from_runner()
+                for lbl, expected_props in expect_state.items():
+                    target = next(
+                        (e for e in elements if lbl.lower() in e.label.lower()), None
+                    )
+                    if target is None:
+                        step_result["passed"] = False
+                        step_result["error"] = (
+                            f"expect_element_state: element '{lbl}' not found"
+                        )
+                        if result["exit_code"] == 0:
+                            result["exit_code"] = 1
+                        break
+                    for prop_key, expected_val in expected_props.items():
+                        actual_val = getattr(target, prop_key, None)
+                        if actual_val != expected_val:
+                            step_result["passed"] = False
+                            step_result["error"] = (
+                                f"expect_element_state: '{lbl}'.{prop_key} "
+                                f"expected {expected_val!r}, got {actual_val!r}"
+                            )
+                            if result["exit_code"] == 0:
+                                result["exit_code"] = 1
+                            break
+            except Exception as exc:
+                step_result["passed"] = False
+                step_result["error"] = f"expect_element_state check failed: {exc}"
+                if result["exit_code"] == 0:
+                    result["exit_code"] = 1
+
+        expect_screenshot_name = step.get("expect_screenshot")
+        if expect_screenshot_name:
+            try:
+                threshold = float(step.get("screenshot_threshold", 5.0))
+                baseline_dir = step.get("baseline_dir", ".specterqa/baselines")
+                baseline_path = Path(baseline_dir) / expect_screenshot_name
+                if not expect_screenshot_name.endswith(".png"):
+                    baseline_path = Path(baseline_dir) / f"{expect_screenshot_name}.png"
+
+                if not baseline_path.exists():
+                    # Save current screenshot as baseline for future runs
+                    raw = backend.screenshot()
+                    b64_current = (
+                        raw.get("base64") or raw.get("data") or raw.get("image", "")
+                    )
+                    if b64_current:
+                        import base64 as _b64
+                        baseline_path.parent.mkdir(parents=True, exist_ok=True)
+                        baseline_path.write_bytes(_b64.b64decode(b64_current))
+                        step_result["screenshot_note"] = (
+                            f"Baseline saved: {baseline_path}"
+                        )
+                else:
+                    import base64 as _b64
+                    raw = backend.screenshot()
+                    b64_current = (
+                        raw.get("base64") or raw.get("data") or raw.get("image", "")
+                    )
+                    if b64_current:
+                        b64_baseline = _b64.b64encode(baseline_path.read_bytes()).decode("ascii")
+                        diff_pct = screenshot_diff(b64_baseline, b64_current)
+                        step_result["screenshot_diff_pct"] = round(diff_pct, 2)
+                        if diff_pct > threshold:
+                            step_result["passed"] = False
+                            step_result["error"] = (
+                                f"Visual regression: {diff_pct:.1f}% pixel difference "
+                                f"exceeds threshold {threshold}% for '{expect_screenshot_name}'"
+                            )
+                            if result["exit_code"] == 0:
+                                result["exit_code"] = 1
+            except ImportError:
+                step_result["screenshot_note"] = (
+                    "Visual regression skipped — Pillow not installed. "
+                    "Install with: pip install Pillow"
+                )
+            except Exception as exc:
+                step_result["passed"] = False
+                step_result["error"] = f"expect_screenshot check failed: {exc}"
+                if result["exit_code"] == 0:
+                    result["exit_code"] = 1
+
         return step_result
 
     def _exec_tap(self, step: dict, backend, annotator, result: dict) -> None:
@@ -528,6 +710,125 @@ class ReplayPlayer:
 
     # ── Public API ────────────────────────────────────────────────────────
 
+    def run_with_session(self, session, verbose: bool = False, variables: Optional[dict] = None) -> dict:
+        """Execute the replay using an already-started *session*.
+
+        Behaves identically to ``run()`` but skips ``session.start()`` and
+        ``session.stop()``.  The caller is responsible for lifecycle management.
+
+        This is used by the ``ci --reuse-runner`` flag to keep the XCTest
+        runner alive across multiple replays, avoiding the ~10 s cold-start
+        penalty per replay.
+
+        Args:
+            session:   A started ``TestSession`` instance.
+            verbose:   If True, print per-step status to stdout.
+            variables: Optional ${VAR} substitution dict.
+
+        Returns:
+            Same structure as ``run()``.
+        """
+        from specterqa.ios.backends.xctest_client import XCTestBackend
+        from specterqa.ios.som_annotator import SoMAnnotator
+
+        vars_dict: dict = variables or {}
+
+        result: dict = {
+            "name": self.name,
+            "bundle_id": self.bundle_id,
+            "steps": [],
+            "passed": True,
+            "exit_code": 0,
+        }
+
+        backend = XCTestBackend(port=session._port)
+        annotator = SoMAnnotator(runner_url=session.runner_url)
+
+        try:
+            i = 0
+            while i < len(self.steps):
+                step = self.steps[i]
+                action = step.get("action", "?")
+                label = step.get(
+                    "element_label",
+                    step.get("direction", step.get("text", step.get("key", ""))),
+                )
+
+                if verbose:
+                    print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
+
+                # Conditional execution guards
+                skip_step = False
+                if_visible = step.get("if_element_visible")
+                if if_visible:
+                    try:
+                        elements = annotator.get_elements_from_runner()
+                        if not any(if_visible.lower() in e.label.lower() for e in elements):
+                            step_result: dict = {
+                                "action": action, "passed": True, "error": None,
+                                "status": "skipped",
+                                "reason": f"if_element_visible: '{if_visible}' not present",
+                            }
+                            result["steps"].append(step_result)
+                            i += 1
+                            continue
+                    except Exception:
+                        pass
+
+                if_not_visible = step.get("if_not_element_visible")
+                if if_not_visible:
+                    try:
+                        elements = annotator.get_elements_from_runner()
+                        if any(if_not_visible.lower() in e.label.lower() for e in elements):
+                            step_result = {
+                                "action": action, "passed": True, "error": None,
+                                "status": "skipped",
+                                "reason": f"if_not_element_visible: '{if_not_visible}' present",
+                            }
+                            result["steps"].append(step_result)
+                            i += 1
+                            continue
+                    except Exception:
+                        pass
+
+                # skip_to action — jump to step with matching step_id
+                if action == "skip_to":
+                    target_id = step.get("step_id", "")
+                    target_idx = next(
+                        (j for j, s in enumerate(self.steps) if s.get("step_id") == target_id),
+                        None,
+                    )
+                    if target_idx is not None and target_idx > i:
+                        i = target_idx
+                    else:
+                        i += 1
+                    continue
+
+                step_result = self._execute_step(
+                    step, backend, annotator, result, variables=vars_dict
+                )
+
+                if not step_result["passed"]:
+                    result["passed"] = False
+
+                result["steps"].append(step_result)
+
+                if verbose:
+                    if step_result["passed"]:
+                        print("    PASS")
+                    else:
+                        print(f"    FAIL: {step_result['error']}")
+
+                time.sleep(0.3)  # brief inter-action pause
+                i += 1
+
+        except Exception as exc:
+            result["passed"] = False
+            result["exit_code"] = 1
+            result["error"] = str(exc)
+
+        return result
+
     def run(self, verbose: bool = False, variables: Optional[dict] = None) -> dict:
         """Execute the replay and return a result summary dict.
 
@@ -569,7 +870,9 @@ class ReplayPlayer:
             backend = XCTestBackend(port=session._port)
             annotator = SoMAnnotator(runner_url=session.runner_url)
 
-            for i, step in enumerate(self.steps):
+            i = 0
+            while i < len(self.steps):
+                step = self.steps[i]
                 action = step.get("action", "?")
                 label = step.get(
                     "element_label",
@@ -578,6 +881,52 @@ class ReplayPlayer:
 
                 if verbose:
                     print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
+
+                # Conditional execution guards
+                if_visible = step.get("if_element_visible")
+                if if_visible:
+                    try:
+                        elements = annotator.get_elements_from_runner()
+                        if not any(if_visible.lower() in e.label.lower() for e in elements):
+                            step_result: dict = {
+                                "action": action, "passed": True, "error": None,
+                                "status": "skipped",
+                                "reason": f"if_element_visible: '{if_visible}' not present",
+                            }
+                            result["steps"].append(step_result)
+                            i += 1
+                            continue
+                    except Exception:
+                        pass
+
+                if_not_visible = step.get("if_not_element_visible")
+                if if_not_visible:
+                    try:
+                        elements = annotator.get_elements_from_runner()
+                        if any(if_not_visible.lower() in e.label.lower() for e in elements):
+                            step_result = {
+                                "action": action, "passed": True, "error": None,
+                                "status": "skipped",
+                                "reason": f"if_not_element_visible: '{if_not_visible}' present",
+                            }
+                            result["steps"].append(step_result)
+                            i += 1
+                            continue
+                    except Exception:
+                        pass
+
+                # skip_to action — jump to step with matching step_id
+                if action == "skip_to":
+                    target_id = step.get("step_id", "")
+                    target_idx = next(
+                        (j for j, s in enumerate(self.steps) if s.get("step_id") == target_id),
+                        None,
+                    )
+                    if target_idx is not None and target_idx > i:
+                        i = target_idx
+                    else:
+                        i += 1
+                    continue
 
                 step_result = self._execute_step(
                     step, backend, annotator, result, variables=vars_dict
@@ -595,6 +944,7 @@ class ReplayPlayer:
                         print(f"    FAIL: {step_result['error']}")
 
                 time.sleep(0.3)  # brief inter-action pause
+                i += 1
 
         except Exception as exc:
             result["passed"] = False
