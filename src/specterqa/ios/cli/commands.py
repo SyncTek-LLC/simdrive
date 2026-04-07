@@ -5,11 +5,19 @@ sub-commands for setting up and running AI-driven iOS Simulator tests.
 
 Commands:
   specterqa ios setup              — verify Xcode and environment
+  specterqa ios doctor             — diagnose the full SpecterQA environment
+  specterqa ios init               — scaffold .specterqa/ for a new project
   specterqa ios devices            — list available iOS simulators
   specterqa ios boot               — boot a simulator by name
   specterqa ios install            — install a .app bundle on a simulator
   specterqa ios run                — run a test journey on iOS Simulator
   specterqa ios smoke              — quick smoke test for a product
+  specterqa ios replay             — replay a recorded session without AI
+  specterqa ios ci                 — run all replays in a directory (CI mode)
+  specterqa ios validate-replay    — validate a replay YAML file
+  specterqa ios runner             — manage the Swift XCTest runner
+  specterqa ios wda                — manage WebDriverAgent
+  specterqa ios serve              — start the MCP server
 """
 
 from __future__ import annotations
@@ -332,6 +340,116 @@ def setup() -> None:
             )
         )
         raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
+# specterqa ios doctor
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.command("doctor")
+def doctor() -> None:
+    """Diagnose the SpecterQA iOS environment.
+
+    Checks Python version, Xcode installation, simulator state, runner build,
+    license key, BrowserStack credentials, and installed package version.
+
+    \b
+    Example:
+      specterqa-ios doctor
+    """
+    import shutil
+    import subprocess as _sp
+
+    click.echo("SpecterQA iOS Doctor")
+    click.echo("=" * 40)
+
+    # Python version
+    py_ver = sys.version.split()[0]
+    py_ok = sys.version_info >= (3, 10)
+    click.echo(
+        f"  {'[OK]' if py_ok else '[!!]'} Python {py_ver}"
+        f"{'  (need 3.10+)' if not py_ok else ''}"
+    )
+
+    # specterqa-ios version
+    try:
+        from specterqa import __version__ as _sqver
+        click.echo(f"  [OK] specterqa-ios {_sqver}")
+    except Exception:
+        click.echo("  [??] specterqa-ios version unknown")
+
+    # Xcode / xcodebuild
+    xcode_bin = shutil.which("xcodebuild")
+    if xcode_bin:
+        try:
+            _xr = _sp.run(
+                ["xcodebuild", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            xcode_ver = _xr.stdout.strip().split("\n")[0]
+            click.echo(f"  [OK] {xcode_ver}")
+        except Exception:
+            click.echo("  [??] xcodebuild found but version check failed")
+    else:
+        click.echo("  [!!] Xcode not installed — install from the Mac App Store")
+
+    # Simulator (booted?)
+    try:
+        _sr = _sp.run(
+            ["xcrun", "simctl", "list", "devices", "booted"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        booted = "Booted" in _sr.stdout
+        click.echo(
+            f"  {'[OK]' if booted else '[--]'} Simulator "
+            f"{'booted' if booted else 'not booted — run: specterqa-ios boot'}"
+        )
+    except Exception:
+        click.echo("  [!!] simctl not available — install Xcode")
+
+    # XCTest runner built?
+    runner_dir = Path.home() / ".specterqa" / "runner-build"
+    runner_built = (runner_dir / "Build" / "Products").exists()
+    click.echo(
+        f"  {'[OK]' if runner_built else '[--]'} XCTest runner "
+        f"{'built' if runner_built else 'not built — run: specterqa-ios runner build'}"
+    )
+
+    # License key
+    license_key = os.environ.get("SPECTERQA_IOS_LICENSE", "")
+    if license_key == "founder":
+        click.echo("  [OK] License: founder mode (unlimited simulators)")
+    elif license_key:
+        click.echo(f"  [OK] License: {license_key[:8]}...")
+    else:
+        click.echo("  [--] License: trial mode (1 simulator) — set SPECTERQA_IOS_LICENSE")
+
+    # BrowserStack
+    bs_user = os.environ.get("BROWSERSTACK_USERNAME", "")
+    bs_key = os.environ.get("BROWSERSTACK_ACCESS_KEY", "")
+    if bs_user and bs_key:
+        click.echo(f"  [OK] BrowserStack: {bs_user} (real-device testing enabled)")
+    else:
+        click.echo("  [  ] BrowserStack: not configured (local simulator only)")
+
+    # ANTHROPIC_API_KEY (needed for AI-driven run, not for replay)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        click.echo(f"  [OK] ANTHROPIC_API_KEY: set ({api_key[:8]}...)")
+    else:
+        click.echo("  [--] ANTHROPIC_API_KEY: not set (needed for AI-driven runs)")
+
+    click.echo("")
+    click.echo("Quick start:")
+    click.echo("  1. specterqa-ios runner build --project App.xcodeproj --scheme App")
+    click.echo("  2. Add to .claude/mcp.json: {\"specterqa-ios\": {\"command\": \"specterqa-ios-mcp\"}}")
+    click.echo("  3. Ask Claude Code: 'Test my iOS app and save a replay'")
+    click.echo("  4. specterqa-ios ci .specterqa/replays/ --json-output results.json")
 
 
 # ---------------------------------------------------------------------------
@@ -1762,20 +1880,44 @@ def replay(replay_file: str, verbose: bool, variables: tuple) -> None:
 @click.option("--fail-fast", is_flag=True, help="Stop on first failure")
 @click.option("--rerecord", is_flag=True, help="Re-record failed replays (requires AI)")
 @click.option(
-    "--reuse-runner",
+    "--no-reuse-runner",
     is_flag=True,
-    help="Keep XCTest runner alive across replays (~10x faster; requires all replays share the same bundle_id)",
+    help="Disable shared XCTest runner — each replay gets its own session (slower, full isolation)",
 )
-def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_runner: bool) -> None:
+@click.option(
+    "--parallel",
+    type=int,
+    default=1,
+    help="Run N replays simultaneously using cloned simulators (default: 1)",
+)
+@click.option(
+    "--json-output",
+    "json_output_path",
+    default=None,
+    metavar="PATH",
+    help="Write structured JSON results to PATH (e.g. .specterqa/results.json).",
+)
+def ci(
+    replay_dir: str,
+    verbose: bool,
+    fail_fast: bool,
+    rerecord: bool,
+    no_reuse_runner: bool,
+    parallel: int,
+    json_output_path: str | None,
+) -> None:
     """Run all replay files in a directory. Exit 0 if all pass.
 
-    Designed for CI/CD pipelines:
+    Designed for CI/CD pipelines. Shared-runner mode is on by default (~10x
+    faster). Use --no-reuse-runner for full per-replay isolation.
 
     \b
       specterqa-ios ci .specterqa/replays/
       specterqa-ios ci --fail-fast
-      specterqa-ios ci --reuse-runner   # keep runner alive — 10x faster
-      specterqa-ios ci --rerecord       # re-record UI-changed tests
+      specterqa-ios ci --parallel 4                         # run 4 replays simultaneously
+      specterqa-ios ci --no-reuse-runner                    # per-replay isolation (slower)
+      specterqa-ios ci --rerecord                           # re-record UI-changed tests
+      specterqa-ios ci --json-output .specterqa/results.json  # write structured results
 
     \b
     Exit codes:
@@ -1785,6 +1927,9 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_ru
     """
     from specterqa.ios.replay import ReplayPlayer
     from specterqa.ios.session_manager import TestSession
+
+    # --reuse-runner is now the default; --no-reuse-runner disables it.
+    reuse_runner = not no_reuse_runner
 
     replay_path = Path(replay_dir)
     if not replay_path.exists():
@@ -1803,6 +1948,9 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_ru
     total_failed = 0
     total_ui_changed = 0
     results = []
+    import threading
+
+    _results_lock = threading.Lock()
 
     def _print_replay_header(player: ReplayPlayer) -> None:
         click.echo(f"\n{'='*60}")
@@ -1813,22 +1961,58 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_ru
         nonlocal total_passed, total_failed, total_ui_changed
         passed = sum(1 for s in result.get("steps", []) if s["passed"])
         total = len(result.get("steps", []))
-        if result["passed"]:
-            click.echo(f"  PASS — {passed}/{total}")
-            total_passed += 1
-        elif result.get("exit_code") == 2:
-            click.echo(f"  UI CHANGED — {passed}/{total} (re-record needed)")
-            total_ui_changed += 1
-        else:
-            click.echo(f"  FAIL — {passed}/{total}")
-            for s in result.get("steps", []):
-                if not s["passed"]:
-                    click.echo(f"    {s['action']}: {s['error']}")
-            total_failed += 1
-        results.append({"file": str(f), **result})
+        with _results_lock:
+            if result["passed"]:
+                click.echo(f"  PASS — {passed}/{total}  [{f.name}]")
+                total_passed += 1
+            elif result.get("exit_code") == 2:
+                click.echo(f"  UI CHANGED — {passed}/{total} (re-record needed)  [{f.name}]")
+                total_ui_changed += 1
+            else:
+                click.echo(f"  FAIL — {passed}/{total}  [{f.name}]")
+                for s in result.get("steps", []):
+                    if not s["passed"]:
+                        click.echo(f"    {s['action']}: {s['error']}")
+                total_failed += 1
+            results.append({"file": str(f), **result})
 
-    if reuse_runner:
-        # ── Shared-runner mode ────────────────────────────────────────────
+    # ── Parallel mode ─────────────────────────────────────────────────────
+    if parallel > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        click.echo(f"[parallel] Running {len(files)} replays across {parallel} workers")
+        t_start = time.time()
+
+        def run_one(replay_file: Path):
+            try:
+                player = ReplayPlayer(str(replay_file))
+                return replay_file, player.run(verbose=False)
+            except Exception as exc:
+                return replay_file, {
+                    "name": replay_file.stem,
+                    "bundle_id": "",
+                    "steps": [],
+                    "passed": False,
+                    "exit_code": 1,
+                    "error": str(exc),
+                }
+
+        with ThreadPoolExecutor(max_workers=parallel) as executor:
+            futures = {executor.submit(run_one, f): f for f in files}
+            for future in as_completed(futures):
+                replay_file, result = future.result()
+                _record_result(result, replay_file)
+                if fail_fast and not result["passed"]:
+                    # Cancel remaining futures
+                    for pending in futures:
+                        pending.cancel()
+                    break
+
+        elapsed = time.time() - t_start
+        click.echo(f"\n[parallel] Total time: {elapsed:.1f}s across {parallel} workers")
+
+    elif reuse_runner:
+        # ── Shared-runner mode (default) ──────────────────────────────────
         # Load first replay to obtain bundle_id / device_id, then start one
         # TestSession and reuse it for all replays.  This avoids the ~10 s
         # xcodebuild cold-start penalty on each replay.
@@ -1860,7 +2044,8 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_ru
 
                 except Exception as exc:
                     click.echo(f"  ERROR: {exc}")
-                    total_failed += 1
+                    with _results_lock:
+                        total_failed += 1
                     results.append({"file": str(f), "passed": False, "error": str(exc)})
                     if fail_fast:
                         break
@@ -1871,10 +2056,10 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_ru
                 pass
 
     else:
-        # ── Per-replay isolation mode (original behaviour) ─────────────
+        # ── Per-replay isolation mode (--no-reuse-runner) ─────────────────
         for f in files:
             # Kill stale xcodebuild processes between replays to prevent
-            # port conflicts and runner state bleed-over (NEW-2 / NEW-3).
+            # port conflicts and runner state bleed-over.
             TestSession._kill_stale_runners()
 
             try:
@@ -1897,12 +2082,148 @@ def ci(replay_dir: str, verbose: bool, fail_fast: bool, rerecord: bool, reuse_ru
     click.echo(f"SUMMARY: {total_passed} passed, {total_failed} failed, {total_ui_changed} UI changed")
     click.echo(f"{'='*60}")
 
+    # --json-output: write structured results file for CI artifact collection
+    if json_output_path:
+        total_duration = sum(
+            r.get("duration_seconds", 0.0) for r in results
+        )
+        replay_records = []
+        for r in results:
+            replay_records.append({
+                "file": r.get("file", ""),
+                "name": r.get("name", Path(r.get("file", "")).stem),
+                "passed": r.get("passed", False),
+                "duration_seconds": r.get("duration_seconds", 0.0),
+                "steps": r.get("steps", []),
+                "error": r.get("error"),
+            })
+        json_payload = {
+            "summary": {
+                "total": total_passed + total_failed + total_ui_changed,
+                "passed": total_passed,
+                "failed": total_failed,
+                "ui_changed": total_ui_changed,
+                "duration_seconds": round(total_duration, 3),
+            },
+            "replays": replay_records,
+        }
+        try:
+            output_path = Path(json_output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(json_payload, indent=2, default=str))
+            click.echo(f"Results written to: {output_path}")
+        except Exception as exc:
+            click.echo(f"Warning: failed to write JSON output to {json_output_path}: {exc}", err=True)
+
     if total_failed > 0:
         raise SystemExit(1)
     elif total_ui_changed > 0:
         raise SystemExit(2)
     else:
         raise SystemExit(0)
+
+
+# ---------------------------------------------------------------------------
+# Validate command — YAML schema validation
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.command("validate-replay")
+@click.argument("replay_file", type=click.Path(exists=True))
+def validate_replay(replay_file: str) -> None:
+    """Validate a replay YAML file's structure and references.
+
+    Checks for:
+    - Required top-level keys (bundle_id, steps)
+    - Valid action types (including Maestro-compatible aliases)
+    - Unknown step keys
+    - Unresolved skip_to references
+
+    \b
+      specterqa-ios validate-replay .specterqa/replays/smoke.yaml
+    """
+    import yaml
+
+    with open(replay_file) as f:
+        data = yaml.safe_load(f)
+
+    issues: list[str] = []
+
+    if not data or "replay" not in data:
+        issues.append("Missing top-level 'replay' key")
+        click.echo(f"INVALID: {issues[0]}")
+        raise SystemExit(1)
+
+    r = data["replay"]
+    if "bundle_id" not in r:
+        issues.append("Missing 'bundle_id'")
+    if "steps" not in r:
+        issues.append("Missing 'steps' list")
+
+    if issues:
+        click.echo(f"INVALID — {len(issues)} issue(s):")
+        for issue in issues:
+            click.echo(f"  {issue}")
+        raise SystemExit(1)
+
+    valid_actions = {
+        "tap", "swipe", "swipe_back", "type", "press_key",
+        "long_press", "wait_for_element", "wait", "skip_to", "assert",
+    }
+    # Maestro-compatible shorthand keys that auto-resolve to an action
+    maestro_shortcuts = {"tapOn", "assertVisible", "assertNotVisible", "inputText", "waitFor"}
+    valid_keys = {
+        "action", "label", "element_label", "type", "element_index", "x", "y",
+        "direction", "text", "key", "duration", "timeout",
+        "expect_elements", "expect_not_elements", "expect_element_value",
+        "expect_element_count", "expect_element_state", "expect_screenshot",
+        "screenshot_threshold", "wait_for", "step_id", "skip_to",
+        "if_element_visible", "if_not_element_visible", "step_timeout",
+        "baseline_dir",
+        # Maestro aliases
+        "tapOn", "assertVisible", "assertNotVisible", "inputText", "waitFor",
+    }
+
+    step_ids: set[str] = set()
+    for i, step in enumerate(r.get("steps", [])):
+        # Resolve effective action (native or Maestro alias)
+        action = step.get("action")
+        if not action:
+            if "tapOn" in step:
+                action = "tap"
+            elif "inputText" in step:
+                action = "type"
+            elif "waitFor" in step:
+                action = "wait_for_element"
+            elif "assertVisible" in step or "assertNotVisible" in step:
+                action = "assert"
+
+        if action and action not in valid_actions:
+            issues.append(f"Step {i}: invalid action '{action}'")
+
+        sid = step.get("step_id")
+        if sid:
+            step_ids.add(sid)
+
+        for key in step:
+            if key not in valid_keys:
+                issues.append(f"Step {i}: unknown key '{key}'")
+
+    # Validate skip_to references
+    for i, step in enumerate(r.get("steps", [])):
+        target = step.get("skip_to")
+        if target and target not in step_ids:
+            issues.append(f"Step {i}: skip_to references unknown step_id '{target}'")
+
+    if issues:
+        click.echo(f"INVALID — {len(issues)} issue(s):")
+        for issue in issues:
+            click.echo(f"  {issue}")
+        raise SystemExit(1)
+
+    step_count = len(r.get("steps", []))
+    click.echo(f"VALID — {step_count} steps, {len(step_ids)} step IDs")
+    raise SystemExit(0)
 
 
 # ---------------------------------------------------------------------------

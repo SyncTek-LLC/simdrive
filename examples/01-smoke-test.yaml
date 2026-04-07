@@ -1,0 +1,16 @@
+# SpecterQA iOS Replay — Example 01: Basic Smoke Test
+#
+# Demonstrates: Maestro-compatible syntax (tapOn, assertVisible, swipe_back)
+# Use case:     Quick sanity check that key screens are reachable after each build.
+# Run with:     specterqa-ios replay examples/01-smoke-test.yaml
+#               specterqa-ios validate-replay examples/01-smoke-test.yaml
+
+replay:
+  name: smoke-test
+  bundle_id: com.example.MyApp
+  steps:
+    - tapOn: "Settings"
+    - assertVisible: ["General", "Display"]
+    - tapOn: "General"
+    - assertVisible: "About"
+    - swipe_back
