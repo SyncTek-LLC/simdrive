@@ -380,6 +380,47 @@ class ReplayPlayer:
             time.sleep(0.5)
         return False
 
+    @staticmethod
+    def _normalize_maestro_step(step: dict) -> dict:
+        """Translate Maestro-compatible YAML shortcuts into native step format.
+
+        Supports these Maestro aliases:
+
+        - ``tapOn: "Label"``              → action: tap, label: Label
+        - ``assertVisible: "Label"``      → action: assert, expect_elements: [Label]
+        - ``assertNotVisible: "Label"``   → action: assert, expect_not_elements: [Label]
+        - ``inputText: "hello"``          → action: type, text: hello
+        - ``waitFor: "Label"``            → action: wait_for_element, label: Label
+
+        The step dict is modified in-place and returned.
+        """
+        if "tapOn" in step:
+            step.setdefault("action", "tap")
+            step.setdefault("element_label", step.pop("tapOn"))
+        if "assertVisible" in step:
+            step.setdefault("action", "assert")
+            step.setdefault("expect_elements", [])
+            val = step.pop("assertVisible")
+            if isinstance(val, list):
+                step["expect_elements"].extend(val)
+            else:
+                step["expect_elements"].append(val)
+        if "assertNotVisible" in step:
+            step.setdefault("action", "assert")
+            step.setdefault("expect_not_elements", [])
+            val = step.pop("assertNotVisible")
+            if isinstance(val, list):
+                step["expect_not_elements"].extend(val)
+            else:
+                step["expect_not_elements"].append(val)
+        if "inputText" in step:
+            step.setdefault("action", "type")
+            step.setdefault("text", step.pop("inputText"))
+        if "waitFor" in step:
+            step.setdefault("action", "wait_for_element")
+            step.setdefault("label", step.pop("waitFor"))
+        return step
+
     def _execute_step(
         self,
         step: dict,
@@ -389,6 +430,9 @@ class ReplayPlayer:
         variables: Optional[dict] = None,
     ) -> dict:
         """Execute one step and return a step-result dict."""
+        # Normalise Maestro-compatible YAML shortcuts before anything else
+        step = self._normalize_maestro_step(dict(step))
+
         if variables:
             step = self._resolve_step_vars(step, variables)
 
@@ -443,6 +487,11 @@ class ReplayPlayer:
                             f"Element '{wf_label}' not found within {wf_timeout}s",
                         ))
                     return
+
+                elif action == "assert":
+                    # Pure-assertion step: no interaction — assertions are
+                    # evaluated in the shared assertion block below.
+                    pass
 
                 else:
                     exec_error.append(("unknown", f"Unknown action: {action!r}"))

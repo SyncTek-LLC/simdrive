@@ -1,0 +1,23 @@
+# SpecterQA iOS Replay — Example 04: Visual Regression Testing
+#
+# Demonstrates: expect_screenshot (visual diff), screenshot_threshold (% tolerance).
+# Use case:     Catch unintended UI regressions — layout changes, color shifts,
+#               missing assets — that functional assertions would miss.
+# First run:    Captures the baseline screenshot (stored in .specterqa/baselines/).
+# Subsequent:   Diffs against the baseline; fails if pixel delta exceeds threshold.
+# Run with:     specterqa-ios replay examples/04-visual-regression.yaml
+# Threshold:    5.0 = allow up to 5% pixel difference (accounts for anti-aliasing,
+#               font rendering differences across OS versions).
+# Tip:          Keep thresholds low (1-5%) for pixel-perfect UI; raise to 10-15%
+#               for screens with dynamic content (timestamps, counters).
+
+replay:
+  name: visual-baseline
+  bundle_id: com.example.MyApp
+  steps:
+    - tapOn: "Settings"
+    - waitFor: "Display"
+    - action: tap
+      label: "Display"
+      expect_screenshot: settings-display.png
+      screenshot_threshold: 5.0

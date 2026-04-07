@@ -10,20 +10,26 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools:
-    ios_start_session    Start XCTest runner on the iOS Simulator
-    ios_stop_session     Stop the XCTest runner and clean up
-    ios_screenshot       Annotated screenshot with numbered elements
-    ios_tap              Tap element by index number
-    ios_long_press       Long-press element by index (context menus, drag init)
-    ios_press_key        Press a keyboard key (return, escape, delete, tab, ...)
-    ios_swipe            Swipe in a direction
-    ios_swipe_back       iOS back navigation gesture
-    ios_type             Type text into focused field
-    ios_elements         Get element list without screenshot
-    ios_set_appearance   Toggle dark/light mode on the simulator
-    ios_simctl           Run arbitrary simctl subcommand on the simulator
-    ios_webview_elements Get elements inside WKWebView content (EPUB readers, PDF viewers)
+Tools (19 total):
+    ios_start_session       Start XCTest runner on the iOS Simulator
+    ios_stop_session        Stop the XCTest runner and clean up
+    ios_screenshot          Annotated screenshot with numbered elements
+    ios_tap                 Tap element by label (preferred) or index number
+    ios_long_press          Long-press element by index (context menus, drag init)
+    ios_press_key           Press a keyboard key (return, escape, delete, tab, ...)
+    ios_swipe               Swipe in a direction
+    ios_swipe_back          iOS back navigation gesture
+    ios_type                Type text into focused field
+    ios_wait                Sleep for N seconds
+    ios_wait_for_element    Poll until a labelled element appears
+    ios_elements            Get element list without screenshot
+    ios_set_appearance      Toggle dark/light mode on the simulator
+    ios_simctl              Run arbitrary simctl subcommand on the simulator
+    ios_webview_elements    Get elements inside WKWebView content (EPUB readers, PDF viewers)
+    ios_start_recording     Clear step buffer; begin clean recording
+    ios_stop_recording      Save replay YAML + clear buffer (marks end of flow)
+    ios_save_replay         Save replay YAML without clearing the step buffer
+    ios_accessibility_audit Audit current screen for accessibility issues
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -1217,24 +1223,57 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
+AVAILABLE TOOLS (19 total):
+
+  Session lifecycle:
+    ios_start_session    — Deploy XCTest runner; launch the app (required first step)
+    ios_stop_session     — Stop runner and clean up (always call when done)
+
+  Observation:
+    ios_screenshot       — Annotated screenshot with numbered bounding boxes + element list
+    ios_elements         — Element list only (faster than screenshot, no image)
+
+  Interaction:
+    ios_tap              — Tap by label (preferred) or element index
+    ios_long_press       — Long-press by index (context menus, drag init)
+    ios_type             — Type text into the focused field
+    ios_press_key        — Press a named key: return, escape, delete, tab, space
+    ios_swipe            — Swipe in a direction: up, down, left, right
+    ios_swipe_back       — iOS edge swipe back navigation gesture
+
+  Waiting:
+    ios_wait             — Sleep for N seconds (animations, splash screens)
+    ios_wait_for_element — Poll until a labelled element appears (async loads)
+
+  Recording & Replay:
+    ios_start_recording  — Clear step buffer; begin clean recording
+    ios_stop_recording   — Save replay YAML + clear buffer (end of flow)
+    ios_save_replay      — Save replay YAML without clearing (keep recording)
+
+  Quality & Diagnostics:
+    ios_accessibility_audit — Audit for missing labels, small targets, duplicate labels
+    ios_set_appearance      — Toggle dark/light mode on the simulator
+    ios_simctl              — Run arbitrary xcrun simctl subcommand
+    ios_webview_elements    — Query elements inside WKWebView (EPUB, PDF, audiobook UI)
+
 WORKFLOW (follow this sequence):
 
 1. START: ios_start_session(bundle_id="com.example.App")
    - Deploys the XCTest runner to the booted simulator
    - The app launches automatically
+   - Recording begins immediately — every action is captured
 
 2. OBSERVE: ios_screenshot() or ios_elements()
    - ios_screenshot returns an annotated image with numbered elements
    - ios_elements returns just the element list (faster, no image)
-   - Use element index numbers for tapping
+   - Use element index numbers with ios_tap
 
 3. INTERACT: ios_tap(label="Save"), ios_swipe(direction="down"),
    ios_type(text="hello"), ios_press_key(key="return"), ios_swipe_back()
    - PREFER label-based tapping: ios_tap(label="Login Button") — more stable than indices
    - Use type= to narrow label matches: ios_tap(label="Cancel", type="Button")
    - Fall back to element_index only when no meaningful label exists
-   - After each interaction, call ios_screenshot to see the result
-   - Verify the expected screen appeared before proceeding
+   - After each interaction, call ios_screenshot to verify the result
 
 3b. WAIT: ios_wait(seconds=1.0) or ios_wait_for_element(label="Home")
    - Use ios_wait_for_element after navigations that load content asynchronously
@@ -1247,15 +1286,23 @@ WORKFLOW (follow this sequence):
 
 5. SAVE: ios_save_replay(name="descriptive-name")
    - ALWAYS save a replay after a successful test flow
-   - The replay can run in CI without AI: specterqa-ios replay <file>
+   - The replay runs in CI without AI: specterqa-ios replay <file>
    - Saves to .specterqa/replays/<name>.yaml
-   - Include checkpoints automatically from current element state
+   - Checkpoints are captured automatically from the current element state
 
 6. AUDIT: ios_accessibility_audit()
    - Run on each key screen to surface missing labels, small targets, duplicate labels
+   - Results feed directly into an accessibility report
 
 7. CLEANUP: ios_stop_session()
-   - Always call this when done testing
+   - Always call this when testing is complete
+
+RECORDING WORKFLOW (best practice):
+  1. ios_start_session → exploratory taps to find the right flow
+  2. ios_start_recording() → clears exploratory steps
+  3. Execute the clean, successful flow (tap, type, etc.)
+  4. ios_stop_recording(name="feature-name") → saves YAML + clears buffer
+  5. Next flow: ios_start_recording() → repeat
 
 TIPS:
 - Take a screenshot BEFORE and AFTER every tap to verify the action worked
@@ -1264,17 +1311,23 @@ TIPS:
 - Use ios_wait_for_element(label="...") after navigations — never assume instant load
 - Name replays descriptively: "settings-privacy-toggles" not "test1"
 - One replay per user flow — keep them focused and short
+- Run ios_accessibility_audit on the home screen and each major screen
 
 PROVIDERS:
-- Local simulator (default) — requires macOS + Xcode
-- BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + ACCESS_KEY
-- CI replay — specterqa-ios replay <file> (no AI needed)
+- Local simulator (default) — requires macOS + Xcode 15+
+- BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + BROWSERSTACK_ACCESS_KEY
+- CI replay — specterqa-ios ci .specterqa/replays/ --json-output results.json
 
 WKWebView content:
 Use ios_webview_elements to query elements inside WKWebView (EPUB readers,
 PDF viewers, audiobook UI). XCTest's .webViews descendants chain exposes
 labelled/identified web elements. For complex DOM nodes without accessibility
 labels, a JavaScript bridge requires app-side instrumentation (out of scope).
+
+SETUP CHECK:
+  specterqa-ios doctor              — diagnose your environment
+  specterqa-ios runner build ...    — build the XCTest runner (one-time)
+  specterqa-ios init                — scaffold .specterqa/ for a new project
 """,
     )
 
