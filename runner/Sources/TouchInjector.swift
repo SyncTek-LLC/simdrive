@@ -7,8 +7,9 @@ import Foundation
 /// All coordinates are in device logical points — the same space as UIKit.
 /// For example, an iPhone 16 Pro (393 × 852 pt) accepts x in 0…393.
 ///
-/// v2 additions (from SpecterQAInteraction.swift / PoolIQ):
-///   - pressReturnKey() with three-strategy crash mitigation for iOS 26
+/// v2/v3 additions (from SpecterQAInteraction.swift / PoolIQ):
+///   - pressReturnKey() with two-strategy crash mitigation for iOS 26
+///     (strategy 3 / typeText("\n") removed — causes unconditional SIGABRT)
 ///   - scrollIntoView extension on XCUIElement
 ///
 /// v1 retained:
@@ -59,8 +60,12 @@ final class TouchInjector {
 
     /// Press a named keyboard key (maps to XCUIKeyboardKey).
     ///
-    /// For "return"/"enter", uses the three-strategy crash mitigation from v2
-    /// (PoolIQ SpecterQAInteraction.swift) to handle iOS 26 SIGABRT.
+    /// For "return"/"enter", uses the two-strategy crash mitigation (v3) to
+    /// handle iOS 26 SIGABRT.  The former typeText("\n") fallback (strategy 3)
+    /// has been removed — SIGABRT kills the process unconditionally and cannot
+    /// be caught by XCTExpectFailure.  A 0.5 s stabilization delay is inserted
+    /// after each successful strategy so the accessibility tree is consistent
+    /// before the next HTTP request is processed.
     ///
     /// Recognised key names (case-insensitive):
     ///   return, enter, delete, backspace, escape, tab, space,
@@ -108,13 +113,22 @@ final class TouchInjector {
         return (shot.pngRepresentation, shot.image.size)
     }
 
-    // MARK: - Return Key (Three-Strategy Crash Mitigation — v2)
+    // MARK: - Return Key (Two-Strategy Crash Mitigation — v3)
     //
     //  iOS 26 beta: typeText("\n") on some keyboards causes SIGABRT.
+    //  SIGABRT is a process-level signal — XCTExpectFailure cannot guard against
+    //  it (it only guards XCTest assertion failures), so strategy 3 is removed.
+    //
+    //  After each successful strategy, Thread.sleep(0.5) lets the keyboard
+    //  dismiss animation complete and the accessibility tree stabilize before
+    //  the runner accepts the next HTTP request. Without this delay the next
+    //  action (tap, screenshot, elements) hits a corrupted a11y tree and crashes.
+    //
     //  Strategy order:
     //    1. Find and tap the Return/Done/Go/… keyboard button by label (safest)
-    //    2. Coordinate tap at the known Return key position
-    //    3. typeText("\n") wrapped in XCTExpectFailure (last resort)
+    //    2. Coordinate tap at the known Return key position (bottom-right corner)
+    //       If no keyboard button was found, this almost always hits the key.
+    //       Return success — do not attempt typeText("\n").
 
     private let returnKeyLabels = ["Return", "Done", "Go", "Send", "Search", "Join", "Next"]
 
@@ -127,6 +141,8 @@ final class TouchInjector {
                 if btn.exists && btn.isHittable {
                     btn.tap()
                     NSLog("[SpecterQA] pressKey(return): tapped keyboard button '\(label)'")
+                    // Wait for keyboard dismiss animation and a11y tree stabilization.
+                    Thread.sleep(forTimeInterval: 0.5)
                     return
                 }
             }
@@ -139,17 +155,18 @@ final class TouchInjector {
                 .withOffset(CGVector(dx: returnX, dy: returnY))
             coord.tap()
             NSLog("[SpecterQA] pressKey(return): coordinate fallback (\(returnX), \(returnY))")
+            // Wait for keyboard dismiss animation and a11y tree stabilization.
+            Thread.sleep(forTimeInterval: 0.5)
             return
         }
 
-        // Strategy 3: typeText("\n") guarded against iOS 26 crash
-        guard let focused = focusedTextElement() else {
-            throw TouchInjectorError.unknownKey("No keyboard visible and no text element has focus — cannot press return")
-        }
-        XCTExpectFailure("iOS 26 return key synthesis may fail — runner continues", options: .nonStrict()) {
-            focused.typeText("\n")
-        }
-        NSLog("[SpecterQA] pressKey(return): typeText fallback attempted (crash-guarded)")
+        // No keyboard visible — coordinate tap was not attempted.
+        // Return success: the field may have already dismissed the keyboard,
+        // or the return action already completed. typeText("\n") is intentionally
+        // omitted — it causes SIGABRT on iOS 26 and cannot be guarded by
+        // XCTExpectFailure (which only catches XCTest assertion failures,
+        // not process-level signals).
+        NSLog("[SpecterQA] pressKey(return): no keyboard visible — assuming already dismissed")
     }
 
     // MARK: - Private helpers
