@@ -36,6 +36,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -938,6 +939,13 @@ def handle_press_key(arguments: dict) -> dict:
     except Exception as exc:
         return {"error": f"press_key failed: {exc}"}
 
+    # Allow the UI to settle after the key press.  For return/enter this is
+    # critical: the keyboard dismiss animation takes ~300 ms, and the XCTest
+    # accessibility tree is in a corrupted state until it completes.  Any
+    # interaction (tap, screenshot, elements) arriving before the tree
+    # stabilizes will crash the runner.  0.5 s covers the animation with margin.
+    time.sleep(0.5)
+
     # Record the key press for replay
     if _recorder is not None:
         _recorder.record_press_key(key)
@@ -1028,8 +1036,13 @@ def handle_set_appearance(arguments: dict) -> dict:
     if mode not in ("dark", "light"):
         return {"error": "mode must be 'dark' or 'light'"}
 
+    # Use "booted" rather than _session._target_udid: when xcodebuild is running
+    # tests the simulator IS the booted device, and xcrun simctl resolves
+    # "booted" correctly within the same process context.  Using the clone UDID
+    # directly can return "Shutdown" errors if the UDID refers to the original
+    # template sim rather than the live booted clone.
     result = subprocess.run(
-        ["xcrun", "simctl", "ui", _session._target_udid, "appearance", mode],
+        ["xcrun", "simctl", "ui", "booted", "appearance", mode],
         capture_output=True,
         text=True,
         timeout=10,
@@ -1068,9 +1081,13 @@ def handle_simctl(arguments: dict) -> dict:
     if not command:
         return {"error": "command is required"}
 
-    udid = _session._target_udid
+    # Use "booted" as the UDID for simctl — the simulator IS booted while tests
+    # are running, and "booted" is always resolved correctly by simctl.
+    # _session._target_udid may point to the original template sim (not the live
+    # clone), causing "Shutdown" errors for ui/status_bar/location subcommands.
+    udid = "booted"
 
-    # Replace placeholder token with the real UDID.
+    # Replace placeholder token with the resolved UDID.
     if "<udid>" in command:
         command = command.replace("<udid>", udid)
     else:
