@@ -2186,6 +2186,9 @@ def validate_replay(replay_file: str) -> None:
 
     step_ids: set[str] = set()
     for i, step in enumerate(r.get("steps", [])):
+        # Support bare string steps e.g. `- swipe_back` which YAML parses as str
+        if isinstance(step, str):
+            step = {"action": step}
         # Resolve effective action (native or Maestro alias)
         action = step.get("action")
         if not action:
@@ -2211,6 +2214,8 @@ def validate_replay(replay_file: str) -> None:
 
     # Validate skip_to references
     for i, step in enumerate(r.get("steps", [])):
+        if isinstance(step, str):
+            step = {"action": step}
         target = step.get("skip_to")
         if target and target not in step_ids:
             issues.append(f"Step {i}: skip_to references unknown step_id '{target}'")
