@@ -22,6 +22,7 @@
 //    GET  /source        — JSON accessibility tree
 //    GET  /health        — health check
 //    GET  /elements      — element query with ?limit=N&types=...
+//    GET  /webview       — WKWebView descendant elements only
 //    POST /wait          — wait for element by label
 //    POST /scroll        — scroll gesture
 //    POST /launch        — launch/activate app by bundle_id
@@ -399,6 +400,15 @@ final class HTTPServer {
                 result = HTTPResponse.rawData(treeData, statusCode: statusCode)
             }
             return result
+
+        // ── WebView elements ──────────────────────────────────────────────────
+        case ("GET", "/webview"):
+            guard let eq = elementQuery else {
+                return HTTPResponse.error("element query not available", code: 503)
+            }
+            let elements = eq.queryWebViewElements(limit: 100)
+            let json = elements.map { $0.dictionary }
+            return HTTPResponse.ok(["success": true, "elements": json, "count": json.count])
 
         // ── Elements (v2 addition) ─────────────────────────────────────────────
         case ("GET", "/elements"):

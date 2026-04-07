@@ -54,8 +54,37 @@ final class TouchInjector {
     }
 
     /// Type arbitrary text into the currently focused element.
+    ///
+    /// v4 crash mitigation for iOS 26:
+    /// ``XCUIApplication.typeText()`` can corrupt the XCTest accessibility
+    /// tree state on iOS 26 — the HTTP response returns OK but the next
+    /// interaction crashes the runner with a delayed SIGABRT.
+    ///
+    /// Fix: ensure the element is focused before typing, wrap the call in
+    /// an autoreleasepool to bound any internal allocations, then wait 0.8 s
+    /// for the keyboard animation and accessibility tree to fully stabilize
+    /// before the runner accepts the next HTTP request.
     func typeText(_ text: String) {
-        app.typeText(text)
+        let focused = focusedTextElement() ?? app.textFields.firstMatch
+        guard focused.exists else {
+            NSLog("[SpecterQA] typeText: no text field found")
+            return
+        }
+
+        // Ensure the field is focused before typing.
+        focused.tap()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        // Wrap in autoreleasepool to bound any internal XCTest allocations.
+        autoreleasepool {
+            focused.typeText(text)
+        }
+
+        // CRITICAL: settle delay before returning.
+        // iOS 26 needs time to stabilize the accessibility tree after text
+        // input; without this the next HTTP request hits a corrupted a11y
+        // tree and the runner crashes with SIGABRT.
+        Thread.sleep(forTimeInterval: 0.8)
     }
 
     /// Press a named keyboard key (maps to XCUIKeyboardKey).
