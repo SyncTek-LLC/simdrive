@@ -1,0 +1,51 @@
+name: SpecterQA iOS Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ios-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install SpecterQA
+        run: pip install specterqa-ios
+
+      - name: Build app
+        run: |
+          xcodebuild build \
+            -scheme MyApp \
+            -destination "platform=iOS Simulator,name=iPhone 15 Pro" \
+            -derivedDataPath build/
+
+      - name: Boot simulator
+        run: |
+          xcrun simctl boot "iPhone 15 Pro" || true
+          sleep 5
+
+      - name: Install app on simulator
+        run: |
+          xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/MyApp.app
+
+      - name: Build SpecterQA runner
+        run: specterqa-ios runner build --project MyApp.xcodeproj --scheme MyApp
+
+      - name: Run replay tests
+        run: specterqa-ios ci .specterqa/replays/ --parallel 2 --json-output .specterqa/results.json
+        env:
+          SPECTERQA_IOS_LICENSE: founder
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: specterqa-results
+          path: .specterqa/results.json

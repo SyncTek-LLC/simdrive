@@ -119,12 +119,12 @@ def _primed_runner(
 class TestLifecycle:
     def test_instantiation_defaults(self):
         runner = SoMRunner()
-        assert runner.wda_url == "http://localhost:8100"
         assert runner.model == "claude-sonnet-4-20250514"
         assert runner.verbose is False
         assert runner.evidence_dir is None
         assert runner._driver is None
         assert runner._client is None
+        assert not hasattr(runner, "wda_url"), "wda_url removed — WDA path is dead code"
 
     def test_api_key_from_env(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key-123")
