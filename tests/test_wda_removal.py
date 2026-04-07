@@ -1,67 +1,46 @@
-"""Tests verifying WDA fallback behaviour in SoM pipeline (INIT-2026-508/509).
+"""Tests verifying WDA code paths are fully removed from the SoM pipeline.
 
-INIT-2026-508 removed WDA as the primary backend.
-INIT-2026-509 restored it as an *optional* fallback with:
-  - A clear warning directing users to build the runner
-  - 10-second timeout per attempt
-  - Maximum 2 retries
-
-The XCTest runner remains the primary (preferred) backend.
-WDA is only used when use_xctest_runner=False AND wda_url is provided.
-Neither WDA URL nor session_id are mandatory — they are optional fallback params.
+R&D cleanup:
+- WDA fallback removed entirely from SoMRunner and SoMAnnotator.
+- XCTest runner is the sole backend.
+- wda_url, session_id, use_xctest_runner, and _start_legacy are all gone.
 """
 import inspect
 import json
 import subprocess
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 from specterqa.ios.som_runner import SoMRunner
 from specterqa.ios.som_annotator import SoMAnnotator
 
 
-class TestSoMRunnerWDAFallback:
-    def test_wda_url_parameter_is_optional(self):
-        """SoMRunner.__init__ accepts optional wda_url (None by default)."""
+class TestSoMRunnerWDARemoved:
+    def test_no_wda_url_parameter(self):
+        """SoMRunner.__init__ must NOT have wda_url — WDA path is removed."""
         sig = inspect.signature(SoMRunner.__init__)
-        assert "wda_url" in sig.parameters
-        assert sig.parameters["wda_url"].default is None
+        assert "wda_url" not in sig.parameters
 
-    def test_start_legacy_method_exists(self):
-        """_start_legacy must exist for the WDA fallback path."""
-        assert hasattr(SoMRunner, "_start_legacy")
+    def test_no_use_xctest_runner_parameter(self):
+        """SoMRunner.__init__ must NOT have use_xctest_runner — XCTest is the only backend."""
+        sig = inspect.signature(SoMRunner.__init__)
+        assert "use_xctest_runner" not in sig.parameters
 
-    def test_start_raises_without_runner_or_wda(self):
-        """start() raises RuntimeError when runner not available and no WDA URL.
+    def test_no_start_legacy_method(self):
+        """_start_legacy must be removed — WDA fallback is dead code."""
+        assert not hasattr(SoMRunner, "_start_legacy")
 
-        Patches _start_xctest to simulate the XCTest runner not being built,
-        and wda_url is not provided, so no fallback is available.
-        """
+    def test_start_raises_without_runner(self):
+        """start() raises RuntimeError when XCTest runner not available."""
         runner = SoMRunner(api_key="test")
         with patch.object(
-            SoMRunner, "_start_xctest", side_effect=RuntimeError("XCTest runner not built. Run: specterqa-ios runner build")
+            SoMRunner, "_start_xctest", side_effect=RuntimeError("XCTest runner not built.")
         ):
-            with pytest.raises(RuntimeError, match="runner"):
+            with pytest.raises(RuntimeError, match="runner|XCTest"):
                 runner.start("com.test.app")
 
-    def test_start_raises_with_use_xctest_false_and_no_wda(self):
-        """Explicitly disabling xctest runner without wda_url raises error."""
-        runner = SoMRunner(api_key="test", use_xctest_runner=False)
-        with pytest.raises(RuntimeError, match="runner"):
-            runner.start("com.test.app")
-
-    def test_start_uses_legacy_when_xctest_disabled_and_wda_provided(self):
-        """When use_xctest_runner=False and wda_url is set, _start_legacy is called."""
-        runner = SoMRunner(api_key="test", use_xctest_runner=False, wda_url="http://localhost:8100")
-        with (
-            patch.object(SoMRunner, "_start_legacy") as mock_legacy,
-            patch("anthropic.Anthropic"),
-        ):
-            runner.start("com.test.app")
-        mock_legacy.assert_called_once()
-
-    def test_xctest_takes_priority_over_wda(self):
-        """When use_xctest_runner=True, _start_xctest is called even if wda_url is set."""
-        runner = SoMRunner(api_key="test", use_xctest_runner=True, wda_url="http://localhost:8100")
+    def test_xctest_always_used(self):
+        """start() always calls _start_xctest — no conditional backend selection."""
+        runner = SoMRunner(api_key="test")
         with (
             patch.object(SoMRunner, "_start_xctest") as mock_xctest,
             patch("anthropic.Anthropic"),
@@ -70,36 +49,30 @@ class TestSoMRunnerWDAFallback:
         mock_xctest.assert_called_once()
 
 
-class TestSoMAnnotatorWDAFallback:
-    def test_wda_url_parameter_is_optional(self):
-        """SoMAnnotator.__init__ accepts optional wda_url (None by default)."""
+class TestSoMAnnotatorWDARemoved:
+    def test_no_wda_url_parameter(self):
+        """SoMAnnotator.__init__ must NOT have wda_url — WDA path is removed."""
         sig = inspect.signature(SoMAnnotator.__init__)
-        assert "wda_url" in sig.parameters
-        assert sig.parameters["wda_url"].default is None
+        assert "wda_url" not in sig.parameters
 
-    def test_session_id_parameter_is_optional(self):
-        """SoMAnnotator.__init__ accepts optional session_id (None by default)."""
+    def test_no_session_id_parameter(self):
+        """SoMAnnotator.__init__ must NOT have session_id — WDA path is removed."""
         sig = inspect.signature(SoMAnnotator.__init__)
-        assert "session_id" in sig.parameters
-        assert sig.parameters["session_id"].default is None
+        assert "session_id" not in sig.parameters
 
-    def test_wda_method_exists(self):
-        """_get_element_tree_from_wda must exist for optional fallback."""
-        assert hasattr(SoMAnnotator, "_get_element_tree_from_wda")
+    def test_no_wda_method(self):
+        """_get_element_tree_from_wda must be removed."""
+        assert not hasattr(SoMAnnotator, "_get_element_tree_from_wda")
 
-    def test_raises_without_runner_url_or_wda(self):
-        """get_element_tree raises when neither runner_url nor wda params are set."""
+    def test_raises_without_runner_url(self):
+        """get_element_tree raises when runner_url is not set."""
         annotator = SoMAnnotator()
         with pytest.raises(RuntimeError, match="runner"):
             annotator.get_element_tree()
 
-    def test_runner_url_takes_priority_over_wda(self):
-        """When both runner_url and wda params are set, runner is used."""
-        annotator = SoMAnnotator(
-            runner_url="http://localhost:8222",
-            wda_url="http://localhost:8100",
-            session_id="abc",
-        )
+    def test_runner_url_used_for_element_tree(self):
+        """When runner_url is set, _get_element_tree_from_runner is called."""
+        annotator = SoMAnnotator(runner_url="http://localhost:8222")
         with patch.object(annotator, "_get_element_tree_from_runner", return_value="<xml/>") as mock_runner:
             result = annotator.get_element_tree()
         mock_runner.assert_called_once()
@@ -107,17 +80,17 @@ class TestSoMAnnotatorWDAFallback:
 
 
 class TestNoWDAImportsInHotPath:
-    def test_som_runner_no_wda_import_at_module_level(self):
-        """som_runner.py must not import wda_driver at module level.
-
-        The WDA import is lazy (inside _start_legacy) so it does not increase
-        cold-start cost or break environments without WDA installed.
-        """
+    def test_som_runner_no_wda_import_anywhere(self):
+        """som_runner.py must not import wda_driver at all."""
         import specterqa.ios.som_runner as mod
         source = inspect.getsource(mod)
-        # Module-level code is everything before the first class definition.
-        # The lazy import inside _start_legacy is acceptable and expected.
-        assert "from specterqa.ios.wda_driver" not in source.split("class")[0]
+        assert "wda_driver" not in source, "wda_driver import must be fully removed"
+
+    def test_som_annotator_no_wda_imports(self):
+        """som_annotator.py must not import socket or urllib.error (WDA-only deps)."""
+        import specterqa.ios.som_annotator as mod
+        source = inspect.getsource(mod)
+        assert "wda_url" not in source, "wda_url must be fully removed from annotator"
 
 
 class TestExistingTestsUnbroken:
