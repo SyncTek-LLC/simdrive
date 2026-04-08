@@ -3,4 +3,4 @@ try:
 
     __version__ = _get_version("specterqa-ios")
 except Exception:
-    __version__ = "11.2.0"
+    __version__ = "11.2.2"
