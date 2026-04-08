@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 import json
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -28,6 +29,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger("specterqa.ios.som_annotator")
 
 
 @dataclass
@@ -569,7 +572,7 @@ class SoMAnnotator:
             try:
                 font = ImageFont.truetype(fp, 22)
                 break
-            except Exception:
+            except (OSError, IOError):
                 continue
 
         badge_size = 30
@@ -676,7 +679,7 @@ class SoMAnnotator:
             sigs: set[tuple[str, int]] = set()
             try:
                 root = ET.fromstring(xml_source)
-            except Exception:
+            except ET.ParseError:
                 return sigs
             for node in root.iter():
                 label = (node.get("label") or node.get("name") or "").strip()

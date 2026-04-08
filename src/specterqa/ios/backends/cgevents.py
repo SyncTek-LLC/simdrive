@@ -70,7 +70,7 @@ class CGEventBackend:
             layer = InteractionLayer(device_id="booted")
             layer._get_simulator_window()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 — capability probe: any failure = unavailable
             return False
 
     # ------------------------------------------------------------------

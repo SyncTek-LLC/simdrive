@@ -10,8 +10,11 @@ INIT-2026-492 — SpecterQA iOS Simulator Driver, Phase 3.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, List, Optional
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.ai_context")
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +117,8 @@ class SimulatorAIContext:
         if console is not None:
             try:
                 recent_logs = list(console.recent())
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — aggregation boundary
+                logger.debug("console.recent() failed: %s", exc)
                 recent_logs = []
 
         # --- network requests ---------------------------------------------
@@ -122,10 +126,12 @@ class SimulatorAIContext:
         if network is not None:
             try:
                 active_requests = list(network.active())
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — aggregation boundary
+                logger.debug("network.active() failed: %s", exc)
                 try:
                     active_requests = list(network.recent())
-                except Exception:
+                except Exception as exc2:  # noqa: BLE001
+                    logger.debug("network.recent() failed: %s", exc2)
                     active_requests = []
 
         # --- performance snapshot -----------------------------------------
@@ -133,7 +139,8 @@ class SimulatorAIContext:
         if perf is not None:
             try:
                 perf_snapshot = perf.snapshot()
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — aggregation boundary
+                logger.debug("perf.snapshot() failed: %s", exc)
                 perf_snapshot = None
 
         # --- app state ----------------------------------------------------
@@ -142,7 +149,8 @@ class SimulatorAIContext:
             try:
                 result = state.snapshot()
                 app_state = result if isinstance(result, dict) else {}
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — aggregation boundary
+                logger.debug("state.snapshot() failed: %s", exc)
                 app_state = {}
 
         # --- crash reports ------------------------------------------------
@@ -150,7 +158,8 @@ class SimulatorAIContext:
         if crash is not None:
             try:
                 crashes = list(crash.check())
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 — aggregation boundary
+                logger.debug("crash.check() failed: %s", exc)
                 crashes = []
 
         return DriverContext(
@@ -237,7 +246,7 @@ class SimulatorAIContext:
         if ctx.app_state:
             try:
                 sections.append(json.dumps(ctx.app_state, indent=2, default=str))
-            except Exception:
+            except (TypeError, ValueError):
                 sections.append(str(ctx.app_state))
         else:
             sections.append("(empty)")
@@ -265,8 +274,8 @@ class SimulatorAIContext:
         if self._redactor is not None:
             try:
                 output = self._redactor.redact_string(output)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — redactor is user-provided
+                logger.debug("redactor.redact_string() failed: %s", exc)
 
         return output
 

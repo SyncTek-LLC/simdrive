@@ -80,8 +80,8 @@ def _auto_checkpoint() -> None:
             labels = [e.label for e in elements[:15] if e.label]
             if labels:
                 _recorder.add_checkpoint(labels)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — checkpoint auto-record is best-effort
+            logger.debug("_record_checkpoint failed: %s", exc)
 
 
 def _get_annotated_screenshot() -> tuple[str, list]:
@@ -617,8 +617,8 @@ def handle_wait_for_element(arguments: dict) -> dict:
             for e in elements:
                 if label.lower() in e.label.lower():
                     return {"status": "found", "label": e.label, "index": e.index}
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — element probe must not abort wait loop
+            logger.debug("Element probe failed during wait: %s", exc)
         time.sleep(poll_interval)
 
     return {"status": "not_found", "label": label, "timeout": timeout}
@@ -1103,7 +1103,7 @@ def handle_set_appearance(arguments: dict) -> dict:
             for dev in runtime_devs:
                 if dev.get("state") == "Booted":
                     booted_udids.append(dev["udid"])
-    except Exception:
+    except (json.JSONDecodeError, KeyError):
         pass
 
     if not booted_udids:
@@ -1171,7 +1171,7 @@ def handle_simctl(arguments: dict) -> dict:
             for _d in _devs:
                 if _d.get("state") == "Booted":
                     _booted.append(_d["udid"])
-    except Exception:
+    except (json.JSONDecodeError, KeyError):
         pass
     udid = _booted[0] if _booted else "booted"
 

@@ -6,9 +6,12 @@ and produces a composite state snapshot. All keychain values are redacted.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.state")
 
 
 class StateInspector:
@@ -129,7 +132,7 @@ class StateInspector:
                 else:
                     result[key] = value
             return result
-        except Exception:
+        except OSError:
             return {}
 
     def read_default(self, key: str) -> Any:

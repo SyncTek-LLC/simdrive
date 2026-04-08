@@ -93,7 +93,7 @@ def _xcode_developer_path() -> str:
             timeout=5,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
-    except Exception:
+    except OSError:
         return ""
 
 
@@ -532,8 +532,8 @@ def _extract_udid_str(bridge: "_ObjCBridge", udid_obj: int) -> str:
             if nsstr and bridge.responds_to_selector(nsstr, "UTF8String"):
                 cstr = str_func(bridge._lib.objc_msgSend)(nsstr, bridge.sel("UTF8String"))
                 return (cstr or b"").decode("utf-8", errors="replace").lower()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — ObjC bridge may raise arbitrary errors
+        logger.debug("_extract_udid_str failed: %s", exc)
     return ""
 
 
@@ -582,7 +582,8 @@ def _enum_devices_from_set(bridge: "_ObjCBridge", device_set: int, target_udid: 
         try:
             udid_obj = bridge.msg(device, "UDID")
             dev_udid = _extract_udid_str(bridge, udid_obj)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — ObjC bridge may raise arbitrary errors
+            logger.debug("Device UDID extraction failed: %s", exc)
             dev_udid = ""
 
         if dev_udid == target_udid:
@@ -789,8 +790,8 @@ def _create_hid_client(bridge: "_ObjCBridge", device: int) -> int:
                 )
         except RuntimeError:
             raise
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — ObjC bridge probe: any error = path not supported
+            logger.debug("IndigoHID Xcode 16+ init path failed: %s", exc)
 
     # Try initWithDevice:error: (Xcode ≤ 15 path)
     init_func = ctypes.CFUNCTYPE(

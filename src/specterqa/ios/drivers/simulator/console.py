@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import collections
 import json
+import logging
 import re
 import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.console")
 
 
 # ---------------------------------------------------------------------------
@@ -175,10 +178,10 @@ class ConsoleMonitor:
         if self._process is not None:
             try:
                 self._process.terminate()
-            except Exception:
+            except OSError:
                 try:
                     self._process.kill()
-                except Exception:
+                except OSError:
                     pass
             self._process = None
         if self._reader_thread is not None:
@@ -231,8 +234,8 @@ class ConsoleMonitor:
                 entry = self._parse_json_line(line)
                 if entry is not None:
                     self._add_entry(entry)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — background reader thread; must not propagate
+            logger.debug("Console log reader exited with error: %s", exc)
 
     @staticmethod
     def _parse_json_line(line: str) -> Optional[LogEntry]:

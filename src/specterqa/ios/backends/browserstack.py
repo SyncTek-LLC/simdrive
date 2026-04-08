@@ -210,6 +210,6 @@ class BrowserStackBackend:
         if self._session_id:
             try:
                 self._request("DELETE", "")
-            except Exception:
-                pass
+            except (OSError, urllib.error.URLError, Exception) as exc:  # noqa: BLE001 — best-effort cleanup
+                logger.debug("BrowserStack session DELETE failed: %s", exc)
             self._session_id = None
