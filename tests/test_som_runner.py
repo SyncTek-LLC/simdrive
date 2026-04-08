@@ -21,10 +21,7 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image
@@ -154,6 +151,7 @@ class TestLifecycle:
             mock_wda_cls.return_value = mock_wda
 
             import builtins
+
             real_import = builtins.__import__
 
             def _block_anthropic(name, *args, **kwargs):
@@ -166,14 +164,11 @@ class TestLifecycle:
                 runner._client = None
                 with pytest.raises((SoMRunnerError, ImportError)):
                     # Call the real start body manually to exercise the import path
-                    from specterqa.ios.wda_driver import WDADriver
-                    from specterqa.ios.som_annotator import SoMAnnotator
 
                     runner._driver = mock_wda
                     runner._driver.create_session = MagicMock(return_value="sess")
                     runner._annotator = MagicMock()
 
-                    import builtins as _b
                     try:
                         import anthropic  # noqa: F401
                     except ImportError as exc:
@@ -203,18 +198,14 @@ class TestLifecycle:
 class TestParseClaudeResponse:
     def test_tap(self):
         runner = _make_runner()
-        r = runner._parse_claude_response(
-            "ACTION: tap\nELEMENT: 5\nREASONING: fifth element"
-        )
+        r = runner._parse_claude_response("ACTION: tap\nELEMENT: 5\nREASONING: fifth element")
         assert r["action"] == "tap"
         assert r["element"] == 5
         assert r["reasoning"] == "fifth element"
 
     def test_scroll_down(self):
         runner = _make_runner()
-        r = runner._parse_claude_response(
-            "ACTION: scroll\nDIRECTION: down\nREASONING: need more items"
-        )
+        r = runner._parse_claude_response("ACTION: scroll\nDIRECTION: down\nREASONING: need more items")
         assert r["action"] == "scroll"
         assert r["direction"] == "down"
         assert r["element"] is None
@@ -387,9 +378,7 @@ class TestAskClaude:
         elements = _make_elements("Wi-Fi", "Bluetooth")
         runner = _make_runner()
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _claude_response(
-            "ACTION: tap\nELEMENT: 1\nREASONING: tap wifi"
-        )
+        mock_client.messages.create.return_value = _claude_response("ACTION: tap\nELEMENT: 1\nREASONING: tap wifi")
         runner._client = mock_client
         mock_annotator = MagicMock()
         mock_annotator.elements_text.return_value = "[1] Button Wi-Fi\n[2] Button Bluetooth"
@@ -406,7 +395,7 @@ class TestAskClaude:
         assert result["element"] == 1
 
         create_call = mock_client.messages.create.call_args
-        kwargs = create_call[1] if create_call[1] else create_call[0][0] if create_call[0] else {}
+        create_call[1] if create_call[1] else create_call[0][0] if create_call[0] else {}
         # Verify model and messages were passed
         assert mock_client.messages.create.called
 
@@ -523,7 +512,8 @@ class TestVerifyCheckpoint:
 class TestRunStep:
     def test_immediate_done_passes(self):
         runner = _primed_runner(
-            "Wi-Fi", "General",
+            "Wi-Fi",
+            "General",
             return_value=_claude_response("ACTION: done\nREASONING: already there"),
         )
         result = runner.run_step("Open Settings")
@@ -532,7 +522,7 @@ class TestRunStep:
         assert result["duration"] >= 0
 
     def test_immediate_done_with_checkpoint(self):
-        fake_b64 = _tiny_png_b64()
+        _tiny_png_b64()
         runner = _primed_runner(
             "Wi-Fi",
             return_value=_claude_response("ACTION: done\nREASONING: done"),
@@ -555,7 +545,8 @@ class TestRunStep:
 
     def test_tap_then_done(self):
         runner = _primed_runner(
-            "General", "Wi-Fi",
+            "General",
+            "Wi-Fi",
             side_effect=[
                 _claude_response("ACTION: tap\nELEMENT: 1\nREASONING: tap general"),
                 _claude_response("ACTION: done\nREASONING: on general page"),
@@ -581,7 +572,9 @@ class TestRunStep:
 
     def test_max_iterations_exceeded(self):
         runner = _primed_runner(
-            "A", "B", "C",
+            "A",
+            "B",
+            "C",
             return_value=_claude_response("ACTION: back\nREASONING: keep going"),
         )
         with patch("time.sleep"):
@@ -662,10 +655,7 @@ class TestRunJourney:
         return {
             "scenario": {
                 "name": "Test Journey",
-                "steps": [
-                    {"id": sid, "goal": f"Goal for {sid}"}
-                    for sid in step_ids
-                ],
+                "steps": [{"id": sid, "goal": f"Goal for {sid}"} for sid in step_ids],
             }
         }
 
@@ -692,8 +682,10 @@ class TestRunJourney:
         done_resp = _claude_response("ACTION: done\nREASONING: done")
         stuck_resp = _claude_response("ACTION: scroll\nDIRECTION: down\nREASONING: loop")
         mock_client.messages.create.side_effect = [
-            done_resp,   # step-1 done
-            stuck_resp, stuck_resp, stuck_resp,  # step-2 stuck
+            done_resp,  # step-1 done
+            stuck_resp,
+            stuck_resp,
+            stuck_resp,  # step-2 stuck
         ]
         runner._client = mock_client
 
@@ -776,9 +768,7 @@ class TestRunJourney:
 class TestFormatHistoryEntry:
     def test_tap(self):
         runner = _make_runner()
-        entry = runner._format_history_entry(
-            {"action": "tap", "element": 3, "reasoning": "tap the button"}, "ok"
-        )
+        entry = runner._format_history_entry({"action": "tap", "element": 3, "reasoning": "tap the button"}, "ok")
         assert "3" in entry
         assert "tap" in entry.lower()
 

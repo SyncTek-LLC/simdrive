@@ -45,7 +45,7 @@ logger = logging.getLogger("specterqa.ios.wda_driver")
 
 WDA_BASE = "http://localhost:8100"
 _DEFAULT_TIMEOUT = 10  # seconds for regular requests
-_STATUS_TIMEOUT = 3    # seconds for quick availability probe
+_STATUS_TIMEOUT = 3  # seconds for quick availability probe
 
 
 class WDAError(Exception):
@@ -146,17 +146,11 @@ class WDADriver:
                 raw = resp.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:
-            raise WDAError(
-                f"WDA HTTP {exc.code} on {method} {path}: {exc.reason}"
-            ) from exc
+            raise WDAError(f"WDA HTTP {exc.code} on {method} {path}: {exc.reason}") from exc
         except urllib.error.URLError as exc:
-            raise WDAError(
-                f"WDA connection failed on {method} {path}: {exc.reason}"
-            ) from exc
+            raise WDAError(f"WDA connection failed on {method} {path}: {exc.reason}") from exc
         except Exception as exc:
-            raise WDAError(
-                f"WDA request error on {method} {path}: {exc}"
-            ) from exc
+            raise WDAError(f"WDA request error on {method} {path}: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Session management
@@ -189,16 +183,12 @@ class WDADriver:
         resp = self._request("POST", "/session", body, timeout=30)
         session_id = resp.get("sessionId") or resp.get("value", {}).get("sessionId")
         if not session_id:
-            raise WDAError(
-                f"WDA did not return a sessionId in response: {resp!r}"
-            )
+            raise WDAError(f"WDA did not return a sessionId in response: {resp!r}")
         self._session_id = session_id
 
         # Fetch window size for coordinate conversion.
         try:
-            size_resp = self._request(
-                "GET", f"/session/{self._session_id}/window/size"
-            )
+            size_resp = self._request("GET", f"/session/{self._session_id}/window/size")
             dims = size_resp.get("value", {})
             self._device_width = float(dims.get("width") or 393)
             self._device_height = float(dims.get("height") or 852)
@@ -209,17 +199,14 @@ class WDADriver:
 
         if self.verbose:
             print(
-                f"  [wda] session={self._session_id!r}  "
-                f"device={self._device_width:.0f}x{self._device_height:.0f} pts"
+                f"  [wda] session={self._session_id!r}  device={self._device_width:.0f}x{self._device_height:.0f} pts"
             )
         return self._session_id
 
     def _require_session(self) -> str:
         """Return the active session ID, raising ``WDAError`` if none exists."""
         if not self._session_id:
-            raise WDAError(
-                "No active WDA session. Call create_session(bundle_id) first."
-            )
+            raise WDAError("No active WDA session. Call create_session(bundle_id) first.")
         return self._session_id
 
     # ------------------------------------------------------------------
@@ -261,10 +248,7 @@ class WDADriver:
         session = self._require_session()
         dev_x, dev_y = self._img_to_device(img_x, img_y)
         if self.verbose:
-            print(
-                f"  [wda] tap  img=({img_x:.0f},{img_y:.0f})  "
-                f"dev=({dev_x:.1f},{dev_y:.1f})"
-            )
+            print(f"  [wda] tap  img=({img_x:.0f},{img_y:.0f})  dev=({dev_x:.1f},{dev_y:.1f})")
         body: dict[str, Any] = {
             "actions": [
                 {
@@ -374,9 +358,7 @@ class WDADriver:
         dx1, dy1 = self._img_to_device(x1, y1)
         dx2, dy2 = self._img_to_device(x2, y2)
         if self.verbose:
-            print(
-                f"  [wda] swipe  ({dx1:.0f},{dy1:.0f}) → ({dx2:.0f},{dy2:.0f})  {duration:.2f}s"
-            )
+            print(f"  [wda] swipe  ({dx1:.0f},{dy1:.0f}) → ({dx2:.0f},{dy2:.0f})  {duration:.2f}s")
         body: dict[str, Any] = {
             "actions": [
                 {
@@ -403,8 +385,10 @@ class WDADriver:
     def swipe_back(self) -> None:
         """iOS edge-swipe back gesture (left-edge → center)."""
         self.swipe(
-            5, self._display_height // 2,
-            self._display_width // 2, self._display_height // 2,
+            5,
+            self._display_height // 2,
+            self._display_width // 2,
+            self._display_height // 2,
             duration=0.3,
         )
 
@@ -474,9 +458,7 @@ class WDADriver:
         Returns:
             Tuple of ``(base64_png_string, width_px, height_px)``.
         """
-        path = os.path.join(
-            self._screenshot_dir, f"shot_{int(time.time() * 1000)}.png"
-        )
+        path = os.path.join(self._screenshot_dir, f"shot_{int(time.time() * 1000)}.png")
         subprocess.run(
             ["xcrun", "simctl", "io", self.udid, "screenshot", "--type=png", path],
             capture_output=True,
@@ -485,9 +467,7 @@ class WDADriver:
         img = Image.open(path)
         if resize_width and img.width > resize_width:
             ratio = resize_width / img.width
-            img = img.resize(
-                (resize_width, int(img.height * ratio)), Image.LANCZOS
-            )
+            img = img.resize((resize_width, int(img.height * ratio)), Image.LANCZOS)
         resized_path = path.replace(".png", "_r.png")
         img.save(resized_path, "PNG")
 
@@ -568,9 +548,7 @@ class WDADriver:
             return None
         for _runtime, devices in data.get("devices", {}).items():
             for dev in devices:
-                if dev.get("state") == "Booted" and (
-                    self.udid == "booted" or dev["udid"] == self.udid
-                ):
+                if dev.get("state") == "Booted" and (self.udid == "booted" or dev["udid"] == self.udid):
                     if self.udid == "booted":
                         self.udid = dev["udid"]
                     return dev
@@ -668,7 +646,4 @@ class WDADriver:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        return (
-            f"WDADriver(udid={self.udid!r}, wda_url={self.wda_url!r}, "
-            f"session={self._session_id!r})"
-        )
+        return f"WDADriver(udid={self.udid!r}, wda_url={self.wda_url!r}, session={self._session_id!r})"

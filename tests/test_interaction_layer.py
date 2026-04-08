@@ -10,9 +10,8 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.drivers.simulator.interaction import InteractionLayer  # type: ignore[import]
+
     _INTERACTION_AVAILABLE = True
 except ImportError:
     _INTERACTION_AVAILABLE = False
@@ -36,6 +36,7 @@ needs_interaction = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Helpers — build mock Quartz window info structures
 # ---------------------------------------------------------------------------
+
 
 def _make_window_info(x: float, y: float, width: float, height: float) -> dict:
     """Build a minimal CGWindowListCopyWindowInfo entry for Simulator.app."""
@@ -280,10 +281,12 @@ class TestTap:
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent") as mock_cg_create, \
-             patch("Quartz.CGEventPost") as mock_cg_post:
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent") as mock_cg_create,
+            patch("Quartz.CGEventPost") as mock_cg_post,
+        ):
             mock_event = MagicMock()
             mock_cg_create.return_value = mock_event
             layer.tap(img_x=195, img_y=422, img_w=390, img_h=844)
@@ -297,18 +300,21 @@ class TestTap:
         not the raw image coordinates."""
         layer = InteractionLayer(title_bar_offset=28)
         window = _make_window_info(x=100.0, y=50.0, width=390.0, height=844.0)
-        expected_sx, expected_sy = 100.0 + 195.0, 50.0 + 28.0  # top-center approx
+        _expected_sx, _expected_sy = 100.0 + 195.0, 50.0 + 28.0  # top-center approx
 
         posted_points: list[tuple] = []
 
         def capture_event(event_type, source, position, button):  # type: ignore[override]
-            posted_points.append((position.x, position.y))
+            # position is a plain tuple (x, y) — _make_point returns tuple[float, float]
+            posted_points.append((position[0], position[1]))
             return MagicMock()
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", side_effect=capture_event), \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", side_effect=capture_event),
+            patch("Quartz.CGEventPost"),
+        ):
             layer.tap(img_x=195, img_y=0, img_w=390, img_h=844)
 
         assert len(posted_points) >= 1
@@ -320,10 +326,12 @@ class TestTap:
         """tap() completes without raising for valid image coordinates."""
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()),
+            patch("Quartz.CGEventPost"),
+        ):
             layer.tap(img_x=100, img_y=200, img_w=390, img_h=844)  # Must not raise
 
 
@@ -340,14 +348,14 @@ class TestDoubleTap:
         """double_tap() must issue at least 4 CGEvent calls (2x down+up)."""
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()) as mock_create, \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()) as mock_create,
+            patch("Quartz.CGEventPost"),
+        ):
             layer.double_tap(img_x=100, img_y=200, img_w=390, img_h=844)
-        assert mock_create.call_count >= 4, (
-            f"Expected ≥4 CGEvent creates for double-tap, got {mock_create.call_count}"
-        )
+        assert mock_create.call_count >= 4, f"Expected ≥4 CGEvent creates for double-tap, got {mock_create.call_count}"
 
     def test_double_tap_at_same_coordinate(self):
         """Both taps in double_tap() target the same screen coordinate."""
@@ -356,13 +364,16 @@ class TestDoubleTap:
         coords: list[Any] = []
 
         def capture(event_type, source, position, button):  # type: ignore
-            coords.append((position.x, position.y))
+            # position is a plain tuple (x, y) — _make_point returns tuple[float, float]
+            coords.append((position[0], position[1]))
             return MagicMock()
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", side_effect=capture), \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", side_effect=capture),
+            patch("Quartz.CGEventPost"),
+        ):
             layer.double_tap(img_x=150, img_y=300, img_w=390, img_h=844)
 
         # All events should share the same x,y
@@ -389,16 +400,17 @@ class TestLongPress:
         _activate_simulator is mocked so its 0.15s overhead is excluded.
         Total for duration=1.5: 1.5 + 0.5 = 2.0s.
         """
-        import time
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         call_log: list[str] = []
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
-             patch("Quartz.CGEventPost", side_effect=lambda tap, ev: call_log.append("post")), \
-             patch("time.sleep", side_effect=lambda d: call_log.append(f"sleep:{d}")):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()),
+            patch("Quartz.CGEventPost", side_effect=lambda tap, ev: call_log.append("post")),
+            patch("time.sleep", side_effect=lambda d: call_log.append(f"sleep:{d}")),
+        ):
             layer.long_press(img_x=100, img_y=200, img_w=390, img_h=844, duration=1.5)
 
         # There should be at least one sleep call with ≈1.5 seconds
@@ -421,11 +433,13 @@ class TestLongPress:
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         sleep_durations: list[float] = []
 
-        with patch.object(layer, "_activate_simulator"), \
-             patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
-             patch("Quartz.CGEventPost"), \
-             patch("time.sleep", side_effect=lambda d: sleep_durations.append(d)):
+        with (
+            patch.object(layer, "_activate_simulator"),
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()),
+            patch("Quartz.CGEventPost"),
+            patch("time.sleep", side_effect=lambda d: sleep_durations.append(d)),
+        ):
             layer.long_press(img_x=100, img_y=200, img_w=390, img_h=844)
 
         total = sum(sleep_durations)
@@ -450,16 +464,16 @@ class TestSwipe:
         layer = InteractionLayer()
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()) as mock_create, \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()) as mock_create,
+            patch("Quartz.CGEventPost"),
+        ):
             layer.swipe(x1=195, y1=700, x2=195, y2=200, img_w=390, img_h=844)
 
         # Should have posted multiple drag events (down + multiple drag + up)
-        assert mock_create.call_count >= 3, (
-            f"Expected ≥3 CGEvent calls for swipe, got {mock_create.call_count}"
-        )
+        assert mock_create.call_count >= 3, f"Expected ≥3 CGEvent calls for swipe, got {mock_create.call_count}"
 
     def test_swipe_duration_controls_sleep(self):
         """swipe() with duration=0.5 should sleep ~0.5 seconds across drag steps.
@@ -474,19 +488,19 @@ class TestSwipe:
         window = _make_window_info(x=0.0, y=0.0, width=390.0, height=844.0)
         sleep_durations: list[float] = []
 
-        with patch.object(layer, "_get_simulator_window", return_value=window), \
-             patch.object(layer, "_activate_simulator"), \
-             patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()), \
-             patch("Quartz.CGEventPost"), \
-             patch("time.sleep", side_effect=lambda d: sleep_durations.append(d)):
+        with (
+            patch.object(layer, "_get_simulator_window", return_value=window),
+            patch.object(layer, "_activate_simulator"),
+            patch("Quartz.CGEventCreateMouseEvent", return_value=MagicMock()),
+            patch("Quartz.CGEventPost"),
+            patch("time.sleep", side_effect=lambda d: sleep_durations.append(d)),
+        ):
             layer.swipe(x1=195, y1=700, x2=195, y2=200, img_w=390, img_h=844, duration=0.5)
 
         total = sum(sleep_durations)
         # 0.02 (initial hold) + 0.5 (drag steps) + 0.3 (post-swipe cooldown) = 0.82
         expected_total = 0.02 + 0.5 + 0.3
-        assert abs(total - expected_total) < 0.15, (
-            f"Expected ≈{expected_total}s total swipe sleep, got {total}"
-        )
+        assert abs(total - expected_total) < 0.15, f"Expected ≈{expected_total}s total swipe sleep, got {total}"
 
 
 # ===========================================================================
@@ -541,9 +555,11 @@ class TestTypeTextFallbackToPbcopy:
                 return failure
             return success
 
-        with patch("subprocess.run", side_effect=side_effect) as mock_run, \
-             patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()), \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch("subprocess.run", side_effect=side_effect) as mock_run,
+            patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()),
+            patch("Quartz.CGEventPost"),
+        ):
             layer.type_text("fallback text")
 
         # At minimum 2 subprocess calls: first fails, second is pbcopy strategy
@@ -563,15 +579,15 @@ class TestTypeTextFallbackToKeystrokes:
         failure.returncode = 1
         failure.stderr = b"error"
 
-        with patch("subprocess.run", return_value=failure), \
-             patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()) as mock_key, \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch("subprocess.run", return_value=failure),
+            patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()) as mock_key,
+            patch("Quartz.CGEventPost"),
+        ):
             layer.type_text("hi")  # 2 chars → at least 2 key-down events
 
         # At least 2 keystroke events (one per character, key-down minimum)
-        assert mock_key.call_count >= 2, (
-            f"Expected ≥2 CGEvent keyboard events for 'hi', got {mock_key.call_count}"
-        )
+        assert mock_key.call_count >= 2, f"Expected ≥2 CGEvent keyboard events for 'hi', got {mock_key.call_count}"
 
     def test_type_text_empty_string_no_error(self):
         """type_text('') must not raise even when all strategies are available."""
@@ -611,8 +627,7 @@ class TestPressKeyMapping:
             codes.append(key_code)
             return MagicMock()
 
-        with patch("Quartz.CGEventCreateKeyboardEvent", side_effect=capture), \
-             patch("Quartz.CGEventPost"):
+        with patch("Quartz.CGEventCreateKeyboardEvent", side_effect=capture), patch("Quartz.CGEventPost"):
             layer.press_key(key_name)
 
         return codes
@@ -658,8 +673,7 @@ class TestPressKeyMapping:
             events.append((key_code, key_down))
             return MagicMock()
 
-        with patch("Quartz.CGEventCreateKeyboardEvent", side_effect=capture), \
-             patch("Quartz.CGEventPost"):
+        with patch("Quartz.CGEventCreateKeyboardEvent", side_effect=capture), patch("Quartz.CGEventPost"):
             layer.press_key("enter")
 
         key_downs = [e for e in events if e[1] is True]
@@ -671,8 +685,7 @@ class TestPressKeyMapping:
         """press_key() with an unmapped key name should raise ValueError (not crash silently)."""
         layer = InteractionLayer()
         with pytest.raises((ValueError, KeyError)):
-            with patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()), \
-                 patch("Quartz.CGEventPost"):
+            with patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()), patch("Quartz.CGEventPost"):
                 layer.press_key("__nonexistent_key__")
 
 
@@ -694,9 +707,11 @@ class TestKeyCombo:
             events.append((key_code, key_down))
             return MagicMock()
 
-        with patch("Quartz.CGEventCreateKeyboardEvent", side_effect=capture_event) as mock_kev, \
-             patch("Quartz.CGEventSetFlags"), \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch("Quartz.CGEventCreateKeyboardEvent", side_effect=capture_event),
+            patch("Quartz.CGEventSetFlags"),
+            patch("Quartz.CGEventPost"),
+        ):
             layer.key_combo(modifiers=["cmd"], key="v")
 
         # Should have generated events for V key (key code 9)
@@ -711,9 +726,11 @@ class TestKeyCombo:
         def capture_flags(event, flags):
             flags_set.append(flags)
 
-        with patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()), \
-             patch("Quartz.CGEventSetFlags", side_effect=capture_flags), \
-             patch("Quartz.CGEventPost"):
+        with (
+            patch("Quartz.CGEventCreateKeyboardEvent", return_value=MagicMock()),
+            patch("Quartz.CGEventSetFlags", side_effect=capture_flags),
+            patch("Quartz.CGEventPost"),
+        ):
             layer.key_combo(modifiers=["shift"], key="enter")
 
         # Shift flag (0x20000) should have been set
@@ -750,9 +767,7 @@ class TestGetSimulatorWindowError:
         fake_windows = [
             {
                 "kCGWindowOwnerName": "Simulator",
-                "kCGWindowBounds": {
-                    "X": 200.0, "Y": 100.0, "Width": 390.0, "Height": 844.0
-                },
+                "kCGWindowBounds": {"X": 200.0, "Y": 100.0, "Width": 390.0, "Height": 844.0},
                 "kCGWindowLayer": 0,
             }
         ]

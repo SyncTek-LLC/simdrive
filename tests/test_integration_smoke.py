@@ -4,6 +4,7 @@ These tests verify cross-module workflows work correctly without
 requiring a live simulator. Backend HTTP calls are mocked but session
 lifecycle, replay player, and MCP handlers run real code.
 """
+
 import json
 import re
 import select
@@ -11,12 +12,12 @@ import subprocess
 from pathlib import Path
 
 import pytest
-import yaml
 
 
 # ---------------------------------------------------------------------------
 # TestFullRecordReplayCycle
 # ---------------------------------------------------------------------------
+
 
 class TestFullRecordReplayCycle:
     """Verify recording an MCP session and replaying it works."""
@@ -148,6 +149,7 @@ class TestFullRecordReplayCycle:
 # TestMaestroExampleParses
 # ---------------------------------------------------------------------------
 
+
 class TestMaestroExampleParses:
     """The shipped Maestro example files should load and validate cleanly."""
 
@@ -161,28 +163,20 @@ class TestMaestroExampleParses:
         return ReplayPlayer(str(p))
 
     def test_smoke_test_example_loads(self):
-        player = self._load_if_exists(
-            "/tmp/specterqa-ios-fresh/examples/01-smoke-test.yaml"
-        )
+        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/01-smoke-test.yaml")
         assert player.name
         assert len(player.steps) > 0
 
     def test_form_with_waits_example_loads(self):
-        player = self._load_if_exists(
-            "/tmp/specterqa-ios-fresh/examples/02-form-with-waits.yaml"
-        )
+        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/02-form-with-waits.yaml")
         assert len(player.steps) > 0
 
     def test_conditional_branching_example_loads(self):
-        player = self._load_if_exists(
-            "/tmp/specterqa-ios-fresh/examples/03-conditional-branching.yaml"
-        )
+        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/03-conditional-branching.yaml")
         assert player.bundle_id
 
     def test_visual_regression_example_loads(self):
-        player = self._load_if_exists(
-            "/tmp/specterqa-ios-fresh/examples/04-visual-regression.yaml"
-        )
+        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/04-visual-regression.yaml")
         assert player.bundle_id
 
     def test_all_examples_have_bundle_id(self):
@@ -207,6 +201,7 @@ class TestMaestroExampleParses:
 # ---------------------------------------------------------------------------
 # TestMCPServerProtocol
 # ---------------------------------------------------------------------------
+
 
 class TestMCPServerProtocol:
     """Verify MCP protocol works end-to-end via stdio."""
@@ -260,9 +255,7 @@ class TestMCPServerProtocol:
         ]
 
     def test_tools_list_returns_19_tools(self):
-        msgs = self._init_msgs() + [
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-        ]
+        msgs = self._init_msgs() + ['{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}']
         responses = self._exchange(msgs)
 
         tool_count = 0
@@ -275,9 +268,7 @@ class TestMCPServerProtocol:
 
     def test_tools_list_includes_core_tools(self):
         """Key tools required for the test framework must be present."""
-        msgs = self._init_msgs() + [
-            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-        ]
+        msgs = self._init_msgs() + ['{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}']
         responses = self._exchange(msgs)
 
         tool_names = set()
@@ -306,22 +297,16 @@ class TestMCPServerProtocol:
         ]
         responses = self._exchange(msgs, timeout=5.0)
 
-        init_resp = next(
-            (r for r in responses if r.get("id") == 1 and "result" in r), None
-        )
+        init_resp = next((r for r in responses if r.get("id") == 1 and "result" in r), None)
         assert init_resp is not None, "No initialize response received"
         assert "protocolVersion" in init_resp["result"]
 
     def test_unknown_method_returns_error(self):
         """Calling a non-existent method should return a JSON-RPC error."""
-        msgs = self._init_msgs() + [
-            '{"jsonrpc":"2.0","id":99,"method":"no_such_method","params":{}}'
-        ]
+        msgs = self._init_msgs() + ['{"jsonrpc":"2.0","id":99,"method":"no_such_method","params":{}}']
         responses = self._exchange(msgs)
 
-        error_resp = next(
-            (r for r in responses if r.get("id") == 99), None
-        )
+        error_resp = next((r for r in responses if r.get("id") == 99), None)
         # Server must respond (either error or empty result — not silence)
         assert error_resp is not None, "Server did not respond to unknown method"
 
@@ -330,19 +315,14 @@ class TestMCPServerProtocol:
 # TestCIJSONOutput
 # ---------------------------------------------------------------------------
 
+
 class TestCIJSONOutput:
     """Verify --json-output writes structured results."""
 
     def _make_minimal_replay(self, path: Path) -> None:
         """Write a minimal valid replay YAML to *path*."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "replay:\n"
-            "  name: ci-json-test\n"
-            "  bundle_id: com.test.app\n"
-            "  steps:\n"
-            "    - tapOn: Save\n"
-        )
+        path.write_text("replay:\n  name: ci-json-test\n  bundle_id: com.test.app\n  steps:\n    - tapOn: Save\n")
 
     def test_json_output_structure_has_summary_and_replays(self, tmp_path):
         """When --json-output is given, the written file contains summary + replays."""
@@ -445,6 +425,7 @@ class TestCIJSONOutput:
 # TestValidatorWithExamples
 # ---------------------------------------------------------------------------
 
+
 class TestValidatorWithExamples:
     """Validate all shipped example files pass the validate-replay command."""
 
@@ -458,13 +439,11 @@ class TestValidatorWithExamples:
 
         failures = []
         for example in sorted(examples_dir.glob("*.yaml")):
-            result = runner.invoke(
-                ios_command_group, ["validate-replay", str(example)]
-            )
+            result = runner.invoke(ios_command_group, ["validate-replay", str(example)])
             if result.exit_code != 0:
                 failures.append(f"{example.name}: {result.output}")
 
-        assert not failures, f"Examples failed validation:\n" + "\n".join(failures)
+        assert not failures, "Examples failed validation:\n" + "\n".join(failures)
 
     def test_invalid_replay_missing_bundle_id_fails_validation(self, tmp_path):
         """validate-replay must reject a file that has no bundle_id."""
@@ -473,13 +452,7 @@ class TestValidatorWithExamples:
         from specterqa.ios.cli.commands import ios_command_group
 
         bad = tmp_path / "bad.yaml"
-        bad.write_text(
-            "replay:\n"
-            "  name: no-bundle\n"
-            "  steps:\n"
-            "    - action: tap\n"
-            "      element_label: OK\n"
-        )
+        bad.write_text("replay:\n  name: no-bundle\n  steps:\n    - action: tap\n      element_label: OK\n")
         runner = CliRunner()
         result = runner.invoke(ios_command_group, ["validate-replay", str(bad)])
         assert result.exit_code != 0, "Expected non-zero exit for missing bundle_id"
@@ -507,6 +480,7 @@ class TestValidatorWithExamples:
 # ---------------------------------------------------------------------------
 # TestPyPIPackageStructure
 # ---------------------------------------------------------------------------
+
 
 class TestPyPIPackageStructure:
     """Verify the package metadata and build configuration are correct."""
@@ -547,6 +521,7 @@ class TestPyPIPackageStructure:
 # TestRunnerSourcesShipped
 # ---------------------------------------------------------------------------
 
+
 class TestRunnerSourcesShipped:
     """Verify Swift runner sources are included in the distribution."""
 
@@ -561,9 +536,8 @@ class TestRunnerSourcesShipped:
         runner_dir = Path("/tmp/specterqa-ios-fresh/runner/Sources")
         assert runner_dir.exists(), "runner/Sources directory missing"
         swift_files = list(runner_dir.glob("*.swift"))
-        assert len(swift_files) >= 5, (
-            f"Expected >=5 Swift source files, found {len(swift_files)}: "
-            + ", ".join(f.name for f in swift_files)
+        assert len(swift_files) >= 5, f"Expected >=5 Swift source files, found {len(swift_files)}: " + ", ".join(
+            f.name for f in swift_files
         )
 
     def test_runner_package_swift_exists(self):
@@ -595,6 +569,7 @@ class TestRunnerSourcesShipped:
 # TestReplayPlayerVariableSubstitution
 # ---------------------------------------------------------------------------
 
+
 class TestReplayPlayerVariableSubstitution:
     """Verify ReplayPlayer.resolve_vars substitutes ${VAR} placeholders."""
 
@@ -607,9 +582,7 @@ class TestReplayPlayerVariableSubstitution:
     def test_resolve_multiple_variables(self):
         from specterqa.ios.replay import ReplayPlayer
 
-        result = ReplayPlayer.resolve_vars(
-            "${USER}@${DOMAIN}", {"USER": "alice", "DOMAIN": "example.com"}
-        )
+        result = ReplayPlayer.resolve_vars("${USER}@${DOMAIN}", {"USER": "alice", "DOMAIN": "example.com"})
         assert result == "alice@example.com"
 
     def test_unresolved_variable_is_left_as_is(self):
@@ -629,6 +602,7 @@ class TestReplayPlayerVariableSubstitution:
 # ---------------------------------------------------------------------------
 # TestMaestroNormalization
 # ---------------------------------------------------------------------------
+
 
 class TestMaestroNormalization:
     """Verify Maestro-shorthand steps are normalised to native format."""

@@ -162,22 +162,26 @@ class SimulatorDriver:
             try:
                 result = subprocess.run(
                     [
-                        "xcrun", "simctl", "io", self._device_id,
-                        "screenshot", "--type=png", tmp_path,
+                        "xcrun",
+                        "simctl",
+                        "io",
+                        self._device_id,
+                        "screenshot",
+                        "--type=png",
+                        tmp_path,
                     ],
                     capture_output=True,
                     timeout=10,
                 )
                 if result.returncode != 0:
                     logger.debug(
-                        "_detect_device_info: simctl screenshot failed (rc=%d) — "
-                        "using defaults",
+                        "_detect_device_info: simctl screenshot failed (rc=%d) — using defaults",
                         result.returncode,
                     )
                     return
 
                 with Image.open(tmp_path) as img:
-                    raw_w, raw_h = img.size   # e.g. 1179×2556 for iPhone 16 Pro
+                    raw_w, raw_h = img.size  # e.g. 1179×2556 for iPhone 16 Pro
             finally:
                 try:
                     os.unlink(tmp_path)
@@ -196,14 +200,14 @@ class SimulatorDriver:
 
             logger.debug(
                 "_detect_device_info: raw=%dx%d scale=%.0fx logical=%.0fx%.0f",
-                raw_w, raw_h,
+                raw_w,
+                raw_h,
                 self._scale_factor,
-                self._device_logical_w, self._device_logical_h,
+                self._device_logical_w,
+                self._device_logical_h,
             )
         except Exception as exc:
-            logger.debug(
-                "_detect_device_info: probe failed (%s) — using defaults", exc
-            )
+            logger.debug("_detect_device_info: probe failed (%s) — using defaults", exc)
 
     # ------------------------------------------------------------------
     # Backend selection
@@ -236,8 +240,7 @@ class SimulatorDriver:
 
         except Exception as exc:
             logger.warning(
-                "SimulatorDriver: backend selection failed (%s) — "
-                "falling back to CGEvent InteractionLayer",
+                "SimulatorDriver: backend selection failed (%s) — falling back to CGEvent InteractionLayer",
                 exc,
             )
             self._backend = None
@@ -267,9 +270,7 @@ class SimulatorDriver:
         dev_y = sy * (self._device_logical_h / img_h)
         return dev_x, dev_y
 
-    def _swipe_screenshot_to_device(
-        self, x1: int, y1: int, x2: int, y2: int
-    ) -> tuple[float, float, float, float]:
+    def _swipe_screenshot_to_device(self, x1: int, y1: int, x2: int, y2: int) -> tuple[float, float, float, float]:
         """Convert a pair of screenshot-pixel swipe coordinates to device points."""
         dx1, dy1 = self._screenshot_to_device(x1, y1)
         dx2, dy2 = self._screenshot_to_device(x2, y2)
@@ -661,9 +662,7 @@ class SimulatorDriver:
             try:
                 img_w = self._last_img_width or 1024
                 img_h = self._last_img_height or 2226
-                self._interaction.double_tap(
-                    int(coord[0]), int(coord[1]), img_w, img_h
-                )
+                self._interaction.double_tap(int(coord[0]), int(coord[1]), img_w, img_h)
                 return {"success": True, "action": "double_click"}
             except Exception as exc:
                 return {"success": False, "action": "double_click", "error": str(exc)}
@@ -674,9 +673,7 @@ class SimulatorDriver:
             try:
                 img_w = self._last_img_width or 1024
                 img_h = self._last_img_height or 2226
-                self._interaction.long_press(
-                    int(coord[0]), int(coord[1]), img_w, img_h, duration=dur
-                )
+                self._interaction.long_press(int(coord[0]), int(coord[1]), img_w, img_h, duration=dur)
                 return {"success": True, "action": action_type}
             except Exception as exc:
                 return {"success": False, "action": action_type, "error": str(exc)}
@@ -702,9 +699,12 @@ class SimulatorDriver:
                 img_w = self._last_img_width or 1024
                 img_h = self._last_img_height or 2226
                 self._interaction.swipe(
-                    int(start[0]), int(start[1]),
-                    int(end[0]), int(end[1]),
-                    img_w, img_h,
+                    int(start[0]),
+                    int(start[1]),
+                    int(end[0]),
+                    int(end[1]),
+                    img_w,
+                    img_h,
                 )
                 return {"success": True, "action": "left_click_drag"}
             except Exception as exc:
@@ -715,8 +715,7 @@ class SimulatorDriver:
             return self.wait(secs)
 
         else:
-            return {"success": False, "action": action_type,
-                    "error": f"Unknown action: {action_type}"}
+            return {"success": False, "action": action_type, "error": f"Unknown action: {action_type}"}
 
     # ------------------------------------------------------------------
     # Context aggregation

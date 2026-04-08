@@ -11,7 +11,6 @@ Module under test (to be created by CodeAtlas):
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -26,6 +25,7 @@ try:
         DriverContext,
         SimulatorAIContext,
     )
+
     _AI_CONTEXT_AVAILABLE = True
 except ImportError:
     _AI_CONTEXT_AVAILABLE = False
@@ -124,11 +124,15 @@ def _make_perf_profiler(snapshot: MagicMock | None = None) -> MagicMock:
 def _make_state_inspector(state: dict | None = None) -> MagicMock:
     """Build a mock StateInspector that returns the given state snapshot."""
     inspector = MagicMock()
-    inspector.snapshot.return_value = state if state is not None else {
-        "user_defaults": {"onboarding_complete": True},
-        "keychain": "[REDACTED]",
-        "container_size_mb": 12.4,
-    }
+    inspector.snapshot.return_value = (
+        state
+        if state is not None
+        else {
+            "user_defaults": {"onboarding_complete": True},
+            "keychain": "[REDACTED]",
+            "container_size_mb": 12.4,
+        }
+    )
     return inspector
 
 
@@ -160,9 +164,7 @@ class TestDriverContextDataclass:
             "app_state",
             "crashes",
         }
-        assert required.issubset(fields), (
-            f"DriverContext is missing fields: {required - fields}"
-        )
+        assert required.issubset(fields), f"DriverContext is missing fields: {required - fields}"
 
     def test_driver_context_is_dataclass(self):
         """DriverContext must be a proper dataclass."""
@@ -416,10 +418,9 @@ class TestBuildSystemPrompt:
         builder = SimulatorAIContext()
         prompt = builder.build_system_prompt(product_name="MyApp")
         # Must reference iOS / simulator context
-        assert any(
-            keyword in prompt.lower()
-            for keyword in ("ios", "simulator", "iphone", "ipad")
-        ), f"Expected iOS-specific instructions in system prompt, got: {prompt[:200]}"
+        assert any(keyword in prompt.lower() for keyword in ("ios", "simulator", "iphone", "ipad")), (
+            f"Expected iOS-specific instructions in system prompt, got: {prompt[:200]}"
+        )
 
     def test_system_prompt_includes_product_name(self):
         """build_system_prompt must embed the product_name in the output."""
@@ -446,14 +447,10 @@ class TestDataRedactorIntegration:
         """
         mock_redactor = MagicMock()
         # Redactor.redact_string should return a safe version
-        mock_redactor.redact_string.side_effect = lambda s: s.replace(
-            "Bearer secret-token-123", "[REDACTED]"
-        )
+        mock_redactor.redact_string.side_effect = lambda s: s.replace("Bearer secret-token-123", "[REDACTED]")
 
         builder = SimulatorAIContext(redactor=mock_redactor)
-        sensitive_log = _make_log_entry(
-            message="Authorization: Bearer secret-token-123", level="info"
-        )
+        sensitive_log = _make_log_entry(message="Authorization: Bearer secret-token-123", level="info")
         ctx = DriverContext(
             screenshot_base64="x",
             recent_logs=[sensitive_log],

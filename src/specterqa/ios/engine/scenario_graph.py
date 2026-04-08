@@ -92,9 +92,7 @@ class ScenarioGraph:
             for step in steps:
                 step_id: str = step["id"]
                 # Find an existing child with this step ID
-                existing: Optional[ScenarioNode] = next(
-                    (c for c in current.children if c.node_id == step_id), None
-                )
+                existing: Optional[ScenarioNode] = next((c for c in current.children if c.node_id == step_id), None)
                 if existing is not None:
                     existing.scenarios_requiring.add(scen_id)
                     current = existing
@@ -212,9 +210,7 @@ class ScenarioGraph:
                 for step in branch_steps:
                     if node is None:
                         break
-                    match = next(
-                        (c for c in node.children if c.node_id == step["id"]), None
-                    )
+                    match = next((c for c in node.children if c.node_id == step["id"]), None)
                     if match is not None:
                         branch_nodes.append(match)
                         node = match
@@ -223,9 +219,7 @@ class ScenarioGraph:
             branches[scen_id] = branch_nodes
         return branches
 
-    def _find_branch_start(
-        self, root: ScenarioNode, depth: int
-    ) -> Optional[ScenarioNode]:
+    def _find_branch_start(self, root: ScenarioNode, depth: int) -> Optional[ScenarioNode]:
         """Descend *depth* levels along the single-child spine to reach the
         node just before the branches split.  Returns that node so callers
         can then look into children."""

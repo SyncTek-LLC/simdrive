@@ -10,7 +10,7 @@ INIT-2026-492 — SpecterQA iOS Simulator Driver, Phase 3.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Optional
 
 

@@ -10,7 +10,6 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.license.validator import LicenseValidator  # type: ignore[import]
+
     _VALIDATOR_AVAILABLE = True
 except ImportError:
     _VALIDATOR_AVAILABLE = False
@@ -210,9 +210,7 @@ class TestLicenseValidatorTier:
                 _make_api_response(tier=expected_tier, max_concurrent=_TIER_CONCURRENCY[expected_tier])
             ):
                 validator.validate()
-            assert validator.tier() == expected_tier, (
-                f"Expected tier={expected_tier!r}, got {validator.tier()!r}"
-            )
+            assert validator.tier() == expected_tier, f"Expected tier={expected_tier!r}, got {validator.tier()!r}"
 
 
 # ===========================================================================
@@ -239,9 +237,7 @@ class TestLicenseValidatorOfflineGrace:
         }
         with patch.object(validator, "_decode_jwt", return_value=mock_token_payload):
             result = validator._check_offline_grace()
-        assert result is True, (
-            "_check_offline_grace() should return True within the 72h grace window"
-        )
+        assert result is True, "_check_offline_grace() should return True within the 72h grace window"
 
     def test_offline_grace_returns_false_after_grace_period(self):
         """_check_offline_grace() returns False when the grace window has expired."""
@@ -257,9 +253,7 @@ class TestLicenseValidatorOfflineGrace:
         }
         with patch.object(validator, "_decode_jwt", return_value=mock_token_payload):
             result = validator._check_offline_grace()
-        assert result is False, (
-            "_check_offline_grace() should return False after the 72h grace window expires"
-        )
+        assert result is False, "_check_offline_grace() should return False after the 72h grace window expires"
 
     def test_api_error_triggers_offline_grace_check(self):
         """When the API is unreachable, validate() falls back to _check_offline_grace().
@@ -270,8 +264,10 @@ class TestLicenseValidatorOfflineGrace:
         validator = LicenseValidator(license_key=_TEST_KEY, api_url=_API_URL)
 
         # Patch requests.get to simulate a network error
-        with patch("requests.get", side_effect=Exception("Network unreachable")), \
-             patch.object(validator, "_check_offline_grace", return_value=True):
+        with (
+            patch("requests.get", side_effect=Exception("Network unreachable")),
+            patch.object(validator, "_check_offline_grace", return_value=True),
+        ):
             # Should not raise — offline grace covers the gap
             result = validator.validate()
 
@@ -303,7 +299,5 @@ class TestLicenseValidatorCaching:
             result_1 = validator.validate()
             result_2 = validator.validate()
 
-        assert mock_get.call_count == 1, (
-            f"Expected 1 API call due to caching, but got {mock_get.call_count}"
-        )
+        assert mock_get.call_count == 1, f"Expected 1 API call due to caching, but got {mock_get.call_count}"
         assert result_1 == result_2, "Cached result must equal first result"

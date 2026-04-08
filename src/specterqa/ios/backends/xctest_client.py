@@ -110,12 +110,8 @@ class XCTestBackend:
         except urllib.error.URLError as exc:
             reason = exc.reason
             if isinstance(reason, socket.timeout) or isinstance(reason, TimeoutError):
-                raise ConnectionError(
-                    f"XCTest runner timed out on {req.full_url}"
-                ) from exc
-            raise ConnectionError(
-                f"XCTest runner unavailable at {self._url('')}: {reason}"
-            ) from exc
+                raise ConnectionError(f"XCTest runner timed out on {req.full_url}") from exc
+            raise ConnectionError(f"XCTest runner unavailable at {self._url('')}: {reason}") from exc
 
     def _send_url(self, url: str) -> dict[str, Any]:
         """Execute a GET by passing the URL string directly to urlopen.
@@ -134,12 +130,8 @@ class XCTestBackend:
         except urllib.error.URLError as exc:
             reason = exc.reason
             if isinstance(reason, socket.timeout) or isinstance(reason, TimeoutError):
-                raise ConnectionError(
-                    f"XCTest runner timed out on {url}"
-                ) from exc
-            raise ConnectionError(
-                f"XCTest runner unavailable at {self._url('')}: {reason}"
-            ) from exc
+                raise ConnectionError(f"XCTest runner timed out on {url}") from exc
+            raise ConnectionError(f"XCTest runner unavailable at {self._url('')}: {reason}") from exc
 
     # ------------------------------------------------------------------
     # Availability check
@@ -344,6 +336,4 @@ class XCTestBackend:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        return (
-            f"XCTestBackend(host={self.host!r}, port={self.port}, udid={self.udid!r})"
-        )
+        return f"XCTestBackend(host={self.host!r}, port={self.port}, udid={self.udid!r})"

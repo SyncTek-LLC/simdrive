@@ -13,7 +13,6 @@ Dogfood bypass (v0.1.0):
 from __future__ import annotations
 
 import os
-import time
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -203,10 +202,12 @@ class ComputerUseRunner:
 
     def _make_screenshot_fn(self):
         """Return a screenshot function bound to the SimulatorRunner."""
+
         def take_screenshot(step_id: str, action_idx: int, label: str) -> str | None:
             if self._sim_runner is None:
                 return None
             return self._sim_runner._take_screenshot(step_id, action_idx, label)
+
         return take_screenshot
 
     def _make_cost_callback(self):
@@ -223,6 +224,7 @@ class ComputerUseRunner:
 
         def cost_callback(model: str, cost_usd: float) -> None:
             from specterqa.engine.cost_tracker import BudgetExceededError
+
             spent[0] += cost_usd
             if not exceeded[0] and spent[0] > budget:
                 exceeded[0] = True

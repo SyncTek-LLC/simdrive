@@ -22,7 +22,7 @@ import re
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from PIL import Image
@@ -43,6 +43,7 @@ try:
         kCGWindowListOptionOnScreenOnly,
         kCGNullWindowID,
     )
+
     QUARTZ_AVAILABLE = True
 except ImportError:
     QUARTZ_AVAILABLE = False
@@ -52,14 +53,15 @@ except ImportError:
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class DeviceInfo:
     udid: str
     name: str
     os_version: str
-    screen_width: int   # raw pixel width
+    screen_width: int  # raw pixel width
     screen_height: int  # raw pixel height
-    scale: int          # Retina scale factor
+    scale: int  # Retina scale factor
 
 
 @dataclass
@@ -73,12 +75,14 @@ class WindowBounds:
 
 class SimulatorError(Exception):
     """Raised when a simulator operation fails."""
+
     pass
 
 
 # ---------------------------------------------------------------------------
 # SimDriver
 # ---------------------------------------------------------------------------
+
 
 class SimDriver:
     """Controls the iOS Simulator via Quartz CGEvents and xcrun simctl.
@@ -133,8 +137,7 @@ class SimDriver:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if check and result.returncode != 0:
                 raise SimulatorError(
-                    f"Command failed (rc={result.returncode}): {' '.join(cmd)}\n"
-                    f"stderr: {result.stderr.strip()}"
+                    f"Command failed (rc={result.returncode}): {' '.join(cmd)}\nstderr: {result.stderr.strip()}"
                 )
             return result
         except subprocess.TimeoutExpired:
@@ -154,37 +157,35 @@ class SimDriver:
         if self._window_cache and (now - self._window_cache_time) < 2.0:
             return self._window_cache
 
-        windows = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
-        )
+        windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
         if windows is None:
             raise SimulatorError("CGWindowListCopyWindowInfo returned None")
 
         # Find the main Simulator window (not helper windows)
         sim_windows = []
         for w in windows:
-            owner = w.get('kCGWindowOwnerName', '')
-            if 'Simulator' in owner:
-                bounds = w.get('kCGWindowBounds', {})
-                layer = w.get('kCGWindowLayer', 0)
-                alpha = w.get('kCGWindowAlpha', 1.0)
-                height = float(bounds.get('Height', 0))
+            owner = w.get("kCGWindowOwnerName", "")
+            if "Simulator" in owner:
+                bounds = w.get("kCGWindowBounds", {})
+                layer = w.get("kCGWindowLayer", 0)
+                alpha = w.get("kCGWindowAlpha", 1.0)
+                height = float(bounds.get("Height", 0))
                 # Main window is layer 0, has alpha 1.0, and is tall (device screen)
                 if layer == 0 and alpha >= 1.0 and height > 200:
-                    sim_windows.append({
-                        'bounds': bounds,
-                        'name': w.get('kCGWindowName', ''),
-                        'height': height,
-                    })
+                    sim_windows.append(
+                        {
+                            "bounds": bounds,
+                            "name": w.get("kCGWindowName", ""),
+                            "height": height,
+                        }
+                    )
 
         if not sim_windows:
-            raise SimulatorError(
-                "Simulator window not found. Is Simulator.app open and visible?"
-            )
+            raise SimulatorError("Simulator window not found. Is Simulator.app open and visible?")
 
         # Use the tallest window (the device window, not toolbar/panel)
-        best = max(sim_windows, key=lambda w: w['height'])
-        b = best['bounds']
+        best = max(sim_windows, key=lambda w: w["height"])
+        b = best["bounds"]
 
         # Auto-detect title bar height
         # macOS standard title bar: 28px
@@ -193,32 +194,33 @@ class SimDriver:
         # We detect by checking if the window name contains the device name
         # (titled windows have title bars, untitled ones are full-screen)
         title_bar = 0.0
-        win_name = best.get('name', '')
+        win_name = best.get("name", "")
         if win_name:
             # Has a title bar (window is titled)
             title_bar = 28.0
         # In full-screen mode, kCGWindowName is often empty
 
         result = WindowBounds(
-            x=float(b['X']),
-            y=float(b['Y']),
-            width=float(b['Width']),
-            height=float(b['Height']),
+            x=float(b["X"]),
+            y=float(b["Y"]),
+            width=float(b["Width"]),
+            height=float(b["Height"]),
             title_bar_height=title_bar,
         )
 
         if self.verbose:
-            print(f"  [window] pos=({result.x:.0f},{result.y:.0f}) "
-                  f"size={result.width:.0f}x{result.height:.0f} "
-                  f"titlebar={result.title_bar_height:.0f} "
-                  f"name='{win_name}'")
+            print(
+                f"  [window] pos=({result.x:.0f},{result.y:.0f}) "
+                f"size={result.width:.0f}x{result.height:.0f} "
+                f"titlebar={result.title_bar_height:.0f} "
+                f"name='{win_name}'"
+            )
 
         self._window_cache = result
         self._window_cache_time = now
         return result
 
-    def _image_to_screen(self, img_x: float, img_y: float,
-                          img_w: float = 0, img_h: float = 0) -> Tuple[float, float]:
+    def _image_to_screen(self, img_x: float, img_y: float, img_w: float = 0, img_h: float = 0) -> Tuple[float, float]:
         """Convert image coordinates to absolute screen coordinates.
 
         Args:
@@ -240,9 +242,11 @@ class SimDriver:
         screen_y = win.y + win.title_bar_height + img_y * scale_y + self._calibration_offset_y
 
         if self.verbose:
-            print(f"  [coords] img=({img_x:.0f},{img_y:.0f})/{iw:.0f}x{ih:.0f} "
-                  f"-> screen=({screen_x:.1f},{screen_y:.1f}) "
-                  f"scale=({scale_x:.3f},{scale_y:.3f})")
+            print(
+                f"  [coords] img=({img_x:.0f},{img_y:.0f})/{iw:.0f}x{ih:.0f} "
+                f"-> screen=({screen_x:.1f},{screen_y:.1f}) "
+                f"scale=({scale_x:.3f},{scale_y:.3f})"
+            )
 
         return screen_x, screen_y
 
@@ -324,10 +328,7 @@ class SimDriver:
 
         # Get pixel dimensions from a screenshot
         screenshot_path = os.path.join(self._screenshot_dir, "info_shot.png")
-        self._run([
-            "xcrun", "simctl", "io", self.udid,
-            "screenshot", "--type=png", screenshot_path
-        ])
+        self._run(["xcrun", "simctl", "io", self.udid, "screenshot", "--type=png", screenshot_path])
         img = Image.open(screenshot_path)
         pixel_w, pixel_h = img.size
 
@@ -336,8 +337,12 @@ class SimDriver:
             scale = 2
 
         self._device_info = DeviceInfo(
-            udid=self.udid, name=name, os_version=os_version,
-            screen_width=pixel_w, screen_height=pixel_h, scale=scale,
+            udid=self.udid,
+            name=name,
+            os_version=os_version,
+            screen_width=pixel_w,
+            screen_height=pixel_h,
+            scale=scale,
         )
         return self._device_info
 
@@ -348,10 +353,7 @@ class SimDriver:
     def screenshot(self, resize_width: int = 1024) -> Tuple[str, int, int]:
         """Capture screenshot, resize, return (base64_png, width, height)."""
         path = os.path.join(self._screenshot_dir, f"shot_{int(time.time() * 1000)}.png")
-        self._run([
-            "xcrun", "simctl", "io", self.udid,
-            "screenshot", "--type=png", path
-        ])
+        self._run(["xcrun", "simctl", "io", self.udid, "screenshot", "--type=png", path])
 
         img = Image.open(path)
         if img.width > resize_width:
@@ -371,10 +373,7 @@ class SimDriver:
     def screenshot_raw(self) -> str:
         """Capture screenshot, return file path."""
         path = os.path.join(self._screenshot_dir, f"shot_{int(time.time() * 1000)}.png")
-        self._run([
-            "xcrun", "simctl", "io", self.udid,
-            "screenshot", "--type=png", path
-        ])
+        self._run(["xcrun", "simctl", "io", self.udid, "screenshot", "--type=png", path])
         return path
 
     # ------------------------------------------------------------------
@@ -424,8 +423,7 @@ class SimDriver:
         CGEventPost(kCGHIDEventTap, up)
         time.sleep(0.5)
 
-    def swipe(self, x1: float, y1: float, x2: float, y2: float,
-              duration: float = 0.4) -> None:
+    def swipe(self, x1: float, y1: float, x2: float, y2: float, duration: float = 0.4) -> None:
         """Swipe gesture via Quartz mouse drag events."""
         self._activate_simulator()
         sx1, sy1 = self._image_to_screen(x1, y1)
@@ -450,9 +448,7 @@ class SimDriver:
 
     def swipe_back(self) -> None:
         """iOS back gesture — swipe from left edge to center."""
-        self.swipe(5, self._display_height // 2,
-                   self._display_width // 2, self._display_height // 2,
-                   duration=0.3)
+        self.swipe(5, self._display_height // 2, self._display_width // 2, self._display_height // 2, duration=0.3)
 
     # ------------------------------------------------------------------
     # Keyboard input
@@ -464,21 +460,22 @@ class SimDriver:
         Tries xcrun simctl keyboard first, falls back to pasteboard + Cmd-V.
         """
         try:
-            self._run([
-                "xcrun", "simctl", "io", self.udid, "keyboard", "input", text
-            ], check=True)
+            self._run(["xcrun", "simctl", "io", self.udid, "keyboard", "input", text], check=True)
         except SimulatorError:
             if self.verbose:
                 print("  [type] Falling back to pasteboard paste")
             proc = subprocess.run(
                 ["xcrun", "simctl", "pbcopy", self.udid],
-                input=text, capture_output=True, text=True,
+                input=text,
+                capture_output=True,
+                text=True,
             )
             if proc.returncode != 0:
                 raise SimulatorError(f"pbcopy failed: {proc.stderr}")
             time.sleep(0.2)
             # Cmd+V via Quartz keyboard event
             from Quartz import CGEventCreateKeyboardEvent, CGEventSetFlags, kCGEventFlagMaskCommand
+
             v_down = CGEventCreateKeyboardEvent(None, 9, True)  # 9 = 'v' keycode
             v_up = CGEventCreateKeyboardEvent(None, 9, False)
             CGEventSetFlags(v_down, kCGEventFlagMaskCommand)
@@ -491,9 +488,17 @@ class SimDriver:
     def press_key(self, key: str) -> None:
         """Press a special key via Quartz keyboard events."""
         KEY_CODES = {
-            "return": 36, "enter": 36, "escape": 53, "delete": 51,
-            "backspace": 51, "tab": 48, "space": 49,
-            "up": 126, "down": 125, "left": 123, "right": 124,
+            "return": 36,
+            "enter": 36,
+            "escape": 53,
+            "delete": 51,
+            "backspace": 51,
+            "tab": 48,
+            "space": 49,
+            "up": 126,
+            "down": 125,
+            "left": 123,
+            "right": 124,
         }
         code = KEY_CODES.get(key.lower())
         if code is None:
@@ -501,6 +506,7 @@ class SimDriver:
 
         self._activate_simulator()
         from Quartz import CGEventCreateKeyboardEvent
+
         down = CGEventCreateKeyboardEvent(None, code, True)
         up = CGEventCreateKeyboardEvent(None, code, False)
         CGEventPost(kCGHIDEventTap, down)

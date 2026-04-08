@@ -9,7 +9,7 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -19,6 +19,7 @@ import pytest
 
 try:
     from specterqa.ios.exploratory.agent import ExploratoryAgent  # type: ignore[import]
+
     _AGENT_AVAILABLE = True
 except ImportError:
     _AGENT_AVAILABLE = False
@@ -32,6 +33,7 @@ needs_agent = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_step_runner(result_overrides: dict | None = None) -> MagicMock:
     """Build a mock step_runner whose run_step returns a minimal StepResult dict."""
@@ -78,9 +80,7 @@ class TestExploratoryAgentReturnShape:
         result = agent.explore(app_context="login screen")
         assert isinstance(result, dict)
         required_keys = {"steps_taken", "findings", "coverage_areas", "duration_seconds", "budget_used"}
-        assert required_keys.issubset(result.keys()), (
-            f"Missing keys: {required_keys - result.keys()}"
-        )
+        assert required_keys.issubset(result.keys()), f"Missing keys: {required_keys - result.keys()}"
 
     def test_explore_coverage_areas_is_list_of_strings(self):
         runner = _make_step_runner()

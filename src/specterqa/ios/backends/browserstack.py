@@ -52,22 +52,26 @@ class BrowserStackBackend:
     @staticmethod
     def is_available() -> bool:
         """Check if BrowserStack credentials are configured."""
-        return bool(
-            os.environ.get("BROWSERSTACK_USERNAME")
-            and os.environ.get("BROWSERSTACK_ACCESS_KEY")
-        )
+        return bool(os.environ.get("BROWSERSTACK_USERNAME") and os.environ.get("BROWSERSTACK_ACCESS_KEY"))
 
     def upload_app(self, app_path: str) -> str:
         """Upload an .ipa/.app to BrowserStack. Returns the app URL."""
         url = "https://api-cloud.browserstack.com/app-automate/upload"
         result = subprocess.run(
             [
-                "curl", "-s",
-                "-u", f"{self.username}:{self.access_key}",
-                "-X", "POST", url,
-                "-F", f"file=@{app_path}",
+                "curl",
+                "-s",
+                "-u",
+                f"{self.username}:{self.access_key}",
+                "-X",
+                "POST",
+                url,
+                "-F",
+                f"file=@{app_path}",
             ],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         data = json.loads(result.stdout)
         self.app_url = data.get("app_url", "")
@@ -119,7 +123,9 @@ class BrowserStackBackend:
         auth = base64.b64encode(f"{self.username}:{self.access_key}".encode()).decode()
 
         req = urllib.request.Request(
-            url, data=data, method=method,
+            url,
+            data=data,
+            method=method,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Basic {auth}",
@@ -136,34 +142,38 @@ class BrowserStackBackend:
 
     def tap(self, x: float, y: float, duration: float = 0.0) -> dict:
         action = {
-            "actions": [{
-                "type": "pointer",
-                "id": "finger1",
-                "parameters": {"pointerType": "touch"},
-                "actions": [
-                    {"type": "pointerMove", "duration": 0, "x": int(x), "y": int(y)},
-                    {"type": "pointerDown", "button": 0},
-                    {"type": "pause", "duration": int(duration * 1000) if duration > 0 else 50},
-                    {"type": "pointerUp", "button": 0},
-                ],
-            }]
+            "actions": [
+                {
+                    "type": "pointer",
+                    "id": "finger1",
+                    "parameters": {"pointerType": "touch"},
+                    "actions": [
+                        {"type": "pointerMove", "duration": 0, "x": int(x), "y": int(y)},
+                        {"type": "pointerDown", "button": 0},
+                        {"type": "pause", "duration": int(duration * 1000) if duration > 0 else 50},
+                        {"type": "pointerUp", "button": 0},
+                    ],
+                }
+            ]
         }
         self._request("POST", "/actions", action)
         return {"status": "ok"}
 
     def swipe(self, x1: float, y1: float, x2: float, y2: float, duration: float = 0.3) -> dict:
         action = {
-            "actions": [{
-                "type": "pointer",
-                "id": "finger1",
-                "parameters": {"pointerType": "touch"},
-                "actions": [
-                    {"type": "pointerMove", "duration": 0, "x": int(x1), "y": int(y1)},
-                    {"type": "pointerDown", "button": 0},
-                    {"type": "pointerMove", "duration": int(duration * 1000), "x": int(x2), "y": int(y2)},
-                    {"type": "pointerUp", "button": 0},
-                ],
-            }]
+            "actions": [
+                {
+                    "type": "pointer",
+                    "id": "finger1",
+                    "parameters": {"pointerType": "touch"},
+                    "actions": [
+                        {"type": "pointerMove", "duration": 0, "x": int(x1), "y": int(y1)},
+                        {"type": "pointerDown", "button": 0},
+                        {"type": "pointerMove", "duration": int(duration * 1000), "x": int(x2), "y": int(y2)},
+                        {"type": "pointerUp", "button": 0},
+                    ],
+                }
+            ]
         }
         self._request("POST", "/actions", action)
         return {"status": "ok"}

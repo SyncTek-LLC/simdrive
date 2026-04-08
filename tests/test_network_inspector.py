@@ -11,9 +11,6 @@ Module under test (to be created by CodeAtlas):
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,6 +23,7 @@ try:
         NetworkInspector,
         NetworkRequest,
     )
+
     _NETWORK_AVAILABLE = True
 except ImportError:
     _NETWORK_AVAILABLE = False
@@ -34,6 +32,7 @@ except ImportError:
 
 try:
     from specterqa.ios.security.redactor import DataRedactor  # type: ignore[import]
+
     _REDACTOR_AVAILABLE = True
 except ImportError:
     _REDACTOR_AVAILABLE = False
@@ -56,6 +55,7 @@ needs_network_and_redactor = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Helpers — build NetworkRequest fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_request(
     request_id: str = "req-001",
@@ -198,9 +198,7 @@ class TestNetworkInspectorCompletedRequests:
         assert "old-req" not in request_ids, (
             "Request completed 119s ago should not appear in completed_requests(seconds=30)"
         )
-        assert "recent-req" in request_ids, (
-            "Recent request should appear in completed_requests(seconds=30)"
-        )
+        assert "recent-req" in request_ids, "Recent request should appear in completed_requests(seconds=30)"
 
 
 @needs_network
@@ -211,9 +209,17 @@ class TestNetworkInspectorFailedRequests:
         """failed_requests() returns requests that are is_failed == True."""
         inspector = NetworkInspector(device_id="booted")
         now = time.time()
-        inspector._add_request(_make_request(request_id="ok",      status_code=200, error=None,              started_at=now - 5, completed_at=now - 4))  # type: ignore[attr-defined]
-        inspector._add_request(_make_request(request_id="bad-400", status_code=400, error=None,              started_at=now - 5, completed_at=now - 4))  # type: ignore[attr-defined]
-        inspector._add_request(_make_request(request_id="error",   status_code=None, error="Timeout",        started_at=now - 5, completed_at=now - 4))  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(request_id="ok", status_code=200, error=None, started_at=now - 5, completed_at=now - 4)
+        )  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(request_id="bad-400", status_code=400, error=None, started_at=now - 5, completed_at=now - 4)
+        )  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(
+                request_id="error", status_code=None, error="Timeout", started_at=now - 5, completed_at=now - 4
+            )
+        )  # type: ignore[attr-defined]
         results = inspector.failed_requests(seconds=60)
         result_ids = {r.request_id for r in results}
         assert "ok" not in result_ids, "200 OK request should NOT appear in failed_requests()"
@@ -229,8 +235,24 @@ class TestNetworkInspectorAuthRequests:
         """auth_requests() returns requests where is_auth is True."""
         inspector = NetworkInspector(device_id="booted")
         now = time.time()
-        inspector._add_request(_make_request(request_id="data-req",  url="https://api.example.com/v1/data",    path="/v1/data",    started_at=now - 5, completed_at=now - 4))  # type: ignore[attr-defined]
-        inspector._add_request(_make_request(request_id="token-req", url="https://auth.example.com/oauth/token", path="/oauth/token", started_at=now - 5, completed_at=now - 4))  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(
+                request_id="data-req",
+                url="https://api.example.com/v1/data",
+                path="/v1/data",
+                started_at=now - 5,
+                completed_at=now - 4,
+            )
+        )  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(
+                request_id="token-req",
+                url="https://auth.example.com/oauth/token",
+                path="/oauth/token",
+                started_at=now - 5,
+                completed_at=now - 4,
+            )
+        )  # type: ignore[attr-defined]
         results = inspector.auth_requests()
         result_ids = {r.request_id for r in results}
         assert "data-req" not in result_ids, "Non-auth request should NOT appear in auth_requests()"
@@ -250,9 +272,42 @@ class TestNetworkInspectorSummary:
         """summary() includes total_requests, by_status, by_host, avg_latency_ms, failed_count."""
         inspector = NetworkInspector(device_id="booted")
         now = time.time()
-        inspector._add_request(_make_request(request_id="r1", url="https://api.a.com/x", host="api.a.com", path="/x", status_code=200, duration_ms=100.0, started_at=now - 3, completed_at=now - 2))  # type: ignore[attr-defined]
-        inspector._add_request(_make_request(request_id="r2", url="https://api.a.com/y", host="api.a.com", path="/y", status_code=200, duration_ms=200.0, started_at=now - 3, completed_at=now - 2))  # type: ignore[attr-defined]
-        inspector._add_request(_make_request(request_id="r3", url="https://api.b.com/z", host="api.b.com", path="/z", status_code=500, duration_ms=50.0,  started_at=now - 3, completed_at=now - 2))  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(
+                request_id="r1",
+                url="https://api.a.com/x",
+                host="api.a.com",
+                path="/x",
+                status_code=200,
+                duration_ms=100.0,
+                started_at=now - 3,
+                completed_at=now - 2,
+            )
+        )  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(
+                request_id="r2",
+                url="https://api.a.com/y",
+                host="api.a.com",
+                path="/y",
+                status_code=200,
+                duration_ms=200.0,
+                started_at=now - 3,
+                completed_at=now - 2,
+            )
+        )  # type: ignore[attr-defined]
+        inspector._add_request(
+            _make_request(
+                request_id="r3",
+                url="https://api.b.com/z",
+                host="api.b.com",
+                path="/z",
+                status_code=500,
+                duration_ms=50.0,
+                started_at=now - 3,
+                completed_at=now - 2,
+            )
+        )  # type: ignore[attr-defined]
 
         s = inspector.summary()
         assert "total_requests" in s, "summary must include 'total_requests'"
@@ -322,9 +377,7 @@ class TestNetworkInspectorRedactorIntegration:
         results = inspector.completed_requests(seconds=30)
         assert len(results) >= 1
         output_url = results[0].url
-        assert "url_secret_token" not in output_url, (
-            "access_token value in URL must be redacted before output"
-        )
+        assert "url_secret_token" not in output_url, "access_token value in URL must be redacted before output"
 
 
 # ===========================================================================

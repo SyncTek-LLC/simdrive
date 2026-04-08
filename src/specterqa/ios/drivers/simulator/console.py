@@ -16,12 +16,13 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Optional
 
 
 # ---------------------------------------------------------------------------
 # LogEntry
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class LogEntry:
@@ -48,21 +49,18 @@ class LogEntry:
     @property
     def is_auth_related(self) -> bool:
         """True when the message contains auth-related keywords (case-insensitive)."""
-        return bool(
-            re.search(r"(?i)(oauth|oidc|token|auth|login|credential)", self.message)
-        )
+        return bool(re.search(r"(?i)(oauth|oidc|token|auth|login|credential)", self.message))
 
     @property
     def is_network_related(self) -> bool:
         """True when the message contains network-related keywords (case-insensitive)."""
-        return bool(
-            re.search(r"(?i)(http|url|connection|dns)", self.message)
-        )
+        return bool(re.search(r"(?i)(http|url|connection|dns)", self.message))
 
 
 # ---------------------------------------------------------------------------
 # LogWatcher
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class LogWatcher:
@@ -96,6 +94,7 @@ class LogWatcher:
 # ConsoleMonitor
 # ---------------------------------------------------------------------------
 
+
 class ConsoleMonitor:
     """Real-time iOS Simulator log stream monitor.
 
@@ -123,9 +122,7 @@ class ConsoleMonitor:
 
         self._lock = threading.Lock()
         self._buffer: collections.deque[LogEntry] = collections.deque(maxlen=buffer_size)
-        self._error_buffer: collections.deque[LogEntry] = collections.deque(
-            maxlen=error_buffer_size
-        )
+        self._error_buffer: collections.deque[LogEntry] = collections.deque(maxlen=error_buffer_size)
         self._watchers: list[LogWatcher] = []
 
         self._process: Optional[subprocess.Popen[str]] = None
@@ -145,10 +142,16 @@ class ConsoleMonitor:
         """
         self._stop_event.clear()
         cmd = [
-            "xcrun", "simctl", "spawn", self._device_id,
-            "log", "stream",
-            "--level", "debug",
-            "--style", "json",
+            "xcrun",
+            "simctl",
+            "spawn",
+            self._device_id,
+            "log",
+            "stream",
+            "--level",
+            "debug",
+            "--style",
+            "json",
         ]
         self._process = subprocess.Popen(
             cmd,
@@ -250,6 +253,7 @@ class ConsoleMonitor:
             return None
 
         import os.path
+
         process_path: str = data.get("processImagePath", "")
         process_name: str = os.path.basename(process_path) if process_path else data.get("process", "")
 
@@ -341,10 +345,7 @@ class ConsoleMonitor:
         cutoff = time.time() - seconds
         with self._lock:
             snapshot = list(self._error_buffer)
-        return [
-            e for e in snapshot
-            if _effective_timestamp(e) >= cutoff
-        ]
+        return [e for e in snapshot if _effective_timestamp(e) >= cutoff]
 
     def search(self, pattern: str) -> list[LogEntry]:
         """Search all buffered entries by regex on the message field.
@@ -402,6 +403,7 @@ class ConsoleMonitor:
 # Timestamp parsing helper
 # ---------------------------------------------------------------------------
 
+
 def _parse_timestamp(timestamp: str) -> float:
     """Parse an ISO 8601 timestamp string to a Unix epoch float.
 
@@ -414,6 +416,7 @@ def _parse_timestamp(timestamp: str) -> float:
     """
     import datetime
     import re as _re
+
     if not timestamp:
         return 0.0
     # Normalise: replace trailing Z with +00:00 for fromisoformat compatibility
@@ -427,12 +430,12 @@ def _parse_timestamp(timestamp: str) -> float:
     if "." in ts:
         dot_idx = ts.index(".")
         # Everything after the dot may be: digits, then optional tz offset
-        after_dot = ts[dot_idx + 1:]
+        after_dot = ts[dot_idx + 1 :]
         # Split fractional digits from any trailing timezone offset
         m = _re.match(r"(\d+)(.*)", after_dot)
         if m:
             frac_digits = m.group(1)[:6]  # keep at most 6 fractional digits
-            tz_suffix = m.group(2)        # e.g. "+0000", "+00:00", or ""
+            tz_suffix = m.group(2)  # e.g. "+0000", "+00:00", or ""
         else:
             frac_digits = after_dot[:6]
             tz_suffix = ""

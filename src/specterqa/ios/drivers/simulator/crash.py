@@ -50,9 +50,7 @@ class CrashDetector:
         self.device_id = device_id
         self.bundle_id = bundle_id
         self._baseline: set[str] = set()
-        self._reports_dir: str = os.path.expanduser(
-            "~/Library/Logs/DiagnosticReports"
-        )
+        self._reports_dir: str = os.path.expanduser("~/Library/Logs/DiagnosticReports")
         # Internal cache populated by check()
         self._detected_crashes: list[CrashReport] = []
 
@@ -68,11 +66,7 @@ class CrashDetector:
         """
         reports_path = Path(self._reports_dir)
         if reports_path.exists():
-            self._baseline = {
-                p.name
-                for p in reports_path.iterdir()
-                if p.suffix == ".ips"
-            }
+            self._baseline = {p.name for p in reports_path.iterdir() if p.suffix == ".ips"}
         else:
             self._baseline = set()
         # Reset crash cache on each start
@@ -96,11 +90,7 @@ class CrashDetector:
         if not reports_path.exists():
             return []
 
-        current_files = {
-            p.name
-            for p in reports_path.iterdir()
-            if p.suffix == ".ips"
-        }
+        current_files = {p.name for p in reports_path.iterdir() if p.suffix == ".ips"}
         new_files = current_files - self._baseline
 
         crashes: list[CrashReport] = []

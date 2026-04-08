@@ -84,8 +84,7 @@ class SimulatorRunner:
             self._device_id = self._find_best_device()
             if self._device_id is None:
                 raise RuntimeError(
-                    f"No simulator device found matching name='{self._device_name}' "
-                    f"os='{self._os_version}'."
+                    f"No simulator device found matching name='{self._device_name}' os='{self._os_version}'."
                 )
 
         logger.info("Using simulator device: %s (name=%s)", self._device_id, self._device_name)
@@ -225,15 +224,17 @@ class SimulatorRunner:
                 logger.error("Action %s failed: %s", action_type, exc, exc_info=True)
 
             action_duration = time.monotonic() - action_start
-            actions_taken.append({
-                "index": action_idx,
-                "action": action_type,
-                "target": target,
-                "value": value,
-                "success": success,
-                "error": action_error,
-                "duration_ms": round(action_duration * 1000, 1),
-            })
+            actions_taken.append(
+                {
+                    "index": action_idx,
+                    "action": action_type,
+                    "target": target,
+                    "value": value,
+                    "success": success,
+                    "error": action_error,
+                    "duration_ms": round(action_duration * 1000, 1),
+                }
+            )
 
             if goal_achieved:
                 break
@@ -397,10 +398,19 @@ class SimulatorRunner:
         if self._device_id is None:
             return False
         key_map: dict[str, str] = {
-            "return": "return", "enter": "return", "tab": "tab",
-            "delete": "delete", "backspace": "delete", "escape": "escape",
-            "esc": "escape", "home": "home", "space": "space",
-            "up": "up", "down": "down", "left": "left", "right": "right",
+            "return": "return",
+            "enter": "return",
+            "tab": "tab",
+            "delete": "delete",
+            "backspace": "delete",
+            "escape": "escape",
+            "esc": "escape",
+            "home": "home",
+            "space": "space",
+            "up": "up",
+            "down": "down",
+            "left": "left",
+            "right": "right",
         }
         simctl_key = key_map.get(key_name.lower().strip())
         if simctl_key is None:
@@ -409,7 +419,9 @@ class SimulatorRunner:
         try:
             result = subprocess.run(
                 ["xcrun", "simctl", "io", self._device_id, "sendkey", simctl_key],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode != 0:
                 return self._applescript_key(simctl_key)
@@ -421,8 +433,10 @@ class SimulatorRunner:
 
     def _action_swipe(
         self,
-        x1: int | float, y1: int | float,
-        x2: int | float, y2: int | float,
+        x1: int | float,
+        y1: int | float,
+        x2: int | float,
+        y2: int | float,
         duration: float = 0.3,
     ) -> bool:
         try:
@@ -430,8 +444,11 @@ class SimulatorRunner:
             dx = (x2 - x1) / steps
             dy = (y2 - y1) / steps
             lines = [
-                'tell application "Simulator"', "  activate", "end tell",
-                'tell application "System Events"', '  tell process "Simulator"',
+                'tell application "Simulator"',
+                "  activate",
+                "end tell",
+                'tell application "System Events"',
+                '  tell process "Simulator"',
             ]
             for i in range(steps + 1):
                 cx = int(x1 + dx * i)
@@ -464,8 +481,15 @@ class SimulatorRunner:
 
     def _applescript_key(self, key_name: str) -> bool:
         key_code_map: dict[str, int] = {
-            "return": 36, "tab": 48, "delete": 51, "escape": 53,
-            "space": 49, "up": 126, "down": 125, "left": 123, "right": 124,
+            "return": 36,
+            "tab": 48,
+            "delete": 51,
+            "escape": 53,
+            "space": 49,
+            "up": 126,
+            "down": 125,
+            "left": 123,
+            "right": 124,
         }
         code = key_code_map.get(key_name)
         if code is None:
@@ -493,7 +517,9 @@ class SimulatorRunner:
         try:
             result = subprocess.run(
                 ["xcrun", "simctl", "io", self._device_id, "screenshot", str(filepath)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 logger.warning("simctl screenshot failed: %s", result.stderr.strip())
@@ -522,7 +548,9 @@ class SimulatorRunner:
         try:
             result = subprocess.run(
                 ["xcrun", "simctl", "list", "devices", "--json"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             data = json.loads(result.stdout)
             devices_by_runtime = data.get("devices", {})
@@ -533,10 +561,12 @@ class SimulatorRunner:
         for runtime, device_list in devices_by_runtime.items():
             for device in device_list:
                 if device.get("isAvailable", False):
-                    flat.append({
-                        "udid": device.get("udid", ""),
-                        "name": device.get("name", ""),
-                        "state": device.get("state", ""),
-                        "runtime": runtime,
-                    })
+                    flat.append(
+                        {
+                            "udid": device.get("udid", ""),
+                            "name": device.get("name", ""),
+                            "state": device.get("state", ""),
+                            "runtime": runtime,
+                        }
+                    )
         return flat
