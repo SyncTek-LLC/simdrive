@@ -74,7 +74,7 @@ class ProjectInjector:
         # Package-relative: src/specterqa/ios → repo root → runner/Sources
         try:
             candidates.append(Path(__file__).parent.parent.parent.parent / "runner" / "Sources")
-        except Exception:
+        except (AttributeError, OSError):
             pass
 
         candidates.append(Path.home() / ".specterqa" / "runner-sources")

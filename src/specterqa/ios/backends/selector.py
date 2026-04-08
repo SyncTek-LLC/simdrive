@@ -123,9 +123,9 @@ class BackendSelector:
             # is_available is an instance method — instantiate with no args
             try:
                 return backend_class().is_available()
-            except Exception:
+            except Exception:  # noqa: BLE001 — backend probe: any failure = unavailable
                 return False
-        except Exception:
+        except Exception:  # noqa: BLE001 — backend probe: any failure = unavailable
             return False
 
     def _auto_select(self) -> Any:

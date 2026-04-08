@@ -6,10 +6,13 @@ when the pool is at capacity) and release it when done. Thread-safe.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 import uuid
 from typing import Any, Dict, List
+
+logger = logging.getLogger("specterqa.ios.parallel.pool")
 
 
 class SimulatorPool:
@@ -32,7 +35,7 @@ class SimulatorPool:
                 cap = license_validator.max_concurrent_sims()
                 if cap < max_concurrent:
                     max_concurrent = cap
-            except Exception:
+            except Exception:  # noqa: BLE001 — plugin boundary: validator may raise anything
                 pass
 
         self._max_concurrent: int = max_concurrent

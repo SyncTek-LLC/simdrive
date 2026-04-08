@@ -108,7 +108,7 @@ class WDADriver:
             with urllib.request.urlopen(url, timeout=_STATUS_TIMEOUT) as resp:
                 data = json.loads(resp.read())
                 return bool(data.get("value", {}).get("ready", False))
-        except Exception:
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
             return False
 
     # ------------------------------------------------------------------

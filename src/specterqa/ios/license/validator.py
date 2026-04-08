@@ -12,10 +12,13 @@ Dogfood bypass (v0.1.0):
 
 from __future__ import annotations
 
+import logging
 import os
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger("specterqa.ios.license.validator")
 
 import requests
 
@@ -108,8 +111,9 @@ class LicenseValidator:
 
         try:
             result = self._fetch_from_api()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — network layer raises many exception types
             # Network / API error — attempt offline grace fallback
+            logger.debug("License API request failed (%s), using offline grace", exc)
             offline_ok = self._check_offline_grace()
             result = {
                 "valid": offline_ok,
@@ -157,7 +161,7 @@ class LicenseValidator:
             iat = payload.get("iat")
             if iat is not None:
                 return (float(iat) + _OFFLINE_GRACE_SECONDS) > now
-        except Exception:
+        except (ValueError, KeyError, AttributeError):
             pass
         return False
 

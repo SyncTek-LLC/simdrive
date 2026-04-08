@@ -325,8 +325,8 @@ class SimulatorDriver:
             if hasattr(self._perf, "stop"):
                 try:
                     self._perf.stop()
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 — best-effort perf monitor cleanup
+                    logger.debug("perf.stop() failed: %s", exc)
 
     def launch_app(self) -> None:
         """Launch the configured app on the simulator.
@@ -739,8 +739,8 @@ class SimulatorDriver:
             screenshot_b64 = capture_result.get("base64", "")
             self._last_img_width = capture_result.get("width", 0)
             self._last_img_height = capture_result.get("height", 0)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — screenshot failure is non-fatal for context
+            logger.debug("Screenshot capture failed during context build: %s", exc)
 
         ctx = self._ai_context.build_context(
             screenshot_b64,

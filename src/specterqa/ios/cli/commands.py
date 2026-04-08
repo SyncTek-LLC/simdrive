@@ -362,7 +362,7 @@ def doctor() -> None:
         from specterqa import __version__ as _sqver
 
         click.echo(f"  [OK] specterqa-ios {_sqver}")
-    except Exception:
+    except ImportError:
         click.echo("  [??] specterqa-ios version unknown")
 
     # Xcode / xcodebuild
@@ -377,7 +377,7 @@ def doctor() -> None:
             )
             xcode_ver = _xr.stdout.strip().split("\n")[0]
             click.echo(f"  [OK] {xcode_ver}")
-        except Exception:
+        except (OSError, IndexError):
             click.echo("  [??] xcodebuild found but version check failed")
     else:
         click.echo("  [!!] Xcode not installed — install from the Mac App Store")
@@ -395,7 +395,7 @@ def doctor() -> None:
             f"  {'[OK]' if booted else '[--]'} Simulator "
             f"{'booted' if booted else 'not booted — run: specterqa-ios boot'}"
         )
-    except Exception:
+    except (OSError, FileNotFoundError):
         click.echo("  [!!] simctl not available — install Xcode")
 
     # XCTest runner built?
@@ -624,7 +624,7 @@ def _runner_source_dir() -> Path | None:
         candidate = pkg_root / "runner"
         if (candidate / "build.sh").exists():
             return candidate
-    except Exception:
+    except OSError:
         pass
     return None
 
@@ -1607,9 +1607,9 @@ def wda_stop() -> None:
                 driver = WDADriver()
                 driver._session_id = session_id  # type: ignore[attr-defined]
                 driver._request("DELETE", f"/session/{session_id}")
-            except Exception:
-                pass
-    except Exception:
+            except (OSError, Exception) as exc:  # noqa: BLE001 — best-effort WDA session cleanup
+                logger.debug("WDA session DELETE failed: %s", exc)
+    except Exception:  # noqa: BLE001 — WDA not running: any error = nothing to close
         pass  # WDA not running — nothing to close
 
     # Kill the xcodebuild process running WDA
@@ -2048,8 +2048,8 @@ def ci(
         finally:
             try:
                 session.stop()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — best-effort session cleanup in CI mode
+                logger.debug("session.stop() failed in CI mode: %s", exc)
 
     else:
         # ── Per-replay isolation mode (--no-reuse-runner) ─────────────────
