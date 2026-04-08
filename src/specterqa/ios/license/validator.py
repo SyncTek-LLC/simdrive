@@ -18,9 +18,9 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger("specterqa.ios.license.validator")
-
 import requests
+
+logger = logging.getLogger("specterqa.ios.license.validator")
 
 # ---------------------------------------------------------------------------
 # Dogfood / trial constants

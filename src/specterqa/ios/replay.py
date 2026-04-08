@@ -845,7 +845,7 @@ class ReplayPlayer:
                     if step_result["passed"]:
                         logger.debug("    PASS")
                     else:
-                        logger.debug("    FAIL: %s", step_result['error'])
+                        logger.debug("    FAIL: %s", step_result["error"])
 
                 time.sleep(0.3)  # brief inter-action pause
                 i += 1
@@ -971,7 +971,7 @@ class ReplayPlayer:
                     if step_result["passed"]:
                         logger.debug("    PASS")
                     else:
-                        logger.debug("    FAIL: %s", step_result['error'])
+                        logger.debug("    FAIL: %s", step_result["error"])
 
                 time.sleep(0.3)  # brief inter-action pause
                 i += 1

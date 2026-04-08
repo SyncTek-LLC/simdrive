@@ -206,9 +206,7 @@ class TestMaestroExampleParses:
 class TestMCPServerProtocol:
     """Verify MCP protocol works end-to-end via stdio."""
 
-    def _exchange(
-        self, messages: list[str], timeout: float = 5.0, cwd: "str | None" = None
-    ) -> list[dict]:
+    def _exchange(self, messages: list[str], timeout: float = 5.0, cwd: "str | None" = None) -> list[dict]:
         """Start MCP server, send *messages*, collect JSON responses, kill.
 
         Polls until *timeout* seconds have elapsed (absolute deadline), so

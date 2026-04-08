@@ -9,10 +9,10 @@ from __future__ import annotations
 import logging
 import subprocess
 import time
-
-logger = logging.getLogger("specterqa.ios.drivers.simulator.perf")
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.perf")
 
 
 @dataclass

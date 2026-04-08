@@ -251,7 +251,14 @@ class SimDriver:
         if self.verbose:
             logger.debug(
                 "  [coords] img=(%.0f,%.0f)/%.0fx%.0f -> screen=(%.1f,%.1f) scale=(%.3f,%.3f)",
-                img_x, img_y, iw, ih, screen_x, screen_y, scale_x, scale_y,
+                img_x,
+                img_y,
+                iw,
+                ih,
+                screen_x,
+                screen_y,
+                scale_x,
+                scale_y,
             )
 
         return screen_x, screen_y

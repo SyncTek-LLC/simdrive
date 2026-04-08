@@ -26,6 +26,11 @@ def _ensure_namespace() -> None:
 _ensure_namespace()
 
 try:
+    from specterqa import __version__  # noqa: E402
+except ImportError:
+    __version__ = "11.3.0"
+
+try:
     from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: E402
 except ImportError:
     # Graceful degradation: if SimulatorDriver cannot be imported (e.g. due to a

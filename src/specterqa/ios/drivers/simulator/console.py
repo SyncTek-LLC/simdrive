@@ -16,10 +16,10 @@ import re
 import subprocess
 import threading
 import time
-
-logger = logging.getLogger("specterqa.ios.drivers.simulator.console")
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.console")
 
 
 # ---------------------------------------------------------------------------

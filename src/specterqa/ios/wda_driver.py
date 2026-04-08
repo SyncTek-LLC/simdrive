@@ -200,7 +200,9 @@ class WDADriver:
         if self.verbose:
             logger.debug(
                 "  [wda] session=%r  device=%.0fx%.0f pts",
-                self._session_id, self._device_width, self._device_height,
+                self._session_id,
+                self._device_width,
+                self._device_height,
             )
         return self._session_id
 

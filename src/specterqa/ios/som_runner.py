@@ -272,7 +272,9 @@ class SoMRunner:
             if self.verbose:
                 logger.debug(
                     "[som] decision: action=%s  element=%s  reasoning=%s",
-                    action_type, decision.get("element"), reasoning[:80],
+                    action_type,
+                    decision.get("element"),
+                    reasoning[:80],
                 )
 
             # 6. Handle done / back / wait before execute
