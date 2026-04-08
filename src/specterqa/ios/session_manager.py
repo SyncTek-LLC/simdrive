@@ -9,7 +9,6 @@ INIT-2026-506 — SpecterQA iOS v3 session manager.
 
 from __future__ import annotations
 
-import glob
 import json
 import logging
 import os
@@ -62,8 +61,7 @@ def _find_free_port(start: int = 8222, end: int = 8231) -> int:
             except OSError:
                 continue
     raise SessionError(
-        f"All ports {start}–{end - 1} are occupied. "
-        "Stop other SpecterQA sessions or XCTest runners and retry."
+        f"All ports {start}–{end - 1} are occupied. Stop other SpecterQA sessions or XCTest runners and retry."
     )
 
 
@@ -83,10 +81,7 @@ def _simctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     cmd = ["xcrun", "simctl", *args]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if check and result.returncode != 0:
-        raise SessionError(
-            f"simctl {' '.join(args)} failed (exit {result.returncode}):\n"
-            f"{result.stderr.strip()}"
-        )
+        raise SessionError(f"simctl {' '.join(args)} failed (exit {result.returncode}):\n{result.stderr.strip()}")
     return result
 
 
@@ -134,10 +129,7 @@ def _wait_for_health(url: str, timeout_s: float = _HEALTH_TIMEOUT_S) -> None:
 
         time.sleep(_HEALTH_POLL_INTERVAL_S)
 
-    raise SessionError(
-        f"Runner at {url} did not become healthy within {timeout_s:.0f}s. "
-        f"Last error: {last_error}"
-    )
+    raise SessionError(f"Runner at {url} did not become healthy within {timeout_s:.0f}s. Last error: {last_error}")
 
 
 class TestSession:
@@ -253,7 +245,8 @@ class TestSession:
 
         result = subprocess.run(
             ["pgrep", "-f", "xcodebuild.*test-without-building"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         for pid_str in result.stdout.strip().split("\n"):
             pid_str = pid_str.strip()
@@ -347,10 +340,14 @@ class TestSession:
         if target:
             try:
                 _simctl(
-                    "spawn", target,
-                    "defaults", "write",
-                    "com.apple.Preferences", "HardwareKeyboardAutomaticallyUsed",
-                    "-bool", "NO",
+                    "spawn",
+                    target,
+                    "defaults",
+                    "write",
+                    "com.apple.Preferences",
+                    "HardwareKeyboardAutomaticallyUsed",
+                    "-bool",
+                    "NO",
                     check=False,
                 )
                 logger.info("Disabled hardware keyboard on %s", target)
@@ -404,9 +401,7 @@ class TestSession:
         result = _simctl("clone", source_udid, clone_name)
         self._clone_udid = result.stdout.strip()
         if not self._clone_udid:
-            raise SessionError(
-                f"simctl clone did not return a UDID. stdout={result.stdout!r}"
-            )
+            raise SessionError(f"simctl clone did not return a UDID. stdout={result.stdout!r}")
         self._target_udid = self._clone_udid
         logger.info("Clone UDID: %s", self._clone_udid)
 
@@ -458,10 +453,7 @@ class TestSession:
                 if dev.get("state") == "Booted":
                     return dev["udid"]
 
-        raise SessionError(
-            "No booted simulator found. "
-            "Boot one first with: specterqa-ios boot"
-        )
+        raise SessionError("No booted simulator found. Boot one first with: specterqa-ios boot")
 
     def _deploy_runner(self) -> None:
         """Launch the XCTest runner via ``xcodebuild test-without-building``.
@@ -476,22 +468,27 @@ class TestSession:
         xctestrun = _find_xctestrun(self._runner_build_dir)
         if xctestrun is None:
             raise SessionError(
-                f"No .xctestrun found in {self._runner_build_dir}.\n"
-                "Build the runner first: specterqa-ios runner build"
+                f"No .xctestrun found in {self._runner_build_dir}.\nBuild the runner first: specterqa-ios runner build"
             )
 
         # Inject SPECTERQA_BUNDLE_ID and SPECTERQA_PORT into the xctestrun
         # plist. Shell env vars don't propagate through xcodebuild to the
         # test process — they must be in the plist's EnvironmentVariables.
-        self._inject_xctestrun_env(xctestrun, {
-            "SPECTERQA_PORT": str(self._port),
-            "SPECTERQA_BUNDLE_ID": self.bundle_id or "",
-        })
+        self._inject_xctestrun_env(
+            xctestrun,
+            {
+                "SPECTERQA_PORT": str(self._port),
+                "SPECTERQA_BUNDLE_ID": self.bundle_id or "",
+            },
+        )
 
         cmd = [
-            "xcodebuild", "test-without-building",
-            "-xctestrun", str(xctestrun),
-            "-destination", f"id={self._target_udid or self._clone_udid}",
+            "xcodebuild",
+            "test-without-building",
+            "-xctestrun",
+            str(xctestrun),
+            "-destination",
+            f"id={self._target_udid or self._clone_udid}",
         ]
 
         logger.info("Deploying runner: %s", " ".join(cmd))
@@ -561,7 +558,7 @@ class TestSession:
         if self._runner_process is not None:
             try:
                 if is_direct:
-                    self._runner_process.kill()   # SIGKILL — no cleanup
+                    self._runner_process.kill()  # SIGKILL — no cleanup
                 else:
                     self._runner_process.terminate()  # SIGTERM — let it clean up clone
                 self._runner_process.wait(timeout=5)
@@ -600,8 +597,4 @@ class TestSession:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        return (
-            f"TestSession(source={self.source_udid!r}, "
-            f"clone={self._clone_udid!r}, "
-            f"port={self._port})"
-        )
+        return f"TestSession(source={self.source_udid!r}, clone={self._clone_udid!r}, port={self._port})"

@@ -20,7 +20,6 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.tree import Tree
@@ -263,9 +262,7 @@ def scaffold_ios_project(
     )
 
     if files_skipped:
-        console.print(
-            f"[dim]Skipped {len(files_skipped)} existing file(s). Use --force to overwrite.[/dim]"
-        )
+        console.print(f"[dim]Skipped {len(files_skipped)} existing file(s). Use --force to overwrite.[/dim]")
 
     api_key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
 

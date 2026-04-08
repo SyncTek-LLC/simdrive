@@ -102,7 +102,7 @@ class SoMRunner:
 
         self._driver: Any = None
         self._annotator: Any = None
-        self._client: Any = None   # anthropic.Anthropic instance
+        self._client: Any = None  # anthropic.Anthropic instance
         self._session: Any = None  # TestSession
 
     # ------------------------------------------------------------------
@@ -122,14 +122,13 @@ class SoMRunner:
         from specterqa.ios.som_annotator import SoMAnnotator
 
         if not self.api_key:
-            raise SoMRunnerError(
-                "No Anthropic API key. Set ANTHROPIC_API_KEY or pass api_key= to SoMRunner."
-            )
+            raise SoMRunnerError("No Anthropic API key. Set ANTHROPIC_API_KEY or pass api_key= to SoMRunner.")
 
         self._start_xctest(bundle_id, SoMAnnotator)
 
         try:
             import anthropic  # type: ignore[import-untyped]
+
             self._client = anthropic.Anthropic(api_key=self.api_key)
         except ImportError as exc:
             raise SoMRunnerError(
@@ -271,7 +270,9 @@ class SoMRunner:
             reasoning = decision.get("reasoning", "")
 
             if self.verbose:
-                print(f"[som] decision: action={action_type}  element={decision.get('element')}  reasoning={reasoning[:80]}")
+                print(
+                    f"[som] decision: action={action_type}  element={decision.get('element')}  reasoning={reasoning[:80]}"
+                )
 
             # 6. Handle done / back / wait before execute
             if action_type == "done":
@@ -289,9 +290,7 @@ class SoMRunner:
                 try:
                     pre_scroll_tree = self._annotator.get_element_tree()
                     if self._is_element_visible(goal, pre_scroll_tree):
-                        logger.warning(
-                            "Element already visible, skipping scroll (goal=%r)", goal[:60]
-                        )
+                        logger.warning("Element already visible, skipping scroll (goal=%r)", goal[:60])
                         _scroll_count = 0
                         time.sleep(_ACTION_SETTLE_S)
                         continue
@@ -313,9 +312,7 @@ class SoMRunner:
                 try:
                     post_scroll_tree = self._annotator.get_element_tree()
                     if not self._annotator._screen_changed(pre_scroll_tree, post_scroll_tree):
-                        logger.warning(
-                            "Screen unchanged after scroll, stopping (guard 2)"
-                        )
+                        logger.warning("Screen unchanged after scroll, stopping (guard 2)")
                         error = "Screen unchanged after scroll — scroll boundary reached"
                         break
                 except Exception as exc:
@@ -342,7 +339,7 @@ class SoMRunner:
                 post_b64 = post_result["base64"]
             else:
                 post_b64, _, _ = post_result
-            screen_changed = (post_b64[:500] != b64[:500])
+            screen_changed = post_b64[:500] != b64[:500]
 
             if screen_changed:
                 same_action_streak.clear()  # Reset — progress was made
@@ -400,14 +397,16 @@ class SoMRunner:
                 print(f"[som] goal: {goal}")
 
             result = self.run_step(goal=goal, checkpoint=checkpoint, max_iterations=max_iter)
-            step_results.append({
-                "id": step_id,
-                "goal": goal,
-                "passed": result["passed"],
-                "duration": result["duration"],
-                "error": result.get("error"),
-                "action_count": len(result.get("actions", [])),
-            })
+            step_results.append(
+                {
+                    "id": step_id,
+                    "goal": goal,
+                    "passed": result["passed"],
+                    "duration": result["duration"],
+                    "error": result.get("error"),
+                    "action_count": len(result.get("actions", [])),
+                }
+            )
 
             if self.verbose:
                 status = "PASS" if result["passed"] else "FAIL"
@@ -580,6 +579,7 @@ class SoMRunner:
 
         try:
             import xml.etree.ElementTree as ET  # already imported in annotator
+
             root = ET.fromstring(element_tree_xml)
         except Exception as exc:
             logger.debug("_is_element_visible: XML parse error — %s", exc)
@@ -602,9 +602,7 @@ class SoMRunner:
     # Action execution
     # ------------------------------------------------------------------
 
-    def _execute_action(
-        self, action_dict: dict[str, Any], elements: list[Any]
-    ) -> str:
+    def _execute_action(self, action_dict: dict[str, Any], elements: list[Any]) -> str:
         """Execute the action Claude selected.
 
         Args:
@@ -626,10 +624,7 @@ class SoMRunner:
             # Find the element by its 1-based index
             target = next((e for e in elements if e.index == element_num), None)
             if target is None:
-                raise SoMRunnerError(
-                    f"Element {element_num} not in current tree "
-                    f"(valid: 1–{len(elements)})."
-                )
+                raise SoMRunnerError(f"Element {element_num} not in current tree (valid: 1–{len(elements)}).")
             # Tap at the exact center in device-point space.  WDA's tap() accepts
             # screenshot-pixel coords and converts internally, but SoM elements
             # are in device points.  We need to provide pixel coords.
@@ -743,6 +738,7 @@ class SoMRunner:
             return
         try:
             import base64 as _b64
+
             path = self.evidence_dir / filename
             path.write_bytes(_b64.b64decode(b64))
         except Exception as exc:

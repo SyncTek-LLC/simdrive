@@ -80,10 +80,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         return data or {}
     except ImportError:
         # yaml not available — fall back to a minimal parser hint
-        raise click.ClickException(
-            "PyYAML is required to read config files.\n"
-            "Install it with: pip install pyyaml"
-        )
+        raise click.ClickException("PyYAML is required to read config files.\nInstall it with: pip install pyyaml")
     except FileNotFoundError:
         raise click.ClickException(f"File not found: {path}")
     except Exception as exc:
@@ -133,9 +130,7 @@ def _list_simulators() -> dict[str, Any]:
         text=True,
     )
     if result.returncode != 0:
-        raise click.ClickException(
-            f"xcrun simctl list devices failed:\n{result.stderr}"
-        )
+        raise click.ClickException(f"xcrun simctl list devices failed:\n{result.stderr}")
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -206,9 +201,7 @@ def _boot_simulator(device_id: str) -> None:
         text=True,
     )
     if result.returncode != 0 and "Unable to boot device in current state: Booted" not in result.stderr:
-        raise click.ClickException(
-            f"Failed to boot simulator {device_id}:\n{result.stderr}"
-        )
+        raise click.ClickException(f"Failed to boot simulator {device_id}:\n{result.stderr}")
 
 
 def _install_app(device_id: str, app_path: str) -> None:
@@ -219,9 +212,7 @@ def _install_app(device_id: str, app_path: str) -> None:
         text=True,
     )
     if result.returncode != 0:
-        raise click.ClickException(
-            f"Failed to install {app_path} on {device_id}:\n{result.stderr}"
-        )
+        raise click.ClickException(f"Failed to install {app_path} on {device_id}:\n{result.stderr}")
 
 
 # ---------------------------------------------------------------------------
@@ -269,11 +260,7 @@ def setup() -> None:
     if xcrun_ok:
         try:
             data = _list_simulators()
-            all_devices = [
-                dev
-                for devices in data.get("devices", {}).values()
-                for dev in devices
-            ]
+            all_devices = [dev for devices in data.get("devices", {}).values() for dev in devices]
             sim_count = len(all_devices)
             booted = [d for d in all_devices if d.get("state") == "Booted"]
             simctl_ok = sim_count > 0
@@ -295,6 +282,7 @@ def setup() -> None:
     pkg_ok = False
     try:
         from specterqa.ios.sim_driver import SimDriver  # noqa: F401
+
         pkg_ok = True
         pkg_detail = "specterqa.ios importable"
     except ImportError as exc:
@@ -367,14 +355,12 @@ def doctor() -> None:
     # Python version
     py_ver = sys.version.split()[0]
     py_ok = sys.version_info >= (3, 10)
-    click.echo(
-        f"  {'[OK]' if py_ok else '[!!]'} Python {py_ver}"
-        f"{'  (need 3.10+)' if not py_ok else ''}"
-    )
+    click.echo(f"  {'[OK]' if py_ok else '[!!]'} Python {py_ver}{'  (need 3.10+)' if not py_ok else ''}")
 
     # specterqa-ios version
     try:
         from specterqa import __version__ as _sqver
+
         click.echo(f"  [OK] specterqa-ios {_sqver}")
     except Exception:
         click.echo("  [??] specterqa-ios version unknown")
@@ -447,7 +433,7 @@ def doctor() -> None:
     click.echo("")
     click.echo("Quick start:")
     click.echo("  1. specterqa-ios runner build --project App.xcodeproj --scheme App")
-    click.echo("  2. Add to .claude/mcp.json: {\"specterqa-ios\": {\"command\": \"specterqa-ios-mcp\"}}")
+    click.echo('  2. Add to .claude/mcp.json: {"specterqa-ios": {"command": "specterqa-ios-mcp"}}')
     click.echo("  3. Ask Claude Code: 'Test my iOS app and save a replay'")
     click.echo("  4. specterqa-ios ci .specterqa/replays/ --json-output results.json")
 
@@ -540,9 +526,7 @@ def boot(device: str | None) -> None:
             if target:
                 break
         if target is None:
-            raise click.ClickException(
-                "No unbooted iPhone simulator found. Pass --device <name or UDID>."
-            )
+            raise click.ClickException("No unbooted iPhone simulator found. Pass --device <name or UDID>.")
         device_id = target["udid"]
         device_name = target["name"]
     elif len(device) == 36 and device.count("-") == 4:
@@ -635,6 +619,7 @@ def _runner_source_dir() -> Path | None:
     """
     try:
         import specterqa.ios as _pkg
+
         pkg_root = Path(_pkg.__file__).parent.parent.parent  # src/specterqa/ios → repo root
         candidate = pkg_root / "runner"
         if (candidate / "build.sh").exists():
@@ -666,6 +651,7 @@ def _get_driver(udid: str = "booted", verbose: bool = False) -> tuple[Any, str]:
     """
     try:
         from specterqa.ios.wda_driver import WDADriver
+
         if WDADriver.is_available():
             if verbose:
                 print("[specterqa] Using WDA backend (headless, device points)")
@@ -675,13 +661,12 @@ def _get_driver(udid: str = "booted", verbose: bool = False) -> tuple[Any, str]:
 
     try:
         from specterqa.ios.sim_driver import SimDriver
+
         if verbose:
             print("[specterqa] Using CGEvent backend (requires visible Simulator)")
         return SimDriver(udid=udid, verbose=verbose), "cgevents"
     except ImportError as exc:
-        raise click.ClickException(
-            f"No driver available. WDA is not running and SimDriver import failed: {exc}"
-        )
+        raise click.ClickException(f"No driver available. WDA is not running and SimDriver import failed: {exc}")
 
 
 def _decision_to_action(decision: Any) -> dict:
@@ -828,23 +813,22 @@ def run(
         console.print()
         console.print(
             Panel(
-                "\n".join([
-                    f"[bold]Product:[/bold]    {product}",
-                    f"[bold]Journey:[/bold]    {journey}",
-                    f"[bold]Device ID:[/bold]  {device_id}",
-                    f"[bold]Bundle ID:[/bold]  {bundle_id}",
-                    f"[bold]Budget:[/bold]     ${budget:.2f}",
-                    f"[bold]Run ID:[/bold]     {run_id}",
-                    f"[bold]Evidence:[/bold]   {evidence_dir}",
-                ]),
+                "\n".join(
+                    [
+                        f"[bold]Product:[/bold]    {product}",
+                        f"[bold]Journey:[/bold]    {journey}",
+                        f"[bold]Device ID:[/bold]  {device_id}",
+                        f"[bold]Bundle ID:[/bold]  {bundle_id}",
+                        f"[bold]Budget:[/bold]     ${budget:.2f}",
+                        f"[bold]Run ID:[/bold]     {run_id}",
+                        f"[bold]Evidence:[/bold]   {evidence_dir}",
+                    ]
+                ),
                 title="[bold cyan]SpecterQA iOS Run[/bold cyan]",
                 border_style="cyan",
             )
         )
         console.print()
-
-    # Resolve UDID
-    udid = product_cfg.get("simulator_id", device_id or "booted")
 
     # Decide which backend to use.
     # Priority:
@@ -858,6 +842,7 @@ def run(
         # Check whether WDA is reachable before committing to CGEvents.
         try:
             from specterqa.ios.wda_driver import WDADriver  # type: ignore[import-untyped]
+
             if WDADriver.is_available():
                 wda_url = "http://localhost:8100"
         except ImportError:
@@ -887,6 +872,7 @@ def run(
     # Build evidence directory for this run
     runner = None
     from specterqa.ios.som_runner import SoMRunner
+
     runner = SoMRunner(
         api_key=api_key,
         verbose=verbose,
@@ -944,14 +930,16 @@ def run(
             if not step_passed:
                 all_passed = False
 
-            step_results.append({
-                "step_id": step_id,
-                "description": description,
-                "passed": step_passed,
-                "duration_seconds": result["duration"],
-                "error": step_error,
-                "findings": [],
-            })
+            step_results.append(
+                {
+                    "step_id": step_id,
+                    "description": description,
+                    "passed": step_passed,
+                    "duration_seconds": result["duration"],
+                    "error": step_error,
+                    "findings": [],
+                }
+            )
     finally:
         runner.stop()
 
@@ -993,14 +981,16 @@ def run(
         verdict = "[bold green]ALL STEPS PASSED[/bold green]" if all_passed else "[bold red]STEPS FAILED[/bold red]"
         console.print(
             Panel(
-                "\n".join([
-                    verdict,
-                    "",
-                    f"  Steps:     {passed_count}/{len(steps)} passed",
-                    f"  Duration:  {total_duration:.1f}s",
-                    f"  Run ID:    {run_id}",
-                    f"  Evidence:  {evidence_dir}",
-                ]),
+                "\n".join(
+                    [
+                        verdict,
+                        "",
+                        f"  Steps:     {passed_count}/{len(steps)} passed",
+                        f"  Duration:  {total_duration:.1f}s",
+                        f"  Run ID:    {run_id}",
+                        f"  Evidence:  {evidence_dir}",
+                    ]
+                ),
                 border_style=border,
             )
         )
@@ -1015,7 +1005,9 @@ def run(
 
 
 @ios_command_group.command("init")
-@click.option("--slug", "app_slug", default="my-ios-app", show_default=True, help="Short app identifier for file names.")
+@click.option(
+    "--slug", "app_slug", default="my-ios-app", show_default=True, help="Short app identifier for file names."
+)
 @click.option("--name", "display_name", default="My iOS App", show_default=True, help="Human-readable app name.")
 @click.option("--dir", "target_dir", default=".", show_default=True, help="Directory to create .specterqa/ in.")
 @click.option("--force", is_flag=True, default=False, help="Overwrite existing files.")
@@ -1071,7 +1063,9 @@ def smoke(ctx: click.Context, product: str, device_id: str | None, budget: float
         product_cfg = _load_product(project_dir, product)
         journeys_hint = product_cfg.get("journeys", [])
         if journeys_hint:
-            smoke_journey = journeys_hint[0] if isinstance(journeys_hint[0], str) else journeys_hint[0].get("id", smoke_journey)
+            smoke_journey = (
+                journeys_hint[0] if isinstance(journeys_hint[0], str) else journeys_hint[0].get("id", smoke_journey)
+            )
     except click.ClickException:
         pass
 
@@ -1087,7 +1081,6 @@ def smoke(ctx: click.Context, product: str, device_id: str | None, budget: float
         verbose=False,
         plain=not sys.stdout.isatty(),
     )
-
 
 
 # ---------------------------------------------------------------------------
@@ -1141,11 +1134,7 @@ def validate(product: str, journey: str | None) -> None:
             if sim_id and _xcrun_available():
                 try:
                     data = _list_simulators()
-                    all_udids = {
-                        dev.get("udid")
-                        for devs in data.get("devices", {}).values()
-                        for dev in devs
-                    }
+                    all_udids = {dev.get("udid") for devs in data.get("devices", {}).values() for dev in devs}
                     udid_found = sim_id in all_udids
                     checks.append(("simulator_id found in simctl", udid_found, sim_id))
                     if not udid_found:
@@ -1168,7 +1157,13 @@ def validate(product: str, journey: str | None) -> None:
                                     "install with: specterqa-ios install <app.app>"
                                 )
                         else:
-                            checks.append(("bundle_id installed on simulator", False, "simctl listapps failed — is simulator booted?"))
+                            checks.append(
+                                (
+                                    "bundle_id installed on simulator",
+                                    False,
+                                    "simctl listapps failed — is simulator booted?",
+                                )
+                            )
                 except click.ClickException as exc:
                     checks.append(("simctl query", False, str(exc)))
 
@@ -1193,9 +1188,7 @@ def validate(product: str, journey: str | None) -> None:
                     errors.append("Journey has no steps defined")
 
                 # Every step needs a goal
-                steps_missing_goal = [
-                    s.get("id", f"step-{i+1}") for i, s in enumerate(steps) if not s.get("goal")
-                ]
+                steps_missing_goal = [s.get("id", f"step-{i + 1}") for i, s in enumerate(steps) if not s.get("goal")]
                 if steps_missing_goal:
                     errors.append(f"Steps missing 'goal' field: {', '.join(steps_missing_goal)}")
                     checks.append(("All steps have goal", False, f"missing: {', '.join(steps_missing_goal)}"))
@@ -1239,17 +1232,21 @@ def validate(product: str, journey: str | None) -> None:
         for e in errors:
             console.print(f"[red]ERROR:[/red] {e}")
         console.print()
-        console.print(Panel(
-            f"[bold red]{len(errors)} error(s) found.[/bold red] Fix the issues above before running.",
-            border_style="red",
-        ))
+        console.print(
+            Panel(
+                f"[bold red]{len(errors)} error(s) found.[/bold red] Fix the issues above before running.",
+                border_style="red",
+            )
+        )
         raise SystemExit(1)
     else:
         console.print()
-        console.print(Panel(
-            "[bold green]Config is valid.[/bold green]",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "[bold green]Config is valid.[/bold green]",
+                border_style="green",
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1276,15 +1273,22 @@ def runner_group() -> None:
 
 
 @runner_group.command("build")
-@click.option("--project", "project_path", default=None, type=click.Path(exists=True),
-              help="Path to user's .xcodeproj for project-injection build (recommended).")
-@click.option("--scheme", "scheme", default=None,
-              help="Xcode scheme name (required when --project is used).")
-@click.option("--runner-dir", "runner_dir", default=None,
-              help="Path to the Swift runner source (default: auto-detected). "
-                   "Used for standalone build when --project is not provided.")
-@click.option("--verbose", "-v", is_flag=True, default=False,
-              help="Stream xcodebuild output to stdout.")
+@click.option(
+    "--project",
+    "project_path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Path to user's .xcodeproj for project-injection build (recommended).",
+)
+@click.option("--scheme", "scheme", default=None, help="Xcode scheme name (required when --project is used).")
+@click.option(
+    "--runner-dir",
+    "runner_dir",
+    default=None,
+    help="Path to the Swift runner source (default: auto-detected). "
+    "Used for standalone build when --project is not provided.",
+)
+@click.option("--verbose", "-v", is_flag=True, default=False, help="Stream xcodebuild output to stdout.")
 def runner_build(
     project_path: str | None,
     scheme: str | None,
@@ -1319,7 +1323,8 @@ def runner_build(
                 "Example: specterqa-ios runner build --project MyApp.xcodeproj --scheme MyApp"
             )
         from specterqa.ios.project_injector import ProjectInjector, ProjectInjectorError
-        console.print(f"[bold]Building runner via project injection...[/bold]")
+
+        console.print("[bold]Building runner via project injection...[/bold]")
         console.print(f"  Project: {project_path}")
         console.print(f"  Scheme:  {scheme}")
         console.print()
@@ -1328,14 +1333,16 @@ def runner_build(
             xctestrun = injector.build(verbose=verbose)
         except ProjectInjectorError as exc:
             raise click.ClickException(str(exc))
-        console.print(Panel(
-            f"[bold green]Runner built successfully.[/bold green]\n\n"
-            f"  Artifact: {xctestrun}\n\n"
-            "Run [bold]specterqa-ios runner status[/bold] to verify,\n"
-            "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
-            title="[green]Build Complete (project injection)[/green]",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                f"[bold green]Runner built successfully.[/bold green]\n\n"
+                f"  Artifact: {xctestrun}\n\n"
+                "Run [bold]specterqa-ios runner status[/bold] to verify,\n"
+                "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
+                title="[green]Build Complete (project injection)[/green]",
+                border_style="green",
+            )
+        )
         return
 
     # --- Standalone path (legacy / CI without user project) ---
@@ -1354,7 +1361,7 @@ def runner_build(
         candidates = list(source.glob("*.xcodeproj"))
         xcodeproj = candidates[0] if candidates else source / "SpecterQARunner.xcodeproj"
 
-    console.print(f"[bold]Building SpecterQA XCTest runner...[/bold]")
+    console.print("[bold]Building SpecterQA XCTest runner...[/bold]")
     console.print(f"  Source:    {source}")
     console.print(f"  Output:    {build_dir}")
     console.print()
@@ -1366,10 +1373,14 @@ def runner_build(
         [
             "xcodebuild",
             "build-for-testing",
-            "-project", str(xcodeproj),
-            "-scheme", "SpecterQARunner",
-            "-sdk", "iphonesimulator",
-            "-derivedDataPath", str(build_dir),
+            "-project",
+            str(xcodeproj),
+            "-scheme",
+            "SpecterQARunner",
+            "-sdk",
+            "iphonesimulator",
+            "-derivedDataPath",
+            str(build_dir),
         ],
         cwd=str(source),
         stdout=stdout,
@@ -1387,20 +1398,23 @@ def runner_build(
 
     # Verify the xctestrun was produced (advisory — build already succeeded).
     import glob as _glob
+
     pattern = str(build_dir / "Build" / "Products" / "*.xctestrun")
     matches = _glob.glob(pattern)
     artifact_line = f"  Artifact: {matches[0]}\n\n" if matches else ""
     if not matches:
         logger.warning("No .xctestrun found at %s — run 'runner status' to verify.", pattern)
 
-    console.print(Panel(
-        f"[bold green]Runner built successfully.[/bold green]\n\n"
-        f"{artifact_line}"
-        "Run [bold]specterqa-ios runner status[/bold] to verify,\n"
-        "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
-        title="[green]Build Complete[/green]",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]Runner built successfully.[/bold green]\n\n"
+            f"{artifact_line}"
+            "Run [bold]specterqa-ios runner status[/bold] to verify,\n"
+            "or [bold]specterqa-ios run --product <slug> --journey <id>[/bold] to start testing.",
+            title="[green]Build Complete[/green]",
+            border_style="green",
+        )
+    )
 
 
 @runner_group.command("status")
@@ -1437,6 +1451,7 @@ def runner_status() -> None:
         xctestrun = Path(matches[0])
         mtime = xctestrun.stat().st_mtime
         import datetime
+
         built_at = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
         table.add_row(
             "Runner artifact (.xctestrun)",
@@ -1457,10 +1472,7 @@ def runner_status() -> None:
     console.print()
 
     if runner_ready:
-        console.print(
-            "[green]Runner is ready.[/green] "
-            "Tests will run headless without stealing the mouse cursor."
-        )
+        console.print("[green]Runner is ready.[/green] Tests will run headless without stealing the mouse cursor.")
     else:
         console.print(
             "[yellow]Runner is not built.[/yellow] "
@@ -1500,9 +1512,7 @@ def runner_clean(yes: bool) -> None:
     try:
         shutil.rmtree(build_dir)
         console.print(f"[green]Deleted:[/green] {build_dir}")
-        console.print(
-            "Run [bold]specterqa-ios runner build[/bold] to rebuild the runner."
-        )
+        console.print("Run [bold]specterqa-ios runner build[/bold] to rebuild the runner.")
     except Exception as exc:
         raise click.ClickException(f"Failed to remove {build_dir}: {exc}")
 
@@ -1567,14 +1577,11 @@ def wda_status() -> None:
     available = WDADriver.is_available()
     if available:
         console.print("[bold green]WDA is running[/bold green] — port 8100 is ready.")
-        console.print(
-            "[dim]The [bold]run[/bold] command will use WDA automatically.[/dim]"
-        )
+        console.print("[dim]The [bold]run[/bold] command will use WDA automatically.[/dim]")
     else:
         console.print("[bold yellow]WDA is not running.[/bold yellow]")
         console.print(
-            "Start it with:  [bold]specterqa-ios wda start[/bold]\n"
-            "Or run it manually via Xcode / xcodebuild."
+            "Start it with:  [bold]specterqa-ios wda start[/bold]\nOr run it manually via Xcode / xcodebuild."
         )
 
 
@@ -1588,7 +1595,7 @@ def wda_stop() -> None:
     """
     # Close the active session gracefully
     try:
-        from specterqa.ios.wda_driver import WDADriver, WDAError
+        from specterqa.ios.wda_driver import WDADriver
         import urllib.request
 
         req = urllib.request.Request("http://localhost:8100/status", method="GET")
@@ -1626,8 +1633,7 @@ def wda_stop() -> None:
 @click.option(
     "--wda-path",
     default=None,
-    help="Path to a pre-built WebDriverAgent.xcodeproj. "
-    "Defaults to ~/.specterqa/wda/WebDriverAgent.",
+    help="Path to a pre-built WebDriverAgent.xcodeproj. Defaults to ~/.specterqa/wda/WebDriverAgent.",
 )
 @click.option(
     "--port",
@@ -1678,10 +1684,7 @@ def wda_start(
     if device_id is None:
         device_id = _find_booted_udid()
         if device_id is None:
-            raise click.ClickException(
-                "No booted simulator found. "
-                "Boot one first with: specterqa-ios boot"
-            )
+            raise click.ClickException("No booted simulator found. Boot one first with: specterqa-ios boot")
     console.print(f"[bold]Target simulator:[/bold] {device_id}")
 
     # Resolve WDA source path
@@ -1691,13 +1694,13 @@ def wda_start(
 
     # Clone WDA if not present
     if not os.path.exists(xcodeproj):
-        console.print(
-            f"[bold]Cloning WebDriverAgent[/bold] into {wda_dir} …\n"
-            "[dim](this only happens once)[/dim]"
-        )
+        console.print(f"[bold]Cloning WebDriverAgent[/bold] into {wda_dir} …\n[dim](this only happens once)[/dim]")
         clone_result = subprocess.run(
             [
-                "git", "clone", "--depth", "1",
+                "git",
+                "clone",
+                "--depth",
+                "1",
                 "https://github.com/appium/WebDriverAgent.git",
                 wda_dir,
             ],
@@ -1713,11 +1716,16 @@ def wda_start(
     console.print("[bold]Building WebDriverAgent for simulator …[/bold]")
     build_result = subprocess.run(
         [
-            "xcodebuild", "build-for-testing",
-            "-project", xcodeproj,
-            "-scheme", "WebDriverAgentRunner",
-            "-destination", f"id={device_id}",
-            "-derivedDataPath", build_dir,
+            "xcodebuild",
+            "build-for-testing",
+            "-project",
+            xcodeproj,
+            "-scheme",
+            "WebDriverAgentRunner",
+            "-destination",
+            f"id={device_id}",
+            "-derivedDataPath",
+            build_dir,
             "CODE_SIGN_IDENTITY=-",
             "CODE_SIGNING_REQUIRED=NO",
             "GCC_TREAT_WARNINGS_AS_ERRORS=NO",
@@ -1726,19 +1734,15 @@ def wda_start(
     )
     if build_result.returncode != 0:
         raise click.ClickException(
-            "xcodebuild build-for-testing failed. "
-            "Check Xcode installation and simulator status."
+            "xcodebuild build-for-testing failed. Check Xcode installation and simulator status."
         )
 
     # Find the .xctestrun file produced by the build
-    xctestrun_pattern = os.path.join(
-        build_dir, "Build", "Products", "*.xctestrun"
-    )
+    xctestrun_pattern = os.path.join(build_dir, "Build", "Products", "*.xctestrun")
     xctestrun_files = glob.glob(xctestrun_pattern)
     if not xctestrun_files:
         raise click.ClickException(
-            f"No .xctestrun file found at {xctestrun_pattern}. "
-            "The build may have failed silently."
+            f"No .xctestrun file found at {xctestrun_pattern}. The build may have failed silently."
         )
     xctestrun = sorted(xctestrun_files)[-1]  # use most recent
     console.print(f"[dim]Using xctestrun: {xctestrun}[/dim]")
@@ -1749,9 +1753,12 @@ def wda_start(
     env["USE_PORT"] = str(port)
     subprocess.Popen(  # noqa: S603 — intentional background process
         [
-            "xcodebuild", "test-without-building",
-            "-xctestrun", xctestrun,
-            "-destination", f"id={device_id}",
+            "xcodebuild",
+            "test-without-building",
+            "-xctestrun",
+            xctestrun,
+            "-destination",
+            f"id={device_id}",
         ],
         env=env,
         stdout=subprocess.DEVNULL,
@@ -1763,14 +1770,8 @@ def wda_start(
     wda_url = f"http://localhost:{port}"
     for elapsed in range(timeout):
         if WDADriver.is_available(wda_url=wda_url):
-            console.print(
-                f"[bold green]WDA is ready[/bold green] on port {port}. "
-                f"({elapsed + 1}s)"
-            )
-            console.print(
-                "\nRun your tests now:\n"
-                f"  [bold]specterqa-ios run --product <slug> --journey <id>[/bold]"
-            )
+            console.print(f"[bold green]WDA is ready[/bold green] on port {port}. ({elapsed + 1}s)")
+            console.print("\nRun your tests now:\n  [bold]specterqa-ios run --product <slug> --journey <id>[/bold]")
             return
         time.sleep(1)
 
@@ -1795,10 +1796,7 @@ def wda_start(
     "variables",
     multiple=True,
     metavar="KEY=VALUE",
-    help=(
-        "Set a replay variable for ${VAR} substitution. "
-        "May be repeated: --var USERNAME=alice --var ENV=staging"
-    ),
+    help=("Set a replay variable for ${VAR} substitution. May be repeated: --var USERNAME=alice --var ENV=staging"),
 )
 def replay(replay_file: str, verbose: bool, variables: tuple) -> None:
     """Replay a recorded test session without AI.
@@ -1953,9 +1951,9 @@ def ci(
     _results_lock = threading.Lock()
 
     def _print_replay_header(player: ReplayPlayer) -> None:
-        click.echo(f"\n{'='*60}")
+        click.echo(f"\n{'=' * 60}")
         click.echo(f"  {player.name} ({len(player.steps)} steps)")
-        click.echo(f"{'='*60}")
+        click.echo(f"{'=' * 60}")
 
     def _record_result(result: dict, f: "Path") -> None:
         nonlocal total_passed, total_failed, total_ui_changed
@@ -2017,9 +2015,7 @@ def ci(
         # TestSession and reuse it for all replays.  This avoids the ~10 s
         # xcodebuild cold-start penalty on each replay.
         first_player = ReplayPlayer(str(files[0]))
-        click.echo(
-            f"[reuse-runner] Starting shared session for bundle '{first_player.bundle_id}'"
-        )
+        click.echo(f"[reuse-runner] Starting shared session for bundle '{first_player.bundle_id}'")
 
         # Kill any leftover xcodebuild processes before starting.
         TestSession._kill_stale_runners()
@@ -2078,25 +2074,25 @@ def ci(
                 results.append({"file": str(f), "passed": False, "error": str(exc)})
 
     # Summary
-    click.echo(f"\n{'='*60}")
+    click.echo(f"\n{'=' * 60}")
     click.echo(f"SUMMARY: {total_passed} passed, {total_failed} failed, {total_ui_changed} UI changed")
-    click.echo(f"{'='*60}")
+    click.echo(f"{'=' * 60}")
 
     # --json-output: write structured results file for CI artifact collection
     if json_output_path:
-        total_duration = sum(
-            r.get("duration_seconds", 0.0) for r in results
-        )
+        total_duration = sum(r.get("duration_seconds", 0.0) for r in results)
         replay_records = []
         for r in results:
-            replay_records.append({
-                "file": r.get("file", ""),
-                "name": r.get("name", Path(r.get("file", "")).stem),
-                "passed": r.get("passed", False),
-                "duration_seconds": r.get("duration_seconds", 0.0),
-                "steps": r.get("steps", []),
-                "error": r.get("error"),
-            })
+            replay_records.append(
+                {
+                    "file": r.get("file", ""),
+                    "name": r.get("name", Path(r.get("file", "")).stem),
+                    "passed": r.get("passed", False),
+                    "duration_seconds": r.get("duration_seconds", 0.0),
+                    "steps": r.get("steps", []),
+                    "error": r.get("error"),
+                }
+            )
         json_payload = {
             "summary": {
                 "total": total_passed + total_failed + total_ui_changed,
@@ -2167,21 +2163,50 @@ def validate_replay(replay_file: str) -> None:
         raise SystemExit(1)
 
     valid_actions = {
-        "tap", "swipe", "swipe_back", "type", "press_key",
-        "long_press", "wait_for_element", "wait", "skip_to", "assert",
+        "tap",
+        "swipe",
+        "swipe_back",
+        "type",
+        "press_key",
+        "long_press",
+        "wait_for_element",
+        "wait",
+        "skip_to",
+        "assert",
     }
-    # Maestro-compatible shorthand keys that auto-resolve to an action
-    maestro_shortcuts = {"tapOn", "assertVisible", "assertNotVisible", "inputText", "waitFor"}
     valid_keys = {
-        "action", "label", "element_label", "type", "element_index", "x", "y",
-        "direction", "text", "key", "duration", "timeout",
-        "expect_elements", "expect_not_elements", "expect_element_value",
-        "expect_element_count", "expect_element_state", "expect_screenshot",
-        "screenshot_threshold", "wait_for", "step_id", "skip_to",
-        "if_element_visible", "if_not_element_visible", "step_timeout",
+        "action",
+        "label",
+        "element_label",
+        "type",
+        "element_index",
+        "x",
+        "y",
+        "direction",
+        "text",
+        "key",
+        "duration",
+        "timeout",
+        "expect_elements",
+        "expect_not_elements",
+        "expect_element_value",
+        "expect_element_count",
+        "expect_element_state",
+        "expect_screenshot",
+        "screenshot_threshold",
+        "wait_for",
+        "step_id",
+        "skip_to",
+        "if_element_visible",
+        "if_not_element_visible",
+        "step_timeout",
         "baseline_dir",
         # Maestro aliases
-        "tapOn", "assertVisible", "assertNotVisible", "inputText", "waitFor",
+        "tapOn",
+        "assertVisible",
+        "assertNotVisible",
+        "inputText",
+        "waitFor",
     }
 
     step_ids: set[str] = set()

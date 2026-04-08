@@ -10,9 +10,8 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import dataclasses
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -22,6 +21,7 @@ import pytest
 
 try:
     from specterqa.engine.protocols import Decision, StepResult  # type: ignore[import]
+
     _PROTOCOLS_AVAILABLE = True
 except ImportError:
     _PROTOCOLS_AVAILABLE = False
@@ -39,6 +39,7 @@ needs_protocols = pytest.mark.skipif(
 
 try:
     from specterqa.ios.engine.ai_step_runner import IOSAIStepRunner  # type: ignore[import]
+
     _IOS_RUNNER_AVAILABLE = True
 except ImportError:
     _IOS_RUNNER_AVAILABLE = False
@@ -49,6 +50,7 @@ try:
         DriverContext,
         SimulatorAIContext,
     )
+
     _AI_CONTEXT_AVAILABLE = True
 except ImportError:
     _AI_CONTEXT_AVAILABLE = False
@@ -214,17 +216,21 @@ def _make_ios_runner(
     decider = _make_decider(decisions)
     executor = _make_executor(screenshot_b64)
     context_builder = _make_context_builder(driver_context)
-    return IOSAIStepRunner(
-        decider=decider,
-        executor=executor,
-        context_builder=context_builder,
-        evidence_dir=evidence_dir,
-        budget=budget,
-    ), decider, executor, context_builder
+    return (
+        IOSAIStepRunner(
+            decider=decider,
+            executor=executor,
+            context_builder=context_builder,
+            evidence_dir=evidence_dir,
+            budget=budget,
+        ),
+        decider,
+        executor,
+        context_builder,
+    )
 
 
-# needed for type hints only in helpers
-from typing import Any
+# (typing.Any imported at top)
 
 
 # ===========================================================================
@@ -247,7 +253,7 @@ class TestRunStepCallsDecider:
         )
         ctx_builder.format_for_claude.return_value = formatted
 
-        result = runner.run_step(goal="Tap Sign In", checkpoint=None, max_iterations=5)
+        runner.run_step(goal="Tap Sign In", checkpoint=None, max_iterations=5)
 
         decider.decide.assert_called()
         call_kwargs = decider.decide.call_args
@@ -331,13 +337,8 @@ class TestRunStepCrashFinding:
         result = runner.run_step(goal="Navigate to home", max_iterations=5)
 
         assert len(result.findings) > 0
-        crash_findings = [
-            f for f in result.findings
-            if hasattr(f, "severity") and f.severity == "critical"
-        ]
-        assert len(crash_findings) > 0, (
-            f"Expected at least one critical finding, got: {result.findings}"
-        )
+        crash_findings = [f for f in result.findings if hasattr(f, "severity") and f.severity == "critical"]
+        assert len(crash_findings) > 0, f"Expected at least one critical finding, got: {result.findings}"
 
 
 # ===========================================================================
@@ -361,13 +362,8 @@ class TestRunStepErrorLogFinding:
         result = runner.run_step(goal="Check network", max_iterations=5)
 
         assert len(result.findings) > 0
-        high_findings = [
-            f for f in result.findings
-            if hasattr(f, "severity") and f.severity == "high"
-        ]
-        assert len(high_findings) > 0, (
-            f"Expected at least one high finding for error logs, got: {result.findings}"
-        )
+        high_findings = [f for f in result.findings if hasattr(f, "severity") and f.severity == "high"]
+        assert len(high_findings) > 0, f"Expected at least one high finding for error logs, got: {result.findings}"
 
 
 # ===========================================================================
@@ -505,9 +501,7 @@ class TestRunStepAllFindingsMerged:
         )
         result = runner.run_step(goal="Test", max_iterations=5)
 
-        severities = {
-            f.severity for f in result.findings if hasattr(f, "severity")
-        }
+        severities = {f.severity for f in result.findings if hasattr(f, "severity")}
         assert "critical" in severities, "Expected critical finding from crash"
         assert "high" in severities, "Expected high finding from error log"
 
@@ -553,9 +547,7 @@ class TestDetectErrorFinding:
         """_detect_error_finding must return a Finding with severity='high'."""
         runner, *_ = _make_ios_runner()
         error_log = _make_log_entry(message="DB connection failed", level="error")
-        findings = runner._detect_error_finding(
-            _make_driver_context(logs_with_errors=[error_log])
-        )
+        findings = runner._detect_error_finding(_make_driver_context(logs_with_errors=[error_log]))
 
         assert len(findings) >= 1
         assert all(f.severity == "high" for f in findings)
@@ -564,9 +556,7 @@ class TestDetectErrorFinding:
         """_detect_error_finding must ignore non-error log entries."""
         runner, *_ = _make_ios_runner()
         info_log = _make_log_entry(message="App started", level="info")
-        findings = runner._detect_error_finding(
-            _make_driver_context(logs_with_errors=[info_log])
-        )
+        findings = runner._detect_error_finding(_make_driver_context(logs_with_errors=[info_log]))
         assert findings == []
 
 
@@ -613,9 +603,7 @@ class TestEvidenceCollection:
         runner.run_step(goal="Collect evidence", max_iterations=5)
 
         evidence_files = list(tmp_path.iterdir())
-        assert len(evidence_files) > 0, (
-            f"Expected evidence files in {tmp_path}, found none"
-        )
+        assert len(evidence_files) > 0, f"Expected evidence files in {tmp_path}, found none"
 
 
 # ===========================================================================

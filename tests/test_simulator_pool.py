@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -23,6 +23,7 @@ import pytest
 
 try:
     from specterqa.ios.parallel.pool import SimulatorPool  # type: ignore[import]
+
     _POOL_AVAILABLE = True
 except ImportError:
     _POOL_AVAILABLE = False
@@ -42,9 +43,7 @@ _REQUIRED_LEASE_KEYS = {"device_id", "udid", "name", "lease_id"}
 
 def _make_pool(max_concurrent: int = 4, license_validator=None) -> "SimulatorPool":
     """Return a SimulatorPool with _create_simulator and _destroy_simulator mocked."""
-    pool = SimulatorPool(
-        max_concurrent=max_concurrent, license_validator=license_validator
-    )
+    pool = SimulatorPool(max_concurrent=max_concurrent, license_validator=license_validator)
     # Prevent real xcrun calls in tests that don't explicitly care about simctl.
     pool._create_simulator = MagicMock(  # type: ignore[method-assign]
         side_effect=lambda device_name: {
@@ -98,7 +97,7 @@ class TestSimulatorPoolAcquire:
 
         # Fill all slots
         lease_a = pool.acquire()
-        lease_b = pool.acquire()
+        pool.acquire()
 
         results: list[dict] = []
         errors: list[Exception] = []
@@ -118,9 +117,7 @@ class TestSimulatorPoolAcquire:
 
         # Give the thread a moment — it should still be blocked
         time.sleep(0.1)
-        assert not acquired_event.is_set(), (
-            "acquire() returned immediately despite pool being at capacity"
-        )
+        assert not acquired_event.is_set(), "acquire() returned immediately despite pool being at capacity"
 
         # Unblock by releasing one slot
         pool.release(lease_a["lease_id"])
@@ -147,9 +144,7 @@ class TestSimulatorPoolRelease:
         before = pool.available()
         pool.release(lease["lease_id"])
         after = pool.available()
-        assert after == before + 1, (
-            f"available() did not increase after release: {before} → {after}"
-        )
+        assert after == before + 1, f"available() did not increase after release: {before} → {after}"
 
     def test_release_invalid_lease_id_raises(self):
         """release() with an unrecognised lease_id raises ValueError."""
@@ -199,7 +194,7 @@ class TestSimulatorPoolActiveLeases:
         pool = _make_pool()
         lease = pool.acquire()
         leases = pool.active_leases()
-        lease_ids = [l["lease_id"] for l in leases]
+        lease_ids = [lease_item["lease_id"] for lease_item in leases]
         assert lease["lease_id"] in lease_ids
 
     def test_active_leases_empty_after_all_released(self):
@@ -253,8 +248,7 @@ class TestSimulatorPoolLicenseEnforcement:
 
         pool = _make_pool(max_concurrent=4, license_validator=mock_validator)
         assert pool.available() <= 2, (
-            f"Pool should be capped at 2 by license validator, "
-            f"but available() returned {pool.available()}"
+            f"Pool should be capped at 2 by license validator, but available() returned {pool.available()}"
         )
 
 
@@ -283,13 +277,10 @@ class TestSimulatorPoolSimctlCalls:
 
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = [create_result, boot_result]
-            result = pool._create_simulator("iPhone 15 Pro")
+            pool._create_simulator("iPhone 15 Pro")
 
         assert mock_run.call_count >= 2, "Expected at least create + boot subprocess calls"
-        all_cmd_strings = [
-            " ".join(c.args[0]) if c.args else ""
-            for c in mock_run.call_args_list
-        ]
+        all_cmd_strings = [" ".join(c.args[0]) if c.args else "" for c in mock_run.call_args_list]
         assert any("simctl" in s and "create" in s for s in all_cmd_strings), (
             f"simctl create not found in calls: {all_cmd_strings}"
         )
@@ -330,9 +321,7 @@ class TestSimulatorPoolLeaseUniqueness:
         pool = _make_pool(max_concurrent=4)
         lease_a = pool.acquire()
         lease_b = pool.acquire()
-        assert lease_a["lease_id"] != lease_b["lease_id"], (
-            "Two leases produced the same lease_id — IDs must be unique"
-        )
+        assert lease_a["lease_id"] != lease_b["lease_id"], "Two leases produced the same lease_id — IDs must be unique"
 
     def test_pool_is_thread_safe(self):
         """Concurrent acquire/release from multiple threads does not corrupt
@@ -361,10 +350,6 @@ class TestSimulatorPoolLeaseUniqueness:
 
         assert not errors, f"Thread-safety errors: {errors}"
         # All IDs should be unique
-        assert len(collected_ids) == len(set(collected_ids)), (
-            "Duplicate lease IDs produced under concurrent load"
-        )
+        assert len(collected_ids) == len(set(collected_ids)), "Duplicate lease IDs produced under concurrent load"
         # Pool should be fully drained back to max_concurrent
-        assert pool.available() == 8, (
-            f"Pool available count wrong after all threads finished: {pool.available()}"
-        )
+        assert pool.available() == 8, f"Pool available count wrong after all threads finished: {pool.available()}"

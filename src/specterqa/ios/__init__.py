@@ -9,7 +9,6 @@ not a namespace package) is aware of our sub-tree so that
 from __future__ import annotations
 
 import os
-import sys
 
 
 def _ensure_namespace() -> None:

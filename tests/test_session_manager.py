@@ -20,7 +20,7 @@ All tests mock subprocess.run and requests so no real simulator is required.
 from __future__ import annotations
 
 import subprocess
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -34,12 +34,13 @@ try:
         SessionManagerError,
         TestSession,
     )
+
     _MODULE_AVAILABLE = True
 except ImportError:
     _MODULE_AVAILABLE = False
-    SessionManager = None       # type: ignore[assignment,misc]
+    SessionManager = None  # type: ignore[assignment,misc]
     SessionManagerError = Exception  # type: ignore[assignment,misc]
-    TestSession = None          # type: ignore[assignment,misc]
+    TestSession = None  # type: ignore[assignment,misc]
 
 needs_module = pytest.mark.skipif(
     not _MODULE_AVAILABLE,
@@ -122,7 +123,7 @@ class TestCloneCreateSimulator:
         manager = _make_manager()
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = _ok_proc(stdout=_CLONE_UDID + "\n")
-            udid = manager._clone(source_udid=_SOURCE_UDID, name="SpecterQA-Clone")
+            manager._clone(source_udid=_SOURCE_UDID, name="SpecterQA-Clone")
 
         # simctl clone <source_udid> <name>
         args = mock_run.call_args_list[0][0][0]
@@ -180,8 +181,7 @@ class TestBootHeadless:
             manager._boot(udid=_CLONE_UDID)
         for c in mock_run.call_args_list:
             cmd = c[0][0]
-            assert not ("open" in cmd and "Simulator" in " ".join(cmd)), \
-                "Headless boot must not open Simulator.app"
+            assert not ("open" in cmd and "Simulator" in " ".join(cmd)), "Headless boot must not open Simulator.app"
 
     def test_boot_ignores_already_booted_error(self):
         """'Unable to boot device in current state: Booted' is not fatal."""
@@ -205,9 +205,7 @@ class TestBootHeadless:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = _ok_proc()
             manager._boot(udid=_CLONE_UDID)
-        all_args = " ".join(
-            str(a) for c in mock_run.call_args_list for a in c[0][0]
-        )
+        all_args = " ".join(str(a) for c in mock_run.call_args_list for a in c[0][0])
         assert _CLONE_UDID in all_args
 
 
@@ -234,9 +232,7 @@ class TestInstallApp:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = _ok_proc()
             manager._install(udid=_CLONE_UDID)
-        all_args = " ".join(
-            str(a) for c in mock_run.call_args_list for a in c[0][0]
-        )
+        all_args = " ".join(str(a) for c in mock_run.call_args_list for a in c[0][0])
         assert _APP_PATH in all_args
 
     def test_install_passes_udid(self):
@@ -244,9 +240,7 @@ class TestInstallApp:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = _ok_proc()
             manager._install(udid=_CLONE_UDID)
-        all_args = " ".join(
-            str(a) for c in mock_run.call_args_list for a in c[0][0]
-        )
+        all_args = " ".join(str(a) for c in mock_run.call_args_list for a in c[0][0])
         assert _CLONE_UDID in all_args
 
     def test_install_raises_on_failure(self):
@@ -345,6 +339,7 @@ class TestWaitForHealth:
     def test_health_check_retries_on_connection_error(self):
         """Retries on connection refused, eventually succeeds."""
         import urllib.error
+
         manager = _make_manager()
 
         ok_resp = MagicMock()
@@ -365,6 +360,7 @@ class TestWaitForHealth:
     def test_health_check_raises_on_timeout(self):
         """Raises SessionManagerError when timeout expires."""
         import urllib.error
+
         manager = _make_manager()
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
             with patch("time.sleep"):
@@ -405,9 +401,7 @@ class TestCleanupDeletesClone:
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = _ok_proc()
             manager._cleanup(udid=_CLONE_UDID)
-        all_args = " ".join(
-            str(a) for c in mock_run.call_args_list for a in c[0][0]
-        )
+        all_args = " ".join(str(a) for c in mock_run.call_args_list for a in c[0][0])
         assert _CLONE_UDID in all_args
 
     def test_cleanup_shutdown_before_delete(self):
@@ -426,8 +420,7 @@ class TestCleanupDeletesClone:
             manager._cleanup(udid=_CLONE_UDID)
 
         if len(call_order) >= 2:
-            assert call_order.index("shutdown") < call_order.index("delete"), \
-                "shutdown must come before delete"
+            assert call_order.index("shutdown") < call_order.index("delete"), "shutdown must come before delete"
 
     def test_cleanup_tolerates_shutdown_failure(self):
         """Shutdown failure (sim already gone) must not prevent delete."""
@@ -482,10 +475,11 @@ class TestFullLifecycle:
                 call_order.append(name)
                 if name == "_deploy_runner":
                     return MagicMock(pid=1)
+
             return _inner
 
         with (
-            patch.object(manager, "_clone", side_effect=lambda **kw: (call_order.append("clone") or _CLONE_UDID)),
+            patch.object(manager, "_clone", side_effect=lambda **kw: call_order.append("clone") or _CLONE_UDID),
             patch.object(manager, "_boot", side_effect=track("boot")),
             patch.object(manager, "_install", side_effect=track("install")),
             patch.object(manager, "_deploy_runner", side_effect=track("deploy_runner")),

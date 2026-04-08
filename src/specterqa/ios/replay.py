@@ -112,14 +112,14 @@ class ReplayStep:
     # Per-step timeout override (seconds); None = use session default
     step_timeout: Optional[float] = None
     # Conditional execution — skip this step if condition is not met
-    if_element_visible: Optional[str] = None      # execute only when element is present
+    if_element_visible: Optional[str] = None  # execute only when element is present
     if_not_element_visible: Optional[str] = None  # execute only when element is absent
     # Step identity and jump target for conditional branching
-    step_id: Optional[str] = None   # ID for this step (referenced by skip_to)
-    skip_to: Optional[str] = None   # action: jump to step with matching step_id
+    step_id: Optional[str] = None  # ID for this step (referenced by skip_to)
+    skip_to: Optional[str] = None  # action: jump to step with matching step_id
     # Visual regression — compare current screenshot against a saved baseline
     expect_screenshot: Optional[str] = None  # baseline filename, e.g. "home_screen.png"
-    screenshot_threshold: float = 5.0        # max allowed % pixel difference
+    screenshot_threshold: float = 5.0  # max allowed % pixel difference
 
 
 @dataclass
@@ -132,8 +132,8 @@ class ReplaySession:
     recorded_at: str = ""
     steps: list[ReplayStep] = field(default_factory=list)
     # Replay-level defaults
-    settle_timeout: float = 2.0   # seconds to wait for UI to settle before assertions
-    step_timeout: float = 10.0    # default per-step execution timeout (seconds)
+    settle_timeout: float = 2.0  # seconds to wait for UI to settle before assertions
+    step_timeout: float = 10.0  # default per-step execution timeout (seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -189,21 +189,15 @@ class ReplayRecorder:
 
     def record_swipe_back(self) -> None:
         """Record an iOS back-navigation swipe."""
-        self.session.steps.append(
-            ReplayStep(action="swipe_back", timestamp=time.time())
-        )
+        self.session.steps.append(ReplayStep(action="swipe_back", timestamp=time.time()))
 
     def record_type(self, text: str) -> None:
         """Record a text-input action."""
-        self.session.steps.append(
-            ReplayStep(action="type", timestamp=time.time(), text=text)
-        )
+        self.session.steps.append(ReplayStep(action="type", timestamp=time.time(), text=text))
 
     def record_press_key(self, key: str) -> None:
         """Record a named key-press (return, delete, tab, …)."""
-        self.session.steps.append(
-            ReplayStep(action="press_key", timestamp=time.time(), key=key)
-        )
+        self.session.steps.append(ReplayStep(action="press_key", timestamp=time.time(), key=key))
 
     def record_long_press(
         self,
@@ -362,9 +356,9 @@ class ReplayPlayer:
         if not variables:
             return step
         resolved = dict(step)
-        for field in ("element_label", "text", "key"):
-            if field in resolved and isinstance(resolved[field], str):
-                resolved[field] = self.resolve_vars(resolved[field], variables)
+        for var_field in ("element_label", "text", "key"):
+            if var_field in resolved and isinstance(resolved[var_field], str):
+                resolved[var_field] = self.resolve_vars(resolved[var_field], variables)
         return resolved
 
     def _wait_for_label(self, annotator, label: str, timeout: float) -> bool:
@@ -455,9 +449,9 @@ class ReplayPlayer:
                     direction = step.get("direction", "down")
                     cx, cy, offset = 195, 422, 200
                     coords = {
-                        "down":  (cx, cy + offset, cx, cy - offset),
-                        "up":    (cx, cy - offset, cx, cy + offset),
-                        "left":  (cx + offset, cy, cx - offset, cy),
+                        "down": (cx, cy + offset, cx, cy - offset),
+                        "up": (cx, cy - offset, cx, cy + offset),
+                        "left": (cx + offset, cy, cx - offset, cy),
                         "right": (cx - offset, cy, cx + offset, cy),
                     }
                     x1, y1, x2, y2 = coords.get(direction, coords["down"])
@@ -482,10 +476,12 @@ class ReplayPlayer:
                         exec_error.append(("unknown", "wait_for_element requires 'label'"))
                         return
                     if not self._wait_for_label(annotator, wf_label, wf_timeout):
-                        exec_error.append((
-                            "unknown",
-                            f"Element '{wf_label}' not found within {wf_timeout}s",
-                        ))
+                        exec_error.append(
+                            (
+                                "unknown",
+                                f"Element '{wf_label}' not found within {wf_timeout}s",
+                            )
+                        )
                     return
 
                 elif action == "assert":
@@ -581,9 +577,7 @@ class ReplayPlayer:
             try:
                 elements = annotator.get_elements_from_runner()
                 for lbl, expected_val in expect_value.items():
-                    target = next(
-                        (e for e in elements if lbl.lower() in e.label.lower()), None
-                    )
+                    target = next((e for e in elements if lbl.lower() in e.label.lower()), None)
                     if target is None:
                         step_result["passed"] = False
                         step_result["error"] = f"expect_element_value: element '{lbl}' not found"
@@ -594,8 +588,7 @@ class ReplayPlayer:
                         if str(expected_val) not in str(actual_val):
                             step_result["passed"] = False
                             step_result["error"] = (
-                                f"expect_element_value: '{lbl}' value '{actual_val}' "
-                                f"does not contain '{expected_val}'"
+                                f"expect_element_value: '{lbl}' value '{actual_val}' does not contain '{expected_val}'"
                             )
                             if result["exit_code"] == 0:
                                 result["exit_code"] = 1
@@ -610,10 +603,7 @@ class ReplayPlayer:
             try:
                 elements = annotator.get_elements_from_runner()
                 for elem_type, expected_count in expect_count.items():
-                    actual_count = sum(
-                        1 for e in elements
-                        if e.element_type.lower() == elem_type.lower()
-                    )
+                    actual_count = sum(1 for e in elements if e.element_type.lower() == elem_type.lower())
                     if actual_count != int(expected_count):
                         step_result["passed"] = False
                         step_result["error"] = (
@@ -633,14 +623,10 @@ class ReplayPlayer:
             try:
                 elements = annotator.get_elements_from_runner()
                 for lbl, expected_props in expect_state.items():
-                    target = next(
-                        (e for e in elements if lbl.lower() in e.label.lower()), None
-                    )
+                    target = next((e for e in elements if lbl.lower() in e.label.lower()), None)
                     if target is None:
                         step_result["passed"] = False
-                        step_result["error"] = (
-                            f"expect_element_state: element '{lbl}' not found"
-                        )
+                        step_result["error"] = f"expect_element_state: element '{lbl}' not found"
                         if result["exit_code"] == 0:
                             result["exit_code"] = 1
                         break
@@ -673,22 +659,18 @@ class ReplayPlayer:
                 if not baseline_path.exists():
                     # Save current screenshot as baseline for future runs
                     raw = backend.screenshot()
-                    b64_current = (
-                        raw.get("base64") or raw.get("data") or raw.get("image", "")
-                    )
+                    b64_current = raw.get("base64") or raw.get("data") or raw.get("image", "")
                     if b64_current:
                         import base64 as _b64
+
                         baseline_path.parent.mkdir(parents=True, exist_ok=True)
                         baseline_path.write_bytes(_b64.b64decode(b64_current))
-                        step_result["screenshot_note"] = (
-                            f"Baseline saved: {baseline_path}"
-                        )
+                        step_result["screenshot_note"] = f"Baseline saved: {baseline_path}"
                 else:
                     import base64 as _b64
+
                     raw = backend.screenshot()
-                    b64_current = (
-                        raw.get("base64") or raw.get("data") or raw.get("image", "")
-                    )
+                    b64_current = raw.get("base64") or raw.get("data") or raw.get("image", "")
                     if b64_current:
                         b64_baseline = _b64.b64encode(baseline_path.read_bytes()).decode("ascii")
                         diff_pct = screenshot_diff(b64_baseline, b64_current)
@@ -703,8 +685,7 @@ class ReplayPlayer:
                                 result["exit_code"] = 1
             except ImportError:
                 step_result["screenshot_note"] = (
-                    "Visual regression skipped — Pillow not installed. "
-                    "Install with: pip install Pillow"
+                    "Visual regression skipped — Pillow not installed. Install with: pip install Pillow"
                 )
             except Exception as exc:
                 step_result["passed"] = False
@@ -731,13 +712,9 @@ class ReplayPlayer:
             # Element disappeared and no coords — flag as UI change
             if result["exit_code"] == 0:
                 result["exit_code"] = 2
-            raise RuntimeError(
-                f"Element '{label}' not found — UI may have changed since recording"
-            )
+            raise RuntimeError(f"Element '{label}' not found — UI may have changed since recording")
 
-    def _exec_long_press(
-        self, step: dict, backend, annotator, result: dict
-    ) -> None:
+    def _exec_long_press(self, step: dict, backend, annotator, result: dict) -> None:
         """Resolve element by label then perform a long press."""
         label = step.get("element_label", "")
         duration = float(step.get("duration", 1.0))
@@ -753,9 +730,7 @@ class ReplayPlayer:
         else:
             if result["exit_code"] == 0:
                 result["exit_code"] = 2
-            raise RuntimeError(
-                f"Element '{label}' not found — UI may have changed since recording"
-            )
+            raise RuntimeError(f"Element '{label}' not found — UI may have changed since recording")
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -807,14 +782,15 @@ class ReplayPlayer:
                     print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
 
                 # Conditional execution guards
-                skip_step = False
                 if_visible = step.get("if_element_visible")
                 if if_visible:
                     try:
                         elements = annotator.get_elements_from_runner()
                         if not any(if_visible.lower() in e.label.lower() for e in elements):
                             step_result: dict = {
-                                "action": action, "passed": True, "error": None,
+                                "action": action,
+                                "passed": True,
+                                "error": None,
                                 "status": "skipped",
                                 "reason": f"if_element_visible: '{if_visible}' not present",
                             }
@@ -830,7 +806,9 @@ class ReplayPlayer:
                         elements = annotator.get_elements_from_runner()
                         if any(if_not_visible.lower() in e.label.lower() for e in elements):
                             step_result = {
-                                "action": action, "passed": True, "error": None,
+                                "action": action,
+                                "passed": True,
+                                "error": None,
                                 "status": "skipped",
                                 "reason": f"if_not_element_visible: '{if_not_visible}' present",
                             }
@@ -853,9 +831,7 @@ class ReplayPlayer:
                         i += 1
                     continue
 
-                step_result = self._execute_step(
-                    step, backend, annotator, result, variables=vars_dict
-                )
+                step_result = self._execute_step(step, backend, annotator, result, variables=vars_dict)
 
                 if not step_result["passed"]:
                     result["passed"] = False
@@ -938,7 +914,9 @@ class ReplayPlayer:
                         elements = annotator.get_elements_from_runner()
                         if not any(if_visible.lower() in e.label.lower() for e in elements):
                             step_result: dict = {
-                                "action": action, "passed": True, "error": None,
+                                "action": action,
+                                "passed": True,
+                                "error": None,
                                 "status": "skipped",
                                 "reason": f"if_element_visible: '{if_visible}' not present",
                             }
@@ -954,7 +932,9 @@ class ReplayPlayer:
                         elements = annotator.get_elements_from_runner()
                         if any(if_not_visible.lower() in e.label.lower() for e in elements):
                             step_result = {
-                                "action": action, "passed": True, "error": None,
+                                "action": action,
+                                "passed": True,
+                                "error": None,
                                 "status": "skipped",
                                 "reason": f"if_not_element_visible: '{if_not_visible}' present",
                             }
@@ -977,9 +957,7 @@ class ReplayPlayer:
                         i += 1
                     continue
 
-                step_result = self._execute_step(
-                    step, backend, annotator, result, variables=vars_dict
-                )
+                step_result = self._execute_step(step, backend, annotator, result, variables=vars_dict)
 
                 if not step_result["passed"]:
                     result["passed"] = False

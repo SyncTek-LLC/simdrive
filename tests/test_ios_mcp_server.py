@@ -13,7 +13,6 @@ Module under test (to be created by CodeAtlas):
 from __future__ import annotations
 
 import json
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,6 +23,7 @@ import pytest
 
 try:
     from specterqa.ios.mcp.server import IOSMCPServer  # type: ignore[import]
+
     _SERVER_AVAILABLE = True
 except ImportError:
     _SERVER_AVAILABLE = False
@@ -38,24 +38,26 @@ needs_server = pytest.mark.skipif(
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-_SIMCTL_DEVICES_OUTPUT = json.dumps({
-    "devices": {
-        "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
-            {
-                "name": "iPhone 15",
-                "udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
-                "state": "Booted",
-                "isAvailable": True,
-            },
-            {
-                "name": "iPhone SE (3rd generation)",
-                "udid": "FFFFFFFF-0000-1111-2222-333333333333",
-                "state": "Shutdown",
-                "isAvailable": True,
-            },
-        ]
+_SIMCTL_DEVICES_OUTPUT = json.dumps(
+    {
+        "devices": {
+            "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+                {
+                    "name": "iPhone 15",
+                    "udid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",
+                    "state": "Booted",
+                    "isAvailable": True,
+                },
+                {
+                    "name": "iPhone SE (3rd generation)",
+                    "udid": "FFFFFFFF-0000-1111-2222-333333333333",
+                    "state": "Shutdown",
+                    "isAvailable": True,
+                },
+            ]
+        }
     }
-})
+)
 
 
 def _make_pool(udid: str = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE") -> MagicMock:
@@ -75,13 +77,15 @@ def _make_step_runner_factory() -> MagicMock:
     """Build a mock factory that produces a step runner."""
     factory = MagicMock()
     runner = MagicMock()
-    runner.run_step = MagicMock(return_value={
-        "success": True,
-        "finding": None,
-        "covered_area": "home",
-        "cost": 0.01,
-        "critical": False,
-    })
+    runner.run_step = MagicMock(
+        return_value={
+            "success": True,
+            "finding": None,
+            "covered_area": "home",
+            "cost": 0.01,
+            "critical": False,
+        }
+    )
     factory.return_value = runner
     return factory
 
@@ -202,7 +206,7 @@ class TestListDevicesAndScenarios:
             mock_proc.stdout = _SIMCTL_DEVICES_OUTPUT
             mock_proc.returncode = 0
             mock_run.return_value = mock_proc
-            devices = server.list_devices()
+            server.list_devices()
         mock_run.assert_called_once()
         args = mock_run.call_args
         # Extract the command from positional or keyword args.

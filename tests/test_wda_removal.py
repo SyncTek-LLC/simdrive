@@ -5,9 +5,9 @@ R&D cleanup:
 - XCTest runner is the sole backend.
 - wda_url, session_id, use_xctest_runner, and _start_legacy are all gone.
 """
+
 import inspect
 import json
-import subprocess
 import pytest
 from unittest.mock import patch, MagicMock
 from specterqa.ios.som_runner import SoMRunner
@@ -32,9 +32,7 @@ class TestSoMRunnerWDARemoved:
     def test_start_raises_without_runner(self):
         """start() raises RuntimeError when XCTest runner not available."""
         runner = SoMRunner(api_key="test")
-        with patch.object(
-            SoMRunner, "_start_xctest", side_effect=RuntimeError("XCTest runner not built.")
-        ):
+        with patch.object(SoMRunner, "_start_xctest", side_effect=RuntimeError("XCTest runner not built.")):
             with pytest.raises(RuntimeError, match="runner|XCTest"):
                 runner.start("com.test.app")
 
@@ -83,12 +81,14 @@ class TestNoWDAImportsInHotPath:
     def test_som_runner_no_wda_import_anywhere(self):
         """som_runner.py must not import wda_driver at all."""
         import specterqa.ios.som_runner as mod
+
         source = inspect.getsource(mod)
         assert "wda_driver" not in source, "wda_driver import must be fully removed"
 
     def test_som_annotator_no_wda_imports(self):
         """som_annotator.py must not import socket or urllib.error (WDA-only deps)."""
         import specterqa.ios.som_annotator as mod
+
         source = inspect.getsource(mod)
         assert "wda_url" not in source, "wda_url must be fully removed from annotator"
 
@@ -100,6 +100,7 @@ class TestExistingTestsUnbroken:
         assert hasattr(SoMRunner, "_is_element_visible")
         assert hasattr(SoMAnnotator, "_screen_changed")
         from specterqa.ios.som_runner import MAX_CONSECUTIVE_SCROLLS
+
         assert MAX_CONSECUTIVE_SCROLLS == 5
 
 
@@ -110,21 +111,25 @@ class TestExistingTestsUnbroken:
 _SOURCE_UDID = "SOURCE-UDID-DEADBEEF"
 _CLONE_UDID = "CLONE-UDID-CAFEBABE"
 
-_DEVICES_JSON_BOOTED = json.dumps({
-    "devices": {
-        "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
-            {"udid": _SOURCE_UDID, "name": "iPhone 15", "state": "Booted"}
-        ]
+_DEVICES_JSON_BOOTED = json.dumps(
+    {
+        "devices": {
+            "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+                {"udid": _SOURCE_UDID, "name": "iPhone 15", "state": "Booted"}
+            ]
+        }
     }
-})
+)
 
-_DEVICES_JSON_SHUTDOWN = json.dumps({
-    "devices": {
-        "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
-            {"udid": _SOURCE_UDID, "name": "iPhone 15", "state": "Shutdown"}
-        ]
+_DEVICES_JSON_SHUTDOWN = json.dumps(
+    {
+        "devices": {
+            "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+                {"udid": _SOURCE_UDID, "name": "iPhone 15", "state": "Shutdown"}
+            ]
+        }
     }
-})
+)
 
 
 def _make_proc(stdout: str = "", returncode: int = 0) -> MagicMock:
@@ -145,7 +150,8 @@ class TestSessionManagerCloneFix:
 
     def _make_session(self) -> "object":
         from specterqa.ios.session_manager import TestSession
-        return TestSession(source_udid=_SOURCE_UDID)
+
+        return TestSession(source_udid=_SOURCE_UDID, clone=True)
 
     def _run_side_effect_booted(self, cmd, **kwargs):
         """Simulate subprocess.run responses for a booted-source scenario."""
@@ -168,7 +174,7 @@ class TestSessionManagerCloneFix:
         """If source sim is booted, shutdown must be called before clone."""
         from specterqa.ios.session_manager import TestSession
 
-        session = TestSession(source_udid=_SOURCE_UDID)
+        session = TestSession(source_udid=_SOURCE_UDID, clone=True)
         call_order = []
 
         def tracking_run(cmd, **kwargs):
@@ -187,6 +193,7 @@ class TestSessionManagerCloneFix:
             patch("specterqa.ios.session_manager._find_free_port", return_value=8222),
             patch("specterqa.ios.session_manager._find_xctestrun", return_value="/fake/test.xctestrun"),
             patch("specterqa.ios.session_manager._wait_for_health"),
+            patch("specterqa.ios.session_manager.TestSession._inject_xctestrun_env"),
             patch("time.sleep"),
         ):
             session._is_sim_booted = lambda udid: True
@@ -194,14 +201,13 @@ class TestSessionManagerCloneFix:
 
         assert "shutdown_source" in call_order, "shutdown must be called when source is booted"
         assert "clone" in call_order, "clone must be called"
-        assert call_order.index("shutdown_source") < call_order.index("clone"), \
-            "shutdown must happen before clone"
+        assert call_order.index("shutdown_source") < call_order.index("clone"), "shutdown must happen before clone"
 
     def test_reboots_original_after_clone(self):
         """Original sim must be re-booted after cloning if it was booted before."""
         from specterqa.ios.session_manager import TestSession
 
-        session = TestSession(source_udid=_SOURCE_UDID)
+        session = TestSession(source_udid=_SOURCE_UDID, clone=True)
         call_order = []
 
         def tracking_run(cmd, **kwargs):
@@ -221,6 +227,7 @@ class TestSessionManagerCloneFix:
             patch("specterqa.ios.session_manager._find_free_port", return_value=8222),
             patch("specterqa.ios.session_manager._find_xctestrun", return_value="/fake/test.xctestrun"),
             patch("specterqa.ios.session_manager._wait_for_health"),
+            patch("specterqa.ios.session_manager.TestSession._inject_xctestrun_env"),
             patch("time.sleep"),
         ):
             session._is_sim_booted = lambda udid: True
@@ -228,14 +235,15 @@ class TestSessionManagerCloneFix:
 
         assert "reboot_source" in call_order, "source sim must be re-booted after clone"
         assert "clone" in call_order
-        assert call_order.index("clone") < call_order.index("reboot_source"), \
+        assert call_order.index("clone") < call_order.index("reboot_source"), (
             "re-boot of source must happen after clone completes"
+        )
 
     def test_clone_works_with_shutdown_sim(self):
         """If source sim is already shutdown, no extra shutdown/re-boot on source."""
         from specterqa.ios.session_manager import TestSession
 
-        session = TestSession(source_udid=_SOURCE_UDID)
+        session = TestSession(source_udid=_SOURCE_UDID, clone=True)
         source_shutdowns = []
         source_reboots = []
 
@@ -257,12 +265,11 @@ class TestSessionManagerCloneFix:
             patch("specterqa.ios.session_manager._find_free_port", return_value=8222),
             patch("specterqa.ios.session_manager._find_xctestrun", return_value="/fake/test.xctestrun"),
             patch("specterqa.ios.session_manager._wait_for_health"),
+            patch("specterqa.ios.session_manager.TestSession._inject_xctestrun_env"),
             patch("time.sleep"),
         ):
             session._is_sim_booted = lambda udid: False
             session._start()
 
-        assert not source_shutdowns, \
-            "No shutdown should be issued on source when it is already shutdown"
-        assert not source_reboots, \
-            "No re-boot should be issued on source when it was not booted before clone"
+        assert not source_shutdowns, "No shutdown should be issued on source when it is already shutdown"
+        assert not source_reboots, "No re-boot should be issued on source when it was not booted before clone"

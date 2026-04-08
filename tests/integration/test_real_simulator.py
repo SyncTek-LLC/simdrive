@@ -83,6 +83,7 @@ def _png_dimensions(b64: str) -> tuple[int, int]:
     if magic != b"\x89PNG\r\n\x1a\n":
         raise ValueError(f"Not a PNG: magic={magic!r}")
     import struct
+
     width = struct.unpack(">I", raw[16:20])[0]
     height = struct.unpack(">I", raw[20:24])[0]
     return width, height
@@ -108,7 +109,6 @@ def _screenshots_differ(b64_a: str, b64_b: str, threshold: float = 0.001) -> boo
     if img_a.size != img_b.size:
         img_b = img_b.resize(img_a.size, Image.LANCZOS)
 
-    import numpy as np
     arr_a = np.array(img_a, dtype=np.int32)
     arr_b = np.array(img_b, dtype=np.int32)
     diff_mask = np.any(arr_a != arr_b, axis=2)
@@ -127,6 +127,7 @@ def _screenshots_differ(b64_a: str, b64_b: str, threshold: float = 0.001) -> boo
 def capture():
     """A ScreenCapture instance targeting the booted simulator."""
     from specterqa.ios.drivers.simulator.capture import ScreenCapture
+
     return ScreenCapture(device_id="booted", resize_width=1024)
 
 
@@ -134,6 +135,7 @@ def capture():
 def interaction():
     """An InteractionLayer instance targeting the booted simulator."""
     from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
     layer = InteractionLayer(device_id="booted")
     # Ensure Simulator.app is front before any gesture
     subprocess.run(["open", "-a", "Simulator"], capture_output=True)
@@ -149,13 +151,16 @@ def driver():
     then stops it after the module finishes.
     """
     from specterqa.ios.drivers.simulator.driver import SimulatorDriver
-    drv = SimulatorDriver(config={
-        "device_id": "booted",
-        "bundle_id": "com.apple.Preferences",
-        "enable_perf_monitoring": False,
-        "enable_network_capture": False,
-        "enable_crash_detection": False,
-    })
+
+    drv = SimulatorDriver(
+        config={
+            "device_id": "booted",
+            "bundle_id": "com.apple.Preferences",
+            "enable_perf_monitoring": False,
+            "enable_network_capture": False,
+            "enable_crash_detection": False,
+        }
+    )
     drv.start()
     yield drv
     drv.stop()
@@ -190,31 +195,21 @@ class TestScreenshotCapture:
         r1 = capture.capture()
         time.sleep(0.2)
         r2 = capture.capture()
-        assert r1["width"] == r2["width"], (
-            f"width changed between captures: {r1['width']} → {r2['width']}"
-        )
-        assert r1["height"] == r2["height"], (
-            f"height changed between captures: {r1['height']} → {r2['height']}"
-        )
+        assert r1["width"] == r2["width"], f"width changed between captures: {r1['width']} → {r2['width']}"
+        assert r1["height"] == r2["height"], f"height changed between captures: {r1['height']} → {r2['height']}"
 
     def test_capture_png_magic_bytes(self, capture):
         """base64 content decodes to a valid PNG (correct magic bytes)."""
         result = capture.capture()
         raw = _decode_b64_png(result["base64"])
-        assert raw[:8] == b"\x89PNG\r\n\x1a\n", (
-            "Decoded bytes don't start with PNG magic — not a PNG file"
-        )
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n", "Decoded bytes don't start with PNG magic — not a PNG file"
 
     def test_capture_png_dimensions_match_metadata(self, capture):
         """PNG header dimensions match the width/height fields in the dict."""
         result = capture.capture()
         png_w, png_h = _png_dimensions(result["base64"])
-        assert png_w == result["width"], (
-            f"PNG header width {png_w} != metadata width {result['width']}"
-        )
-        assert png_h == result["height"], (
-            f"PNG header height {png_h} != metadata height {result['height']}"
-        )
+        assert png_w == result["width"], f"PNG header width {png_w} != metadata width {result['width']}"
+        assert png_h == result["height"], f"PNG header height {png_h} != metadata height {result['height']}"
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +246,7 @@ class TestCGEventTaps:
     def _before_after(self, gesture_fn, settle: float = 0.8):
         """Helper: capture before, run gesture, settle, capture after."""
         from specterqa.ios.drivers.simulator.capture import ScreenCapture
+
         cap = ScreenCapture(device_id="booted", resize_width=1024)
         before = cap.capture()
         gesture_fn(before)
@@ -261,6 +257,7 @@ class TestCGEventTaps:
     def test_center_tap_registers(self):
         """Tap at center of screen changes the screenshot."""
         from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
         layer = InteractionLayer(device_id="booted")
 
         def _gesture(before):
@@ -277,6 +274,7 @@ class TestCGEventTaps:
     def test_bottom_tap_registers(self):
         """Tap at 92% height (tab bar area) changes the screenshot."""
         from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
         layer = InteractionLayer(device_id="booted")
 
         def _gesture(before):
@@ -292,6 +290,7 @@ class TestCGEventTaps:
     def test_top_tap_registers(self):
         """Tap at 8% height (status bar / search area) registers."""
         from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
         layer = InteractionLayer(device_id="booted")
 
         def _gesture(before):
@@ -307,6 +306,7 @@ class TestCGEventTaps:
     def test_scroll_registers(self):
         """Scroll gesture changes the screenshot."""
         from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
         layer = InteractionLayer(device_id="booted")
 
         def _gesture(before):
@@ -314,15 +314,17 @@ class TestCGEventTaps:
             cy = before["height"] // 2
             # Swipe up (scroll content down) from center
             layer.swipe(
-                cx, int(cy * 1.3),
-                cx, int(cy * 0.7),
-                before["width"], before["height"],
+                cx,
+                int(cy * 1.3),
+                cx,
+                int(cy * 0.7),
+                before["width"],
+                before["height"],
             )
 
         before, after = self._before_after(_gesture, settle=1.2)
         assert _screenshots_differ(before["base64"], after["base64"]), (
-            "Scroll gesture did NOT change the screenshot — "
-            "swipe may have landed outside the Simulator window"
+            "Scroll gesture did NOT change the screenshot — swipe may have landed outside the Simulator window"
         )
 
     def test_multiple_taps_sequential(self):
@@ -338,8 +340,8 @@ class TestCGEventTaps:
 
         # Three distinct tap positions
         positions = [
-            (w // 2, int(h * 0.2)),   # top-centre (search bar area)
-            (w // 2, int(h * 0.5)),   # centre
+            (w // 2, int(h * 0.2)),  # top-centre (search bar area)
+            (w // 2, int(h * 0.5)),  # centre
             (w // 2, int(h * 0.75)),  # lower-centre
         ]
 
@@ -462,13 +464,10 @@ class TestSimulatorDriverIntegration:
 
     def test_backend_selection(self, driver):
         """driver._backend_name is set after start()."""
-        assert driver._backend_name, (
-            "_backend_name is empty — backend selection may have failed silently"
-        )
+        assert driver._backend_name, "_backend_name is empty — backend selection may have failed silently"
         valid_names = {"XCTestBackend", "IndigoHIDBackend", "CGEventBackend", "InteractionLayer"}
         assert driver._backend_name in valid_names, (
-            f"Unexpected backend name: {driver._backend_name!r} "
-            f"(expected one of {valid_names})"
+            f"Unexpected backend name: {driver._backend_name!r} (expected one of {valid_names})"
         )
 
 
@@ -487,6 +486,7 @@ class TestBackendAvailability:
         time.sleep(1.5)
 
         from specterqa.ios.backends.cgevents import CGEventBackend
+
         available = CGEventBackend.is_available()
         assert available, (
             "CGEventBackend.is_available() returned False even though "
@@ -507,7 +507,9 @@ class TestBackendAvailability:
         try:
             result = subprocess.run(
                 ["xcodebuild", "-version"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             version_line = result.stdout.strip().splitlines()[0] if result.stdout else ""
             # e.g. "Xcode 16.2" or "Xcode 15.4"
@@ -520,6 +522,7 @@ class TestBackendAvailability:
             pytest.skip(f"Xcode {major} — IndigoHID may legitimately work here; skipping")
 
         from specterqa.ios.backends.indigo_hid import IndigoHIDBackend
+
         available = IndigoHIDBackend.is_available()
         assert not available, (
             "IndigoHIDBackend.is_available() returned True on Xcode 16+, "
@@ -533,7 +536,9 @@ class TestBackendAvailability:
         try:
             result = subprocess.run(
                 ["xcodebuild", "-version"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             version_line = result.stdout.strip().splitlines()[0] if result.stdout else ""
             parts = version_line.split()
@@ -548,6 +553,7 @@ class TestBackendAvailability:
         time.sleep(1.0)
 
         from specterqa.ios.backends.selector import BackendSelector
+
         selector = BackendSelector(udid="booted")
         backend = selector.get_backend()
         backend_name = type(backend).__name__
@@ -558,8 +564,7 @@ class TestBackendAvailability:
             "which would SIGTRAP.  is_available() fix did not propagate."
         )
         assert backend_name in ("CGEventBackend", "XCTestBackend"), (
-            f"Expected CGEventBackend or XCTestBackend on Xcode 16+, "
-            f"got {backend_name!r}"
+            f"Expected CGEventBackend or XCTestBackend on Xcode 16+, got {backend_name!r}"
         )
 
 
@@ -578,6 +583,7 @@ class TestCoordinateAccuracy:
         time.sleep(1.5)
 
         from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
         layer = InteractionLayer(device_id="booted")
 
         win = layer._get_simulator_window()
@@ -591,6 +597,7 @@ class TestCoordinateAccuracy:
         time.sleep(1.5)
 
         from specterqa.ios.drivers.simulator.interaction import InteractionLayer
+
         layer = InteractionLayer(device_id="booted")
 
         win = layer._get_simulator_window()
@@ -606,8 +613,7 @@ class TestCoordinateAccuracy:
         # Also ensure the raw value doesn't go negative (the v0.5.2 bug)
         assert expected_title_bar >= 0, "Title bar height is negative — coordinate math will be wrong"
         assert expected_title_bar <= 100, (
-            f"Title bar height {expected_title_bar} is unexpectedly large "
-            "(> 100px) — window geometry may be mis-parsed"
+            f"Title bar height {expected_title_bar} is unexpectedly large (> 100px) — window geometry may be mis-parsed"
         )
 
     def test_image_to_screen_returns_within_window(self):
@@ -633,13 +639,13 @@ class TestCoordinateAccuracy:
 
         # Test a grid of 9 image-space points
         test_points = [
-            (img_w // 2, img_h // 2),        # centre
-            (10, 10),                          # top-left corner
-            (img_w - 10, 10),                  # top-right corner
-            (10, img_h - 10),                  # bottom-left corner
-            (img_w - 10, img_h - 10),          # bottom-right corner
-            (img_w // 2, 10),                  # top-centre
-            (img_w // 2, img_h - 10),          # bottom-centre
+            (img_w // 2, img_h // 2),  # centre
+            (10, 10),  # top-left corner
+            (img_w - 10, 10),  # top-right corner
+            (10, img_h - 10),  # bottom-left corner
+            (img_w - 10, img_h - 10),  # bottom-right corner
+            (img_w // 2, 10),  # top-centre
+            (img_w // 2, img_h - 10),  # bottom-centre
         ]
 
         for ix, iy in test_points:
@@ -654,12 +660,10 @@ class TestCoordinateAccuracy:
             screen_y = win_y + title_bar + iy * scale_y
 
             assert win_x <= screen_x <= win_x + win_w, (
-                f"screen_x={screen_x:.1f} is outside window "
-                f"[{win_x}, {win_x + win_w}] for img_x={ix}"
+                f"screen_x={screen_x:.1f} is outside window [{win_x}, {win_x + win_w}] for img_x={ix}"
             )
             assert win_y <= screen_y <= win_y + win_h, (
-                f"screen_y={screen_y:.1f} is outside window "
-                f"[{win_y}, {win_y + win_h}] for img_y={iy}"
+                f"screen_y={screen_y:.1f} is outside window [{win_y}, {win_y + win_h}] for img_y={iy}"
             )
 
     def test_image_to_screen_center(self):
@@ -701,10 +705,8 @@ class TestCoordinateAccuracy:
         tol_y = content_h * 0.10
 
         assert abs(screen_cx - expected_cx) <= tol_x, (
-            f"Centre X mapping off: got {screen_cx:.1f}, expected ~{expected_cx:.1f} "
-            f"(tolerance {tol_x:.1f}px)"
+            f"Centre X mapping off: got {screen_cx:.1f}, expected ~{expected_cx:.1f} (tolerance {tol_x:.1f}px)"
         )
         assert abs(screen_cy - expected_cy) <= tol_y, (
-            f"Centre Y mapping off: got {screen_cy:.1f}, expected ~{expected_cy:.1f} "
-            f"(tolerance {tol_y:.1f}px)"
+            f"Centre Y mapping off: got {screen_cy:.1f}, expected ~{expected_cy:.1f} (tolerance {tol_y:.1f}px)"
         )

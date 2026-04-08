@@ -10,11 +10,7 @@ Module under test (to be created by CodeAtlas):
 
 from __future__ import annotations
 
-import dataclasses
 import time
-from dataclasses import dataclass, fields
-from typing import Callable
-from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.drivers.simulator.perf import PerfProfiler, PerfSnapshot  # type: ignore[import]
+
     _PERF_AVAILABLE = True
 except ImportError:
     _PERF_AVAILABLE = False
@@ -40,6 +37,7 @@ needs_perf = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 # Mock builder helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_subprocess_result(stdout: str = "", returncode: int = 0) -> MagicMock:
     """Build a mock subprocess.CompletedProcess result."""
@@ -64,7 +62,7 @@ PID\tStatus\tLabel
 890\t0\tcom.apple.springboard
 """
 
-PS_RSS_OUTPUT = "81920\n"    # 81920 KB == 80.0 MB
+PS_RSS_OUTPUT = "81920\n"  # 81920 KB == 80.0 MB
 PS_CPU_OUTPUT = "12.5\n"
 PS_THREADS_OUTPUT = "32\n"
 
@@ -152,11 +150,12 @@ class TestSnapshot:
         """snapshot() calls underlying metrics methods and populates a PerfSnapshot."""
         profiler = PerfProfiler(device_id="booted", bundle_id="com.example.testapp")
 
-        with patch.object(profiler, "_get_app_pid", return_value=5678), \
-             patch.object(profiler, "_get_memory", return_value=80.0), \
-             patch.object(profiler, "_get_cpu", return_value=12.5), \
-             patch.object(profiler, "_get_thread_count", return_value=32):
-
+        with (
+            patch.object(profiler, "_get_app_pid", return_value=5678),
+            patch.object(profiler, "_get_memory", return_value=80.0),
+            patch.object(profiler, "_get_cpu", return_value=12.5),
+            patch.object(profiler, "_get_thread_count", return_value=32),
+        ):
             snap = profiler.snapshot()
 
         assert isinstance(snap, PerfSnapshot)
@@ -193,8 +192,7 @@ class TestMeasureLaunchTime:
 
         # Patch whatever screenshot method PerfProfiler uses so it returns
         # a non-empty/non-black image immediately.
-        with patch.object(profiler, "_get_app_pid", return_value=5678), \
-             patch("subprocess.run") as mock_run:
+        with patch.object(profiler, "_get_app_pid", return_value=5678), patch("subprocess.run") as mock_run:
             # Simulate screenshot returning some non-blank output
             mock_run.return_value = _make_subprocess_result("screenshot_data")
             elapsed = profiler.measure_launch_time(launch_fn)
@@ -215,9 +213,25 @@ class TestSummary:
         # Inject a sequence of snapshots showing significant memory growth.
         now = time.time()
         snapshots = [
-            PerfSnapshot(memory_mb=100.0, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now - 20),
-            PerfSnapshot(memory_mb=110.0, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now - 10),
-            PerfSnapshot(memory_mb=125.0, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now),
+            PerfSnapshot(
+                memory_mb=100.0,
+                cpu_percent=5.0,
+                thread_count=20,
+                disk_usage_mb=50.0,
+                fps_estimate=60.0,
+                timestamp=now - 20,
+            ),
+            PerfSnapshot(
+                memory_mb=110.0,
+                cpu_percent=5.0,
+                thread_count=20,
+                disk_usage_mb=50.0,
+                fps_estimate=60.0,
+                timestamp=now - 10,
+            ),
+            PerfSnapshot(
+                memory_mb=125.0, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now
+            ),
         ]
         # Inject snapshots directly into the profiler's internal history
         profiler._snapshots = snapshots  # type: ignore[attr-defined]
@@ -233,9 +247,25 @@ class TestSummary:
 
         now = time.time()
         snapshots = [
-            PerfSnapshot(memory_mb=80.0, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now - 20),
-            PerfSnapshot(memory_mb=80.5, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now - 10),
-            PerfSnapshot(memory_mb=80.2, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now),
+            PerfSnapshot(
+                memory_mb=80.0,
+                cpu_percent=5.0,
+                thread_count=20,
+                disk_usage_mb=50.0,
+                fps_estimate=60.0,
+                timestamp=now - 20,
+            ),
+            PerfSnapshot(
+                memory_mb=80.5,
+                cpu_percent=5.0,
+                thread_count=20,
+                disk_usage_mb=50.0,
+                fps_estimate=60.0,
+                timestamp=now - 10,
+            ),
+            PerfSnapshot(
+                memory_mb=80.2, cpu_percent=5.0, thread_count=20, disk_usage_mb=50.0, fps_estimate=60.0, timestamp=now
+            ),
         ]
         profiler._snapshots = snapshots  # type: ignore[attr-defined]
 

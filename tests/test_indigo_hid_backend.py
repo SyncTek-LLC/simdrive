@@ -22,11 +22,10 @@ any private frameworks.
 
 from __future__ import annotations
 
-import ctypes
 import struct
 import threading
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -35,7 +34,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 try:
-    from specterqa.ios.backends.indigo_hid import (  # type: ignore[import]
+    from specterqa.ios.backends.indigo_hid import (  # type: ignore[import]  # noqa: F401
         IndigoHIDBackend,
         _build_indigo_message,
         _build_indigo_payload,
@@ -51,6 +50,7 @@ try:
         _sim_kit_path,
         _xcode_developer_path,
     )
+
     _INDIGO_AVAILABLE = True
 except ImportError:
     _INDIGO_AVAILABLE = False
@@ -303,6 +303,7 @@ class TestIndigoHIDBackendAvailability:
     def test_is_available_returns_false_when_framework_not_found(self):
         """is_available() returns False when LoadLibrary raises OSError."""
         import specterqa.ios.backends.indigo_hid as mod
+
         orig = mod._frameworks_loaded
         mod._frameworks_loaded = None
         try:
@@ -315,6 +316,7 @@ class TestIndigoHIDBackendAvailability:
     def test_graceful_error_when_xcode_not_installed(self):
         """is_available() returns False (not raises) when Xcode is absent."""
         import specterqa.ios.backends.indigo_hid as mod
+
         orig = mod._frameworks_loaded
         mod._frameworks_loaded = None
         try:
@@ -330,6 +332,7 @@ class TestIndigoHIDBackendAvailability:
     def test_framework_path_uses_xcode_select_dynamically(self):
         """The framework path is resolved via xcode-select, not hardcoded."""
         import specterqa.ios.backends.indigo_hid as mod
+
         orig = mod._frameworks_loaded
         mod._frameworks_loaded = None
         fake_dev_path = "/Applications/Xcode_15.app/Contents/Developer"
@@ -343,17 +346,19 @@ class TestIndigoHIDBackendAvailability:
             mock_sp = MagicMock()
             mock_sp.returncode = 0
             mock_sp.stdout = fake_dev_path
-            with patch("subprocess.run", return_value=mock_sp), \
-                 patch("ctypes.cdll.LoadLibrary", side_effect=_capture_load), \
-                 patch("os.path.exists", return_value=True):
+            with (
+                patch("subprocess.run", return_value=mock_sp),
+                patch("ctypes.cdll.LoadLibrary", side_effect=_capture_load),
+                patch("os.path.exists", return_value=True),
+            ):
                 IndigoHIDBackend.is_available()
         finally:
             mod._frameworks_loaded = orig
 
         if captured_paths:
-            assert any(
-                fake_dev_path in p or "Xcode_15" in p for p in captured_paths
-            ), f"Framework path does not incorporate xcode-select output.\nCaptured: {captured_paths}"
+            assert any(fake_dev_path in p or "Xcode_15" in p for p in captured_paths), (
+                f"Framework path does not incorporate xcode-select output.\nCaptured: {captured_paths}"
+            )
 
 
 # ===========================================================================
@@ -471,6 +476,7 @@ class TestIndigoHIDBackendLongPress:
     def test_long_press_holds_longer_than_tap(self):
         """long_press() default duration is 3.0s (longer than a normal tap)."""
         import inspect
+
         sig = inspect.signature(IndigoHIDBackend.long_press)
         default_duration = sig.parameters["duration"].default
         assert default_duration == 3.0
@@ -496,8 +502,7 @@ class TestIndigoHIDBackendScreenshot:
         mock_result.returncode = 0
         mock_result.stderr = ""
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("os.close"):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch("os.close"):
             backend = _make_backend(udid=_TEST_UDID)
             backend.screenshot(output_path="/tmp/test.png")
 
@@ -510,8 +515,7 @@ class TestIndigoHIDBackendScreenshot:
         mock_result.returncode = 0
         mock_result.stderr = ""
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("os.close"):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch("os.close"):
             backend = _make_backend(udid=_TEST_UDID)
             backend.screenshot(output_path="/tmp/test.png")
 
@@ -523,8 +527,7 @@ class TestIndigoHIDBackendScreenshot:
         mock_result.returncode = 1
         mock_result.stderr = "No booted device found"
 
-        with patch("subprocess.run", return_value=mock_result), \
-             pytest.raises(RuntimeError):
+        with patch("subprocess.run", return_value=mock_result), pytest.raises(RuntimeError):
             _make_backend().screenshot(output_path="/tmp/test.png")
 
 
@@ -542,8 +545,7 @@ class TestIndigoHIDBackendBooted:
         mock_result.returncode = 0
         mock_result.stderr = ""
 
-        with patch("subprocess.run", return_value=mock_result) as mock_run, \
-             patch("os.close"):
+        with patch("subprocess.run", return_value=mock_result) as mock_run, patch("os.close"):
             backend = _make_backend(udid=_BOOTED)
             backend.screenshot(output_path="/tmp/test.png")
 
@@ -610,19 +612,13 @@ class TestIndigoHIDBackendThreadSafety:
         # Stub out _send so threads don't need real frameworks
         backend._send = lambda et, x, y, pressure=1.0: None
 
-        threads = [
-            threading.Thread(target=_tap_worker, args=(backend, i))
-            for i in range(10)
-        ]
+        threads = [threading.Thread(target=_tap_worker, args=(backend, i)) for i in range(10)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=5.0)
 
-        assert not errors, (
-            f"Thread safety violation — {len(errors)} error(s):\n"
-            + "\n".join(str(e) for e in errors)
-        )
+        assert not errors, f"Thread safety violation — {len(errors)} error(s):\n" + "\n".join(str(e) for e in errors)
 
 
 # ===========================================================================

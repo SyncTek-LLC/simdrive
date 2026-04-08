@@ -10,11 +10,8 @@ Run:
 from __future__ import annotations
 
 import threading
-import time
 import os
-import tempfile
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,6 +25,7 @@ import pytest
 def _fresh_server_state():
     """Reset all MCP server globals to a pristine no-session state."""
     import specterqa.ios.mcp.server as srv
+
     srv._backend = None
     srv._session = None
     srv._last_elements = []
@@ -38,6 +36,7 @@ def _fresh_server_state():
 def _active_server_state(elements=None):
     """Set module globals to a fake active session with optional elements."""
     import specterqa.ios.mcp.server as srv
+
     srv._backend = MagicMock()
     srv._session = MagicMock()
     srv._last_elements = elements or []
@@ -148,7 +147,6 @@ class TestMalformedInputs:
 
     def test_swipe_with_empty_direction_defaults_gracefully(self):
         """Empty direction should default to 'down' or return an error — never crash."""
-        import specterqa.ios.mcp.server as srv
         from specterqa.ios.mcp.server import handle_swipe
 
         _active_server_state()
@@ -315,7 +313,7 @@ class TestMalformedInputs:
         srv._recorder = recorder
         srv._last_elements = []
 
-        with patch.object(recorder, "save", return_value=tmp_path / "replay.yaml") as mock_save:
+        with patch.object(recorder, "save", return_value=tmp_path / "replay.yaml"):
             result = srv.handle_save_replay({"name": ""})
             # Should use "replay" as default name
             assert "error" not in result or True  # save may fail due to path — acceptable
@@ -359,6 +357,7 @@ class TestSessionStateRaces:
         """Multiple threads calling handle_tap simultaneously must not raise."""
         _active_server_state(elements=[_make_mock_element("Btn", index=1)])
         import specterqa.ios.mcp.server as srv
+
         srv._backend.tap = MagicMock()
 
         from specterqa.ios.mcp.server import handle_tap
@@ -457,11 +456,7 @@ class TestReplayMalformed:
     def test_replay_with_null_step_value(self, tmp_path):
         """A null step in the list must not crash player construction."""
         bad = tmp_path / "null_step.yaml"
-        bad.write_text(
-            "replay:\n  name: test\n  bundle_id: com.test\n  steps:\n"
-            "    - null\n"
-            "    - tapOn: \"OK\"\n"
-        )
+        bad.write_text('replay:\n  name: test\n  bundle_id: com.test\n  steps:\n    - null\n    - tapOn: "OK"\n')
         from specterqa.ios.replay import ReplayPlayer
 
         try:
@@ -486,7 +481,7 @@ class TestReplayMalformed:
         from specterqa.ios.replay import ReplayPlayer
 
         try:
-            player = ReplayPlayer(str(bad))
+            ReplayPlayer(str(bad))
             # steps will be the string "not_a_list" — iteration will likely fail
         except Exception:
             pass  # Acceptable
@@ -539,7 +534,8 @@ class TestResourceExhaustion:
 
     def test_screenshot_diff_large_images(self):
         """screenshot_diff must not OOM on large images."""
-        import base64, io
+        import base64
+        import io
         from PIL import Image
         from specterqa.ios.replay import screenshot_diff
 
@@ -733,9 +729,7 @@ class TestReplayPlayerSkipTo:
         from specterqa.ios.replay import ReplayPlayer
 
         f = tmp_path / "test.yaml"
-        f.write_text(
-            f"replay:\n  name: test\n  bundle_id: com.test\n  steps:\n{steps_yaml}"
-        )
+        f.write_text(f"replay:\n  name: test\n  bundle_id: com.test\n  steps:\n{steps_yaml}")
         return ReplayPlayer(str(f))
 
     def test_skip_to_forward_step_loaded(self, tmp_path):
@@ -830,8 +824,10 @@ class TestScreenshotHandler:
         _active_server_state()
         # Patch _get_annotated_screenshot to avoid real simulator
         mock_elements = [_make_mock_element("OK")]
-        import base64, io
+        import base64
+        import io
         from PIL import Image
+
         img = Image.new("RGB", (100, 100), "white")
         buf = io.BytesIO()
         img.save(buf, format="PNG")

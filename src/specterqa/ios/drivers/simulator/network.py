@@ -12,13 +12,14 @@ from __future__ import annotations
 import re
 import time
 import threading
-from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
 # NetworkRequest
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class NetworkRequest:
@@ -65,9 +66,7 @@ class NetworkRequest:
     @property
     def is_auth(self) -> bool:
         """True when the URL contains auth-related path segments (case-insensitive)."""
-        return bool(
-            re.search(r"(?i)(oauth|token|authenticate|authorize)", self.url)
-        )
+        return bool(re.search(r"(?i)(oauth|token|authenticate|authorize)", self.url))
 
     @property
     def is_failed(self) -> bool:
@@ -82,6 +81,7 @@ class NetworkRequest:
 # ---------------------------------------------------------------------------
 # NetworkInspector
 # ---------------------------------------------------------------------------
+
 
 class NetworkInspector:
     """Tracks network requests made by an app running in the iOS Simulator.
@@ -275,6 +275,7 @@ class NetworkInspector:
             The original is not mutated.
         """
         import dataclasses
+
         redacted_req_headers = self._redactor.redact_dict(req.request_headers)
         redacted_resp_headers = self._redactor.redact_dict(req.response_headers)
         redacted_url = self._redactor.redact(req.url)

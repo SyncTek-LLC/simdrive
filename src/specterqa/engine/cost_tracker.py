@@ -129,9 +129,7 @@ class CostTracker:
 
         if self._per_run_usd > 0 and self._total_cost > self._per_run_usd:
             self._budget_exceeded = True
-            raise BudgetExceededError(
-                f"Run budget exceeded: ${self._total_cost:.4f} > ${self._per_run_usd:.2f} limit"
-            )
+            raise BudgetExceededError(f"Run budget exceeded: ${self._total_cost:.4f} > ${self._per_run_usd:.2f} limit")
 
         return call
 
@@ -321,9 +319,11 @@ class CostTracker:
 
 class BudgetExceededError(Exception):
     """Raised when a run exceeds its per-run cost budget."""
+
     pass
 
 
 class CumulativeBudgetExceededError(Exception):
     """Raised when cumulative daily or monthly costs exceed their caps."""
+
     pass

@@ -19,8 +19,7 @@ from __future__ import annotations
 import base64
 import io
 import json
-import subprocess
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image
@@ -85,6 +84,7 @@ class TestIsAvailable:
 
     def test_returns_false_on_timeout(self):
         import socket
+
         with patch("urllib.request.urlopen", side_effect=socket.timeout):
             assert WDADriver.is_available() is False
 
@@ -151,6 +151,7 @@ class TestRequest:
 
     def test_raises_wda_error_on_http_error(self):
         import urllib.error
+
         d = WDADriver()
         exc = urllib.error.HTTPError(
             url="http://localhost:8100/session",
@@ -165,6 +166,7 @@ class TestRequest:
 
     def test_raises_wda_error_on_url_error(self):
         import urllib.error
+
         d = WDADriver()
         with patch(
             "urllib.request.urlopen",
@@ -222,6 +224,7 @@ class TestCreateSession:
 
     def test_fallback_dimensions_on_size_error(self):
         import urllib.error
+
         d = WDADriver()
         session_resp = _urlopen_response({"sessionId": "s1"})
         size_exc = urllib.error.URLError("timeout")
@@ -315,7 +318,7 @@ class TestTap:
             with patch("time.sleep"):
                 d.tap(100, 200)
         url = mock_open.call_args[0][0].full_url
-        assert f"/session/test-session-abc/actions" in url
+        assert "/session/test-session-abc/actions" in url
 
 
 # ---------------------------------------------------------------------------
@@ -644,12 +647,14 @@ class TestExecute:
         wda_resp = _urlopen_response({"value": None})
         with patch("urllib.request.urlopen", return_value=wda_resp):
             with patch("time.sleep"):
-                result = d.execute({
-                    "action": "scroll",
-                    "coordinate": [512, 1113],
-                    "direction": "down",
-                    "amount": 3,
-                })
+                result = d.execute(
+                    {
+                        "action": "scroll",
+                        "coordinate": [512, 1113],
+                        "direction": "down",
+                        "amount": 3,
+                    }
+                )
         assert "down" in result["text"]
 
     def test_scroll_up(self, tmp_path):
@@ -657,11 +662,13 @@ class TestExecute:
         wda_resp = _urlopen_response({"value": None})
         with patch("urllib.request.urlopen", return_value=wda_resp):
             with patch("time.sleep"):
-                result = d.execute({
-                    "action": "scroll",
-                    "direction": "up",
-                    "amount": 2,
-                })
+                result = d.execute(
+                    {
+                        "action": "scroll",
+                        "direction": "up",
+                        "amount": 2,
+                    }
+                )
         assert "up" in result["text"]
 
     def test_scroll_left_right(self, tmp_path):
@@ -678,11 +685,13 @@ class TestExecute:
         wda_resp = _urlopen_response({"value": None})
         with patch("urllib.request.urlopen", return_value=wda_resp):
             with patch("time.sleep"):
-                result = d.execute({
-                    "action": "left_click_drag",
-                    "start_coordinate": [100, 100],
-                    "coordinate": [400, 400],
-                })
+                result = d.execute(
+                    {
+                        "action": "left_click_drag",
+                        "start_coordinate": [100, 100],
+                        "coordinate": [400, 400],
+                    }
+                )
         assert "Dragged" in result["text"]
 
     def test_wait_action(self, tmp_path):
@@ -718,6 +727,7 @@ class TestLaunchApp:
     def test_falls_back_to_simctl_on_wda_error(self):
         d = _make_driver()
         import urllib.error
+
         wda_exc = urllib.error.URLError("refused")
         simctl_result = MagicMock(returncode=0)
         with patch("urllib.request.urlopen", side_effect=wda_exc):
@@ -746,17 +756,19 @@ class TestLaunchApp:
 class TestDeviceInfo:
     def test_returns_booted_device(self):
         d = WDADriver()
-        simctl_out = json.dumps({
-            "devices": {
-                "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
-                    {
-                        "udid": "AABBCCDD-1234-5678-ABCD-000000000001",
-                        "name": "iPhone 16 Pro",
-                        "state": "Booted",
-                    }
-                ]
+        simctl_out = json.dumps(
+            {
+                "devices": {
+                    "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
+                        {
+                            "udid": "AABBCCDD-1234-5678-ABCD-000000000001",
+                            "name": "iPhone 16 Pro",
+                            "state": "Booted",
+                        }
+                    ]
+                }
             }
-        })
+        )
         mock_result = MagicMock(returncode=0, stdout=simctl_out)
         with patch("subprocess.run", return_value=mock_result):
             info = d.device_info()
@@ -765,13 +777,9 @@ class TestDeviceInfo:
 
     def test_resolves_booted_udid(self):
         d = WDADriver(udid="booted")
-        simctl_out = json.dumps({
-            "devices": {
-                "runtime": [
-                    {"udid": "REAL-UDID-XYZ", "name": "iPhone 15", "state": "Booted"}
-                ]
-            }
-        })
+        simctl_out = json.dumps(
+            {"devices": {"runtime": [{"udid": "REAL-UDID-XYZ", "name": "iPhone 15", "state": "Booted"}]}}
+        )
         with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=simctl_out)):
             d.device_info()
         assert d.udid == "REAL-UDID-XYZ"

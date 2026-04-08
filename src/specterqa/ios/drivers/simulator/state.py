@@ -6,7 +6,6 @@ and produces a composite state snapshot. All keychain values are redacted.
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -40,8 +39,12 @@ class StateInspector:
         """
         result = subprocess.run(
             [
-                "xcrun", "simctl", "get_app_container",
-                self.device_id, self.bundle_id, "data",
+                "xcrun",
+                "simctl",
+                "get_app_container",
+                self.device_id,
+                self.bundle_id,
+                "data",
             ],
             capture_output=True,
             text=True,
@@ -67,8 +70,13 @@ class StateInspector:
         """
         result = subprocess.run(
             [
-                "xcrun", "simctl", "spawn", self.device_id,
-                "defaults", "read", self.bundle_id,
+                "xcrun",
+                "simctl",
+                "spawn",
+                self.device_id,
+                "defaults",
+                "read",
+                self.bundle_id,
             ],
             capture_output=True,
             text=True,
@@ -97,9 +105,7 @@ class StateInspector:
         if not container:
             return {}
 
-        plist_path = (
-            Path(container) / "Library" / "Preferences" / f"{self.bundle_id}.plist"
-        )
+        plist_path = Path(container) / "Library" / "Preferences" / f"{self.bundle_id}.plist"
         if not plist_path.exists():
             return {}
 
@@ -137,8 +143,14 @@ class StateInspector:
         """
         result = subprocess.run(
             [
-                "xcrun", "simctl", "spawn", self.device_id,
-                "defaults", "read", self.bundle_id, key,
+                "xcrun",
+                "simctl",
+                "spawn",
+                self.device_id,
+                "defaults",
+                "read",
+                self.bundle_id,
+                key,
             ],
             capture_output=True,
             text=True,
@@ -155,8 +167,15 @@ class StateInspector:
         """
         subprocess.run(
             [
-                "xcrun", "simctl", "spawn", self.device_id,
-                "defaults", "write", self.bundle_id, key, str(value),
+                "xcrun",
+                "simctl",
+                "spawn",
+                self.device_id,
+                "defaults",
+                "write",
+                self.bundle_id,
+                key,
+                str(value),
             ],
             capture_output=True,
             text=True,

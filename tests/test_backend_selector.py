@@ -11,7 +11,7 @@ Module under test (to be created by CodeAtlas):
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -21,6 +21,7 @@ import pytest
 
 try:
     from specterqa.ios.backends.selector import BackendSelector  # type: ignore[import]
+
     _SELECTOR_AVAILABLE = True
 except ImportError:
     _SELECTOR_AVAILABLE = False
@@ -81,18 +82,14 @@ class TestBackendSelectorAutoSelection:
         indigo_class = _make_mock_backend_class(is_available=True)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector()
             backend = selector.get_backend()
 
         # XCTest should win — it has the highest priority
         xctest_class.assert_called(), "XCTestBackend was not instantiated"
         # Verify we got back an instance of the xctest mock
-        assert backend is xctest_class.return_value, (
-            "get_backend() did not return the XCTestBackend instance"
-        )
+        assert backend is xctest_class.return_value, "get_backend() did not return the XCTestBackend instance"
 
     def test_selects_indigo_when_xctest_unavailable(self):
         """get_backend() falls back to IndigoHIDBackend when XCTest is unavailable."""
@@ -100,9 +97,7 @@ class TestBackendSelectorAutoSelection:
         indigo_class = _make_mock_backend_class(is_available=True)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector()
             backend = selector.get_backend()
 
@@ -116,9 +111,7 @@ class TestBackendSelectorAutoSelection:
         indigo_class = _make_mock_backend_class(is_available=False)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector()
             backend = selector.get_backend()
 
@@ -142,15 +135,11 @@ class TestBackendSelectorPreferred:
         indigo_class = _make_mock_backend_class(is_available=True)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector(preferred="xctest")
             backend = selector.get_backend()
 
-        assert backend is xctest_class.return_value, (
-            "preferred='xctest' must select XCTestBackend"
-        )
+        assert backend is xctest_class.return_value, "preferred='xctest' must select XCTestBackend"
 
     def test_preferred_indigo_forces_indigo(self):
         """preferred='indigo' selects IndigoHIDBackend even if XCTest is available."""
@@ -158,15 +147,11 @@ class TestBackendSelectorPreferred:
         indigo_class = _make_mock_backend_class(is_available=True)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector(preferred="indigo")
             backend = selector.get_backend()
 
-        assert backend is indigo_class.return_value, (
-            "preferred='indigo' must select IndigoHIDBackend"
-        )
+        assert backend is indigo_class.return_value, "preferred='indigo' must select IndigoHIDBackend"
 
     def test_preferred_cgevents_forces_cgevents(self):
         """preferred='cgevents' selects CGEventBackend regardless of availability."""
@@ -174,15 +159,11 @@ class TestBackendSelectorPreferred:
         indigo_class = _make_mock_backend_class(is_available=True)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector(preferred="cgevents")
             backend = selector.get_backend()
 
-        assert backend is cgevent_class.return_value, (
-            "preferred='cgevents' must select CGEventBackend"
-        )
+        assert backend is cgevent_class.return_value, "preferred='cgevents' must select CGEventBackend"
 
 
 # ===========================================================================
@@ -197,9 +178,11 @@ class TestBackendSelectorInterface:
     def test_returned_backend_has_tap(self):
         """get_backend() result has a callable tap() method."""
         xctest_class = _make_mock_backend_class(is_available=True)
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)), \
-             patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)):
+        with (
+            patch(_XCTEST_PATH, xctest_class),
+            patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)),
+            patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)),
+        ):
             selector = _make_selector()
             backend = selector.get_backend()
         assert callable(getattr(backend, "tap", None)), "Backend must expose tap()"
@@ -207,9 +190,11 @@ class TestBackendSelectorInterface:
     def test_returned_backend_has_swipe(self):
         """get_backend() result has a callable swipe() method."""
         xctest_class = _make_mock_backend_class(is_available=True)
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)), \
-             patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)):
+        with (
+            patch(_XCTEST_PATH, xctest_class),
+            patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)),
+            patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)),
+        ):
             selector = _make_selector()
             backend = selector.get_backend()
         assert callable(getattr(backend, "swipe", None)), "Backend must expose swipe()"
@@ -217,9 +202,11 @@ class TestBackendSelectorInterface:
     def test_returned_backend_has_type_text(self):
         """get_backend() result has a callable type_text() method."""
         xctest_class = _make_mock_backend_class(is_available=True)
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)), \
-             patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)):
+        with (
+            patch(_XCTEST_PATH, xctest_class),
+            patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)),
+            patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)),
+        ):
             selector = _make_selector()
             backend = selector.get_backend()
         assert callable(getattr(backend, "type_text", None)), "Backend must expose type_text()"
@@ -227,9 +214,11 @@ class TestBackendSelectorInterface:
     def test_returned_backend_has_screenshot(self):
         """get_backend() result has a callable screenshot() method."""
         xctest_class = _make_mock_backend_class(is_available=True)
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)), \
-             patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)):
+        with (
+            patch(_XCTEST_PATH, xctest_class),
+            patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)),
+            patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)),
+        ):
             selector = _make_selector()
             backend = selector.get_backend()
         assert callable(getattr(backend, "screenshot", None)), "Backend must expose screenshot()"
@@ -248,17 +237,17 @@ class TestBackendSelectorLogging:
         """Selecting a backend emits at least one INFO-level log message."""
         xctest_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)), \
-             patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)):
+        with (
+            patch(_XCTEST_PATH, xctest_class),
+            patch(_INDIGO_PATH, _make_mock_backend_class(is_available=False)),
+            patch(_CGEVENTS_PATH, _make_mock_backend_class(is_available=False)),
+        ):
             with caplog.at_level(logging.INFO):
                 selector = _make_selector()
                 selector.get_backend()
 
         info_records = [r for r in caplog.records if r.levelno >= logging.INFO]
-        assert info_records, (
-            "BackendSelector must log at INFO level when selecting a backend"
-        )
+        assert info_records, "BackendSelector must log at INFO level when selecting a backend"
 
 
 # ===========================================================================
@@ -277,9 +266,7 @@ class TestBackendSelectorDynamicAvailability:
         indigo_class = _make_mock_backend_class(is_available=True)
         cgevent_class = _make_mock_backend_class(is_available=False)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector()
 
             # First call — XCTest down, should get IndigoHID
@@ -313,15 +300,11 @@ class TestBackendSelectorAvailableList:
         indigo_class = _make_mock_backend_class(is_available=False)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector()
             result = selector.available_backends()
 
-        assert isinstance(result, list), (
-            f"available_backends() must return a list, got {type(result)}"
-        )
+        assert isinstance(result, list), f"available_backends() must return a list, got {type(result)}"
 
     def test_available_backends_contains_available_names(self):
         """available_backends() includes names of backends that report is_available=True."""
@@ -329,9 +312,7 @@ class TestBackendSelectorAvailableList:
         indigo_class = _make_mock_backend_class(is_available=False)
         cgevent_class = _make_mock_backend_class(is_available=True)
 
-        with patch(_XCTEST_PATH, xctest_class), \
-             patch(_INDIGO_PATH, indigo_class), \
-             patch(_CGEVENTS_PATH, cgevent_class):
+        with patch(_XCTEST_PATH, xctest_class), patch(_INDIGO_PATH, indigo_class), patch(_CGEVENTS_PATH, cgevent_class):
             selector = _make_selector()
             names = selector.available_backends()
 
