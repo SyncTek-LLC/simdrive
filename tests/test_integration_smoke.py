@@ -162,37 +162,37 @@ class TestMaestroExampleParses:
             pytest.skip(f"Example not found: {path}")
         return ReplayPlayer(str(p))
 
-    def test_smoke_test_example_loads(self):
-        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/01-smoke-test.yaml")
+    def test_smoke_test_example_loads(self, fresh_install):
+        player = self._load_if_exists(str(fresh_install / "examples" / "01-smoke-test.yaml"))
         assert player.name
         assert len(player.steps) > 0
 
-    def test_form_with_waits_example_loads(self):
-        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/02-form-with-waits.yaml")
+    def test_form_with_waits_example_loads(self, fresh_install):
+        player = self._load_if_exists(str(fresh_install / "examples" / "02-form-with-waits.yaml"))
         assert len(player.steps) > 0
 
-    def test_conditional_branching_example_loads(self):
-        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/03-conditional-branching.yaml")
+    def test_conditional_branching_example_loads(self, fresh_install):
+        player = self._load_if_exists(str(fresh_install / "examples" / "03-conditional-branching.yaml"))
         assert player.bundle_id
 
-    def test_visual_regression_example_loads(self):
-        player = self._load_if_exists("/tmp/specterqa-ios-fresh/examples/04-visual-regression.yaml")
+    def test_visual_regression_example_loads(self, fresh_install):
+        player = self._load_if_exists(str(fresh_install / "examples" / "04-visual-regression.yaml"))
         assert player.bundle_id
 
-    def test_all_examples_have_bundle_id(self):
+    def test_all_examples_have_bundle_id(self, fresh_install):
         """Every example file must declare a bundle_id."""
         from specterqa.ios.replay import ReplayPlayer
 
-        examples_dir = Path("/tmp/specterqa-ios-fresh/examples")
+        examples_dir = fresh_install / "examples"
         for example in sorted(examples_dir.glob("*.yaml")):
             player = ReplayPlayer(str(example))
             assert player.bundle_id, f"{example.name} missing bundle_id"
 
-    def test_all_examples_have_at_least_one_step(self):
+    def test_all_examples_have_at_least_one_step(self, fresh_install):
         """Every example file must have at least one step."""
         from specterqa.ios.replay import ReplayPlayer
 
-        examples_dir = Path("/tmp/specterqa-ios-fresh/examples")
+        examples_dir = fresh_install / "examples"
         for example in sorted(examples_dir.glob("*.yaml")):
             player = ReplayPlayer(str(example))
             assert len(player.steps) > 0, f"{example.name} has no steps"
@@ -206,11 +206,19 @@ class TestMaestroExampleParses:
 class TestMCPServerProtocol:
     """Verify MCP protocol works end-to-end via stdio."""
 
-    def _exchange(self, messages: list[str], timeout: float = 5.0) -> list[dict]:
+    def _exchange(
+        self, messages: list[str], timeout: float = 5.0, cwd: "str | None" = None
+    ) -> list[dict]:
         """Start MCP server, send *messages*, collect JSON responses, kill.
 
         Polls until *timeout* seconds have elapsed (absolute deadline), so
         the server has time to start up before the first response arrives.
+
+        Args:
+            messages: JSON-RPC message strings to send.
+            timeout: Deadline in seconds.
+            cwd: Working directory for the MCP server process. Defaults to
+                the repo root so ``specterqa.ios.mcp`` is importable.
         """
         import time
 
@@ -220,7 +228,7 @@ class TestMCPServerProtocol:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            cwd="/tmp/specterqa-ios-fresh",
+            cwd=cwd,
         )
         try:
             for msg in messages:
@@ -254,9 +262,9 @@ class TestMCPServerProtocol:
             '{"jsonrpc":"2.0","method":"notifications/initialized"}',
         ]
 
-    def test_tools_list_returns_19_tools(self):
+    def test_tools_list_returns_19_tools(self, fresh_install):
         msgs = self._init_msgs() + ['{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}']
-        responses = self._exchange(msgs)
+        responses = self._exchange(msgs, cwd=str(fresh_install))
 
         tool_count = 0
         for msg in responses:
@@ -266,10 +274,10 @@ class TestMCPServerProtocol:
 
         assert tool_count >= 19, f"Expected >=19 tools, got {tool_count}"
 
-    def test_tools_list_includes_core_tools(self):
+    def test_tools_list_includes_core_tools(self, fresh_install):
         """Key tools required for the test framework must be present."""
         msgs = self._init_msgs() + ['{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}']
-        responses = self._exchange(msgs)
+        responses = self._exchange(msgs, cwd=str(fresh_install))
 
         tool_names = set()
         for msg in responses:
@@ -290,21 +298,21 @@ class TestMCPServerProtocol:
         missing = required - tool_names
         assert not missing, f"MCP server missing required tools: {missing}"
 
-    def test_initialize_returns_protocol_version(self):
+    def test_initialize_returns_protocol_version(self, fresh_install):
         """Server must echo back a protocolVersion in its initialize result."""
         msgs = [
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}'
         ]
-        responses = self._exchange(msgs, timeout=5.0)
+        responses = self._exchange(msgs, timeout=5.0, cwd=str(fresh_install))
 
         init_resp = next((r for r in responses if r.get("id") == 1 and "result" in r), None)
         assert init_resp is not None, "No initialize response received"
         assert "protocolVersion" in init_resp["result"]
 
-    def test_unknown_method_returns_error(self):
+    def test_unknown_method_returns_error(self, fresh_install):
         """Calling a non-existent method should return a JSON-RPC error."""
         msgs = self._init_msgs() + ['{"jsonrpc":"2.0","id":99,"method":"no_such_method","params":{}}']
-        responses = self._exchange(msgs)
+        responses = self._exchange(msgs, cwd=str(fresh_install))
 
         error_resp = next((r for r in responses if r.get("id") == 99), None)
         # Server must respond (either error or empty result — not silence)
@@ -429,12 +437,12 @@ class TestCIJSONOutput:
 class TestValidatorWithExamples:
     """Validate all shipped example files pass the validate-replay command."""
 
-    def test_all_examples_validate_clean(self):
+    def test_all_examples_validate_clean(self, fresh_install):
         from click.testing import CliRunner
 
         from specterqa.ios.cli.commands import ios_command_group
 
-        examples_dir = Path("/tmp/specterqa-ios-fresh/examples")
+        examples_dir = fresh_install / "examples"
         runner = CliRunner()
 
         failures = []
@@ -485,35 +493,35 @@ class TestValidatorWithExamples:
 class TestPyPIPackageStructure:
     """Verify the package metadata and build configuration are correct."""
 
-    def test_pyproject_has_correct_version(self):
-        pyproject = Path("/tmp/specterqa-ios-fresh/pyproject.toml").read_text()
+    def test_pyproject_has_correct_version(self, fresh_install):
+        pyproject = (fresh_install / "pyproject.toml").read_text()
         match = re.search(r'version\s*=\s*"([^"]+)"', pyproject)
         assert match, "version field not found in pyproject.toml"
         version = match.group(1)
         assert version.startswith("11."), f"Expected v11.x, got {version}"
 
-    def test_console_script_entry_points(self):
-        pyproject = Path("/tmp/specterqa-ios-fresh/pyproject.toml").read_text()
+    def test_console_script_entry_points(self, fresh_install):
+        pyproject = (fresh_install / "pyproject.toml").read_text()
         assert "specterqa-ios" in pyproject, "specterqa-ios entry point missing"
         assert "specterqa-ios-mcp" in pyproject, "specterqa-ios-mcp entry point missing"
 
-    def test_pyproject_has_build_backend(self):
+    def test_pyproject_has_build_backend(self, fresh_install):
         """pyproject.toml must declare a PEP 517 build backend."""
-        pyproject = Path("/tmp/specterqa-ios-fresh/pyproject.toml").read_text()
+        pyproject = (fresh_install / "pyproject.toml").read_text()
         assert "build-backend" in pyproject
 
-    def test_pyproject_declares_python_requires(self):
+    def test_pyproject_declares_python_requires(self, fresh_install):
         """Minimum Python version constraint must be present."""
-        pyproject = Path("/tmp/specterqa-ios-fresh/pyproject.toml").read_text()
+        pyproject = (fresh_install / "pyproject.toml").read_text()
         assert "requires-python" in pyproject
 
-    def test_license_file_exists(self):
-        license_file = Path("/tmp/specterqa-ios-fresh/LICENSE")
+    def test_license_file_exists(self, fresh_install):
+        license_file = fresh_install / "LICENSE"
         assert license_file.exists(), "LICENSE file missing"
         assert license_file.stat().st_size > 0, "LICENSE file is empty"
 
-    def test_readme_exists(self):
-        readme = Path("/tmp/specterqa-ios-fresh/README.md")
+    def test_readme_exists(self, fresh_install):
+        readme = fresh_install / "README.md"
         assert readme.exists(), "README.md missing"
 
 
@@ -525,29 +533,29 @@ class TestPyPIPackageStructure:
 class TestRunnerSourcesShipped:
     """Verify Swift runner sources are included in the distribution."""
 
-    def test_manifest_includes_runner(self):
-        manifest = Path("/tmp/specterqa-ios-fresh/MANIFEST.in")
+    def test_manifest_includes_runner(self, fresh_install):
+        manifest = fresh_install / "MANIFEST.in"
         if not manifest.exists():
             pytest.skip("MANIFEST.in not present")
         content = manifest.read_text()
         assert "runner" in content, "MANIFEST.in does not include runner sources"
 
-    def test_swift_files_exist(self):
-        runner_dir = Path("/tmp/specterqa-ios-fresh/runner/Sources")
+    def test_swift_files_exist(self, fresh_install):
+        runner_dir = fresh_install / "runner" / "Sources"
         assert runner_dir.exists(), "runner/Sources directory missing"
         swift_files = list(runner_dir.glob("*.swift"))
         assert len(swift_files) >= 5, f"Expected >=5 Swift source files, found {len(swift_files)}: " + ", ".join(
             f.name for f in swift_files
         )
 
-    def test_runner_package_swift_exists(self):
+    def test_runner_package_swift_exists(self, fresh_install):
         """Package.swift must exist for the Swift runner target."""
-        pkg = Path("/tmp/specterqa-ios-fresh/runner/Package.swift")
+        pkg = fresh_install / "runner" / "Package.swift"
         assert pkg.exists(), "runner/Package.swift missing"
 
-    def test_core_swift_source_files_present(self):
+    def test_core_swift_source_files_present(self, fresh_install):
         """Key Swift source files must be present by name."""
-        runner_dir = Path("/tmp/specterqa-ios-fresh/runner/Sources")
+        runner_dir = fresh_install / "runner" / "Sources"
         present = {f.name for f in runner_dir.glob("*.swift")}
 
         expected = {
@@ -558,9 +566,9 @@ class TestRunnerSourcesShipped:
         missing = expected - present
         assert not missing, f"Missing Swift sources: {missing}"
 
-    def test_runner_sources_are_non_empty(self):
+    def test_runner_sources_are_non_empty(self, fresh_install):
         """Every Swift source file must have content (not empty stubs)."""
-        runner_dir = Path("/tmp/specterqa-ios-fresh/runner/Sources")
+        runner_dir = fresh_install / "runner" / "Sources"
         for swift_file in runner_dir.glob("*.swift"):
             assert swift_file.stat().st_size > 0, f"{swift_file.name} is empty"
 
