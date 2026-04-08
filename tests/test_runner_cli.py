@@ -69,7 +69,7 @@ _RUNNER_PROJECT = "runner/SpecterQARunner.xcodeproj"
 
 def _invoke(*args, env=None, **kwargs):
     """Invoke ios_command_group with the given args, optionally overriding env."""
-    cli_runner = CliRunner(mix_stderr=False)
+    cli_runner = CliRunner()
     with cli_runner.isolated_filesystem():
         result = cli_runner.invoke(
             ios_command_group,
@@ -133,7 +133,7 @@ class TestRunnerBuildCommand:
     def test_build_exits_nonzero_on_failure(self):
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=65, stdout="", stderr="xcodebuild: error")
-            result = CliRunner(mix_stderr=False).invoke(ios_command_group, ["runner", "build"], catch_exceptions=True)
+            result = CliRunner().invoke(ios_command_group, ["runner", "build"], catch_exceptions=True)
         assert result.exit_code != 0, "Expected non-zero exit when xcodebuild fails"
 
     def test_build_prints_progress_message(self):
