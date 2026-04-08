@@ -210,12 +210,12 @@ class TestSession:
         """
         try:
             self._start()
-        except Exception:
+        except Exception:  # noqa: BLE001 — all errors from _start() must trigger cleanup before re-raise
             # Best-effort cleanup — don't mask the original error.
             try:
                 self._teardown()
-            except Exception:
-                pass
+            except OSError as cleanup_exc:
+                logger.debug("Teardown during start() cleanup failed: %s", cleanup_exc)
             raise
 
     def stop(self) -> None:

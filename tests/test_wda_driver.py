@@ -89,7 +89,9 @@ class TestIsAvailable:
             assert WDADriver.is_available() is False
 
     def test_probes_correct_url(self):
-        with patch("urllib.request.urlopen", side_effect=Exception) as mock_open:
+        # Use OSError (a specific exception the narrow except now catches) so
+        # is_available() returns False without propagating.
+        with patch("urllib.request.urlopen", side_effect=OSError) as mock_open:
             WDADriver.is_available(wda_url="http://localhost:8100")
         mock_open.assert_called_once()
         call_arg = mock_open.call_args[0][0]

@@ -60,7 +60,7 @@ def _detect_booted_simulator() -> Optional[dict]:
                         "name": dev.get("name", "iPhone Simulator"),
                         "runtime": runtime_id,
                     }
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         pass
     return None
 

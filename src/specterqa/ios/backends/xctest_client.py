@@ -171,7 +171,7 @@ class XCTestBackend:
                 raw = resp.read()
                 data = json.loads(raw) if raw else {}
                 return data.get("status") == "ok"
-        except Exception:
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
             return False
 
     def health(self) -> dict[str, Any]:

@@ -382,8 +382,14 @@ class TestBuild:
             f"Expected 'com.my.special.app' in one of {created_dirs}"
         )
 
-    def test_build_verbose_prints_output(self, capsys, tmp_path):
-        """build(verbose=True) prints progress lines without raising."""
+    def test_build_verbose_logs_output(self, caplog, tmp_path):
+        """build(verbose=True) emits progress log records without raising.
+
+        Previously checked stdout (print). Now uses logger.info — verified via
+        caplog since verbose progress is no longer written to stdout directly.
+        """
+        import logging
+
         injector = _make_injector()
         fake_xctestrun = tmp_path / "test.xctestrun"
         fake_xctestrun.touch()
@@ -402,9 +408,11 @@ class TestBuild:
             patch("pathlib.Path.mkdir"),
             patch("pathlib.Path.write_text"),
             patch("pathlib.Path.is_dir", return_value=True),
+            caplog.at_level(logging.INFO, logger="specterqa.ios.project_injector"),
         ):
             mock_run.return_value = self._make_successful_build_proc()
             injector.build(verbose=True)
 
-        captured = capsys.readouterr()
-        assert "specterqa" in captured.out.lower()
+        assert any("specterqa" in r.message.lower() for r in caplog.records), (
+            f"Expected 'specterqa' in log output. Records: {[r.message for r in caplog.records]}"
+        )

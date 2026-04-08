@@ -8,11 +8,14 @@ crashes that occurred after :meth:`start` are reported.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.crash")
 
 
 @dataclass
@@ -104,7 +107,7 @@ class CrashDetector:
             try:
                 raw = json.loads(Path(full_path).read_text())
                 file_bundle_id = raw.get("bundleID", "")
-            except Exception:
+            except (json.JSONDecodeError, OSError, ValueError):
                 file_bundle_id = ""
             if file_bundle_id == self.bundle_id:
                 crashes.append(report)
@@ -126,7 +129,7 @@ class CrashDetector:
         """
         try:
             raw = json.loads(Path(path).read_text())
-        except Exception:
+        except (json.JSONDecodeError, OSError, ValueError):
             return None
 
         # Extract exception info
