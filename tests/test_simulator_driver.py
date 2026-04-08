@@ -211,9 +211,7 @@ class TestSimulatorDriverConstructor:
         sentinel_redactor = MagicMock(name="SharedRedactor")
 
         with (
-            patch(
-                "specterqa.ios.drivers.simulator.driver.DataRedactor", return_value=sentinel_redactor
-            ),
+            patch("specterqa.ios.drivers.simulator.driver.DataRedactor", return_value=sentinel_redactor),
             patch("specterqa.ios.drivers.simulator.driver.InteractionLayer"),
             patch("specterqa.ios.drivers.simulator.driver.ScreenCapture"),
             patch("specterqa.ios.drivers.simulator.driver.ConsoleMonitor"),
