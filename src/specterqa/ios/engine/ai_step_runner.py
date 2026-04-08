@@ -178,7 +178,7 @@ class IOSAIStepRunner:
                 try:
                     ss_path.write_text(screenshot_b64)
                     screenshots.append(str(ss_path))
-                except Exception:
+                except OSError:
                     pass
 
             # ----------------------------------------------------------------

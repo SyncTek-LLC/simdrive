@@ -108,7 +108,7 @@ class WDADriver:
             with urllib.request.urlopen(url, timeout=_STATUS_TIMEOUT) as resp:
                 data = json.loads(resp.read())
                 return bool(data.get("value", {}).get("ready", False))
-        except Exception:
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
             return False
 
     # ------------------------------------------------------------------
@@ -198,8 +198,11 @@ class WDADriver:
             self._device_height = 852.0
 
         if self.verbose:
-            print(
-                f"  [wda] session={self._session_id!r}  device={self._device_width:.0f}x{self._device_height:.0f} pts"
+            logger.debug(
+                "  [wda] session=%r  device=%.0fx%.0f pts",
+                self._session_id,
+                self._device_width,
+                self._device_height,
             )
         return self._session_id
 
@@ -248,7 +251,7 @@ class WDADriver:
         session = self._require_session()
         dev_x, dev_y = self._img_to_device(img_x, img_y)
         if self.verbose:
-            print(f"  [wda] tap  img=({img_x:.0f},{img_y:.0f})  dev=({dev_x:.1f},{dev_y:.1f})")
+            logger.debug("  [wda] tap  img=(%.0f,%.0f)  dev=(%.1f,%.1f)", img_x, img_y, dev_x, dev_y)
         body: dict[str, Any] = {
             "actions": [
                 {
@@ -279,7 +282,7 @@ class WDADriver:
         session = self._require_session()
         dev_x, dev_y = self._img_to_device(img_x, img_y)
         if self.verbose:
-            print(f"  [wda] double_tap  dev=({dev_x:.1f},{dev_y:.1f})")
+            logger.debug("  [wda] double_tap  dev=(%.1f,%.1f)", dev_x, dev_y)
         ix, iy = int(dev_x), int(dev_y)
         body: dict[str, Any] = {
             "actions": [
@@ -318,7 +321,7 @@ class WDADriver:
         dev_x, dev_y = self._img_to_device(img_x, img_y)
         hold_ms = max(500, int(duration * 1000))
         if self.verbose:
-            print(f"  [wda] long_press  dev=({dev_x:.1f},{dev_y:.1f})  {hold_ms}ms")
+            logger.debug("  [wda] long_press  dev=(%.1f,%.1f)  %dms", dev_x, dev_y, hold_ms)
         body: dict[str, Any] = {
             "actions": [
                 {
@@ -358,7 +361,7 @@ class WDADriver:
         dx1, dy1 = self._img_to_device(x1, y1)
         dx2, dy2 = self._img_to_device(x2, y2)
         if self.verbose:
-            print(f"  [wda] swipe  ({dx1:.0f},{dy1:.0f}) → ({dx2:.0f},{dy2:.0f})  {duration:.2f}s")
+            logger.debug("  [wda] swipe  (%.0f,%.0f) -> (%.0f,%.0f)  %.2fs", dx1, dy1, dx2, dy2, duration)
         body: dict[str, Any] = {
             "actions": [
                 {
@@ -412,7 +415,7 @@ class WDADriver:
         )
         if result.returncode != 0:
             if self.verbose:
-                print("  [wda] simctl keyboard failed — falling back to WDA /keys")
+                logger.debug("  [wda] simctl keyboard failed — falling back to WDA /keys")
             session = self._require_session()
             body: dict[str, Any] = {"value": list(text)}
             self._request("POST", f"/session/{session}/keys", body)

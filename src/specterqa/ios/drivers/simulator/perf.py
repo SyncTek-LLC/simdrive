@@ -6,10 +6,13 @@ Tracks a history of PerfSnapshot objects for trend detection.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+logger = logging.getLogger("specterqa.ios.drivers.simulator.perf")
 
 
 @dataclass
@@ -87,7 +90,7 @@ class PerfProfiler:
                             return int(parts[1])
                         except ValueError:
                             pass
-        except Exception:
+        except OSError:
             pass
 
         return None

@@ -21,11 +21,14 @@ Exit codes returned by ReplayPlayer.run():
 
 from __future__ import annotations
 
+import logging
 import time
 import yaml
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("specterqa.ios.replay")
 
 
 # ---------------------------------------------------------------------------
@@ -369,8 +372,8 @@ class ReplayPlayer:
                 elements = annotator.get_elements_from_runner()
                 if any(label.lower() in e.label.lower() for e in elements):
                     return True
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — element probe must not abort wait loop
+                logger.debug("Element probe failed during wait: %s", exc)
             time.sleep(0.5)
         return False
 
@@ -545,8 +548,8 @@ class ReplayPlayer:
                     missing = [lbl for lbl in expect if lbl not in found_labels]
                     if not missing:
                         break
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 — checkpoint verification poll must not abort
+                    logger.debug("Checkpoint element probe failed: %s", exc)
                 if missing:
                     time.sleep(1.0)
             if missing:
@@ -779,7 +782,7 @@ class ReplayPlayer:
                 )
 
                 if verbose:
-                    print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
+                    logger.debug("  Step %d/%d: %s %s", i + 1, len(self.steps), action, label)
 
                 # Conditional execution guards
                 if_visible = step.get("if_element_visible")
@@ -797,8 +800,8 @@ class ReplayPlayer:
                             result["steps"].append(step_result)
                             i += 1
                             continue
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — conditional guard probe must not abort step
+                        logger.debug("if_element_visible probe failed: %s", exc)
 
                 if_not_visible = step.get("if_not_element_visible")
                 if if_not_visible:
@@ -815,8 +818,8 @@ class ReplayPlayer:
                             result["steps"].append(step_result)
                             i += 1
                             continue
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — conditional guard probe must not abort step
+                        logger.debug("if_not_element_visible probe failed: %s", exc)
 
                 # skip_to action — jump to step with matching step_id
                 if action == "skip_to":
@@ -840,9 +843,9 @@ class ReplayPlayer:
 
                 if verbose:
                     if step_result["passed"]:
-                        print("    PASS")
+                        logger.debug("    PASS")
                     else:
-                        print(f"    FAIL: {step_result['error']}")
+                        logger.debug("    FAIL: %s", step_result["error"])
 
                 time.sleep(0.3)  # brief inter-action pause
                 i += 1
@@ -905,7 +908,7 @@ class ReplayPlayer:
                 )
 
                 if verbose:
-                    print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
+                    logger.debug("  Step %d/%d: %s %s", i + 1, len(self.steps), action, label)
 
                 # Conditional execution guards
                 if_visible = step.get("if_element_visible")
@@ -923,8 +926,8 @@ class ReplayPlayer:
                             result["steps"].append(step_result)
                             i += 1
                             continue
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — conditional guard probe must not abort step
+                        logger.debug("if_element_visible probe failed: %s", exc)
 
                 if_not_visible = step.get("if_not_element_visible")
                 if if_not_visible:
@@ -941,8 +944,8 @@ class ReplayPlayer:
                             result["steps"].append(step_result)
                             i += 1
                             continue
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — conditional guard probe must not abort step
+                        logger.debug("if_not_element_visible probe failed: %s", exc)
 
                 # skip_to action — jump to step with matching step_id
                 if action == "skip_to":
@@ -966,9 +969,9 @@ class ReplayPlayer:
 
                 if verbose:
                     if step_result["passed"]:
-                        print("    PASS")
+                        logger.debug("    PASS")
                     else:
-                        print(f"    FAIL: {step_result['error']}")
+                        logger.debug("    FAIL: %s", step_result["error"])
 
                 time.sleep(0.3)  # brief inter-action pause
                 i += 1
@@ -981,7 +984,7 @@ class ReplayPlayer:
         finally:
             try:
                 session.stop()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 — best-effort session cleanup
+                logger.debug("session.stop() failed in finally: %s", exc)
 
         return result

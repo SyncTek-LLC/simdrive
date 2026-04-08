@@ -25,7 +25,11 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import logging
+
 from PIL import Image
+
+logger = logging.getLogger("specterqa.ios.sim_driver")
 
 # ---------------------------------------------------------------------------
 # Quartz imports — required for touch input
@@ -132,7 +136,7 @@ class SimDriver:
 
     def _run(self, cmd: list[str], check: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
         if self.verbose:
-            print(f"  [cmd] {' '.join(cmd)}")
+            logger.debug("  [cmd] %s", " ".join(cmd))
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             if check and result.returncode != 0:
@@ -209,11 +213,14 @@ class SimDriver:
         )
 
         if self.verbose:
-            print(
-                f"  [window] pos=({result.x:.0f},{result.y:.0f}) "
-                f"size={result.width:.0f}x{result.height:.0f} "
-                f"titlebar={result.title_bar_height:.0f} "
-                f"name='{win_name}'"
+            logger.debug(
+                "  [window] pos=(%.0f,%.0f) size=%.0fx%.0f titlebar=%.0f name=%r",
+                result.x,
+                result.y,
+                result.width,
+                result.height,
+                result.title_bar_height,
+                win_name,
             )
 
         self._window_cache = result
@@ -242,10 +249,16 @@ class SimDriver:
         screen_y = win.y + win.title_bar_height + img_y * scale_y + self._calibration_offset_y
 
         if self.verbose:
-            print(
-                f"  [coords] img=({img_x:.0f},{img_y:.0f})/{iw:.0f}x{ih:.0f} "
-                f"-> screen=({screen_x:.1f},{screen_y:.1f}) "
-                f"scale=({scale_x:.3f},{scale_y:.3f})"
+            logger.debug(
+                "  [coords] img=(%.0f,%.0f)/%.0fx%.0f -> screen=(%.1f,%.1f) scale=(%.3f,%.3f)",
+                img_x,
+                img_y,
+                iw,
+                ih,
+                screen_x,
+                screen_y,
+                scale_x,
+                scale_y,
             )
 
         return screen_x, screen_y
@@ -264,7 +277,7 @@ class SimDriver:
             (offset_x, offset_y): calibration offsets applied
         """
         if self.verbose:
-            print("  [calibrate] Running auto-calibration...")
+            logger.debug("  [calibrate] Running auto-calibration...")
 
         # Take baseline screenshot
         b64_before, w, h = self.screenshot()
@@ -280,7 +293,7 @@ class SimDriver:
         # If screenshots differ, center tap is working
         if b64_before != b64_after:
             if self.verbose:
-                print("  [calibrate] Center tap registers — calibration OK")
+                logger.debug("  [calibrate] Center tap registers — calibration OK")
             return (0.0, 0.0)
 
         # If center didn't register, try small offsets
@@ -292,13 +305,13 @@ class SimDriver:
             b64_test, _, _ = self.screenshot()
             if b64_test != b64_before:
                 if self.verbose:
-                    print(f"  [calibrate] Found working offset: ({dx}, {dy})")
+                    logger.debug("  [calibrate] Found working offset: (%d, %d)", dx, dy)
                 return (dx, dy)
 
         self._calibration_offset_x = 0
         self._calibration_offset_y = 0
         if self.verbose:
-            print("  [calibrate] Could not auto-calibrate — using default mapping")
+            logger.debug("  [calibrate] Could not auto-calibrate — using default mapping")
         return (0.0, 0.0)
 
     # ------------------------------------------------------------------
@@ -463,7 +476,7 @@ class SimDriver:
             self._run(["xcrun", "simctl", "io", self.udid, "keyboard", "input", text], check=True)
         except SimulatorError:
             if self.verbose:
-                print("  [type] Falling back to pasteboard paste")
+                logger.debug("  [type] Falling back to pasteboard paste")
             proc = subprocess.run(
                 ["xcrun", "simctl", "pbcopy", self.udid],
                 input=text,
