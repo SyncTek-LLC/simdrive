@@ -11,13 +11,9 @@ INIT-2026-506 — SpecterQA iOS v3 project-injection runner build.
 
 from __future__ import annotations
 
-import json
 import os
-import plistlib
 import subprocess
-import tempfile
 from pathlib import Path
-from typing import Optional
 
 
 class ProjectInjectorError(Exception):
@@ -74,9 +70,7 @@ class ProjectInjector:
 
         # Package-relative: src/specterqa/ios → repo root → runner/Sources
         try:
-            candidates.append(
-                Path(__file__).parent.parent.parent.parent / "runner" / "Sources"
-            )
+            candidates.append(Path(__file__).parent.parent.parent.parent / "runner" / "Sources")
         except Exception:
             pass
 
@@ -112,9 +106,12 @@ class ProjectInjector:
             [
                 "xcodebuild",
                 "-showBuildSettings",
-                "-project", str(self.project_path),
-                "-scheme", self.scheme,
-                "-sdk", "iphonesimulator",
+                "-project",
+                str(self.project_path),
+                "-scheme",
+                self.scheme,
+                "-sdk",
+                "iphonesimulator",
             ],
             capture_output=True,
             text=True,
@@ -122,8 +119,7 @@ class ProjectInjector:
         )
         if result.returncode != 0:
             raise ProjectInjectorError(
-                f"xcodebuild -showBuildSettings failed (exit {result.returncode}):\n"
-                f"{result.stderr}"
+                f"xcodebuild -showBuildSettings failed (exit {result.returncode}):\n{result.stderr}"
             )
 
         settings: dict[str, str] = {}
@@ -224,10 +220,7 @@ class ProjectInjector:
         # Build OUR runner project with their signing — never compile their code.
         runner_project = self._runner_sources.parent / "SpecterQARunner.xcodeproj"
         if not runner_project.is_dir():
-            raise ProjectInjectorError(
-                f"Runner Xcode project not found at {runner_project}. "
-                "Reinstall specterqa-ios."
-            )
+            raise ProjectInjectorError(f"Runner Xcode project not found at {runner_project}. Reinstall specterqa-ios.")
 
         # Write xcconfig with user's signing settings.
         xcconfig = build_dir / "specterqa-runner.xcconfig"
@@ -241,18 +234,24 @@ class ProjectInjector:
         cmd = [
             "xcodebuild",
             "build-for-testing",
-            "-project", str(runner_project),
-            "-scheme", "SpecterQARunner",
-            "-sdk", "iphonesimulator",
-            "-destination", self.destination,
-            "-derivedDataPath", str(derived_data),
-            "-xcconfig", str(xcconfig),
+            "-project",
+            str(runner_project),
+            "-scheme",
+            "SpecterQARunner",
+            "-sdk",
+            "iphonesimulator",
+            "-destination",
+            self.destination,
+            "-derivedDataPath",
+            str(derived_data),
+            "-xcconfig",
+            str(xcconfig),
         ]
 
         if verbose:
             print(f"[specterqa] Building runner for {bundle_id}...")
             print(f"[specterqa] Using project: {runner_project}")
-            print(f"[specterqa] Scheme:        SpecterQARunner")
+            print("[specterqa] Scheme:        SpecterQARunner")
             print(f"[specterqa] Command:       {' '.join(cmd)}")
 
         result = subprocess.run(
@@ -263,9 +262,7 @@ class ProjectInjector:
         )
         if result.returncode != 0:
             detail = result.stderr if not verbose else "see output above"
-            raise ProjectInjectorError(
-                f"Runner build failed (exit {result.returncode}): {detail}"
-            )
+            raise ProjectInjectorError(f"Runner build failed (exit {result.returncode}): {detail}")
 
         xctestrun = self._find_xctestrun(derived_data)
 

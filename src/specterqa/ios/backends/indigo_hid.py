@@ -76,12 +76,8 @@ logger = logging.getLogger("specterqa.ios.backends.indigo_hid")
 
 _OBJC_LIB = "/usr/lib/libobjc.A.dylib"
 _FOUNDATION_PATH = "/System/Library/Frameworks/Foundation.framework/Foundation"
-_CORE_FOUNDATION_PATH = (
-    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
-)
-_CORE_SIM_PATH = (
-    "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
-)
+_CORE_FOUNDATION_PATH = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+_CORE_SIM_PATH = "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator"
 
 # kCFStringEncodingUTF8 — used when creating CFString / NSString via CoreFoundation
 _kCFStringEncodingUTF8 = 0x08000100
@@ -156,7 +152,7 @@ def _setup_framework_paths() -> None:
 # ---------------------------------------------------------------------------
 
 _objc: Optional[ctypes.CDLL] = None
-_cf: Optional[ctypes.CDLL] = None          # CoreFoundation — for CFString creation
+_cf: Optional[ctypes.CDLL] = None  # CoreFoundation — for CFString creation
 _core_sim: Optional[ctypes.CDLL] = None
 _sim_kit: Optional[ctypes.CDLL] = None
 
@@ -191,9 +187,9 @@ def _load_frameworks() -> bool:
         _cf = ctypes.cdll.LoadLibrary(_CORE_FOUNDATION_PATH)
         _cf.CFStringCreateWithCString.restype = ctypes.c_void_p
         _cf.CFStringCreateWithCString.argtypes = [
-            ctypes.c_void_p,   # allocator (NULL = kCFAllocatorDefault)
-            ctypes.c_char_p,   # cStr
-            ctypes.c_uint32,   # encoding
+            ctypes.c_void_p,  # allocator (NULL = kCFAllocatorDefault)
+            ctypes.c_char_p,  # cStr
+            ctypes.c_uint32,  # encoding
         ]
         ctypes.cdll.LoadLibrary(_FOUNDATION_PATH)
 
@@ -221,8 +217,7 @@ def _load_frameworks() -> bool:
         sk_path = _sim_kit_path()
         if not sk_path or not os.path.exists(sk_path):
             logger.warning(
-                "SimulatorKit not found at %r — is Xcode installed? "
-                "(xcode-select -p returned: %r)",
+                "SimulatorKit not found at %r — is Xcode installed? (xcode-select -p returned: %r)",
                 sk_path,
                 _xcode_developer_path(),
             )
@@ -243,6 +238,7 @@ def _load_frameworks() -> bool:
 # ---------------------------------------------------------------------------
 # ObjC runtime bridge
 # ---------------------------------------------------------------------------
+
 
 class _ObjCBridge:
     """Minimal wrapper around the ObjC runtime.
@@ -319,23 +315,17 @@ class _ObjCBridge:
         self._lib.object_getClass.restype = ctypes.c_void_p
         self._lib.object_getClass.argtypes = [ctypes.c_void_p]
         isa = self._lib.object_getClass(ctypes.c_void_p(obj_ptr)) or obj_ptr
-        return bool(self._lib.class_respondsToSelector(
-            ctypes.c_void_p(isa), ctypes.c_void_p(sel_ptr)
-        ))
+        return bool(self._lib.class_respondsToSelector(ctypes.c_void_p(isa), ctypes.c_void_p(sel_ptr)))
 
     def msg(self, receiver: int, selector_name: str, *args) -> int:
         """Send an ObjC message and return the result as an int (pointer)."""
         if not receiver:
-            raise RuntimeError(
-                f"Cannot send [{selector_name!r}] to nil receiver"
-            )
+            raise RuntimeError(f"Cannot send [{selector_name!r}] to nil receiver")
         sel_ptr = self.sel(selector_name)
 
         # Build a typed CFUNCTYPE so ctypes passes extra args correctly.
         # All args are c_void_p (pointer-sized).
-        arg_types = [ctypes.c_void_p, ctypes.c_void_p] + [
-            ctypes.c_void_p for _ in args
-        ]
+        arg_types = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_void_p for _ in args]
         func_type = ctypes.CFUNCTYPE(ctypes.c_void_p, *arg_types)
         typed_msg = func_type(self._lib.objc_msgSend)
         return typed_msg(receiver, sel_ptr, *args) or 0
@@ -343,9 +333,7 @@ class _ObjCBridge:
     def msg_double(self, receiver: int, selector_name: str) -> float:
         """Send a message whose return type is double (e.g. property accessors)."""
         sel_ptr = self.sel(selector_name)
-        func_type = ctypes.CFUNCTYPE(
-            ctypes.c_double, ctypes.c_void_p, ctypes.c_void_p
-        )
+        func_type = ctypes.CFUNCTYPE(ctypes.c_double, ctypes.c_void_p, ctypes.c_void_p)
         typed_msg = func_type(self._lib.objc_msgSend)
         return float(typed_msg(receiver, sel_ptr))
 
@@ -365,9 +353,7 @@ class _ObjCBridge:
 
         # --- Preferred: use CoreFoundation (toll-free bridged to NSString) ---
         if self._cf is not None:
-            result = self._cf.CFStringCreateWithCString(
-                None, encoded, _kCFStringEncodingUTF8
-            )
+            result = self._cf.CFStringCreateWithCString(None, encoded, _kCFStringEncodingUTF8)
             if result:
                 return result
             # Fall through to ObjC path on failure
@@ -383,12 +369,8 @@ class _ObjCBridge:
         # to avoid ARM64 ctypes variadic-call ABI issues with c_char_p.
         buf = ctypes.create_string_buffer(encoded + b"\x00")
         buf_ptr = ctypes.cast(buf, ctypes.c_void_p)
-        init_func = ctypes.CFUNCTYPE(
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
-        )
-        result = init_func(self._lib.objc_msgSend)(
-            instance, self.sel("initWithUTF8String:"), buf_ptr
-        )
+        init_func = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+        result = init_func(self._lib.objc_msgSend)(instance, self.sel("initWithUTF8String:"), buf_ptr)
         return result or 0
 
     def nsdata(self, raw: bytes) -> int:
@@ -423,15 +405,15 @@ class _ObjCBridge:
 # ---------------------------------------------------------------------------
 
 # Struct layout constants (reverse-engineered from idb and CoreSimulator)
-_INDIGO_PAYLOAD_SIZE = 0x60          # 96 bytes per payload
-_INDIGO_PAYLOAD_STRIDE = 0x90        # 144 bytes: payload + 48 bytes padding
-_INDIGO_MSG_HEADER_SIZE = 0x18       # 24 bytes: 4 magic + 4 pad + 8 ns + 8 reserved
+_INDIGO_PAYLOAD_SIZE = 0x60  # 96 bytes per payload
+_INDIGO_PAYLOAD_STRIDE = 0x90  # 144 bytes: payload + 48 bytes padding
+_INDIGO_MSG_HEADER_SIZE = 0x18  # 24 bytes: 4 magic + 4 pad + 8 ns + 8 reserved
 _INDIGO_MSG_TOTAL = _INDIGO_MSG_HEADER_SIZE + 2 * _INDIGO_PAYLOAD_STRIDE  # 312 bytes
 
 # Event type constants
 _INDIGO_EVENT_DOWN = 0x00000001
 _INDIGO_EVENT_MOVE = 0x00000002
-_INDIGO_EVENT_UP   = 0x00000003
+_INDIGO_EVENT_UP = 0x00000003
 
 # Header magic
 _INDIGO_MAGIC = 0x0000001A
@@ -464,14 +446,14 @@ def _build_indigo_payload(
     """
     payload = struct.pack(
         "<IIffffff",
-        event_type,          # event_type
-        1,                   # touch_id
-        x_norm,              # x normalised
-        y_norm,              # y normalised
-        pressure,            # pressure
-        0.05,                # major_radius
-        0.05,                # minor_radius
-        0.0,                 # reserved
+        event_type,  # event_type
+        1,  # touch_id
+        x_norm,  # x normalised
+        y_norm,  # y normalised
+        pressure,  # pressure
+        0.05,  # major_radius
+        0.05,  # minor_radius
+        0.0,  # reserved
     )
     # Pad to stride
     payload += b"\x00" * (_INDIGO_PAYLOAD_STRIDE - len(payload))
@@ -494,7 +476,7 @@ def _build_indigo_message(
     header += b"\x00" * (_INDIGO_MSG_HEADER_SIZE - len(header))
 
     slot0 = _build_indigo_payload(event_type, x_norm, y_norm, pressure)
-    slot1 = b"\x00" * _INDIGO_PAYLOAD_STRIDE   # second slot — unused
+    slot1 = b"\x00" * _INDIGO_PAYLOAD_STRIDE  # second slot — unused
 
     return header + slot0 + slot1
 
@@ -502,6 +484,7 @@ def _build_indigo_message(
 # ---------------------------------------------------------------------------
 # Device resolution helpers
 # ---------------------------------------------------------------------------
+
 
 def _resolve_booted_udid() -> str:
     """Use ``xcrun simctl list devices booted -j`` to find the actual UDID of the
@@ -577,13 +560,9 @@ def _enum_devices_from_set(bridge: "_ObjCBridge", device_set: int, target_udid: 
         count_func = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_void_p)
         count = count_func(bridge._lib.objc_msgSend)(devices, bridge.sel("count"))
         logger.debug("SimDeviceSet contains %d device(s) (no enumerator)", count)
-        obj_func = ctypes.CFUNCTYPE(
-            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong
-        )
+        obj_func = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong)
         for i in range(count):
-            device = obj_func(bridge._lib.objc_msgSend)(
-                devices, bridge.sel("objectAtIndex:"), ctypes.c_ulong(i)
-            ) or 0
+            device = obj_func(bridge._lib.objc_msgSend)(devices, bridge.sel("objectAtIndex:"), ctypes.c_ulong(i)) or 0
             if not device:
                 continue
             dev_udid = _extract_udid_str(bridge, bridge.msg(device, "UDID"))
@@ -596,9 +575,7 @@ def _enum_devices_from_set(bridge: "_ObjCBridge", device_set: int, target_udid: 
     next_func = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
     seen = 0
     while True:
-        device = next_func(bridge._lib.objc_msgSend)(
-            enumerator, bridge.sel("nextObject")
-        ) or 0
+        device = next_func(bridge._lib.objc_msgSend)(enumerator, bridge.sel("nextObject")) or 0
         if not device:
             break
         seen += 1
@@ -650,12 +627,15 @@ def _get_sim_service_context(bridge: "_ObjCBridge") -> int:
                 ctypes.c_void_p,
                 ctypes.c_void_p,
             )
-            ctx = call_func(bridge._lib.objc_msgSend)(
-                ctx_cls,
-                bridge.sel(sel_name),
-                ctypes.c_void_p(ns_dev),
-                ctypes.c_void_p(0),  # error — nil
-            ) or 0
+            ctx = (
+                call_func(bridge._lib.objc_msgSend)(
+                    ctx_cls,
+                    bridge.sel(sel_name),
+                    ctypes.c_void_p(ns_dev),
+                    ctypes.c_void_p(0),  # error — nil
+                )
+                or 0
+            )
             if ctx:
                 logger.debug("Got SimServiceContext via %r", sel_name)
                 return ctx
@@ -707,14 +687,10 @@ def _find_sim_device(bridge: "_ObjCBridge", udid: str) -> int:
             device_set = 0
             # Prefer defaultDeviceSetWithError: (Xcode 16+)
             if bridge.responds_to_selector(ctx, "defaultDeviceSetWithError:"):
-                device_set = bridge.msg(
-                    ctx, "defaultDeviceSetWithError:", ctypes.c_void_p(0)
-                ) or 0
+                device_set = bridge.msg(ctx, "defaultDeviceSetWithError:", ctypes.c_void_p(0)) or 0
             # Fall back to deviceSetWithPath: using default path
             if not device_set:
-                devices_dir = os.path.expanduser(
-                    "~/Library/Developer/CoreSimulator/Devices"
-                )
+                devices_dir = os.path.expanduser("~/Library/Developer/CoreSimulator/Devices")
                 if bridge.responds_to_selector(ctx, "deviceSetWithPath:error:"):
                     ns_path = bridge.nsstr(devices_dir)
                     if ns_path:
@@ -725,12 +701,15 @@ def _find_sim_device(bridge: "_ObjCBridge", udid: str) -> int:
                             ctypes.c_void_p,
                             ctypes.c_void_p,
                         )
-                        device_set = call_func(bridge._lib.objc_msgSend)(
-                            ctx,
-                            bridge.sel("deviceSetWithPath:error:"),
-                            ctypes.c_void_p(ns_path),
-                            ctypes.c_void_p(0),
-                        ) or 0
+                        device_set = (
+                            call_func(bridge._lib.objc_msgSend)(
+                                ctx,
+                                bridge.sel("deviceSetWithPath:error:"),
+                                ctypes.c_void_p(ns_path),
+                                ctypes.c_void_p(0),
+                            )
+                            or 0
+                        )
 
             if device_set:
                 device = _enum_devices_from_set(bridge, device_set, target_udid)
@@ -741,19 +720,14 @@ def _find_sim_device(bridge: "_ObjCBridge", udid: str) -> int:
                     actual_udid,
                 )
             else:
-                logger.warning(
-                    "SimServiceContext obtained but no device set selector responded"
-                )
+                logger.warning("SimServiceContext obtained but no device set selector responded")
         else:
-            logger.warning(
-                "Could not obtain SimServiceContext — all selectors unavailable or returned nil"
-            )
+            logger.warning("Could not obtain SimServiceContext — all selectors unavailable or returned nil")
     except Exception as exc:
         logger.warning("SimServiceContext path failed: %s", exc)
 
     raise RuntimeError(
-        f"Simulator device not found for UDID={udid!r}. "
-        "Make sure the simulator is booted: xcrun simctl boot <udid>"
+        f"Simulator device not found for UDID={udid!r}. Make sure the simulator is booted: xcrun simctl boot <udid>"
     )
 
 
@@ -789,9 +763,7 @@ def _create_hid_client(bridge: "_ObjCBridge", device: int) -> int:
             + "). Is SimulatorKit loaded?"
         )
 
-    alloc_func = ctypes.CFUNCTYPE(
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
-    )
+    alloc_func = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
     instance = alloc_func(bridge._lib.objc_msgSend)(cls, bridge.sel("alloc"))
     if not instance:
         raise RuntimeError("SimDeviceLegacyHIDClient alloc returned nil")
@@ -828,12 +800,15 @@ def _create_hid_client(bridge: "_ObjCBridge", device: int) -> int:
         ctypes.c_void_p,
         ctypes.c_void_p,
     )
-    client = init_func(bridge._lib.objc_msgSend)(
-        instance,
-        bridge.sel("initWithDevice:error:"),
-        ctypes.c_void_p(device),
-        ctypes.c_void_p(0),   # error pointer — nil; we check return value
-    ) or 0
+    client = (
+        init_func(bridge._lib.objc_msgSend)(
+            instance,
+            bridge.sel("initWithDevice:error:"),
+            ctypes.c_void_p(device),
+            ctypes.c_void_p(0),  # error pointer — nil; we check return value
+        )
+        or 0
+    )
     if not client:
         raise RuntimeError(
             "SimDeviceLegacyHIDClient initWithDevice:error: returned nil. "
@@ -862,27 +837,25 @@ def _send_hid_message(
         ``sendWithData:error:`` or ``send:error:`` — wraps bytes in NSData.
     """
     # --- Xcode 16+ path: sendWithMessage:freeWhenDone:completionQueue:completion: ---
-    if bridge.responds_to_selector(
-        client, "sendWithMessage:freeWhenDone:completionQueue:completion:"
-    ):
+    if bridge.responds_to_selector(client, "sendWithMessage:freeWhenDone:completionQueue:completion:"):
         buf = ctypes.create_string_buffer(msg_bytes)
         buf_ptr = ctypes.cast(buf, ctypes.c_void_p)
         send_func = ctypes.CFUNCTYPE(
-            ctypes.c_void_p,   # return void
-            ctypes.c_void_p,   # self
-            ctypes.c_void_p,   # SEL
-            ctypes.c_void_p,   # IndigoHIDMessageStruct *message
-            ctypes.c_bool,     # BOOL freeWhenDone
-            ctypes.c_void_p,   # dispatch_queue_t completionQueue (nil)
-            ctypes.c_void_p,   # completion block (nil)
+            ctypes.c_void_p,  # return void
+            ctypes.c_void_p,  # self
+            ctypes.c_void_p,  # SEL
+            ctypes.c_void_p,  # IndigoHIDMessageStruct *message
+            ctypes.c_bool,  # BOOL freeWhenDone
+            ctypes.c_void_p,  # dispatch_queue_t completionQueue (nil)
+            ctypes.c_void_p,  # completion block (nil)
         )
         send_func(bridge._lib.objc_msgSend)(
             client,
             bridge.sel("sendWithMessage:freeWhenDone:completionQueue:completion:"),
             buf_ptr,
-            False,              # freeWhenDone = NO — Python owns the buffer
-            ctypes.c_void_p(0), # completionQueue = nil
-            ctypes.c_void_p(0), # completion = nil
+            False,  # freeWhenDone = NO — Python owns the buffer
+            ctypes.c_void_p(0),  # completionQueue = nil
+            ctypes.c_void_p(0),  # completion = nil
         )
         logger.debug("sendHID via sendWithMessage:freeWhenDone:completionQueue:completion:")
         return
@@ -920,6 +893,7 @@ def _send_hid_message(
 # ---------------------------------------------------------------------------
 # Public backend class
 # ---------------------------------------------------------------------------
+
 
 class IndigoHIDBackend:
     """Headless touch injection via Apple's IndigoHID protocol.
@@ -1045,7 +1019,7 @@ class IndigoHIDBackend:
             RuntimeError: If frameworks fail to load or the device is not found.
         """
         if self._hid_client is not None:
-            return   # already initialised
+            return  # already initialised
 
         if not _load_frameworks():
             raise RuntimeError(
@@ -1209,10 +1183,7 @@ class IndigoHIDBackend:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"xcrun simctl io screenshot failed (rc={result.returncode}): "
-                f"{result.stderr.strip()}"
-            )
+            raise RuntimeError(f"xcrun simctl io screenshot failed (rc={result.returncode}): {result.stderr.strip()}")
 
         logger.debug("screenshot saved to %s", output_path)
         return output_path
@@ -1227,7 +1198,4 @@ class IndigoHIDBackend:
         w = getattr(self, "_device_width", 0)
         h = getattr(self, "_device_height", 0)
         sf = getattr(self, "_scale_factor", 0)
-        return (
-            f"IndigoHIDBackend(udid={udid!r}, "
-            f"{w}x{h}pt @{sf}x, {status})"
-        )
+        return f"IndigoHIDBackend(udid={udid!r}, {w}x{h}pt @{sf}x, {status})"

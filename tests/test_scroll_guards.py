@@ -109,10 +109,10 @@ def _xml_empty() -> str:
 def _xml_with_zero_size(label: str) -> str:
     """XML with a matching label but zero width/height — should be invisible."""
     return (
-        f'<AppElement>'
+        f"<AppElement>"
         f'<XCUIElementTypeCell label="{label}" name="{label}" '
         f'enabled="true" visible="true" x="0" y="0" width="0" height="0" />'
-        f'</AppElement>'
+        f"</AppElement>"
     )
 
 
@@ -189,10 +189,10 @@ class TestPreScrollVisibilityCheck:
         """Zero width is treated as invisible — guard must return False."""
         runner = _make_runner()
         xml = (
-            '<AppElement>'
+            "<AppElement>"
             '<XCUIElementTypeCell label="Hidden" name="Hidden" '
             'enabled="true" visible="true" x="0" y="0" width="0" height="44" />'
-            '</AppElement>'
+            "</AppElement>"
         )
         assert runner._is_element_visible("Hidden", xml) is False
 
@@ -200,10 +200,10 @@ class TestPreScrollVisibilityCheck:
         """Zero height is treated as invisible — guard must return False."""
         runner = _make_runner()
         xml = (
-            '<AppElement>'
+            "<AppElement>"
             '<XCUIElementTypeCell label="Hidden" name="Hidden" '
             'enabled="true" visible="true" x="0" y="0" width="200" height="0" />'
-            '</AppElement>'
+            "</AppElement>"
         )
         assert runner._is_element_visible("Hidden", xml) is False
 
@@ -216,10 +216,10 @@ class TestPreScrollVisibilityCheck:
         """When ``label`` is absent, ``name`` attribute should be used instead."""
         runner = _make_runner()
         xml = (
-            '<AppElement>'
+            "<AppElement>"
             '<XCUIElementTypeCell name="Settings" '
             'enabled="true" visible="true" x="0" y="0" width="200" height="44" />'
-            '</AppElement>'
+            "</AppElement>"
         )
         assert runner._is_element_visible("Settings", xml) is True
 
@@ -318,14 +318,14 @@ class TestScrollStateChangeDetection:
             f'enabled="true" visible="true"/>'
             for i in range(9)
         )
-        before = f'<AppElement>{shared_cells}</AppElement>'
+        before = f"<AppElement>{shared_cells}</AppElement>"
         # After has same 9 items + one extra at the bottom
         extra = (
             '<XCUIElementTypeCell label="NewItem" name="NewItem" '
             'x="0" y="396" width="390" height="44" '
             'enabled="true" visible="true"/>'
         )
-        after = f'<AppElement>{shared_cells}{extra}</AppElement>'
+        after = f"<AppElement>{shared_cells}{extra}</AppElement>"
         # before signatures: 9 items; after signatures: 10 items
         # overlap = 9; denominator = max(9, 10) = 10; ratio = 0.9 > 0.80 → False
         assert annotator._screen_changed(before, after) is False
@@ -342,16 +342,16 @@ class TestScrollStateChangeDetection:
         annotator = SoMAnnotator()
         # y=100 and y=104 both produce bucket round(100/10)=10 / round(104/10)=10
         before = (
-            '<AppElement>'
+            "<AppElement>"
             '<XCUIElementTypeCell label="X" enabled="true" visible="true" '
             'x="0" y="100" width="390" height="44" />'
-            '</AppElement>'
+            "</AppElement>"
         )
         after = (
-            '<AppElement>'
+            "<AppElement>"
             '<XCUIElementTypeCell label="X" enabled="true" visible="true" '
             'x="0" y="104" width="390" height="44" />'
-            '</AppElement>'
+            "</AppElement>"
         )
         # Both produce signature ("X", 10) → identical → unchanged → False
         assert annotator._screen_changed(before, after) is False
@@ -491,7 +491,7 @@ class TestScrollGuardsIntegration:
         # get_element_tree returns XML that contains the goal text
         annotator.get_element_tree.return_value = _xml_with_elements("Settings", "Wi-Fi")
 
-        png = _tiny_png_b64()
+        _tiny_png_b64()
         # Two distinct screenshots so the old stuck-detector doesn't fire
         driver.screenshot.side_effect = [
             (_tiny_png_b64("white"), 390, 844),
@@ -530,9 +530,7 @@ class TestScrollGuardsIntegration:
 
         mock_client = MagicMock()
         runner._client = mock_client
-        mock_client.messages.create.return_value = _claude_resp(
-            "ACTION: scroll\nDIRECTION: down\nREASONING: scrolling"
-        )
+        mock_client.messages.create.return_value = _claude_resp("ACTION: scroll\nDIRECTION: down\nREASONING: scrolling")
 
         with patch("time.sleep"):
             result = runner.run_step("Privacy", max_iterations=10)
@@ -576,7 +574,7 @@ class TestScrollGuardsIntegration:
 
         # get_element_tree returns empty tree on first call, then tree with target
         annotator.get_element_tree.side_effect = [
-            _xml_empty(),                          # pre-scroll Guard 1 check: not visible
+            _xml_empty(),  # pre-scroll Guard 1 check: not visible
             _xml_with_elements("Wi-Fi", "Settings"),  # post-scroll Guard 2 check
         ] + [_xml_with_elements("Wi-Fi", "Settings")] * 10
 
@@ -589,9 +587,11 @@ class TestScrollGuardsIntegration:
         png_a = _tiny_png_b64("white")
         png_b = _tiny_png_b64("black")
         driver.screenshot.side_effect = [
-            (png_a, 390, 844), (png_b, 390, 844),  # iter 0: scroll
-            (png_b, 390, 844), (png_a, 390, 844),  # iter 1: tap
-            (png_a, 390, 844),                      # iter 2: done
+            (png_a, 390, 844),
+            (png_b, 390, 844),  # iter 0: scroll
+            (png_b, 390, 844),
+            (png_a, 390, 844),  # iter 1: tap
+            (png_a, 390, 844),  # iter 2: done
         ] + [(png_b, 390, 844)] * 10
 
         mock_client = MagicMock()

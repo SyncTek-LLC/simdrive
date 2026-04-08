@@ -89,7 +89,9 @@ class AIStepRunner:
         abort_threshold = step.get("stuck_abort_threshold", self._stuck_abort_threshold)
         repeat_threshold = step.get("action_repeat_threshold", self._action_repeat_threshold)
 
-        logger.info("AI step %s: goal=%s, max_actions=%d, max_duration=%ds", step_id, goal[:80], max_actions, max_duration)
+        logger.info(
+            "AI step %s: goal=%s, max_actions=%d, max_duration=%ds", step_id, goal[:80], max_actions, max_duration
+        )
 
         screenshots: list[str] = []
         ux_observations: list[str] = []
@@ -141,12 +143,26 @@ class AIStepRunner:
                         f"Try a COMPLETELY DIFFERENT approach."
                     )
                     if self._on_escalation:
-                        self._on_escalation({"step_id": step_id, "action_idx": action_idx, "consecutive_same_hash": consecutive_same_hash, "level": "warn"})
+                        self._on_escalation(
+                            {
+                                "step_id": step_id,
+                                "action_idx": action_idx,
+                                "consecutive_same_hash": consecutive_same_hash,
+                                "level": "warn",
+                            }
+                        )
 
                 if consecutive_same_hash >= abort_threshold:
                     error_msg = f"App stuck: no UI change for {consecutive_same_hash} consecutive actions"
                     if self._on_escalation:
-                        self._on_escalation({"step_id": step_id, "action_idx": action_idx, "consecutive_same_hash": consecutive_same_hash, "level": "abort"})
+                        self._on_escalation(
+                            {
+                                "step_id": step_id,
+                                "action_idx": action_idx,
+                                "consecutive_same_hash": consecutive_same_hash,
+                                "level": "abort",
+                            }
+                        )
                     break
 
             if not force_api and len(recent_actions) >= repeat_threshold:
@@ -219,8 +235,18 @@ class AIStepRunner:
                                 break
                             else:
                                 verification_failures += 1
-                                failure_reason = v_decision.reasoning or v_decision.observation or "Criteria not confirmed"
-                                findings.append({"type": "verification_failure", "step_id": step_id, "action_idx": action_idx, "reason": failure_reason, "attempt": verification_failures})
+                                failure_reason = (
+                                    v_decision.reasoning or v_decision.observation or "Criteria not confirmed"
+                                )
+                                findings.append(
+                                    {
+                                        "type": "verification_failure",
+                                        "step_id": step_id,
+                                        "action_idx": action_idx,
+                                        "reason": failure_reason,
+                                        "attempt": verification_failures,
+                                    }
+                                )
                                 if verification_failures >= _DEFAULT_MAX_VERIFICATION_FAILURES:
                                     error_msg = f"Verification failed {verification_failures} times: {failure_reason}"
                                     goal_achieved = False
@@ -256,17 +282,19 @@ class AIStepRunner:
                 logger.error("AI step %s: executor error: %s", step_id, exc, exc_info=True)
 
             action_duration_ms = result.duration_ms or round((time.monotonic() - action_start) * 1000, 1)
-            actions_taken.append({
-                "index": action_idx,
-                "action": decision.action,
-                "target": decision.target,
-                "value": decision.value,
-                "reasoning": decision.reasoning,
-                "success": result.success,
-                "error": result.error,
-                "duration_ms": action_duration_ms,
-                "ui_changed": result.ui_changed,
-            })
+            actions_taken.append(
+                {
+                    "index": action_idx,
+                    "action": decision.action,
+                    "target": decision.target,
+                    "value": decision.value,
+                    "reasoning": decision.reasoning,
+                    "success": result.success,
+                    "error": result.error,
+                    "duration_ms": action_duration_ms,
+                    "ui_changed": result.ui_changed,
+                }
+            )
 
             if self._cost_callback is not None:
                 try:
@@ -331,6 +359,7 @@ class AIStepRunner:
     @staticmethod
     def _read_screenshot_b64(filepath: str) -> str:
         import base64
+
         try:
             with open(filepath, "rb") as f:
                 return base64.b64encode(f.read()).decode("utf-8")

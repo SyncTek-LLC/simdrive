@@ -24,6 +24,7 @@ try:
         ScenarioGraph,
         ScenarioNode,
     )
+
     _SCENARIO_GRAPH_AVAILABLE = True
 except ImportError:
     _SCENARIO_GRAPH_AVAILABLE = False
@@ -45,10 +46,7 @@ def _make_scenario(scenario_id: str, step_ids: list[str], goals: list[str] | Non
     """Build a scenario dict with the given step IDs."""
     if goals is None:
         goals = [f"Complete step {sid}" for sid in step_ids]
-    steps = [
-        {"id": sid, "goal": goal}
-        for sid, goal in zip(step_ids, goals)
-    ]
+    steps = [{"id": sid, "goal": goal} for sid, goal in zip(step_ids, goals)]
     return {"id": scenario_id, "steps": steps}
 
 
@@ -70,9 +68,7 @@ class TestScenarioNodeDataclass:
         children, is_fork_point."""
         fields = {f.name for f in dataclasses.fields(ScenarioNode)}
         required = {"node_id", "step", "scenarios_requiring", "children", "is_fork_point"}
-        assert required.issubset(fields), (
-            f"ScenarioNode missing fields: {required - fields}"
-        )
+        assert required.issubset(fields), f"ScenarioNode missing fields: {required - fields}"
 
     def test_is_fork_point_defaults_false(self):
         """is_fork_point must default to False."""
@@ -103,9 +99,7 @@ class TestExecutionPlanDataclass:
         scenario_branches."""
         fields = {f.name for f in dataclasses.fields(ExecutionPlan)}
         required = {"nodes", "fork_points", "shared_prefix_depth", "scenario_branches"}
-        assert required.issubset(fields), (
-            f"ExecutionPlan missing fields: {required - fields}"
-        )
+        assert required.issubset(fields), f"ExecutionPlan missing fields: {required - fields}"
 
 
 # ===========================================================================
@@ -120,9 +114,7 @@ class TestBuildTrieSingleScenario:
     def test_single_scenario_produces_linear_trie(self):
         """A single scenario with 3 steps should produce a trie where every
         node has at most one child."""
-        scenarios = [
-            _make_scenario("scen-1", ["step-A", "step-B", "step-C"])
-        ]
+        scenarios = [_make_scenario("scen-1", ["step-A", "step-B", "step-C"])]
         graph = ScenarioGraph(scenarios)
         root = graph.build_trie()
 
@@ -137,9 +129,7 @@ class TestBuildTrieSingleScenario:
 
     def test_single_scenario_trie_depth_matches_step_count(self):
         """A linear trie for 3 steps must have depth 3 (excluding virtual root if any)."""
-        scenarios = [
-            _make_scenario("scen-1", ["step-A", "step-B", "step-C"])
-        ]
+        scenarios = [_make_scenario("scen-1", ["step-A", "step-B", "step-C"])]
         graph = ScenarioGraph(scenarios)
         root = graph.build_trie()
 
@@ -186,9 +176,7 @@ class TestBuildTrieSharedPrefix:
 
         node_b = _find_node(root, "step-B")
         assert node_b is not None, "step-B node not found in trie"
-        assert len(node_b.children) == 2, (
-            f"Expected 2 children at fork point, got {len(node_b.children)}"
-        )
+        assert len(node_b.children) == 2, f"Expected 2 children at fork point, got {len(node_b.children)}"
 
     def test_shared_prefix_node_scenarios_requiring_contains_both(self):
         """The shared node 'step-A' must have both scenario IDs in scenarios_requiring."""
@@ -276,9 +264,7 @@ class TestFindForkPointsCorrectDepth:
 
         assert len(forks) >= 1
         fork_ids = {n.node_id for n in forks}
-        assert "step-B" in fork_ids, (
-            f"Expected step-B as fork point, got: {fork_ids}"
-        )
+        assert "step-B" in fork_ids, f"Expected step-B as fork point, got: {fork_ids}"
 
     def test_multiple_scenarios_fork_at_first_divergence(self):
         """With 3 scenarios sharing first 2 steps, the fork point is at step 2."""

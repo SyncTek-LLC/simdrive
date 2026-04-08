@@ -15,8 +15,7 @@ import io
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,6 +25,7 @@ import pytest
 
 try:
     from specterqa.ios.drivers.simulator.capture import ScreenCapture  # type: ignore[import]
+
     _CAPTURE_AVAILABLE = True
 except ImportError:
     _CAPTURE_AVAILABLE = False
@@ -41,11 +41,13 @@ needs_capture = pytest.mark.skipif(
 # Helpers — build synthetic test images via PIL or raw bytes
 # ---------------------------------------------------------------------------
 
+
 def _make_solid_png(width: int, height: int, color: tuple[int, int, int]) -> bytes:
     """Return a minimal PNG of a solid colour using PIL if available,
     otherwise a raw stub (the stub is sufficient for mock-based tests)."""
     try:
         from PIL import Image  # type: ignore[import]
+
         img = Image.new("RGB", (width, height), color)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -53,7 +55,9 @@ def _make_solid_png(width: int, height: int, color: tuple[int, int, int]) -> byt
     except ImportError:
         # Minimal 1x1 valid PNG fallback — good enough for tests that
         # don't parse actual pixel values.
-        import zlib, struct
+        import zlib
+        import struct
+
         def _png(w: int, h: int, rgb: tuple[int, int, int]) -> bytes:
             def chunk(name: bytes, data: bytes) -> bytes:
                 c = struct.pack(">I", len(data)) + name + data
@@ -64,18 +68,12 @@ def _make_solid_png(width: int, height: int, color: tuple[int, int, int]) -> byt
             for _ in range(h):
                 raw += b"\x00" + bytes(rgb) * w
             idat = zlib.compress(raw)
-            return (
-                b"\x89PNG\r\n\x1a\n"
-                + chunk(b"IHDR", ihdr)
-                + chunk(b"IDAT", idat)
-                + chunk(b"IEND", b"")
-            )
+            return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
         return _png(width, height, color)
 
 
-def _make_capture_dict(
-    width: int, height: int, color: tuple[int, int, int] = (128, 128, 128)
-) -> dict:
+def _make_capture_dict(width: int, height: int, color: tuple[int, int, int] = (128, 128, 128)) -> dict:
     """Build a capture dict matching the ScreenCapture.capture() return schema."""
     raw = _make_solid_png(width, height, color)
     return {
@@ -108,8 +106,11 @@ class TestCaptureCallsSimctl:
         def fake_run(cmd, *args, **kwargs):
             # Simulate simctl writing the PNG file to the tmp path
             # Find the file path argument (last positional arg in the command list)
-            if isinstance(cmd, list) and len(cmd) > 0 and "simctl" in cmd[0] or (
-                isinstance(cmd, list) and any("simctl" in c for c in cmd)
+            if (
+                isinstance(cmd, list)
+                and len(cmd) > 0
+                and "simctl" in cmd[0]
+                or (isinstance(cmd, list) and any("simctl" in c for c in cmd))
             ):
                 # Write PNG to whichever path simctl would write to
                 for arg in reversed(cmd):
@@ -124,7 +125,8 @@ class TestCaptureCallsSimctl:
         # subprocess.run must have been called
         assert mock_run.called, "subprocess.run was never called"
         cmd_str = " ".join(
-            str(a) for a in (
+            str(a)
+            for a in (
                 mock_run.call_args_list[0][0][0]
                 if mock_run.call_args_list[0][0]
                 else mock_run.call_args_list[0].args[0]
@@ -184,9 +186,7 @@ class TestCaptureResizes:
         with patch("subprocess.run", side_effect=fake_run):
             result = cap.capture(resize_width=200)
 
-        assert result["width"] == 200, (
-            f"Expected width=200 after resize, got {result['width']}"
-        )
+        assert result["width"] == 200, f"Expected width=200 after resize, got {result['width']}"
         # Height should be proportionally scaled (400/800 → 200/x → x≈400)
         assert result["height"] > 0
 
@@ -207,9 +207,7 @@ class TestCaptureResizes:
         with patch("subprocess.run", side_effect=fake_run):
             result = cap.capture()  # No resize_width override
 
-        assert result["width"] == 1024, (
-            f"Expected default resize_width=1024, got {result['width']}"
-        )
+        assert result["width"] == 1024, f"Expected default resize_width=1024, got {result['width']}"
 
 
 # ===========================================================================
@@ -231,9 +229,7 @@ class TestDiffIdentical:
         assert result["changed_pixels"] == 0, (
             f"Expected 0 changed_pixels for identical images, got {result['changed_pixels']}"
         )
-        assert result["change_ratio"] == pytest.approx(0.0), (
-            f"Expected change_ratio=0.0, got {result['change_ratio']}"
-        )
+        assert result["change_ratio"] == pytest.approx(0.0), f"Expected change_ratio=0.0, got {result['change_ratio']}"
 
 
 @needs_capture
@@ -247,12 +243,8 @@ class TestDiffDetectsChanges:
         white = _make_capture_dict(width=10, height=10, color=(255, 255, 255))
         result = cap.diff(black, white)
 
-        assert result["changed_pixels"] > 0, (
-            "Expected changed_pixels > 0 for black vs white images"
-        )
-        assert result["change_ratio"] > 0.0, (
-            f"Expected change_ratio > 0, got {result['change_ratio']}"
-        )
+        assert result["changed_pixels"] > 0, "Expected changed_pixels > 0 for black vs white images"
+        assert result["change_ratio"] > 0.0, f"Expected change_ratio > 0, got {result['change_ratio']}"
 
     def test_diff_change_ratio_formula(self):
         """change_ratio == changed_pixels / total_pixels."""
@@ -266,8 +258,7 @@ class TestDiffDetectsChanges:
         expected_ratio = changed / total if total > 0 else 0.0
 
         assert abs(result["change_ratio"] - expected_ratio) < 0.01, (
-            f"change_ratio {result['change_ratio']} does not match "
-            f"changed_pixels/total_pixels = {expected_ratio}"
+            f"change_ratio {result['change_ratio']} does not match changed_pixels/total_pixels = {expected_ratio}"
         )
 
 
@@ -294,9 +285,7 @@ class TestWaitForChange:
             return changed if call_count["n"] >= 2 else baseline
 
         with patch.object(cap, "capture", side_effect=mock_capture):
-            result = cap.wait_for_change(
-                baseline=baseline, timeout=5.0, poll_interval=0.1
-            )
+            result = cap.wait_for_change(baseline=baseline, timeout=5.0, poll_interval=0.1)
 
         assert result is True, "Expected wait_for_change to return True when screen changes"
 
@@ -306,11 +295,8 @@ class TestWaitForChange:
         baseline = _make_capture_dict(width=10, height=10, color=(0, 0, 0))
 
         # Always return same image → no change
-        with patch.object(cap, "capture", return_value=baseline), \
-             patch("time.sleep"):  # avoid real sleeping in test
-            result = cap.wait_for_change(
-                baseline=baseline, timeout=0.05, poll_interval=0.01
-            )
+        with patch.object(cap, "capture", return_value=baseline), patch("time.sleep"):  # avoid real sleeping in test
+            result = cap.wait_for_change(baseline=baseline, timeout=0.05, poll_interval=0.01)
 
         assert result is False, "Expected wait_for_change to return False on timeout"
 
@@ -320,16 +306,16 @@ class TestWaitForChange:
         baseline = _make_capture_dict(width=10, height=10, color=(0, 0, 0))
         sleep_calls: list[float] = []
 
-        with patch.object(cap, "capture", return_value=baseline), \
-             patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
+        with (
+            patch.object(cap, "capture", return_value=baseline),
+            patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)),
+        ):
             cap.wait_for_change(baseline=baseline, timeout=0.05, poll_interval=0.02)
 
         # Each sleep call should use poll_interval=0.02
         assert len(sleep_calls) >= 1
         for duration in sleep_calls:
-            assert abs(duration - 0.02) < 0.005, (
-                f"Expected poll_interval=0.02 per sleep, got {duration}"
-            )
+            assert abs(duration - 0.02) < 0.005, f"Expected poll_interval=0.02 per sleep, got {duration}"
 
 
 # ===========================================================================
@@ -345,8 +331,7 @@ class TestElementAppears:
         """element_appears() returns True when the screen changes within timeout."""
         cap = ScreenCapture(device_id="booted")
 
-        with patch.object(cap, "capture") as mock_cap, \
-             patch.object(cap, "wait_for_change", return_value=True):
+        with patch.object(cap, "capture") as mock_cap, patch.object(cap, "wait_for_change", return_value=True):
             mock_cap.return_value = _make_capture_dict(10, 10, (0, 0, 0))
             result = cap.element_appears(description="Login button", timeout=5.0)
 
@@ -356,8 +341,7 @@ class TestElementAppears:
         """element_appears() returns False when no visual change within timeout."""
         cap = ScreenCapture(device_id="booted")
 
-        with patch.object(cap, "capture") as mock_cap, \
-             patch.object(cap, "wait_for_change", return_value=False):
+        with patch.object(cap, "capture") as mock_cap, patch.object(cap, "wait_for_change", return_value=False):
             mock_cap.return_value = _make_capture_dict(10, 10, (0, 0, 0))
             result = cap.element_appears(description="Login button", timeout=1.0)
 

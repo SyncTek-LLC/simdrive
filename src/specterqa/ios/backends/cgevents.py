@@ -145,7 +145,4 @@ class CGEventBackend:
     # ------------------------------------------------------------------
 
     def __repr__(self) -> str:
-        return (
-            f"CGEventBackend(udid={self._layer.device_id!r}, "
-            f"img={self._img_w}x{self._img_h})"
-        )
+        return f"CGEventBackend(udid={self._layer.device_id!r}, img={self._img_w}x{self._img_h})"

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from typing import Optional
 
 
 class IdbInputBackend:
@@ -89,10 +88,17 @@ class IdbInputBackend:
         """
         self._run(
             [
-                "idb", "ui", "swipe",
-                "--udid", self.udid,
-                str(x1), str(y1), str(x2), str(y2),
-                "--duration", str(duration),
+                "idb",
+                "ui",
+                "swipe",
+                "--udid",
+                self.udid,
+                str(x1),
+                str(y1),
+                str(x2),
+                str(y2),
+                "--duration",
+                str(duration),
             ]
         )
 

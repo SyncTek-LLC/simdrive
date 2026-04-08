@@ -55,12 +55,12 @@ logger = logging.getLogger("specterqa.ios.mcp")
 # Global session state — one active session at a time
 # ---------------------------------------------------------------------------
 
-_session = None          # TestSession instance
-_backend = None          # XCTestBackend instance
-_annotator = None        # SoMAnnotator instance
+_session = None  # TestSession instance
+_backend = None  # XCTestBackend instance
+_annotator = None  # SoMAnnotator instance
 _last_elements: list = []  # Element cache from last ios_screenshot / ios_elements call
 _session_lock = threading.Lock()  # Serialises start/stop to prevent race conditions
-_recorder = None         # ReplayRecorder instance (None when recording is not active)
+_recorder = None  # ReplayRecorder instance (None when recording is not active)
 
 
 def _require_session() -> None:
@@ -74,6 +74,7 @@ def _auto_checkpoint() -> None:
     if _recorder is not None and _annotator is not None:
         try:
             import time
+
             time.sleep(0.3)  # let UI settle
             elements = _annotator.get_elements_from_runner()
             labels = [e.label for e in elements[:15] if e.label]
@@ -122,11 +123,7 @@ def _list_simulator_devices() -> list[dict[str, Any]]:
 
     devices: list[dict[str, Any]] = []
     for runtime_id, device_list in data.get("devices", {}).items():
-        runtime_label = (
-            runtime_id
-            .replace("com.apple.CoreSimulator.SimRuntime.", "")
-            .replace("-", " ")
-        )
+        runtime_label = runtime_id.replace("com.apple.CoreSimulator.SimRuntime.", "").replace("-", " ")
         for dev in device_list:
             devices.append({**dev, "runtime": runtime_label})
     return devices
@@ -240,6 +237,7 @@ def handle_start_session(arguments: dict) -> dict:
         # BUG V5-1 FIX: if the caller passes license_key="founder" as an argument,
         # inject it into the environment so LicenseValidator's founder bypass fires.
         from specterqa.ios.license.validator import LicenseValidator
+
         license_key = arguments.get("license_key", os.environ.get("SPECTERQA_LICENSE_KEY", ""))
         if str(license_key).strip().lower() == "founder":
             os.environ["SPECTERQA_IOS_LICENSE"] = "founder"
@@ -257,6 +255,7 @@ def handle_start_session(arguments: dict) -> dict:
 
         # Auto-build runner if not built
         from specterqa.ios.session_manager import _find_xctestrun, _DEFAULT_RUNNER_BUILD_DIR
+
         if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None:
             logger.info("Runner not built — building automatically...")
             try:
@@ -265,7 +264,9 @@ def handle_start_session(arguments: dict) -> dict:
                 if build_sh.exists():
                     subprocess.run(
                         ["bash", str(build_sh)],
-                        capture_output=True, text=True, timeout=120,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
                         cwd=str(runner_dir),
                     )
             except Exception as exc:
@@ -274,11 +275,13 @@ def handle_start_session(arguments: dict) -> dict:
         # Auto-detect provider: local sim or BrowserStack
         provider = "local"
         from specterqa.ios.backends.browserstack import BrowserStackBackend
+
         if BrowserStackBackend.is_available():
             # Check if a local sim is booted
             sim_check = subprocess.run(
                 ["xcrun", "simctl", "list", "devices", "booted", "-j"],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             has_local_sim = '"state" : "Booted"' in sim_check.stdout
             if not has_local_sim:
@@ -304,6 +307,7 @@ def handle_start_session(arguments: dict) -> dict:
                 _last_elements = []
 
                 from specterqa.ios.replay import ReplayRecorder
+
                 _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
                 return {
@@ -342,6 +346,7 @@ def handle_start_session(arguments: dict) -> dict:
 
             # Start recording — every subsequent tool call will be captured
             from specterqa.ios.replay import ReplayRecorder
+
             _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
             return {
@@ -370,6 +375,7 @@ def handle_stop_session(arguments: dict) -> dict:
 
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
+
         if isinstance(_backend, BrowserStackBackend):
             try:
                 _backend.stop()
@@ -515,7 +521,7 @@ def handle_tap(arguments: dict) -> dict:
                 "error": (
                     f"No element found with label containing '{label}'"
                     + (f" and type '{element_type_filter}'" if element_type_filter else "")
-                    + f". Call ios_screenshot first to refresh elements."
+                    + ". Call ios_screenshot first to refresh elements."
                 )
             }
 
@@ -574,6 +580,7 @@ def handle_wait(arguments: dict) -> dict:
         {"status": "ok", "waited": <seconds>}
     """
     import time as _time
+
     seconds = max(0.0, min(float(arguments.get("seconds", 1.0)), 30.0))
     _time.sleep(seconds)
     return {"status": "ok", "waited": seconds}
@@ -680,8 +687,14 @@ def handle_accessibility_audit(arguments: dict) -> dict:
         return {"error": f"Failed to fetch elements: {exc}"}
 
     interactive_types = {
-        "Button", "TextField", "SecureTextField", "Switch",
-        "Slider", "Link", "MenuItem", "Cell",
+        "Button",
+        "TextField",
+        "SecureTextField",
+        "Switch",
+        "Slider",
+        "Link",
+        "MenuItem",
+        "Cell",
     }
 
     issues = []
@@ -689,34 +702,49 @@ def handle_accessibility_audit(arguments: dict) -> dict:
     for e in elements:
         # Missing label on an interactive element
         if not e.label and e.element_type in interactive_types:
-            issues.append({
-                "type": "missing_label",
-                "element_type": e.element_type,
-                "index": e.index,
-                "frame": f"{e.x},{e.y} {e.width}x{e.height}",
-            })
+            issues.append(
+                {
+                    "type": "missing_label",
+                    "element_type": e.element_type,
+                    "index": e.index,
+                    "frame": f"{e.x},{e.y} {e.width}x{e.height}",
+                }
+            )
 
         # Touch target too small — only flag actually-interactive element types.
         # StaticText / Image / Other are non-interactive by design and routinely
         # smaller than 44 pt; including them floods the report with false positives.
         INTERACTIVE_FOR_AUDIT = {
-            "XCUIElementTypeButton", "XCUIElementTypeCell",
-            "XCUIElementTypeSwitch", "XCUIElementTypeSlider",
-            "XCUIElementTypeLink", "XCUIElementTypeTab",
-            "XCUIElementTypeMenuItem", "XCUIElementTypeRadioButton",
+            "XCUIElementTypeButton",
+            "XCUIElementTypeCell",
+            "XCUIElementTypeSwitch",
+            "XCUIElementTypeSlider",
+            "XCUIElementTypeLink",
+            "XCUIElementTypeTab",
+            "XCUIElementTypeMenuItem",
+            "XCUIElementTypeRadioButton",
             "XCUIElementTypeCheckBox",
             # Short-form aliases (runner may omit the prefix)
-            "Button", "Cell", "Switch", "Slider",
-            "Link", "Tab", "MenuItem", "RadioButton", "CheckBox",
+            "Button",
+            "Cell",
+            "Switch",
+            "Slider",
+            "Link",
+            "Tab",
+            "MenuItem",
+            "RadioButton",
+            "CheckBox",
         }
         if e.element_type in INTERACTIVE_FOR_AUDIT and (e.width < 44 or e.height < 44):
-            issues.append({
-                "type": "small_target",
-                "label": e.label or f"[{e.element_type}@{e.index}]",
-                "element_type": e.element_type,
-                "size": f"{e.width}x{e.height}",
-                "index": e.index,
-            })
+            issues.append(
+                {
+                    "type": "small_target",
+                    "label": e.label or f"[{e.element_type}@{e.index}]",
+                    "element_type": e.element_type,
+                    "size": f"{e.width}x{e.height}",
+                    "index": e.index,
+                }
+            )
 
     # Duplicate labels
     labels = [e.label for e in elements if e.label]
@@ -725,11 +753,13 @@ def handle_accessibility_audit(arguments: dict) -> dict:
         seen[lbl] = seen.get(lbl, 0) + 1
     for lbl, count in seen.items():
         if count > 1:
-            issues.append({
-                "type": "duplicate_label",
-                "label": lbl,
-                "count": count,
-            })
+            issues.append(
+                {
+                    "type": "duplicate_label",
+                    "label": lbl,
+                    "count": count,
+                }
+            )
 
     return {
         "issues": issues,
@@ -756,18 +786,16 @@ def handle_swipe(arguments: dict) -> dict:
     direction = arguments.get("direction", "down").lower()
     valid_directions = {"up", "down", "left", "right"}
     if direction not in valid_directions:
-        return {
-            "error": f"Invalid direction {direction!r}. Must be one of: {sorted(valid_directions)}"
-        }
+        return {"error": f"Invalid direction {direction!r}. Must be one of: {sorted(valid_directions)}"}
 
     # Centre of a standard iPhone screen in logical points
     cx, cy = 195, 422
     offset = 200
 
     coords = {
-        "down":  (cx, cy + offset, cx, cy - offset),
-        "up":    (cx, cy - offset, cx, cy + offset),
-        "left":  (cx + offset, cy, cx - offset, cy),
+        "down": (cx, cy + offset, cx, cy - offset),
+        "up": (cx, cy - offset, cx, cy + offset),
+        "left": (cx + offset, cy, cx - offset, cy),
         "right": (cx - offset, cy, cx + offset, cy),
     }
 
@@ -1036,6 +1064,7 @@ def handle_long_press(arguments: dict) -> dict:
 
 # BUG V5-3 FIX: appearance toggle and generic simctl access.
 
+
 def handle_set_appearance(arguments: dict) -> dict:
     """Toggle dark/light mode on the simulator.
 
@@ -1131,7 +1160,9 @@ def handle_simctl(arguments: dict) -> dict:
 
     _list = subprocess.run(
         ["xcrun", "simctl", "list", "devices", "-j"],
-        capture_output=True, text=True, timeout=5,
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
     _booted: list[str] = []
     try:
@@ -1351,23 +1382,22 @@ SETUP CHECK:
         license_key: str | None = None,
         clone: bool = False,
     ) -> str:
-        result = handle_start_session({
-            "bundle_id": bundle_id,
-            "device_id": device_id,
-            "app_path": app_path,
-            "license_key": license_key or "",
-            "clone": clone,
-        })
+        result = handle_start_session(
+            {
+                "bundle_id": bundle_id,
+                "device_id": device_id,
+                "app_path": app_path,
+                "license_key": license_key or "",
+                "clone": clone,
+            }
+        )
         return json.dumps(result)
 
     # ── Tool: ios_stop_session ─────────────────────────────────────────────
 
     @mcp.tool(
         name="ios_stop_session",
-        description=(
-            "Stop the XCTest runner and clean up. "
-            "Call this when testing is complete."
-        ),
+        description=("Stop the XCTest runner and clean up. Call this when testing is complete."),
     )
     async def ios_stop_session() -> str:
         result = handle_stop_session({})
@@ -1413,11 +1443,13 @@ SETUP CHECK:
         label: str | None = None,
         type: str | None = None,
     ) -> str:
-        result = handle_tap({
-            "element_index": element_index,
-            "label": label,
-            "type": type,
-        })
+        result = handle_tap(
+            {
+                "element_index": element_index,
+                "label": label,
+                "type": type,
+            }
+        )
         return json.dumps(result)
 
     # ── Tool: ios_wait ─────────────────────────────────────────────────────

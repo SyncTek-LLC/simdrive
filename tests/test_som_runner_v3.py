@@ -22,16 +22,13 @@ INIT-2026-500 — SpecterQA iOS Headless Driver.
 from __future__ import annotations
 
 import io
-import json
 import logging
-import warnings
-from typing import Any
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from specterqa.ios.som_annotator import UIElement
-from specterqa.ios.som_runner import SoMRunner, SoMRunnerError
+from specterqa.ios.som_runner import SoMRunner
 
 # ---------------------------------------------------------------------------
 # Helpers — shared with test_som_runner.py but kept local for isolation
@@ -109,10 +106,7 @@ class TestSoMUsesOurRunner:
         """The default URL must NOT be WebDriverAgent's port 8100."""
         runner = SoMRunner(api_key="test-key")
         runner_url = getattr(runner, "runner_url", getattr(runner, "wda_url", ""))
-        assert "8100" not in runner_url, (
-            "v3 SoMRunner must not default to WDA port 8100. "
-            f"Got: {runner_url!r}"
-        )
+        assert "8100" not in runner_url, f"v3 SoMRunner must not default to WDA port 8100. Got: {runner_url!r}"
 
     def test_runner_url_can_be_overridden(self):
         """Custom runner_url is accepted and stored."""
@@ -123,9 +117,7 @@ class TestSoMUsesOurRunner:
     def test_runner_url_scheme_is_http(self):
         runner = SoMRunner(api_key="test-key")
         runner_url = getattr(runner, "runner_url", getattr(runner, "wda_url", ""))
-        assert runner_url.startswith("http://"), (
-            f"runner_url must start with http://, got: {runner_url!r}"
-        )
+        assert runner_url.startswith("http://"), f"runner_url must start with http://, got: {runner_url!r}"
 
     def test_runner_url_targets_localhost(self):
         runner = SoMRunner(api_key="test-key")
@@ -150,9 +142,7 @@ class TestSoMGetsSourceFromRunner:
         runner._driver = _mock_driver(fake_b64)
         runner._annotator = _mock_annotator(elements, fake_b64)
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _claude_response(
-            "ACTION: done\nREASONING: done"
-        )
+        mock_client.messages.create.return_value = _claude_response("ACTION: done\nREASONING: done")
         runner._client = mock_client
 
         # Patch the backend's source tree fetch if v3 adds it
@@ -175,7 +165,7 @@ class TestSoMGetsSourceFromRunner:
             setattr(runner, backend_attr, mock_backend)
 
         with patch("time.sleep"):
-            result = runner.run_step("tap button A")
+            runner.run_step("tap button A")
 
         # Annotator should have been called — meaning we got elements
         assert runner._annotator.annotate.called
@@ -188,9 +178,7 @@ class TestSoMGetsSourceFromRunner:
         runner._driver = _mock_driver(fake_b64)
         runner._annotator = _mock_annotator(elements, fake_b64)
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _claude_response(
-            "ACTION: done\nREASONING: done"
-        )
+        mock_client.messages.create.return_value = _claude_response("ACTION: done\nREASONING: done")
         runner._client = mock_client
 
         if not (hasattr(runner, "_xctest_backend") or hasattr(runner, "_runner_backend")):
@@ -211,7 +199,7 @@ class TestSoMGetsSourceFromRunner:
 
     def test_source_tree_elements_mapped_to_ui_elements(self):
         """Source tree JSON must be converted to UIElement objects for the annotator."""
-        fake_b64 = _tiny_png_b64()
+        _tiny_png_b64()
 
         runner = SoMRunner(api_key="test-key")
 
@@ -248,7 +236,7 @@ class TestSoMFallbackToCGEvents:
         runner = SoMRunner(api_key="test-key")
 
         with (
-            patch("specterqa.ios.som_runner.SoMRunner.start") as mock_start,
+            patch("specterqa.ios.som_runner.SoMRunner.start"),
         ):
             # We want to verify that a warning is emitted in fallback mode.
             # Since start() is mocked here to avoid needing WDA, we test via
@@ -273,7 +261,7 @@ class TestSoMFallbackToCGEvents:
         check_fn = getattr(runner, "_is_runner_available", None) or getattr(runner, "_check_runner")
         with (
             patch("urllib.request.urlopen", side_effect=Exception("refused")),
-            patch.object(logging.getLogger("specterqa.ios.som_runner"), "warning") as mock_warn,
+            patch.object(logging.getLogger("specterqa.ios.som_runner"), "warning"),
         ):
             check_fn()
 
@@ -298,8 +286,10 @@ class TestSoMFallbackToCGEvents:
         driver = getattr(runner, "_driver", None)
         if driver is not None:
             from specterqa.ios.backends.xctest_client import XCTestBackend
-            assert not isinstance(driver, XCTestBackend), \
+
+            assert not isinstance(driver, XCTestBackend), (
                 "Fallback mode must not use XCTestBackend as the primary driver"
+            )
 
     def test_cgevents_fallback_warning_mentions_runner(self, caplog):
         """The fallback warning must mention the runner for actionability."""
@@ -313,8 +303,9 @@ class TestSoMFallbackToCGEvents:
             warn_fn()
 
         combined = caplog.text.lower()
-        assert any(kw in combined for kw in ("runner", "8222", "xctest", "fallback")), \
+        assert any(kw in combined for kw in ("runner", "8222", "xctest", "fallback")), (
             f"Fallback warning should mention runner/8222/xctest/fallback. Got: {caplog.text!r}"
+        )
 
     def test_run_step_succeeds_in_fallback_mode(self):
         """run_step() must succeed even when the XCTest runner is unavailable."""
@@ -324,9 +315,7 @@ class TestSoMFallbackToCGEvents:
         runner._driver = _mock_driver(fake_b64)
         runner._annotator = _mock_annotator(elements, fake_b64)
         mock_client = MagicMock()
-        mock_client.messages.create.return_value = _claude_response(
-            "ACTION: done\nREASONING: done"
-        )
+        mock_client.messages.create.return_value = _claude_response("ACTION: done\nREASONING: done")
         runner._client = mock_client
 
         # Simulate runner unavailable
@@ -351,12 +340,9 @@ class TestSoMHeadlessMode:
     def test_headless_flag_accepted(self):
         """SoMRunner.__init__ accepts headless= kwarg without error."""
         try:
-            runner = SoMRunner(api_key="test-key", headless=True)
+            SoMRunner(api_key="test-key", headless=True)
         except TypeError:
-            pytest.fail(
-                "SoMRunner.__init__ does not accept headless= kwarg. "
-                "v3 must add headless support."
-            )
+            pytest.fail("SoMRunner.__init__ does not accept headless= kwarg. v3 must add headless support.")
 
     def test_headless_stored_on_instance(self):
         runner = SoMRunner(api_key="test-key", headless=True)
@@ -415,31 +401,20 @@ class TestSoMHeadlessMode:
         runner._driver = _mock_driver(fake_b64)
         runner._annotator = _mock_annotator(elements, fake_b64)
         runner._client = MagicMock()
-        runner._client.messages.create.return_value = _claude_response(
-            "ACTION: done\nREASONING: done"
-        )
+        runner._client.messages.create.return_value = _claude_response("ACTION: done\nREASONING: done")
 
         with patch("subprocess.run") as mock_run, patch("subprocess.Popen") as mock_popen:
             with patch("time.sleep"):
                 runner.run_step("quick test")
 
             all_cmds = [
-                " ".join(str(a) for a in c[0][0])
-                for c in (mock_run.call_args_list + mock_popen.call_args_list)
-                if c[0]
+                " ".join(str(a) for a in c[0][0]) for c in (mock_run.call_args_list + mock_popen.call_args_list) if c[0]
             ]
-            simulator_opens = [
-                cmd for cmd in all_cmds
-                if "open" in cmd.lower() and "Simulator" in cmd
-            ]
-            assert not simulator_opens, (
-                f"Headless mode must not open Simulator.app. Calls: {simulator_opens}"
-            )
+            simulator_opens = [cmd for cmd in all_cmds if "open" in cmd.lower() and "Simulator" in cmd]
+            assert not simulator_opens, f"Headless mode must not open Simulator.app. Calls: {simulator_opens}"
 
     def test_headless_runner_url_still_uses_8222(self):
         """Even in headless mode, the runner URL must be port 8222."""
         runner = SoMRunner(api_key="test-key", headless=True)
         runner_url = getattr(runner, "runner_url", getattr(runner, "wda_url", ""))
-        assert "8222" in runner_url, (
-            f"Headless runner must still use port 8222, got: {runner_url!r}"
-        )
+        assert "8222" in runner_url, f"Headless runner must still use port 8222, got: {runner_url!r}"

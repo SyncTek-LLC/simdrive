@@ -155,9 +155,7 @@ class ExploratoryAgent:
         for goal in persona_goals:
             if goal not in history:
                 # Skip if the goal text overlaps with an already-covered area
-                already_done = any(
-                    area.lower() in goal.lower() for area in coverage
-                )
+                already_done = any(area.lower() in goal.lower() for area in coverage)
                 if not already_done:
                     return goal
 

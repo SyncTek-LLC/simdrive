@@ -12,7 +12,7 @@ Test plan (INIT-2026-492, ART-2026-018-TEST-PLAN):
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,6 +22,7 @@ from specterqa.engine.protocols import Decision, StepResult
 # ---------------------------------------------------------------------------
 # Helpers — build fake Anthropic API response objects
 # ---------------------------------------------------------------------------
+
 
 def _make_content_block(block_type: str, **kwargs) -> MagicMock:
     """Build a mock Anthropic content block (text or tool_use)."""
@@ -71,6 +72,7 @@ def _setup_beta_client(mock_client: MagicMock, response: MagicMock) -> MagicMock
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def evidence_dir(tmp_path: Path) -> Path:
     """Temporary evidence directory for test runs."""
@@ -103,6 +105,7 @@ def cost_callback() -> MagicMock:
 # ComputerUseDecider Tests
 # ---------------------------------------------------------------------------
 
+
 class TestComputerUseDeciderClickDecision:
     """Test 1: left_click tool_use → Decision(action='click')."""
 
@@ -111,9 +114,9 @@ class TestComputerUseDeciderClickDecision:
         the coordinate pair included in the target string."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [200, 450]})
-        ])
+        response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [200, 450]})]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -137,9 +140,7 @@ class TestComputerUseDeciderTypeDecision:
         typed text in the value field."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "type", "text": "hello"})
-        ])
+        response = _make_api_response([_make_tool_use_block("computer", {"action": "type", "text": "hello"})])
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -162,9 +163,7 @@ class TestComputerUseDeciderKeyDecision:
         key name in the value field."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "key", "text": "Return"})
-        ])
+        response = _make_api_response([_make_tool_use_block("computer", {"action": "key", "text": "Return"})])
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -186,14 +185,19 @@ class TestComputerUseDeciderScrollDecision:
         """A scroll tool_use response should map to a scroll Decision."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {
-                "action": "scroll",
-                "coordinate": [195, 422],
-                "direction": "down",
-                "amount": 3,
-            })
-        ])
+        response = _make_api_response(
+            [
+                _make_tool_use_block(
+                    "computer",
+                    {
+                        "action": "scroll",
+                        "coordinate": [195, 422],
+                        "direction": "down",
+                        "amount": 3,
+                    },
+                )
+            ]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -215,9 +219,7 @@ class TestComputerUseDeciderGoalAchieved:
         should interpret this as goal completion and return a done Decision."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_text_block("Goal achieved. The login was successful.")
-        ])
+        response = _make_api_response([_make_text_block("Goal achieved. The login was successful.")])
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -271,9 +273,9 @@ class TestComputerUseDeciderRetryOnTransient:
         import anthropic
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        success_response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [100, 200]})
-        ])
+        success_response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [100, 200]})]
+        )
 
         mock_anthropic_client.beta.messages.create.side_effect = [
             anthropic.APIConnectionError(request=MagicMock()),
@@ -303,9 +305,9 @@ class TestComputerUseDeciderBetaHeader:
         required by the Computer Use API."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [10, 20]})
-        ])
+        response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [10, 20]})]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -331,9 +333,9 @@ class TestComputerUseDeciderScreenshotPayload:
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
         test_b64 = "aGVsbG93b3JsZA=="  # base64 for 'helloworld'
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})
-        ])
+        response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -354,9 +356,7 @@ class TestComputerUseDeciderScreenshotPayload:
                         if source.get("data") == test_b64:
                             image_found = True
                             break
-        assert image_found, (
-            "No image content block with the provided base64 data found in the request messages"
-        )
+        assert image_found, "No image content block with the provided base64 data found in the request messages"
 
 
 class TestComputerUseDeciderStuckContext:
@@ -368,9 +368,9 @@ class TestComputerUseDeciderStuckContext:
         different approach."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})
-        ])
+        response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         stuck_msg = "tried clicking 3 times without result"
@@ -385,9 +385,7 @@ class TestComputerUseDeciderStuckContext:
         call_kwargs = mock_anthropic_client.beta.messages.create.call_args.kwargs
         # The stuck_context must appear somewhere in the messages payload
         messages_str = str(call_kwargs.get("messages", []))
-        assert stuck_msg in messages_str, (
-            f"stuck_context '{stuck_msg}' not found in messages sent to API"
-        )
+        assert stuck_msg in messages_str, f"stuck_context '{stuck_msg}' not found in messages sent to API"
 
 
 class TestComputerUseDeciderCostCallback:
@@ -398,9 +396,9 @@ class TestComputerUseDeciderCostCallback:
         be invoked so the caller can track per-call spend."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})
-        ])
+        response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         with patch("anthropic.Anthropic", return_value=mock_anthropic_client):
@@ -426,9 +424,9 @@ class TestComputerUseDeciderDisplayDimensions:
         display dimensions (defaults: 1170x2532 for iPhone 15 Pro retina)."""
         from specterqa.engine.computer_use_decider import ComputerUseDecider
 
-        response = _make_api_response([
-            _make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})
-        ])
+        response = _make_api_response(
+            [_make_tool_use_block("computer", {"action": "left_click", "coordinate": [0, 0]})]
+        )
         mock_anthropic_client.beta.messages.create.return_value = response
 
         display_w, display_h = 1170, 2532
@@ -462,6 +460,7 @@ class TestComputerUseDeciderDisplayDimensions:
 # ComputerUseRunner Tests
 # ---------------------------------------------------------------------------
 
+
 class TestComputerUseRunnerStartBootsSimulator:
     """Test 13: start() boots the underlying SimulatorRunner."""
 
@@ -477,15 +476,19 @@ class TestComputerUseRunnerStartBootsSimulator:
 
         mock_sim_runner = MagicMock()
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-            return_value=mock_sim_runner,
-        ), patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+                return_value=mock_sim_runner,
+            ),
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
         ):
             runner = ComputerUseRunner(
                 bundle_id="com.example.testapp",
@@ -508,14 +511,18 @@ class TestComputerUseRunnerInstallApp:
         mock_sim_runner = MagicMock()
         app_path = "/tmp/MyApp.app"
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-        ) as MockSimRunner, patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+            ) as MockSimRunner,
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
         ):
             MockSimRunner.return_value = mock_sim_runner
             runner = ComputerUseRunner(
@@ -554,18 +561,23 @@ class TestComputerUseRunnerRunScenarioAllSteps:
         mock_step_result.error = None
         mock_step_result.goal_achieved = True
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-            return_value=mock_sim_runner,
-        ), patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.ai_step_runner.AIStepRunner",
-        ) as MockAIStepRunner:
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+                return_value=mock_sim_runner,
+            ),
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.ai_step_runner.AIStepRunner",
+            ) as MockAIStepRunner,
+        ):
             mock_ai_runner = MagicMock()
             mock_ai_runner.execute_step.return_value = mock_step_result
             MockAIStepRunner.return_value = mock_ai_runner
@@ -598,15 +610,19 @@ class TestComputerUseRunnerStopShutsDown:
 
         mock_sim_runner = MagicMock()
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-            return_value=mock_sim_runner,
-        ), patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+                return_value=mock_sim_runner,
+            ),
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
         ):
             runner = ComputerUseRunner(
                 bundle_id="com.example.testapp",
@@ -635,23 +651,26 @@ class TestComputerUseRunnerBudgetEnforcement:
 
         mock_sim_runner = MagicMock()
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-            return_value=mock_sim_runner,
-        ), patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.ai_step_runner.AIStepRunner",
-        ) as MockAIStepRunner:
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+                return_value=mock_sim_runner,
+            ),
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.ai_step_runner.AIStepRunner",
+            ) as MockAIStepRunner,
+        ):
             mock_ai_runner = MagicMock()
             # First step raises BudgetExceededError; remaining must be skipped
-            mock_ai_runner.execute_step.side_effect = BudgetExceededError(
-                "Run budget exceeded: $0.01"
-            )
+            mock_ai_runner.execute_step.side_effect = BudgetExceededError("Run budget exceeded: $0.01")
             MockAIStepRunner.return_value = mock_ai_runner
 
             runner = ComputerUseRunner(
@@ -673,9 +692,7 @@ class TestComputerUseRunnerBudgetEnforcement:
         # All 3 results returned, but step_1 shows budget error and
         # steps 2-3 are skipped. None should be passed=True.
         assert len(results) == 3, "Expected a result per step (failed/skipped)"
-        assert all(not r.passed for r in results), (
-            "No steps should pass when budget is exceeded on step 1"
-        )
+        assert all(not r.passed for r in results), "No steps should pass when budget is exceeded on step 1"
 
 
 class TestComputerUseRunnerEvidenceCollected:
@@ -690,14 +707,18 @@ class TestComputerUseRunnerEvidenceCollected:
 
         mock_sim_runner = MagicMock()
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-        ) as MockSimRunner, patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+            ) as MockSimRunner,
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
         ):
             MockSimRunner.return_value = mock_sim_runner
 
@@ -741,18 +762,23 @@ class TestComputerUseRunnerStepResultsType:
         step_result.findings = []
         step_result.error = None
 
-        with patch(
-            "specterqa.engine.simulator_runner.SimulatorRunner",
-            return_value=mock_sim_runner,
-        ), patch(
-            "specterqa.engine.computer_use_decider.ComputerUseDecider",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.sim_action_executor.SimActionExecutor",
-            return_value=MagicMock(),
-        ), patch(
-            "specterqa.engine.ai_step_runner.AIStepRunner",
-        ) as MockAIStepRunner:
+        with (
+            patch(
+                "specterqa.engine.simulator_runner.SimulatorRunner",
+                return_value=mock_sim_runner,
+            ),
+            patch(
+                "specterqa.engine.computer_use_decider.ComputerUseDecider",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.sim_action_executor.SimActionExecutor",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "specterqa.engine.ai_step_runner.AIStepRunner",
+            ) as MockAIStepRunner,
+        ):
             mock_ai_runner = MagicMock()
             mock_ai_runner.execute_step.return_value = step_result
             MockAIStepRunner.return_value = mock_ai_runner
@@ -763,9 +789,7 @@ class TestComputerUseRunnerStepResultsType:
             )
             runner.start()
 
-            results = runner.run_scenario({
-                "steps": [{"id": "step_login", "goal": "Log in"}]
-            })
+            results = runner.run_scenario({"steps": [{"id": "step_login", "goal": "Log in"}]})
 
         assert isinstance(results, list), "run_scenario() must return a list"
         assert len(results) == 1
@@ -779,6 +803,7 @@ class TestComputerUseRunnerStepResultsType:
 # ---------------------------------------------------------------------------
 # Orchestrator Mode Routing Tests
 # ---------------------------------------------------------------------------
+
 
 class TestOrchestratorIosSimulatorCuMode:
     """Test 20: ios_simulator_cu mode routes to ComputerUseRunner."""

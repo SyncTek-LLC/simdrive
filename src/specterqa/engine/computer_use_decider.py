@@ -34,12 +34,15 @@ def _compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """Estimate USD cost for a single API call."""
     try:
         from specterqa.engine.models import PRICING
+
         pricing = PRICING.get(model)
         if pricing:
             return (input_tokens / 1_000_000) * pricing["input"] + (output_tokens / 1_000_000) * pricing["output"]
     except ImportError:
         pass
-    return (input_tokens / 1_000_000) * _FALLBACK_INPUT_COST_PER_M + (output_tokens / 1_000_000) * _FALLBACK_OUTPUT_COST_PER_M
+    return (input_tokens / 1_000_000) * _FALLBACK_INPUT_COST_PER_M + (
+        output_tokens / 1_000_000
+    ) * _FALLBACK_OUTPUT_COST_PER_M
 
 
 class ComputerUseDecider:
