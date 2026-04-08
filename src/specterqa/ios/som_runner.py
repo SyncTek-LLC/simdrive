@@ -136,7 +136,7 @@ class SoMRunner:
             ) from exc
 
         if self.verbose:
-            print(f"[som] started  bundle_id={bundle_id}  mode=xctest-runner")
+            logger.debug("[som] started  bundle_id=%s  mode=xctest-runner", bundle_id)
 
     def _start_xctest(self, bundle_id: str, SoMAnnotator: type) -> None:
         """Start the XCTest-runner-backed pipeline (non-blocking, headless).
@@ -164,7 +164,7 @@ class SoMRunner:
         self._annotator = SoMAnnotator(runner_url=runner_url)
 
         if self.verbose:
-            print(f"[som] xctest runner at {runner_url}  clone={self._session.clone_udid}")
+            logger.debug("[som] xctest runner at %s  clone=%s", runner_url, self._session.clone_udid)
 
     def stop(self) -> None:
         """Clean up driver session and (if active) the TestSession clone."""
@@ -178,7 +178,7 @@ class SoMRunner:
                 logger.warning("TestSession.stop() error (non-fatal): %s", exc)
             self._session = None
         if self.verbose:
-            print("[som] stopped")
+            logger.debug("[som] stopped")
 
     # ------------------------------------------------------------------
     # Core step execution
@@ -250,7 +250,7 @@ class SoMRunner:
             screenshots.append(annotated_b64)
 
             if self.verbose:
-                print(f"[som] iter={i}  elements={len(elements)}  goal={goal[:60]}")
+                logger.debug("[som] iter=%d  elements=%d  goal=%s", i, len(elements), goal[:60])
 
             # 4. Ask Claude
             try:
@@ -270,8 +270,9 @@ class SoMRunner:
             reasoning = decision.get("reasoning", "")
 
             if self.verbose:
-                print(
-                    f"[som] decision: action={action_type}  element={decision.get('element')}  reasoning={reasoning[:80]}"
+                logger.debug(
+                    "[som] decision: action=%s  element=%s  reasoning=%s",
+                    action_type, decision.get("element"), reasoning[:80],
                 )
 
             # 6. Handle done / back / wait before execute
@@ -393,8 +394,8 @@ class SoMRunner:
             max_iter = step.get("max_iterations", 15)
 
             if self.verbose:
-                print(f"\n[som] --- step {i}/{len(steps)}: {step_id} ---")
-                print(f"[som] goal: {goal}")
+                logger.debug("[som] --- step %d/%d: %s ---", i, len(steps), step_id)
+                logger.debug("[som] goal: %s", goal)
 
             result = self.run_step(goal=goal, checkpoint=checkpoint, max_iterations=max_iter)
             step_results.append(
@@ -410,7 +411,7 @@ class SoMRunner:
 
             if self.verbose:
                 status = "PASS" if result["passed"] else "FAIL"
-                print(f"[som] {status}  ({result['duration']:.1f}s)  error={result.get('error')}")
+                logger.debug("[som] %s  (%.1fs)  error=%s", status, result["duration"], result.get("error"))
 
         total_duration = round(time.monotonic() - journey_start, 3)
         passed_count = sum(1 for s in step_results if s["passed"])
@@ -500,7 +501,7 @@ class SoMRunner:
 
         raw = response.content[0].text.strip()
         if self.verbose:
-            print(f"[som] claude raw:\n{raw}")
+            logger.debug("[som] claude raw:\n%s", raw)
 
         return self._parse_claude_response(raw)
 
@@ -722,7 +723,7 @@ class SoMRunner:
             )
             answer = response.content[0].text.strip().upper()
             if self.verbose:
-                print(f"[som] checkpoint '{checkpoint[:50]}': {answer}")
+                logger.debug("[som] checkpoint %r: %s", checkpoint[:50], answer)
             return answer.startswith("Y")
         except Exception as exc:
             logger.warning("Checkpoint verification failed: %s", exc)

@@ -21,11 +21,14 @@ Exit codes returned by ReplayPlayer.run():
 
 from __future__ import annotations
 
+import logging
 import time
 import yaml
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("specterqa.ios.replay")
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +782,7 @@ class ReplayPlayer:
                 )
 
                 if verbose:
-                    print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
+                    logger.debug("  Step %d/%d: %s %s", i + 1, len(self.steps), action, label)
 
                 # Conditional execution guards
                 if_visible = step.get("if_element_visible")
@@ -840,9 +843,9 @@ class ReplayPlayer:
 
                 if verbose:
                     if step_result["passed"]:
-                        print("    PASS")
+                        logger.debug("    PASS")
                     else:
-                        print(f"    FAIL: {step_result['error']}")
+                        logger.debug("    FAIL: %s", step_result['error'])
 
                 time.sleep(0.3)  # brief inter-action pause
                 i += 1
@@ -905,7 +908,7 @@ class ReplayPlayer:
                 )
 
                 if verbose:
-                    print(f"  Step {i + 1}/{len(self.steps)}: {action} {label}")
+                    logger.debug("  Step %d/%d: %s %s", i + 1, len(self.steps), action, label)
 
                 # Conditional execution guards
                 if_visible = step.get("if_element_visible")
@@ -966,9 +969,9 @@ class ReplayPlayer:
 
                 if verbose:
                     if step_result["passed"]:
-                        print("    PASS")
+                        logger.debug("    PASS")
                     else:
-                        print(f"    FAIL: {step_result['error']}")
+                        logger.debug("    FAIL: %s", step_result['error'])
 
                 time.sleep(0.3)  # brief inter-action pause
                 i += 1

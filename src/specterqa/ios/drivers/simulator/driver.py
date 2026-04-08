@@ -235,7 +235,7 @@ class SimulatorDriver:
                 self._backend_name,
                 f"{self._backend_name} backend",
             )
-            print(f"[specterqa] Using {label}", flush=True)
+            logger.info("[specterqa] Using %s", label)
             logger.info("SimulatorDriver: selected backend %s", self._backend_name)
 
         except Exception as exc:

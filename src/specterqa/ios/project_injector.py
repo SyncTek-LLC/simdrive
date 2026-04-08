@@ -11,9 +11,12 @@ INIT-2026-506 — SpecterQA iOS v3 project-injection runner build.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger("specterqa.ios.project_injector")
 
 
 class ProjectInjectorError(Exception):
@@ -249,10 +252,10 @@ class ProjectInjector:
         ]
 
         if verbose:
-            print(f"[specterqa] Building runner for {bundle_id}...")
-            print(f"[specterqa] Using project: {runner_project}")
-            print("[specterqa] Scheme:        SpecterQARunner")
-            print(f"[specterqa] Command:       {' '.join(cmd)}")
+            logger.info("[specterqa] Building runner for %s...", bundle_id)
+            logger.info("[specterqa] Using project: %s", runner_project)
+            logger.info("[specterqa] Scheme:        SpecterQARunner")
+            logger.info("[specterqa] Command:       %s", " ".join(cmd))
 
         result = subprocess.run(
             cmd,
@@ -267,6 +270,6 @@ class ProjectInjector:
         xctestrun = self._find_xctestrun(derived_data)
 
         if verbose:
-            print(f"[specterqa] Runner built: {xctestrun}")
+            logger.info("[specterqa] Runner built: %s", xctestrun)
 
         return xctestrun

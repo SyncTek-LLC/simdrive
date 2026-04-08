@@ -654,7 +654,7 @@ def _get_driver(udid: str = "booted", verbose: bool = False) -> tuple[Any, str]:
 
         if WDADriver.is_available():
             if verbose:
-                print("[specterqa] Using WDA backend (headless, device points)")
+                logger.debug("[specterqa] Using WDA backend (headless, device points)")
             return WDADriver(udid=udid, verbose=verbose), "wda"
     except ImportError:
         pass
@@ -663,7 +663,7 @@ def _get_driver(udid: str = "booted", verbose: bool = False) -> tuple[Any, str]:
         from specterqa.ios.sim_driver import SimDriver
 
         if verbose:
-            print("[specterqa] Using CGEvent backend (requires visible Simulator)")
+            logger.debug("[specterqa] Using CGEvent backend (requires visible Simulator)")
         return SimDriver(udid=udid, verbose=verbose), "cgevents"
     except ImportError as exc:
         raise click.ClickException(f"No driver available. WDA is not running and SimDriver import failed: {exc}")
