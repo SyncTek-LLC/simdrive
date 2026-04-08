@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "11.2.2"
+version = "11.3.0"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -12,6 +12,23 @@ requires-python = ">=3.10"
 authors = [
     {name = "SyncTek LLC", email = "info@synctek.io"},
 ]
+keywords = ["ios", "testing", "qa", "xctest", "simulator", "mcp", "ai", "agent"]
+classifiers = [
+    "License :: Other/Proprietary License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://synctek.io/specterqa"
+Repository = "https://github.com/SyncTek-LLC/specterqa-ios"
+Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
+Changelog = "https://github.com/SyncTek-LLC/specterqa-ios/blob/main/CHANGELOG.md"
 
 dependencies = [
     "Pillow>=10.0",
