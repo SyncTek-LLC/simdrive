@@ -4,6 +4,15 @@ Validates a SpecterQA license key against the Keygen.sh API. Caches the result
 to avoid redundant network round-trips. Falls back to a JWT-based offline grace
 period when the API is unreachable.
 
+BYOK enforcement:
+  Before any test run, call ``check_byok()`` or ``assert_ready_for_run()``.
+  If ``ANTHROPIC_API_KEY`` is not set, a ``LicenseBYOKError`` is raised with an
+  actionable message.
+
+Trial mode:
+  When no license is present, 1 simulator is allowed and runs are capped at
+  ``TRIAL_MAX_RUNS`` per session (tracked in-process via a module-level counter).
+
 Dogfood bypass (v0.1.0):
   Set SPECTERQA_IOS_LICENSE=founder to bypass all API validation with a
   pre-configured founder tier grant (valid through 2027-01-01, 4 sims).
@@ -18,9 +27,14 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-import requests
-
 logger = logging.getLogger("specterqa.ios.license.validator")
+
+# ---------------------------------------------------------------------------
+# Trial run counter — module-level, reset per process
+# ---------------------------------------------------------------------------
+
+_trial_run_count: int = 0
+TRIAL_MAX_RUNS: int = 3
 
 # ---------------------------------------------------------------------------
 # Dogfood / trial constants
@@ -44,13 +58,89 @@ _TRIAL_RESULT: Dict[str, Any] = {
 # Tier → default max_concurrent_sims mapping (fallback when API omits the field)
 # ---------------------------------------------------------------------------
 _TIER_DEFAULTS: Dict[str, int] = {
+    "trial": 1,
+    "indie": 2,
+    "pro": 4,
     "solo": 1,
-    "team": 4,
-    "enterprise": 16,
+    "team": 10,
+    "enterprise": 0,  # 0 == unlimited
+    "founder": 4,
 }
 
 # Offline grace window in seconds (72 hours)
 _OFFLINE_GRACE_SECONDS = 72 * 3600
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class LicenseBYOKError(RuntimeError):
+    """Raised when ANTHROPIC_API_KEY is not set and a test run is attempted."""
+
+
+class TrialLimitError(RuntimeError):
+    """Raised when the trial run limit is exceeded."""
+
+
+# ---------------------------------------------------------------------------
+# BYOK helper (module-level, reusable)
+# ---------------------------------------------------------------------------
+
+
+def check_byok() -> None:
+    """Raise ``LicenseBYOKError`` if ``ANTHROPIC_API_KEY`` is not set.
+
+    Call this before initiating any test run.
+
+    Raises:
+        LicenseBYOKError: with an actionable message directing the user to set
+            the environment variable and pointing to console.anthropic.com.
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        raise LicenseBYOKError(
+            "BYOK required. Set ANTHROPIC_API_KEY environment variable before running tests.\n"
+            "  export ANTHROPIC_API_KEY=sk-ant-...\n"
+            "Get an API key at: https://console.anthropic.com/"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Trial limit helper (module-level)
+# ---------------------------------------------------------------------------
+
+
+def consume_trial_run() -> int:
+    """Increment the in-process trial run counter and enforce the run cap.
+
+    Returns:
+        The new run count after incrementing.
+
+    Raises:
+        TrialLimitError: when the run count exceeds ``TRIAL_MAX_RUNS``.
+    """
+    global _trial_run_count
+    _trial_run_count += 1
+    if _trial_run_count > TRIAL_MAX_RUNS:
+        raise TrialLimitError(
+            f"Trial limit reached: {TRIAL_MAX_RUNS} runs per session in trial mode.\n"
+            "Activate a license to unlock unlimited runs:\n"
+            "  specterqa-ios license activate <key>\n"
+            "Purchase a license at: https://synctek.io/specterqa#pricing"
+        )
+    return _trial_run_count
+
+
+def reset_trial_counter() -> None:
+    """Reset the trial run counter. Primarily for use in tests."""
+    global _trial_run_count
+    _trial_run_count = 0
+
+
+# ---------------------------------------------------------------------------
+# LicenseValidator
+# ---------------------------------------------------------------------------
 
 
 class LicenseValidator:
@@ -101,8 +191,10 @@ class LicenseValidator:
         # Trial mode — no key and no env var → 1 simulator, warn but allow
         if not self._license_key and not env_license:
             warnings.warn(
-                "No SpecterQA license key found. Running in trial mode (1 simulator). "
-                "Set SPECTERQA_IOS_LICENSE=founder or provide a license key to unlock more.",
+                "No SpecterQA license key found. Running in trial mode (1 simulator, "
+                f"{TRIAL_MAX_RUNS} runs/session). "
+                "Activate a license to unlock more: specterqa-ios license activate <key>\n"
+                f"Purchase at: https://synctek.io/specterqa#pricing",
                 UserWarning,
                 stacklevel=2,
             )
@@ -133,13 +225,33 @@ class LicenseValidator:
         """Return the maximum concurrent simulator count allowed by this license."""
         if self._cache is None:
             return 1
-        return int(self._cache.get("max_concurrent_sims", 1))
+        raw = self._cache.get("max_concurrent_sims", 1)
+        # 0 encodes "unlimited" in TIER_DEFAULTS — return a high practical cap
+        return int(raw) if int(raw) > 0 else 999
 
     def tier(self) -> str:
-        """Return the license tier string (e.g. ``"solo"``, ``"team"``, ``"enterprise"``)."""
+        """Return the license tier string (e.g. ``"indie"``, ``"pro"``, ``"team"``)."""
         if self._cache is None:
             return "unknown"
         return str(self._cache.get("tier", "unknown"))
+
+    def assert_ready_for_run(self) -> None:
+        """Assert both a valid license and ANTHROPIC_API_KEY before a test run.
+
+        For trial-mode licenses this also consumes a run slot from the session
+        budget (``TRIAL_MAX_RUNS`` runs allowed before upgrade is required).
+
+        Raises:
+            LicenseBYOKError: when ``ANTHROPIC_API_KEY`` is absent.
+            TrialLimitError: when a trial run exceeds ``TRIAL_MAX_RUNS``.
+        """
+        # BYOK check is universal — applies to all tiers including trial
+        check_byok()
+
+        # Consume a trial slot when running in trial mode
+        result = self.validate()
+        if result.get("tier") == "trial":
+            consume_trial_run()
 
     # ------------------------------------------------------------------
     # Offline grace
@@ -186,6 +298,11 @@ class LicenseValidator:
     def _fetch_from_api(self) -> Dict[str, Any]:
         """Fetch and parse the license status from the remote API.
 
+        Uses httpx when ``SPECTERQA_KEYGEN_ACCOUNT`` is set (full Keygen.sh v1
+        account-scoped URL). Falls back to the legacy ``requests``-based path
+        (``/licenses/{key}/actions/validate``) when the account env var is absent,
+        preserving backwards compatibility with pre-INIT-2026-525 callers.
+
         Returns:
             Normalised dict matching the ``validate()`` contract.
 
@@ -193,23 +310,56 @@ class LicenseValidator:
             Exception: Propagates any network or HTTP error so ``validate()``
                 can apply the offline grace fallback.
         """
+        account = os.environ.get("SPECTERQA_KEYGEN_ACCOUNT", "").strip()
+
+        if account:
+            return self._fetch_via_httpx(account)
+        else:
+            return self._fetch_from_api_requests()
+
+    def _fetch_via_httpx(self, account: str) -> Dict[str, Any]:
+        """Fetch via httpx using the account-scoped Keygen.sh v1 URL."""
+        try:
+            import httpx
+        except ImportError:
+            # httpx not installed — fall through to requests
+            return self._fetch_from_api_requests()
+
+        url = f"{self._api_url}/accounts/{account}/licenses/{self._license_key}/validate"
+        response = httpx.get(url, timeout=15.0)
+        response.raise_for_status()
+        return self._parse_api_response(response.json())
+
+    def _fetch_from_api_requests(self) -> Dict[str, Any]:
+        """Fetch using the requests library (legacy path, no account segment)."""
+        import requests  # type: ignore[import-untyped]
+
         url = f"{self._api_url}/licenses/{self._license_key}/actions/validate"
         response = requests.get(url)
         response.raise_for_status()
-        data = response.json()
+        return self._parse_api_response(response.json())
 
+    @staticmethod
+    def _parse_api_response(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse a Keygen.sh validation response into the internal contract dict."""
         attrs = data.get("data", {}).get("attributes", {})
         status = attrs.get("status", "")
         metadata = attrs.get("metadata", {})
 
-        tier = str(metadata.get("tier", "solo"))
+        tier = str(metadata.get("tier", "indie")).lower()
         raw_max = metadata.get("max_concurrent_sims")
         if raw_max is not None:
             max_concurrent = int(raw_max)
         else:
             max_concurrent = _TIER_DEFAULTS.get(tier, 1)
 
-        valid = status.upper() == "ACTIVE"
+        # Top-level meta.valid takes precedence (Keygen validate endpoint)
+        meta_valid = data.get("meta", {}).get("valid")
+        if meta_valid is not None:
+            valid = bool(meta_valid)
+        else:
+            valid = status.upper() in ("ACTIVE", "VALID")
+
         expires_at = attrs.get("expiry")
 
         return {
