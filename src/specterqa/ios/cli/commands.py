@@ -2257,6 +2257,18 @@ def validate_replay(replay_file: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# License subcommand — mount license_group onto ios_command_group
+# ---------------------------------------------------------------------------
+
+try:
+    from specterqa.ios.cli.license_cmd import license_group as _license_group
+
+    ios_command_group.add_command(_license_group, name="license")
+except ImportError:
+    logger.debug("license_cmd not available — license subcommand not registered")
+
+
+# ---------------------------------------------------------------------------
 # Standalone entry point
 # ---------------------------------------------------------------------------
 
