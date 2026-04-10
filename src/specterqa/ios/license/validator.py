@@ -23,11 +23,46 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("specterqa.ios.license.validator")
+
+# ---------------------------------------------------------------------------
+# Security: license key sanitization
+# ---------------------------------------------------------------------------
+
+# SEC-CRIT-001: Only alphanumeric characters, hyphens, and underscores are
+# permitted in license keys. This prevents path traversal attacks when the key
+# is interpolated into API URLs (e.g. /licenses/{key}/actions/validate).
+_LICENSE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
+
+
+def _sanitize_license_key(key: str) -> str:
+    """Validate the license key format, raising ValueError on unsafe input.
+
+    Rejects any key containing path-unsafe characters (``/``, ``..``, ``\\``)
+    or that does not match the expected alphanumeric-plus-dashes pattern.
+
+    Args:
+        key: The raw license key string.
+
+    Returns:
+        The key unchanged if validation passes.
+
+    Raises:
+        ValueError: if the key contains invalid characters.
+    """
+    if not _LICENSE_KEY_RE.match(key):
+        raise ValueError(
+            f"Invalid license key format: {key!r}. "
+            "Keys must be 8–256 characters and contain only letters, digits, "
+            "hyphens, and underscores."
+        )
+    return key
+
 
 # ---------------------------------------------------------------------------
 # Trial run counter — module-level, reset per process
@@ -325,7 +360,9 @@ class LicenseValidator:
             # httpx not installed — fall through to requests
             return self._fetch_from_api_requests()
 
-        url = f"{self._api_url}/accounts/{account}/licenses/{self._license_key}/validate"
+        # SEC-CRIT-001: sanitize key before interpolating into URL
+        safe_key = _sanitize_license_key(self._license_key)
+        url = f"{self._api_url}/accounts/{account}/licenses/{safe_key}/validate"
         response = httpx.get(url, timeout=15.0)
         response.raise_for_status()
         return self._parse_api_response(response.json())
@@ -334,7 +371,9 @@ class LicenseValidator:
         """Fetch using the requests library (legacy path, no account segment)."""
         import requests  # type: ignore[import-untyped]
 
-        url = f"{self._api_url}/licenses/{self._license_key}/actions/validate"
+        # SEC-CRIT-001: sanitize key before interpolating into URL
+        safe_key = _sanitize_license_key(self._license_key)
+        url = f"{self._api_url}/licenses/{safe_key}/actions/validate"
         response = requests.get(url)
         response.raise_for_status()
         return self._parse_api_response(response.json())

@@ -47,14 +47,47 @@ logger = logging.getLogger("specterqa.ios.license.stripe_webhook")
 _KEYGEN_BASE = "https://api.keygen.sh/v1"
 _PURCHASE_URL = "https://synctek.io/specterqa#pricing"
 
-# Stripe price ID → Keygen tier name. Operators should set these to their
-# actual Stripe price IDs via environment variables.
+# Stripe price ID → Keygen tier name.
+#
+# SEC-HIGH-004: These MUST be configured via environment variables in production.
+# The fallback strings ("price_indie", etc.) are placeholder sentinels that will
+# never match real Stripe price IDs and are only present to keep the dict
+# non-empty for local development. If ALL env vars are missing at import time,
+# a warning is emitted so misconfigured deployments are caught early.
+#
+# Required env vars (set on the webhook server):
+#   STRIPE_PRICE_INDIE       — e.g. price_1ABC...
+#   STRIPE_PRICE_PRO         — e.g. price_2DEF...
+#   STRIPE_PRICE_TEAM        — e.g. price_3GHI...
+#   STRIPE_PRICE_ENTERPRISE  — e.g. price_4JKL...
+_STRIPE_PRICE_INDIE = os.environ.get("STRIPE_PRICE_INDIE", "price_indie")
+_STRIPE_PRICE_PRO = os.environ.get("STRIPE_PRICE_PRO", "price_pro")
+_STRIPE_PRICE_TEAM = os.environ.get("STRIPE_PRICE_TEAM", "price_team")
+_STRIPE_PRICE_ENTERPRISE = os.environ.get("STRIPE_PRICE_ENTERPRISE", "price_enterprise")
+
 _PRICE_TIER_MAP: Dict[str, str] = {
-    os.environ.get("STRIPE_PRICE_INDIE", "price_indie"): "indie",
-    os.environ.get("STRIPE_PRICE_PRO", "price_pro"): "pro",
-    os.environ.get("STRIPE_PRICE_TEAM", "price_team"): "team",
-    os.environ.get("STRIPE_PRICE_ENTERPRISE", "price_enterprise"): "enterprise",
+    _STRIPE_PRICE_INDIE: "indie",
+    _STRIPE_PRICE_PRO: "pro",
+    _STRIPE_PRICE_TEAM: "team",
+    _STRIPE_PRICE_ENTERPRISE: "enterprise",
 }
+
+# Warn at import time if none of the price env vars are configured — this
+# indicates a misconfigured deployment where tier mapping will silently fail.
+_price_env_vars = (
+    "STRIPE_PRICE_INDIE",
+    "STRIPE_PRICE_PRO",
+    "STRIPE_PRICE_TEAM",
+    "STRIPE_PRICE_ENTERPRISE",
+)
+if not any(os.environ.get(v) for v in _price_env_vars):
+    logger.warning(
+        "SEC-HIGH-004: None of the Stripe price ID environment variables are set "
+        "(%s). The _PRICE_TIER_MAP will use placeholder sentinel values that will "
+        "never match real Stripe price IDs. Configure these env vars before "
+        "processing live Stripe events.",
+        ", ".join(_price_env_vars),
+    )
 
 # Tier → max concurrent simulators (mirrors license_cmd.py)
 _TIER_SIM_LIMITS: Dict[str, int] = {
@@ -140,17 +173,21 @@ def create_keygen_license(
     }
 
     try:
-        response = httpx.post(url, headers=_keygen_headers(), json=payload, timeout=15.0)
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise RuntimeError(
-            f"Keygen.sh license creation failed (HTTP {exc.response.status_code}): "
-            f"{exc.response.text}"
-        ) from exc
+        resp = httpx.post(url, headers=_keygen_headers(), json=payload, timeout=15.0)
     except httpx.RequestError as exc:
         raise RuntimeError(f"Network error contacting Keygen.sh: {exc}") from exc
 
-    return response.json()
+    if not resp.is_success:
+        # SEC-HIGH-002: log full body internally but never expose it in the raised
+        # exception — response bodies may contain sensitive Keygen.sh error details.
+        logger.error(
+            "Keygen license creation failed: status=%d body=%s",
+            resp.status_code,
+            resp.text,
+        )
+        raise RuntimeError(f"Keygen license creation failed (status {resp.status_code})")
+
+    return resp.json()
 
 
 def suspend_keygen_license_by_customer(stripe_customer_id: str) -> Optional[Dict[str, Any]]:
@@ -349,15 +386,149 @@ def _handle_subscription_deleted(subscription: Dict[str, Any]) -> Dict[str, str]
         return {"status": "error", "detail": str(exc)}
 
 
-def _handle_subscription_updated(subscription: Dict[str, Any]) -> Dict[str, str]:
-    """Handle ``customer.subscription.updated`` — log the event for now.
+def _find_keygen_license_id_by_customer(stripe_customer_id: str) -> Optional[str]:
+    """Look up the Keygen.sh license ID for a Stripe customer.
 
-    Full tier-change implementation (update Keygen metadata) can be added
-    when plan upgrade/downgrade flows are built out.
+    Args:
+        stripe_customer_id: The Stripe customer ID stored in license metadata.
+
+    Returns:
+        The Keygen.sh license ID string, or None if no match is found.
+
+    Raises:
+        RuntimeError: if the Keygen.sh API call fails.
     """
-    stripe_customer_id = subscription.get("customer", "unknown")
-    logger.info("Subscription updated for customer %s (tier sync deferred)", stripe_customer_id)
-    return {"status": "handled", "detail": "Subscription update logged (tier sync pending)"}
+    try:
+        import httpx
+    except ImportError as exc:
+        raise RuntimeError("httpx required for Keygen.sh API calls.") from exc
+
+    account = _keygen_account()
+    search_url = (
+        f"{_KEYGEN_BASE}/accounts/{account}/licenses"
+        f"?metadata[stripe_customer_id]={stripe_customer_id}"
+    )
+    try:
+        resp = httpx.get(search_url, headers=_keygen_headers(), timeout=15.0)
+        resp.raise_for_status()
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        raise RuntimeError(f"Keygen.sh license lookup failed: {exc}") from exc
+
+    licenses = resp.json().get("data", [])
+    if not licenses:
+        return None
+    return licenses[0].get("id")
+
+
+def _update_keygen_license_tier(license_id: str, new_tier: str) -> Dict[str, Any]:
+    """Update the tier metadata on an existing Keygen.sh license.
+
+    Args:
+        license_id: The Keygen.sh license ID.
+        new_tier: The new tier string (e.g. ``"pro"``).
+
+    Returns:
+        The updated license dict from the Keygen.sh API.
+
+    Raises:
+        RuntimeError: if the Keygen.sh API call fails.
+    """
+    try:
+        import httpx
+    except ImportError as exc:
+        raise RuntimeError("httpx required for Keygen.sh API calls.") from exc
+
+    account = _keygen_account()
+    max_sims = _TIER_SIM_LIMITS.get(new_tier, 2)
+    url = f"{_KEYGEN_BASE}/accounts/{account}/licenses/{license_id}"
+    payload: Dict[str, Any] = {
+        "data": {
+            "type": "licenses",
+            "id": license_id,
+            "attributes": {
+                "metadata": {
+                    "tier": new_tier,
+                    "max_concurrent_sims": max_sims,
+                },
+            },
+        }
+    }
+    try:
+        resp = httpx.patch(url, headers=_keygen_headers(), json=payload, timeout=15.0)
+        resp.raise_for_status()
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        raise RuntimeError(f"Keygen.sh license update failed: {exc}") from exc
+
+    return resp.json()
+
+
+def _handle_subscription_updated(subscription: Dict[str, Any]) -> Dict[str, str]:
+    """Handle ``customer.subscription.updated`` — propagate tier changes to Keygen.
+
+    SEC-HIGH-003: This was previously a no-op. It now:
+    1. Extracts the new price ID from the updated subscription's items.
+    2. Maps it to a tier via ``_PRICE_TIER_MAP``.
+    3. Finds the existing Keygen license for this customer.
+    4. Updates the license metadata with the new tier and sim limit.
+    """
+    stripe_customer_id = subscription.get("customer", "")
+    if not stripe_customer_id:
+        return {"status": "error", "detail": "Missing customer ID in subscription.updated event"}
+
+    # Extract the current price ID from subscription items
+    items = subscription.get("items", {}).get("data", [])
+    new_price_id = ""
+    for item in items:
+        new_price_id = (item.get("price") or item.get("plan") or {}).get("id", "")
+        if new_price_id:
+            break
+
+    new_tier = _PRICE_TIER_MAP.get(new_price_id, "")
+    if not new_tier:
+        logger.warning(
+            "subscription.updated: price_id=%r not in _PRICE_TIER_MAP, skipping tier update "
+            "for customer %s",
+            new_price_id,
+            stripe_customer_id,
+        )
+        return {
+            "status": "ignored",
+            "detail": f"Price ID {new_price_id!r} not mapped to a known tier",
+        }
+
+    try:
+        license_id = _find_keygen_license_id_by_customer(stripe_customer_id)
+    except RuntimeError as exc:
+        logger.error("Failed to find Keygen license for customer %s: %s", stripe_customer_id, exc)
+        return {"status": "error", "detail": str(exc)}
+
+    if not license_id:
+        logger.warning(
+            "subscription.updated: no Keygen license found for customer %s", stripe_customer_id
+        )
+        return {
+            "status": "ignored",
+            "detail": f"No license found for customer {stripe_customer_id}",
+        }
+
+    try:
+        _update_keygen_license_tier(license_id, new_tier)
+    except RuntimeError as exc:
+        logger.error(
+            "Failed to update Keygen license %s to tier %s: %s", license_id, new_tier, exc
+        )
+        return {"status": "error", "detail": str(exc)}
+
+    logger.info(
+        "Updated Keygen license %s to tier=%s for customer %s",
+        license_id,
+        new_tier,
+        stripe_customer_id,
+    )
+    return {
+        "status": "handled",
+        "detail": f"License {license_id} updated to tier {new_tier!r} for customer {stripe_customer_id}",
+    }
 
 
 # ---------------------------------------------------------------------------
