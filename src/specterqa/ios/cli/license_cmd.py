@@ -13,6 +13,7 @@ Environment variables:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -31,6 +32,39 @@ console = Console(stderr=True)
 _AUTH_PATH = Path.home() / ".specterqa" / "auth.yaml"
 _KEYGEN_BASE = "https://api.keygen.sh/v1"
 _PURCHASE_URL = "https://synctek.io/specterqa#pricing"
+
+# ---------------------------------------------------------------------------
+# Security helpers
+# ---------------------------------------------------------------------------
+
+# Only allow alphanumeric characters plus hyphens and underscores.
+# This prevents path traversal attacks (e.g. keys containing ../../).
+_LICENSE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
+
+
+def _sanitize_license_key(key: str) -> str:
+    """Validate and return the license key, raising ClickException on bad input.
+
+    Rejects any key that contains path-unsafe characters (``/``, ``..``, ``\\``)
+    or does not match the expected alphanumeric-plus-dashes pattern.
+
+    Args:
+        key: The raw license key string supplied by the user.
+
+    Returns:
+        The key unchanged if it passes validation.
+
+    Raises:
+        click.ClickException: if the key contains invalid characters.
+    """
+    if not _LICENSE_KEY_RE.match(key):
+        raise click.ClickException(
+            f"Invalid license key format: {key!r}\n"
+            "License keys must be 8–256 characters long and contain only "
+            "letters, digits, hyphens, and underscores."
+        )
+    return key
+
 
 # Tier → max concurrent simulators
 TIER_SIM_LIMITS: Dict[str, int] = {
@@ -97,6 +131,8 @@ def _keygen_validate(key: str, account: str) -> Dict[str, Any]:
             "Install it with: pip install httpx"
         )
 
+    # SEC-CRIT-001: sanitize key before interpolating into URL
+    key = _sanitize_license_key(key)
     url = f"{_KEYGEN_BASE}/accounts/{account}/licenses/{key}/validate"
     try:
         response = httpx.get(url, timeout=15.0)
@@ -184,7 +220,9 @@ def activate(key: str) -> None:
 
     console.print(f"[dim]Validating license key with Keygen.sh…[/dim]")
 
-    result = _keygen_validate(key.strip(), account)
+    # SEC-CRIT-001: sanitize key input before any processing
+    key = _sanitize_license_key(key.strip())
+    result = _keygen_validate(key, account)
 
     if not result["valid"]:
         raise click.ClickException(
@@ -201,6 +239,11 @@ def activate(key: str) -> None:
         "name": result["name"],
     }
     _write_yaml(_AUTH_PATH, auth_data)
+
+    # SEC-HIGH-001: restrict auth file and directory to owner-only access
+    auth_dir = _AUTH_PATH.parent
+    os.chmod(auth_dir, 0o700)
+    os.chmod(_AUTH_PATH, 0o600)
 
     tier_label = result["tier"].capitalize()
     sims_label = "unlimited" if result["max_sims"] == 0 else str(result["max_sims"])
