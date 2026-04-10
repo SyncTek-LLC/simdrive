@@ -1,0 +1,41 @@
+{
+  "name": "SpecterQA iOS",
+  "description": "AI-native iOS simulator testing. Record tests with Claude, replay deterministically in CI. 19 MCP tools for agent-driven iOS QA.",
+  "version": "11.3.0",
+  "provider": {
+    "name": "SyncTek LLC",
+    "url": "https://synctek.io"
+  },
+  "capabilities": [
+    "ios-simulator-testing",
+    "deterministic-replay",
+    "parallel-ci-execution",
+    "visual-regression",
+    "accessibility-audit",
+    "crash-detection",
+    "network-inspection"
+  ],
+  "supported_modalities": ["mcp", "cli"],
+  "mcp_server": {
+    "transport": "stdio",
+    "entry_point": "specterqa-ios-mcp",
+    "tools_count": 19
+  },
+  "pricing": {
+    "model": "subscription",
+    "byok_required": true,
+    "tiers": [
+      {"name": "Trial", "price": 0, "sims": 1, "runs_per_session": 3},
+      {"name": "Indie", "price_monthly": 29, "sims": 2},
+      {"name": "Pro", "price_monthly": 99, "sims": 4},
+      {"name": "Team", "price_monthly": 299, "sims": 10},
+      {"name": "Enterprise", "price_monthly": "custom", "sims": "unlimited"}
+    ]
+  },
+  "links": {
+    "homepage": "https://synctek.io/products/specterqa-ios",
+    "documentation": "https://github.com/SyncTek-LLC/specterqa-ios",
+    "pricing": "https://synctek.io/products/specterqa-ios#pricing",
+    "mcp_registry": "https://github.com/modelcontextprotocol/servers"
+  }
+}
