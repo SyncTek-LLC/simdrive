@@ -9,6 +9,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## [11.4.0] — 2026-04-10
+
+### Added
+- `feat(mcp)`: `accessibilityIdentifier` support in `ios_tap` — find elements by exact identifier match
+- `feat(mcp)`: coordinate-based tap in `ios_tap` — tap at explicit x,y screen coordinates
+- `feat(replay)`: `element_identifier` field, `_find_by_identifier()`, `tapOnIdentifier` Maestro shortcut
+- `test`: 32 new tests for identifier and coordinate tap features
+
+---
+
 ## [11.3.0] — 2026-04-08
 
 ### Changed
