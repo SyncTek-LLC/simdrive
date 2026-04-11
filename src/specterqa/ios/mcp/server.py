@@ -477,15 +477,19 @@ def handle_screenshot(arguments: dict) -> dict:
 
 
 def handle_tap(arguments: dict) -> dict:
-    """Tap an element by its index number OR by label.
+    """Tap an element by identifier, label, index, or explicit coordinates.
 
     Args:
+        identifier:    Exact accessibilityIdentifier match (most reliable).
+                       Use this when the element has an accessibility identifier set.
         element_index: Integer index shown in the annotated screenshot.
                        Use this OR label — not both.
         label:         Case-insensitive substring to match against element labels.
                        Preferred over element_index when available (label-stable tapping).
         type:          Optional element type filter when using label (e.g. "Button").
                        Only applies when label is provided.
+        x:             X coordinate for a direct coordinate tap (used with y).
+        y:             Y coordinate for a direct coordinate tap (used with x).
 
     Returns:
         {"status": "ok", "tapped": "<label>", "x": <cx>, "y": <cy>}
@@ -493,19 +497,41 @@ def handle_tap(arguments: dict) -> dict:
     """
     global _last_elements
 
-    try:
-        _require_session()
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-
+    identifier = arguments.get("identifier")
     label = arguments.get("label")
     element_type_filter = arguments.get("type")
     element_index = arguments.get("element_index")
+    coord_x = arguments.get("x")
+    coord_y = arguments.get("y")
 
     target = None
 
-    # Label-based lookup (preferred — more stable across UI changes)
-    if label is not None:
+    # ── Identifier-based lookup (most reliable — exact accessibilityIdentifier match) ──
+    if identifier is not None:
+        try:
+            _require_session()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+
+        target = next(
+            (e for e in _last_elements if getattr(e, 'identifier', '') == identifier),
+            None,
+        )
+        if target is None and label is None and element_index is None and (coord_x is None or coord_y is None):
+            return {
+                "error": (
+                    f"No element found with identifier '{identifier}'. "
+                    "Call ios_screenshot first to refresh elements."
+                )
+            }
+
+    # ── Label-based lookup (preferred — more stable across UI changes) ──
+    if target is None and label is not None:
+        try:
+            _require_session()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+
         label_lower = label.lower()
         candidates = [e for e in _last_elements if label_lower in e.label.lower()]
         if element_type_filter:
@@ -516,7 +542,7 @@ def handle_tap(arguments: dict) -> dict:
         if candidates:
             target = candidates[0]
         # Fall through to element_index if no label match and index provided
-        if target is None and element_index is None:
+        if target is None and element_index is None and (coord_x is None or coord_y is None):
             return {
                 "error": (
                     f"No element found with label containing '{label}'"
@@ -525,10 +551,12 @@ def handle_tap(arguments: dict) -> dict:
                 )
             }
 
-    # Index-based lookup (fallback or explicit)
-    if target is None:
-        if element_index is None:
-            return {"error": "element_index or label is required"}
+    # ── Index-based lookup (fallback or explicit) ──
+    if target is None and element_index is not None:
+        try:
+            _require_session()
+        except RuntimeError as exc:
+            return {"error": str(exc)}
 
         try:
             element_index = int(element_index)
@@ -537,7 +565,7 @@ def handle_tap(arguments: dict) -> dict:
 
         target = next((e for e in _last_elements if e.index == element_index), None)
 
-        if target is None:
+        if target is None and (coord_x is None or coord_y is None):
             valid_indices = [e.index for e in _last_elements]
             return {
                 "error": (
@@ -546,6 +574,29 @@ def handle_tap(arguments: dict) -> dict:
                     f"Valid indices: {valid_indices}"
                 )
             }
+
+    # ── Coordinate tap (direct — no element lookup needed) ──
+    if target is None:
+        if coord_x is not None and coord_y is not None:
+            try:
+                _backend.tap(float(coord_x), float(coord_y))
+            except Exception as exc:
+                return {"error": f"Coordinate tap failed: {exc}"}
+
+            if _recorder is not None:
+                _recorder.record_tap(-1, "", float(coord_x), float(coord_y))
+
+            _auto_checkpoint()
+
+            return {
+                "status": "ok",
+                "tapped": "",
+                "x": float(coord_x),
+                "y": float(coord_y),
+            }
+
+        # No lookup method specified at all
+        return {"error": "One of identifier, label, element_index, or x+y coordinates is required"}
 
     cx = target.x + target.width / 2
     cy = target.y + target.height / 2
@@ -557,7 +608,7 @@ def handle_tap(arguments: dict) -> dict:
 
     # Record the tap for replay
     if _recorder is not None:
-        _recorder.record_tap(target.index, target.label, cx, cy)
+        _recorder.record_tap(target.index, target.label, cx, cy, identifier=getattr(target, 'identifier', ''))
 
     # Auto-checkpoint: capture element state after action for replay verification
     _auto_checkpoint()
@@ -1430,24 +1481,32 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_tap",
         description=(
-            "Tap an element by LABEL (preferred) or by index number. "
-            "PREFERRED: use label='Save' to tap the element whose label contains 'Save'. "
-            "Label matching is case-insensitive substring match. "
-            "Optional type='Button' narrows the match to a specific element type. "
-            "FALLBACK: use element_index=N (integer from ios_screenshot) when no label is available. "
-            "Call ios_screenshot first to populate the element cache."
+            "Tap an element by IDENTIFIER (most reliable), LABEL, index number, or raw COORDINATES. "
+            "Priority: identifier > label > element_index > coordinates. "
+            "IDENTIFIER: use identifier='settingsButton' to tap the element with that accessibilityIdentifier (exact match). "
+            "LABEL: use label='Save' for case-insensitive substring match. "
+            "Optional type='Button' narrows label matching to a specific element type. "
+            "FALLBACK: use element_index=N (integer from ios_screenshot) when no label or identifier is available. "
+            "COORDINATES: use x=195, y=275 to tap at exact screen coordinates (use when element has no label or identifier). "
+            "Call ios_screenshot first to populate the element cache (not needed for coordinate taps)."
         ),
     )
     async def ios_tap(
         element_index: int | None = None,
         label: str | None = None,
         type: str | None = None,
+        identifier: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
     ) -> str:
         result = handle_tap(
             {
                 "element_index": element_index,
                 "label": label,
                 "type": type,
+                "identifier": identifier,
+                "x": x,
+                "y": y,
             }
         )
         return json.dumps(result)
