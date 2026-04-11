@@ -75,10 +75,10 @@ BYOK required: bring your own Anthropic API key for the record phase. Replay is 
 ## Key Differentiators
 
 - **Record once, replay free** — AI records; deterministic engine replays. Zero API cost on reruns. This is the fundamental difference from tools that call AI on every run.
-- **90% tap accuracy** — Set-of-Mark (SoM) prompting annotates the simulator screenshot before asking Claude where to tap. No coordinate guessing, no brittle selectors.
+- **~90% tap accuracy** (based on Set-of-Mark research) — Set-of-Mark (SoM) prompting annotates the simulator screenshot before asking Claude where to tap. No coordinate guessing, no brittle selectors.
 - **Maestro compatible** — Existing Maestro YAML files work natively. `tapOn`, `inputText`, `assertVisible`, `assertNotVisible`, `waitFor` all understood. Zero migration cost.
 - **Agent-native** — 19 MCP tools. A2A discoverable via `.well-known/agent.json`. Works in Claude Code, Claude Desktop, or any MCP-compatible orchestrator.
-- **BYOK** — You own your Anthropic API key. SyncTek never sees it. 97% gross margin for us; full data control for you.
+- **BYOK** — You own your Anthropic API key. Your data never touches our servers. Full control, full privacy.
 - **Parallel CI** — Shared runner reuse and clone isolation allow running 10 replays in the time XCUITest runs 1. Pro tier and above.
 
 ## Links

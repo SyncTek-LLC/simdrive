@@ -50,11 +50,11 @@ Your existing Maestro YAML files work natively. `tapOn`, `inputText`, `assertVis
 ### 4. Parallel CI — 10x Faster
 Shared runner reuse and clone isolation let you run 10 replays in the time XCUITest runs 1. Configure parallelism in one flag: `--parallel N`. Available on Pro tier and above.
 
-### 5. 90% Tap Accuracy
+### 5. ~90% Tap Accuracy (based on Set-of-Mark research)
 Set-of-Mark (SoM) prompting annotates the simulator screenshot with numbered markers before asking Claude where to tap. No coordinate guessing. No brittle selectors. Taps land where they should.
 
 ### 6. BYOK — Full Data Control
-You bring your own Anthropic API key. SyncTek never sees it. Your test recordings, your simulator state, your app binary — none of it leaves your machine. 97% gross margin for us; complete control for you.
+You own your Anthropic API key. Your data never touches our servers. Your test recordings, your simulator state, your app binary — none of it leaves your machine. Full control, full privacy.
 
 ---
 
