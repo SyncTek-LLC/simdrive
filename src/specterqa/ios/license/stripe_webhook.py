@@ -89,6 +89,30 @@ if not any(os.environ.get(v) for v in _price_env_vars):
         ", ".join(_price_env_vars),
     )
 
+
+def _assert_price_ids_configured() -> None:
+    """Raise RuntimeError if no Stripe price ID env vars are configured.
+
+    SEC-HIGH-004: Placeholder price IDs ("price_indie", etc.) will never match
+    real Stripe price IDs. Call this before processing any live Stripe events to
+    catch misconfigured deployments with an actionable error instead of silent
+    tier-mapping failures.
+
+    Raises:
+        RuntimeError: if none of the STRIPE_PRICE_* env vars are set.
+    """
+    if not any(os.environ.get(v) for v in _price_env_vars):
+        raise RuntimeError(
+            "Stripe price IDs not configured. Set the following environment variables "
+            "on the webhook server before enabling live Stripe event processing:\n"
+            "  STRIPE_PRICE_INDIE       — e.g. price_1ABC...\n"
+            "  STRIPE_PRICE_PRO         — e.g. price_2DEF...\n"
+            "  STRIPE_PRICE_TEAM        — e.g. price_3GHI...\n"
+            "  STRIPE_PRICE_ENTERPRISE  — e.g. price_4JKL...\n"
+            "See docs/deployment/stripe_webhook.md for setup instructions."
+        )
+
+
 # Tier → max concurrent simulators (mirrors license_cmd.py)
 _TIER_SIM_LIMITS: Dict[str, int] = {
     "indie": 2,
@@ -323,7 +347,14 @@ def handle_stripe_event(event: Dict[str, Any]) -> Dict[str, str]:
     Returns:
         A status dict with ``status`` (``"handled"`` | ``"ignored"``) and
         optional ``detail`` string.
+
+    Raises:
+        RuntimeError: if Stripe price ID environment variables are not configured.
     """
+    # SEC-HIGH-004: Fail fast if price IDs aren't configured — prevents silent
+    # tier-mapping failures where every checkout maps to the "indie" fallback.
+    _assert_price_ids_configured()
+
     event_type = event.get("type", "")
     data_object = event.get("data", {}).get("object", {})
 
@@ -365,8 +396,10 @@ def _handle_checkout_completed(session: Dict[str, Any]) -> Dict[str, str]:
         )
         return {"status": "handled", "detail": f"License {license_id} created for {customer_email}"}
     except RuntimeError as exc:
+        # SEC-HIGH-002: log full error internally; return only a generic message
+        # to the caller — Keygen error bodies may contain sensitive API details.
         logger.error("Failed to create Keygen.sh license: %s", exc)
-        return {"status": "error", "detail": str(exc)}
+        return {"status": "error", "detail": "License provisioning failed. Contact support@synctek.io"}
 
 
 def _handle_subscription_deleted(subscription: Dict[str, Any]) -> Dict[str, str]:
@@ -382,8 +415,9 @@ def _handle_subscription_deleted(subscription: Dict[str, Any]) -> Dict[str, str]
             return {"status": "ignored", "detail": f"No license found for customer {stripe_customer_id}"}
         return {"status": "handled", "detail": f"License suspended for customer {stripe_customer_id}"}
     except RuntimeError as exc:
+        # SEC-HIGH-002: log full error internally; return only a generic message.
         logger.error("Failed to suspend Keygen.sh license: %s", exc)
-        return {"status": "error", "detail": str(exc)}
+        return {"status": "error", "detail": "License suspension failed. Contact support@synctek.io"}
 
 
 def _find_keygen_license_id_by_customer(stripe_customer_id: str) -> Optional[str]:
@@ -499,8 +533,9 @@ def _handle_subscription_updated(subscription: Dict[str, Any]) -> Dict[str, str]
     try:
         license_id = _find_keygen_license_id_by_customer(stripe_customer_id)
     except RuntimeError as exc:
+        # SEC-HIGH-002: log full error internally; return only a generic message.
         logger.error("Failed to find Keygen license for customer %s: %s", stripe_customer_id, exc)
-        return {"status": "error", "detail": str(exc)}
+        return {"status": "error", "detail": "License lookup failed. Contact support@synctek.io"}
 
     if not license_id:
         logger.warning(
@@ -514,10 +549,11 @@ def _handle_subscription_updated(subscription: Dict[str, Any]) -> Dict[str, str]
     try:
         _update_keygen_license_tier(license_id, new_tier)
     except RuntimeError as exc:
+        # SEC-HIGH-002: log full error internally; return only a generic message.
         logger.error(
             "Failed to update Keygen license %s to tier %s: %s", license_id, new_tier, exc
         )
-        return {"status": "error", "detail": str(exc)}
+        return {"status": "error", "detail": "License update failed. Contact support@synctek.io"}
 
     logger.info(
         "Updated Keygen license %s to tier=%s for customer %s",
