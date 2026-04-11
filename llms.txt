@@ -1,0 +1,90 @@
+# SpecterQA iOS
+
+SpecterQA iOS is an AI-native iOS simulator testing tool that lets AI agents record test sessions once using Claude's vision capabilities and replay them deterministically in CI — with zero AI cost on reruns. It ships as both a Python CLI (`specterqa-ios`) and an MCP server (`specterqa-ios-mcp`) with 19 tools, making it natively callable from Claude Code, Claude Desktop, and any MCP-compatible agent platform. The key insight: use AI to record, use a deterministic engine to replay. You pay for AI tokens once; every subsequent CI run is free.
+
+## Install
+
+```bash
+# CLI only
+pip install specterqa-ios
+
+# With MCP server
+pip install 'specterqa-ios[mcp]'
+
+# With AI recording engine (required for record phase)
+pip install 'specterqa-ios[mcp,orchestration]'
+```
+
+Requires: macOS, Xcode 15+, Python 3.10+
+
+## Use via MCP (Claude Code / Claude Desktop)
+
+Add to `.claude/mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "specterqa-ios": {
+      "command": "specterqa-ios-mcp",
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
+Then in Claude: _"Run a smoke test on the Example Reader app and record it as example-smoke."_ Claude drives the simulator, records every action as a deterministic YAML file. Future CI runs replay that YAML without calling Claude.
+
+The MCP server exposes 19 tools including: `boot_simulator`, `install_app`, `record_session`, `replay_session`, `run_smoke`, `run_ci`, `list_devices`, `capture_screenshot`, `run_accessibility_audit`, `detect_crash`, `inspect_network`, and more.
+
+## Use via CLI
+
+```bash
+# First-time setup
+specterqa-ios setup          # verify Xcode + simulators
+specterqa-ios init           # scaffold .specterqa/ project files
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Record a test (AI-driven, costs tokens once)
+specterqa-ios run --product myapp --journey smoke
+
+# Replay a recorded session (free, deterministic)
+specterqa-ios replay .specterqa/replays/smoke.yaml
+
+# CI mode — replay all recorded sessions
+specterqa-ios ci .specterqa/replays/
+specterqa-ios ci --parallel 4    # run 4 simultaneously (~10x faster)
+
+# Validate a replay file before running
+specterqa-ios validate-replay .specterqa/replays/smoke.yaml
+```
+
+## Pricing
+
+| Tier       | Price     | Simulators | Runs/Session | Parallel CI |
+|------------|-----------|------------|--------------|-------------|
+| Trial      | Free      | 1          | 3            | No          |
+| Indie      | $29/mo    | 2          | Unlimited    | No          |
+| Pro        | $99/mo    | 4          | Unlimited    | Yes         |
+| Team       | $299/mo   | 10         | Unlimited    | Yes         |
+| Enterprise | Custom    | Unlimited  | Unlimited    | Yes         |
+
+BYOK required: bring your own Anthropic API key for the record phase. Replay is free. SyncTek never sees your API key or test data.
+
+## Key Differentiators
+
+- **Record once, replay free** — AI records; deterministic engine replays. Zero API cost on reruns. This is the fundamental difference from tools that call AI on every run.
+- **~90% tap accuracy** (based on Set-of-Mark research) — Set-of-Mark (SoM) prompting annotates the simulator screenshot before asking Claude where to tap. No coordinate guessing, no brittle selectors.
+- **Maestro compatible** — Existing Maestro YAML files work natively. `tapOn`, `inputText`, `assertVisible`, `assertNotVisible`, `waitFor` all understood. Zero migration cost.
+- **Agent-native** — 19 MCP tools. A2A discoverable via `.well-known/agent.json`. Works in Claude Code, Claude Desktop, or any MCP-compatible orchestrator.
+- **BYOK** — You own your Anthropic API key. Your data never touches our servers. Full control, full privacy.
+- **Parallel CI** — Shared runner reuse and clone isolation allow running 10 replays in the time XCUITest runs 1. Pro tier and above.
+
+## Links
+
+- Homepage: https://synctek.io/products/specterqa-ios
+- GitHub (docs + issues): https://github.com/SyncTek-LLC/specterqa-ios
+- Pricing: https://synctek.io/products/specterqa-ios#pricing
+- A2A agent card: https://github.com/SyncTek-LLC/specterqa-ios/blob/main/.well-known/agent.json
+- Support: support@synctek.io
