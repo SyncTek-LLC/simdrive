@@ -336,7 +336,7 @@ class LicenseValidator:
         Uses httpx when ``SPECTERQA_KEYGEN_ACCOUNT`` is set (full Keygen.sh v1
         account-scoped URL). Falls back to the legacy ``requests``-based path
         (``/licenses/{key}/actions/validate``) when the account env var is absent,
-        preserving backwards compatibility with pre-INIT-2026-525 callers.
+        preserving backwards compatibility with callers prior to v11.4.0.
 
         Returns:
             Normalised dict matching the ``validate()`` contract.
