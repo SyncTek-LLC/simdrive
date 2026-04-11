@@ -93,6 +93,7 @@ class ReplayStep:
     # Tap / long_press
     element_index: Optional[int] = None
     element_label: Optional[str] = None
+    element_identifier: Optional[str] = None
     x: Optional[float] = None
     y: Optional[float] = None
     # Swipe
@@ -167,6 +168,7 @@ class ReplayRecorder:
         label: str,
         x: float,
         y: float,
+        identifier: str = "",
     ) -> None:
         """Record a tap action."""
         self.session.steps.append(
@@ -175,6 +177,7 @@ class ReplayRecorder:
                 timestamp=time.time(),
                 element_index=element_index,
                 element_label=label,
+                element_identifier=identifier,
                 x=x,
                 y=y,
             )
@@ -348,6 +351,13 @@ class ReplayPlayer:
         return next((e for e in elements if e.label == label), None)
 
     @staticmethod
+    def _find_by_identifier(elements: list, identifier: str):
+        """Return the first element whose identifier matches, or None."""
+        if not identifier:
+            return None
+        return next((e for e in elements if getattr(e, 'identifier', '') == identifier), None)
+
+    @staticmethod
     def resolve_vars(text: str, variables: dict) -> str:
         """Substitute ${VAR} placeholders in *text* from *variables* dict."""
         for key, value in variables.items():
@@ -359,7 +369,7 @@ class ReplayPlayer:
         if not variables:
             return step
         resolved = dict(step)
-        for var_field in ("element_label", "text", "key"):
+        for var_field in ("element_label", "element_identifier", "text", "key"):
             if var_field in resolved and isinstance(resolved[var_field], str):
                 resolved[var_field] = self.resolve_vars(resolved[var_field], variables)
         return resolved
@@ -416,6 +426,9 @@ class ReplayPlayer:
         if "waitFor" in step:
             step.setdefault("action", "wait_for_element")
             step.setdefault("label", step.pop("waitFor"))
+        if "tapOnIdentifier" in step:
+            step.setdefault("action", "tap")
+            step.setdefault("element_identifier", step.pop("tapOnIdentifier"))
         return step
 
     def _execute_step(
@@ -699,10 +712,16 @@ class ReplayPlayer:
         return step_result
 
     def _exec_tap(self, step: dict, backend, annotator, result: dict) -> None:
-        """Resolve element by label (resilient) or recorded coords (fallback)."""
+        """Resolve element by identifier, label (resilient), or recorded coords (fallback)."""
+        identifier = step.get("element_identifier", "")
         label = step.get("element_label", "")
         elements = annotator.get_elements_from_runner()
-        target = self._find_by_label(elements, label)
+
+        # Try identifier first (most reliable)
+        target = self._find_by_identifier(elements, identifier)
+        # Fall back to label
+        if target is None:
+            target = self._find_by_label(elements, label)
 
         if target is not None:
             cx = target.x + target.width / 2
@@ -715,7 +734,7 @@ class ReplayPlayer:
             # Element disappeared and no coords — flag as UI change
             if result["exit_code"] == 0:
                 result["exit_code"] = 2
-            raise RuntimeError(f"Element '{label}' not found — UI may have changed since recording")
+            raise RuntimeError(f"Element '{identifier or label}' not found — UI may have changed since recording")
 
     def _exec_long_press(self, step: dict, backend, annotator, result: dict) -> None:
         """Resolve element by label then perform a long press."""
