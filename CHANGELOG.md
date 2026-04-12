@@ -7,6 +7,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.6.0 (2026-04-12)
+
+### Features
+- feat(mcp): `ios_logs` tool — real-time app console logs from iOS Simulator (level, category, pattern filters, 100-entry cap, summary stats)
+- feat(mcp): `ios_crashes` tool — crash detection from .ips files in DiagnosticReports (exception type, backtrace, app running status)
+- Both monitors auto-start/stop with session lifecycle
+- Tool count: 22 → 24
+
+---
+
 ## [Unreleased]
 
 ## v11.5.0 (2026-04-12)
