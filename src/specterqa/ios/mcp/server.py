@@ -1431,7 +1431,7 @@ def handle_wait_idle(arguments: dict) -> dict:
 
     timeout = min(float(arguments.get("timeout", 10.0)), 30.0)
     try:
-        result = _backend._post("/idle", {"timeout": timeout})
+        result = _backend.wait_idle(timeout=timeout)
         return result
     except Exception as exc:
         return {"error": f"wait_idle failed: {exc}"}
@@ -1449,7 +1449,7 @@ def handle_app_state(arguments: dict) -> dict:
         return {"error": str(exc)}
 
     try:
-        result = _backend._get("/app_state")
+        result = _backend.app_state()
         return result
     except Exception as exc:
         return {"error": f"app_state failed: {exc}"}
