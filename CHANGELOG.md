@@ -9,6 +9,32 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+## v11.5.0 (2026-04-12)
+
+### Critical
+- fix(runner): `ios_press_key("tab")` no longer crashes the XCTest runner — two-strategy mitigation (label scan + coordinate fallback) mirroring the existing return key fix
+
+### High
+- feat(mcp): Element Resolver v2 — auto-refresh on cache miss eliminates 29% stale-cache tap failures; scored matching (exact > prefix > substring) prevents greedy label mismatches
+- fix(mcp): `ios_screenshot()` outputs JPEG (quality=85) instead of lossless PNG — 3-5x payload reduction, fits within MCP message limits
+- feat(runner): `isHittable` tracked in ElementDescriptor — non-hittable elements auto-fallback to coordinate tap with warning
+
+### Medium
+- feat(runner): Auto-recover from app backgrounding after tap (Safari link trap no longer kills sessions)
+- feat(mcp): Session state machine (idle → running → crashed) with health probes and clear recovery instructions
+- feat(mcp): New tools — `ios_wait_idle` (element tree stabilization), `ios_app_state` (lifecycle check), `ios_dismiss_sheet` (swipe-down dismiss)
+- feat(runner): `POST /appearance` endpoint via XCUIDevice — `ios_set_appearance` works during active sessions
+- feat(runner): `POST /idle` endpoint — polls element tree stability for idle-wait
+- feat(runner): `GET /app_state` endpoint — exposes app lifecycle state
+
+### Low
+- fix(mcp): `ios_start_recording` creates fresh ReplayRecorder (recording scope now works correctly)
+- fix(mcp): Session state machine prevents BrowserStack zombie state after runner crash
+- feat(replay): `_exec_long_press` uses identifier-first resolution matching `_exec_tap`
+- 46 new tests (891 total passing)
+
+---
+
 ## [11.4.0] — 2026-04-10
 
 ### Added
