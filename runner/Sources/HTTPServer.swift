@@ -13,15 +13,15 @@
 //      CFRunLoopRunInMode loop in SpecterQARunner.swift)
 //
 //  Supported endpoints (superset of v1 + v2):
-//    POST /tap           — coordinate or element tap
+//    POST /tap           — coordinate or element tap (auto-recovers from backgrounding)
 //    POST /swipe         — swipe gesture (fromX/fromY/toX/toY or direction)
 //    POST /type          — type text
-//    POST /key           — press named key (return crash-safe)
+//    POST /key           — press named key (return/tab crash-safe)
 //    POST /press_button  — hardware button (home/volumeup/volumedown)
 //    GET  /screenshot    — base64 JPEG/PNG with scale/quality params
 //    GET  /source        — JSON accessibility tree
 //    GET  /health        — health check
-//    GET  /elements      — element query with ?limit=N&types=...
+//    GET  /elements      — element query with ?limit=N&types=... (includes isHittable)
 //    GET  /webview       — WKWebView descendant elements only
 //    POST /wait          — wait for element by label
 //    POST /scroll        — scroll gesture
@@ -30,6 +30,10 @@
 //    POST /dismiss-alert — dismiss visible system alert or sheet
 //    POST /shutdown      — graceful shutdown (v1 compat)
 //    POST /stop          — graceful shutdown (v2 compat alias)
+//    POST /appearance    — set dark/light mode via XCUIDevice (avoids simctl conflict)
+//    GET  /app_state     — current XCUIApplication state (string + raw int)
+//    POST /idle          — wait until element tree is stable (two snapshots match)
+//    GET  /logs          — log stream stub (OSLogStore requires unavailable entitlements)
 //
 
 import Foundation
@@ -303,8 +307,22 @@ final class HTTPServer {
             let body = request.body
             if let x = body["x"] as? Double, let y = body["y"] as? Double {
                 let duration = body["duration"] as? Double ?? 0.0
-                runOnMain { self.injector.tap(x: x, y: y, duration: duration) }
-                return HTTPResponse.success(["mode": "coordinate", "x": x, "y": y])
+                var autoRecovered = false
+                runOnMain {
+                    self.injector.tap(x: x, y: y, duration: duration)
+                    // Fix 5: auto-recover if tap sent the app to background
+                    if self.injector.app.state != .runningForeground {
+                        NSLog("[SpecterQA] tap: app backgrounded after tap — activating")
+                        self.injector.app.activate()
+                        Thread.sleep(forTimeInterval: 1.0)
+                        autoRecovered = true
+                    }
+                }
+                var result: [String: Any] = ["mode": "coordinate", "x": x, "y": y]
+                if autoRecovered {
+                    result["warning"] = "App was backgrounded and auto-recovered"
+                }
+                return HTTPResponse.success(result)
             }
             return HTTPResponse.error("tap requires x, y (numbers)", code: 422)
 
@@ -525,9 +543,116 @@ final class HTTPServer {
             }
             return dismissResult
 
+        // ── Appearance (Fix 2) ────────────────────────────────────────────────
+        // Uses XCUIDevice.shared.appearance to avoid simctl conflict with active
+        // XCTest session. Accepts {"mode": "dark"} or {"mode": "light"}.
+        case ("POST", "/appearance"):
+            guard let mode = request.body["mode"] as? String,
+                  mode == "dark" || mode == "light" else {
+                return HTTPResponse.error("appearance requires {mode: 'dark' | 'light'}", code: 422)
+            }
+            runOnMain {
+                XCUIDevice.shared.appearance = (mode == "dark") ? .dark : .light
+                NSLog("[SpecterQA] appearance set to \(mode)")
+            }
+            return HTTPResponse.success(["mode": mode])
+
+        // ── App state (Fix 4) ─────────────────────────────────────────────────
+        // Returns the current XCUIApplication state as a string and raw Int.
+        case ("GET", "/app_state"):
+            var stateResult: HTTPResponse = HTTPResponse.error("app_state failed", code: 500)
+            runOnMain {
+                let state = self.injector.app.state
+                let stateStr: String
+                switch state {
+                case .notInstalled:       stateStr = "notInstalled"
+                case .notRunning:         stateStr = "notRunning"
+                case .runningBackgroundSuspended: stateStr = "runningBackgroundSuspended"
+                case .runningBackground:  stateStr = "runningBackground"
+                case .runningForeground:  stateStr = "runningForeground"
+                @unknown default:         stateStr = "unknown"
+                }
+                stateResult = HTTPResponse.ok([
+                    "state": stateStr,
+                    "state_raw": state.rawValue
+                ])
+            }
+            return stateResult
+
+        // ── Idle wait (Fix 6) ─────────────────────────────────────────────────
+        // Polls until the element tree is stable (two snapshots 300ms apart have
+        // the same element count) or a timeout is reached.
+        // Body: {"timeout": <seconds, default 10, max 30>}
+        case ("POST", "/idle"):
+            let rawTimeout = (request.body["timeout"] as? Double) ?? 10.0
+            let idleTimeout = min(max(rawTimeout, 0), 30.0)
+            var idleResult: HTTPResponse = HTTPResponse.error("idle check failed", code: 500)
+            runOnMain {
+                let deadline = Date().addingTimeInterval(idleTimeout)
+                var waited: Double = 0.0
+                let pollInterval: TimeInterval = 0.3
+
+                // First ensure app is in foreground
+                if self.injector.app.state != .runningForeground {
+                    NSLog("[SpecterQA] idle: app not in foreground — aborting")
+                    idleResult = HTTPResponse.error("app not in runningForeground state", code: 503)
+                    return
+                }
+
+                while Date() < deadline {
+                    let countBefore: Int
+                    let countAfter: Int
+                    do {
+                        let snap1 = try self.injector.app.snapshot()
+                        let c1 = self.countDescendants(snap1)
+                        Thread.sleep(forTimeInterval: pollInterval)
+                        waited += pollInterval
+                        let snap2 = try self.injector.app.snapshot()
+                        countBefore = c1
+                        countAfter = self.countDescendants(snap2)
+                    } catch {
+                        // Snapshot failed — wait and retry
+                        Thread.sleep(forTimeInterval: pollInterval)
+                        waited += pollInterval
+                        continue
+                    }
+
+                    if countBefore == countAfter {
+                        NSLog("[SpecterQA] idle: stable after \(waited)s (count=\(countAfter))")
+                        idleResult = HTTPResponse.ok(["status": "idle", "waited": waited])
+                        return
+                    }
+                    // Tree is still changing — keep polling (no extra sleep, 300ms already spent)
+                }
+
+                NSLog("[SpecterQA] idle: timed out after \(idleTimeout)s")
+                idleResult = HTTPResponse.ok(["status": "timeout", "waited": idleTimeout])
+            }
+            return idleResult
+
+        // ── Log stream (Fix 7 — stub) ─────────────────────────────────────────
+        // OSLogStore requires entitlements unavailable to XCTest runners.
+        // Return a clear stub with a terminal alternative.
+        case ("GET", "/logs"):
+            return HTTPResponse.ok([
+                "success": false,
+                "error": "not yet implemented",
+                "suggestion": "Use 'xcrun simctl spawn booted log stream --predicate \"subsystem == \\\"<bundle_id>\\\"\" --style json' from the terminal"
+            ])
+
         default:
             return HTTPResponse.notFound(request.path)
         }
+    }
+
+    // MARK: - Snapshot descendant counter (used by /idle)
+
+    private func countDescendants(_ snapshot: any XCUIElementSnapshot) -> Int {
+        var count = 1
+        for child in snapshot.children {
+            count += countDescendants(child)
+        }
+        return count
     }
 
     // MARK: - Optional v2 subsystems (set by SpecterQARunner after init)
