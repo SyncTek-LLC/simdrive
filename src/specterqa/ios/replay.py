@@ -737,11 +737,17 @@ class ReplayPlayer:
             raise RuntimeError(f"Element '{identifier or label}' not found — UI may have changed since recording")
 
     def _exec_long_press(self, step: dict, backend, annotator, result: dict) -> None:
-        """Resolve element by label then perform a long press."""
+        """Resolve element by identifier (preferred) or label then perform a long press."""
+        identifier = step.get("element_identifier", "")
         label = step.get("element_label", "")
         duration = float(step.get("duration", 1.0))
         elements = annotator.get_elements_from_runner()
-        target = self._find_by_label(elements, label)
+
+        # Try identifier first (most reliable — stable across UI changes)
+        target = self._find_by_identifier(elements, identifier)
+        # Fall back to label
+        if target is None:
+            target = self._find_by_label(elements, label)
 
         if target is not None:
             cx = target.x + target.width / 2
@@ -752,7 +758,7 @@ class ReplayPlayer:
         else:
             if result["exit_code"] == 0:
                 result["exit_code"] = 2
-            raise RuntimeError(f"Element '{label}' not found — UI may have changed since recording")
+            raise RuntimeError(f"Element '{identifier or label}' not found — UI may have changed since recording")
 
     # ── Public API ────────────────────────────────────────────────────────
 

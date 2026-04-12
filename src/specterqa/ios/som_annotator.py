@@ -47,6 +47,7 @@ class UIElement:
     height: float  # Device-point height
     enabled: bool = True
     visible: bool = True
+    hittable: bool = True  # False when element exists but is obscured (behind sheet/overlay)
 
     @property
     def center_x(self) -> float:
@@ -71,6 +72,7 @@ class UIElement:
             "center_y": self.center_y,
             "enabled": self.enabled,
             "visible": self.visible,
+            "hittable": self.hittable,
         }
 
 
@@ -384,6 +386,8 @@ class SoMAnnotator:
                 label_lower = label.lower()
                 is_noise = any(f in label_lower for f in _NOISE_LABEL_FRAGMENTS)
 
+                hittable = node.get("hittable", "true").lower() == "true"
+
                 if (
                     visible
                     and enabled
@@ -415,6 +419,7 @@ class SoMAnnotator:
                                 height=h,
                                 enabled=enabled,
                                 visible=visible,
+                                hittable=hittable,
                             )
                         )
                         index += 1
@@ -465,6 +470,7 @@ class SoMAnnotator:
                 if value == "<null>":
                     value = ""
                 enabled = elem.get("enabled", True)
+                hittable = elem.get("hittable", True)
                 frame = elem.get("frame", {})
                 x = float(frame.get("x", 0))
                 y = float(frame.get("y", 0))
@@ -501,6 +507,7 @@ class SoMAnnotator:
                                 height=h,
                                 visible=visible,
                                 enabled=enabled,
+                                hittable=bool(hittable),
                             )
                         )
                         index += 1
@@ -616,9 +623,14 @@ class SoMAnnotator:
                 font=font,
             )
 
-        result = Image.alpha_composite(img, overlay).convert("RGB")
+        result = Image.alpha_composite(img, overlay)
+        # Convert RGBA to RGB for JPEG (no alpha channel)
+        if result.mode == "RGBA":
+            background = Image.new("RGB", result.size, (255, 255, 255))
+            background.paste(result, mask=result.split()[3])
+            result = background
         buf = io.BytesIO()
-        result.save(buf, format="PNG")
+        result.save(buf, format="JPEG", quality=85, optimize=True)
         return base64.standard_b64encode(buf.getvalue()).decode("ascii")
 
     # ------------------------------------------------------------------
