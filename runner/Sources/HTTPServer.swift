@@ -635,9 +635,8 @@ final class HTTPServer {
         // Return a clear stub with a terminal alternative.
         case ("GET", "/logs"):
             return HTTPResponse.ok([
-                "success": false,
-                "error": "not yet implemented",
-                "suggestion": "Use 'xcrun simctl spawn booted log stream --predicate \"subsystem == \\\"<bundle_id>\\\"\" --style json' from the terminal"
+                "success": true,
+                "message": "Console logs are now handled by the MCP server directly via the ios_logs tool. The runner does not buffer logs."
             ])
 
         default:

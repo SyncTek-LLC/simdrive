@@ -10,7 +10,7 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (22 total):
+Tools (24 total):
     ios_start_session       Start XCTest runner on the iOS Simulator
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
@@ -33,6 +33,8 @@ Tools (22 total):
     ios_stop_recording      Save replay YAML + clear buffer (marks end of flow)
     ios_save_replay         Save replay YAML without clearing the step buffer
     ios_accessibility_audit Audit current screen for accessibility issues
+    ios_logs                Get recent app console logs from the iOS Simulator
+    ios_crashes             Check for app crashes since session start
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -65,6 +67,8 @@ _last_elements: list = []  # Element cache from last ios_screenshot / ios_elemen
 _session_lock = threading.Lock()  # Serialises start/stop to prevent race conditions
 _recorder = None  # ReplayRecorder instance (None when recording is not active)
 _session_state = "idle"  # idle | running | crashed
+_console_monitor = None  # ConsoleMonitor instance (None when session is not active)
+_crash_detector = None  # CrashDetector instance (None when session is not active)
 
 
 def _require_session() -> None:
@@ -244,7 +248,7 @@ def handle_start_session(arguments: dict) -> dict:
         {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
         or {"error": "<message>"} on failure.
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
@@ -365,6 +369,16 @@ def handle_start_session(arguments: dict) -> dict:
 
             _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
+            # Start console log monitor and crash detector
+            from specterqa.ios.drivers.simulator.console import ConsoleMonitor
+            from specterqa.ios.drivers.simulator.crash import CrashDetector
+
+            _console_monitor = ConsoleMonitor(device_id=_session._target_udid)
+            _console_monitor.start()
+
+            _crash_detector = CrashDetector(device_id=_session._target_udid, bundle_id=bundle_id)
+            _crash_detector.start()
+
             _session_state = "running"
             return {
                 "status": "ok",
@@ -379,6 +393,8 @@ def handle_start_session(arguments: dict) -> dict:
             _annotator = None
             _last_elements = []
             _recorder = None
+            _console_monitor = None
+            _crash_detector = None
             _session_state = "idle"
             return {"error": str(exc)}
 
@@ -389,7 +405,7 @@ def handle_stop_session(arguments: dict) -> dict:
     Returns:
         {"status": "stopped"}
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector
 
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
@@ -405,14 +421,133 @@ def handle_stop_session(arguments: dict) -> dict:
             except Exception as exc:
                 logger.warning("Error stopping session: %s", exc)
 
+        # Stop console monitor (terminates background log stream process)
+        if _console_monitor is not None:
+            try:
+                _console_monitor.stop()
+            except Exception as exc:
+                logger.warning("Error stopping console monitor: %s", exc)
+
+        # Stop crash detector (clears baseline state; no background process)
+        if _crash_detector is not None:
+            try:
+                _crash_detector.stop()
+            except Exception as exc:
+                logger.warning("Error stopping crash detector: %s", exc)
+
         _session = None
         _backend = None
         _annotator = None
         _last_elements = []
         _recorder = None
+        _console_monitor = None
+        _crash_detector = None
         _session_state = "idle"
 
     return {"status": "stopped"}
+
+
+def handle_logs(arguments: dict) -> dict:
+    """Get recent app console logs from the iOS Simulator.
+
+    Args:
+        seconds:  Time window to query (default 30.0).
+        level:    Optional level filter, e.g. ``"error"`` or ``"fault"``.
+                  When set to ``"error"`` or ``"fault"``, the dedicated error
+                  buffer is queried instead of the main ring buffer.
+        category: Optional category filter (exact match).
+        pattern:  Optional regex pattern applied to the message field.
+                  When provided, overrides ``level`` and ``seconds``.
+
+    Returns:
+        {"count": <int>, "logs": [...], "summary": {...}}
+        or {"error": "<message>"} on failure.
+    """
+    if _console_monitor is None:
+        return {
+            "error": (
+                "No active session or console monitor not started. "
+                "Call ios_start_session first."
+            )
+        }
+
+    seconds = float(arguments.get("seconds", 30))
+    level = arguments.get("level")
+    category = arguments.get("category")
+    pattern = arguments.get("pattern")
+
+    if pattern:
+        entries = _console_monitor.search(pattern)
+    elif level and level.lower() in ("error", "fault"):
+        entries = _console_monitor.errors(seconds=seconds)
+    else:
+        entries = _console_monitor.recent(seconds=seconds, level=level, category=category)
+
+    # Cap at 100 entries to keep MCP payloads reasonable
+    log_list = []
+    for entry in entries[-100:]:
+        log_list.append({
+            "timestamp": str(getattr(entry, "timestamp", "")),
+            "level": getattr(entry, "level", ""),
+            "subsystem": getattr(entry, "subsystem", ""),
+            "category": getattr(entry, "category", ""),
+            "message": getattr(entry, "message", ""),
+            "process": getattr(entry, "process", ""),
+        })
+
+    return {
+        "count": len(log_list),
+        "logs": log_list,
+        "summary": _console_monitor.summary(),
+    }
+
+
+def handle_crashes(arguments: dict) -> dict:
+    """Check for app crashes since the session started.
+
+    Returns:
+        {
+            "crashes_since_session_start": <int>,
+            "crashes": [...],
+            "app_running": <bool>,
+            "latest_crash": {...} | null,
+        }
+        or {"error": "<message>"} on failure.
+    """
+    if _crash_detector is None:
+        return {
+            "error": (
+                "No active session or crash detector not started. "
+                "Call ios_start_session first."
+            )
+        }
+
+    crashes = _crash_detector.check()
+    latest = _crash_detector.latest_crash()
+    is_running = _crash_detector.is_app_running()
+
+    crash_list = []
+    for crash in crashes:
+        crash_list.append({
+            "timestamp": str(getattr(crash, "timestamp", "")),
+            "exception_type": getattr(crash, "exception_type", ""),
+            "exception_code": getattr(crash, "exception_code", ""),
+            "crashing_thread": getattr(crash, "crashing_thread", 0),
+            "backtrace": getattr(crash, "backtrace", []),
+            "app_version": getattr(crash, "app_version", ""),
+            "os_version": getattr(crash, "os_version", ""),
+        })
+
+    return {
+        "crashes_since_session_start": len(crash_list),
+        "crashes": crash_list,
+        "app_running": is_running,
+        "latest_crash": {
+            "timestamp": str(latest.timestamp),
+            "exception_type": latest.exception_type,
+            "backtrace": latest.backtrace,
+        } if latest is not None else None,
+    }
 
 
 def handle_screenshot(arguments: dict) -> dict:
@@ -1503,7 +1638,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (22 total):
+AVAILABLE TOOLS (24 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -1538,6 +1673,8 @@ AVAILABLE TOOLS (22 total):
     ios_set_appearance      — Toggle dark/light mode on the simulator
     ios_simctl              — Run arbitrary xcrun simctl subcommand
     ios_webview_elements    — Query elements inside WKWebView (EPUB, PDF, audiobook UI)
+    ios_logs                — Get recent app console logs (filterable by level, category, regex)
+    ios_crashes             — Check for app crashes since session start (parses .ips files)
 
 WORKFLOW (follow this sequence):
 
@@ -1998,6 +2135,54 @@ SETUP CHECK:
     async def ios_dismiss_sheet() -> str:
         result = handle_dismiss_sheet({})
         return json.dumps(result)
+
+    # ── Tool: ios_logs ─────────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_logs",
+        description=(
+            "Get recent app console logs from the iOS Simulator. "
+            "Returns structured log entries with timestamp, level, subsystem, category, and message. "
+            "Use seconds=N to control the time window (default 30s). "
+            "Use level='error' to filter to errors and faults only (queries the dedicated error buffer). "
+            "Use pattern='regex' to search log messages by regex (overrides level and seconds). "
+            "Use category='subsystem.category' to filter by log category. "
+            "Returns at most 100 entries plus an aggregate summary. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_logs(
+        seconds: float = 30.0,
+        level: str | None = None,
+        pattern: str | None = None,
+        category: str | None = None,
+    ) -> str:
+        result = handle_logs({
+            "seconds": seconds,
+            "level": level,
+            "pattern": pattern,
+            "category": category,
+        })
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_crashes ──────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_crashes",
+        description=(
+            "Check for app crashes since the session started. "
+            "Returns crash reports with exception type, exception code, crashing thread, "
+            "backtrace, app version, and OS version. "
+            "Also reports whether the app process is currently running. "
+            "Use after unexpected behavior or blank screens to diagnose if the app crashed. "
+            "Parses .ips crash files from ~/Library/Logs/DiagnosticReports/ — "
+            "only reports crashes that appeared after ios_start_session was called. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_crashes() -> str:
+        result = handle_crashes({})
+        return json.dumps(result, default=str)
 
     return mcp
 
