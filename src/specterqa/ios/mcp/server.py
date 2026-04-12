@@ -10,7 +10,7 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (19 total):
+Tools (22 total):
     ios_start_session       Start XCTest runner on the iOS Simulator
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
@@ -22,6 +22,9 @@ Tools (19 total):
     ios_type                Type text into focused field
     ios_wait                Sleep for N seconds
     ios_wait_for_element    Poll until a labelled element appears
+    ios_wait_idle           Wait for app to become idle (element tree stabilizes)
+    ios_app_state           Check app lifecycle state (foreground/background/suspended)
+    ios_dismiss_sheet       Dismiss a sheet/modal by swiping down
     ios_elements            Get element list without screenshot
     ios_set_appearance      Toggle dark/light mode on the simulator
     ios_simctl              Run arbitrary simctl subcommand on the simulator
@@ -61,12 +64,22 @@ _annotator = None  # SoMAnnotator instance
 _last_elements: list = []  # Element cache from last ios_screenshot / ios_elements call
 _session_lock = threading.Lock()  # Serialises start/stop to prevent race conditions
 _recorder = None  # ReplayRecorder instance (None when recording is not active)
+_session_state = "idle"  # idle | running | crashed
 
 
 def _require_session() -> None:
-    """Raise RuntimeError if no active session exists."""
+    """Raise RuntimeError if no active session exists or session has crashed."""
+    global _session_state
+    if _session_state == "crashed":
+        raise RuntimeError("Session crashed. Call ios_stop_session then ios_start_session to recover.")
     if _backend is None:
         raise RuntimeError("No active session. Call ios_start_session first.")
+    # Health probe — detect runner death mid-session
+    try:
+        _backend.health()
+    except Exception:
+        _session_state = "crashed"
+        raise RuntimeError("Session crashed (runner unreachable). Call ios_stop_session then ios_start_session.")
 
 
 def _auto_checkpoint() -> None:
@@ -169,7 +182,8 @@ def _resize_screenshot(b64_png: str, scale: float = 0.5) -> str:
     new_size = (max(1, int(img.width * scale)), max(1, int(img.height * scale)))
     img = img.resize(new_size, Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    img = img.convert("RGB")
+    img.save(buf, format="JPEG", quality=85, optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -230,7 +244,7 @@ def handle_start_session(arguments: dict) -> dict:
         {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
         or {"error": "<message>"} on failure.
     """
-    global _session, _backend, _annotator, _last_elements, _recorder
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
@@ -310,6 +324,7 @@ def handle_start_session(arguments: dict) -> dict:
 
                 _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
+                _session_state = "running"
                 return {
                     "status": "ok",
                     "provider": "browserstack",
@@ -322,6 +337,7 @@ def handle_start_session(arguments: dict) -> dict:
                 _annotator = None
                 _last_elements = []
                 _recorder = None
+                _session_state = "idle"
                 return {"error": str(exc)}
 
         from specterqa.ios.session_manager import TestSession
@@ -349,6 +365,7 @@ def handle_start_session(arguments: dict) -> dict:
 
             _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
+            _session_state = "running"
             return {
                 "status": "ok",
                 "clone_udid": _session._target_udid,
@@ -362,6 +379,7 @@ def handle_start_session(arguments: dict) -> dict:
             _annotator = None
             _last_elements = []
             _recorder = None
+            _session_state = "idle"
             return {"error": str(exc)}
 
 
@@ -371,7 +389,7 @@ def handle_stop_session(arguments: dict) -> dict:
     Returns:
         {"status": "stopped"}
     """
-    global _session, _backend, _annotator, _last_elements, _recorder
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state
 
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
@@ -392,6 +410,7 @@ def handle_stop_session(arguments: dict) -> dict:
         _annotator = None
         _last_elements = []
         _recorder = None
+        _session_state = "idle"
 
     return {"status": "stopped"}
 
@@ -476,6 +495,91 @@ def handle_screenshot(arguments: dict) -> dict:
         return {"error": str(exc)}
 
 
+def _lookup(label, identifier, element_index, element_type, elements):
+    """Look up an element from *elements* using priority: identifier > label > index.
+
+    Label matching uses scored matching: exact > prefix > substring, shorter wins.
+    Index matching does NOT auto-refresh (indices are position-dependent).
+
+    Args:
+        label:         Label substring to match (case-insensitive).
+        identifier:    Exact accessibilityIdentifier to match.
+        element_index: Integer index to match.
+        element_type:  Optional element type filter (applied to label candidates).
+        elements:      List of UIElement objects to search.
+
+    Returns:
+        The matching UIElement, or None.
+    """
+    # 1. Identifier (exact match)
+    if identifier:
+        match = next((e for e in elements if getattr(e, "identifier", "") == identifier), None)
+        if match:
+            return match
+
+    # 2. Label (scored: exact > prefix > substring, shorter wins)
+    if label:
+        label_lower = label.lower()
+        candidates = []
+        for e in elements:
+            el = e.label.lower()
+            if el == label_lower:
+                candidates.append((2, -len(el), e))  # exact
+            elif el.startswith(label_lower):
+                candidates.append((1, -len(el), e))  # prefix
+            elif label_lower in el:
+                candidates.append((0, -len(el), e))  # substring
+
+        if element_type:
+            type_lower = element_type.lower()
+            typed = [(s, l, e) for s, l, e in candidates if e.element_type.lower() == type_lower]
+            if typed:
+                candidates = typed
+
+        if candidates:
+            candidates.sort(key=lambda x: (-x[0], -x[1]))  # highest score, shortest label
+            return candidates[0][2]
+
+    # 3. Index (NO auto-refresh — indices are position-dependent)
+    if element_index is not None:
+        return next((e for e in elements if e.index == element_index), None)
+
+    return None
+
+
+def _resolve_element(
+    label=None,
+    identifier=None,
+    element_index=None,
+    element_type=None,
+):
+    """Resolve an element from cache, auto-refreshing on miss.
+
+    Returns (element, was_refreshed).
+    Priority: identifier > label > element_index.
+    Label uses scored matching: exact > prefix > substring, shorter wins.
+    Index-based lookups do NOT trigger auto-refresh (indices are stale after navigation).
+    """
+    global _last_elements
+
+    target = _lookup(label, identifier, element_index, element_type, _last_elements)
+    if target is not None:
+        return target, False
+
+    # Cache miss for identifier/label — auto-refresh once (navigation likely happened).
+    # Do NOT auto-refresh for index-only lookups (position-dependent, refresh is misleading).
+    if element_index is None and _annotator is not None:
+        try:
+            fresh = _annotator.get_elements_from_runner()
+            _last_elements = fresh
+            target = _lookup(label, identifier, None, element_type, fresh)
+            return target, True
+        except Exception:
+            pass
+
+    return None, False
+
+
 def handle_tap(arguments: dict) -> dict:
     """Tap an element by identifier, label, index, or explicit coordinates.
 
@@ -504,80 +608,14 @@ def handle_tap(arguments: dict) -> dict:
     coord_x = arguments.get("x")
     coord_y = arguments.get("y")
 
-    target = None
-
-    # ── Identifier-based lookup (most reliable — exact accessibilityIdentifier match) ──
-    if identifier is not None:
-        try:
-            _require_session()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-
-        target = next(
-            (e for e in _last_elements if getattr(e, 'identifier', '') == identifier),
-            None,
-        )
-        if target is None and label is None and element_index is None and (coord_x is None or coord_y is None):
-            return {
-                "error": (
-                    f"No element found with identifier '{identifier}'. "
-                    "Call ios_screenshot first to refresh elements."
-                )
-            }
-
-    # ── Label-based lookup (preferred — more stable across UI changes) ──
-    if target is None and label is not None:
-        try:
-            _require_session()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-
-        label_lower = label.lower()
-        candidates = [e for e in _last_elements if label_lower in e.label.lower()]
-        if element_type_filter:
-            type_lower = element_type_filter.lower()
-            type_filtered = [e for e in candidates if e.element_type.lower() == type_lower]
-            if type_filtered:
-                candidates = type_filtered
-        if candidates:
-            target = candidates[0]
-        # Fall through to element_index if no label match and index provided
-        if target is None and element_index is None and (coord_x is None or coord_y is None):
-            return {
-                "error": (
-                    f"No element found with label containing '{label}'"
-                    + (f" and type '{element_type_filter}'" if element_type_filter else "")
-                    + ". Call ios_screenshot first to refresh elements."
-                )
-            }
-
-    # ── Index-based lookup (fallback or explicit) ──
-    if target is None and element_index is not None:
-        try:
-            _require_session()
-        except RuntimeError as exc:
-            return {"error": str(exc)}
-
-        try:
-            element_index = int(element_index)
-        except (TypeError, ValueError):
-            return {"error": f"element_index must be an integer, got: {element_index!r}"}
-
-        target = next((e for e in _last_elements if e.index == element_index), None)
-
-        if target is None and (coord_x is None or coord_y is None):
-            valid_indices = [e.index for e in _last_elements]
-            return {
-                "error": (
-                    f"Element {element_index} not found. "
-                    f"Call ios_screenshot first to refresh elements. "
-                    f"Valid indices: {valid_indices}"
-                )
-            }
-
     # ── Coordinate tap (direct — no element lookup needed) ──
-    if target is None:
+    if identifier is None and label is None and element_index is None:
         if coord_x is not None and coord_y is not None:
+            try:
+                _require_session()
+            except RuntimeError as exc:
+                return {"error": str(exc)}
+
             try:
                 _backend.tap(float(coord_x), float(coord_y))
             except Exception as exc:
@@ -598,8 +636,93 @@ def handle_tap(arguments: dict) -> dict:
         # No lookup method specified at all
         return {"error": "One of identifier, label, element_index, or x+y coordinates is required"}
 
+    # ── Element lookup (identifier / label / index) via unified resolver ──
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    if element_index is not None:
+        try:
+            element_index = int(element_index)
+        except (TypeError, ValueError):
+            return {"error": f"element_index must be an integer, got: {element_index!r}"}
+
+    target, was_refreshed = _resolve_element(
+        label=label,
+        identifier=identifier,
+        element_index=element_index,
+        element_type=element_type_filter,
+    )
+
+    if target is None:
+        if coord_x is not None and coord_y is not None:
+            # Fall through to coordinate tap below
+            try:
+                _backend.tap(float(coord_x), float(coord_y))
+            except Exception as exc:
+                return {"error": f"Coordinate tap failed: {exc}"}
+
+            if _recorder is not None:
+                _recorder.record_tap(-1, "", float(coord_x), float(coord_y))
+
+            _auto_checkpoint()
+
+            return {
+                "status": "ok",
+                "tapped": "",
+                "x": float(coord_x),
+                "y": float(coord_y),
+            }
+
+        # Build a helpful error message
+        if identifier is not None:
+            return {
+                "error": (
+                    f"No element found with identifier '{identifier}'. "
+                    "Call ios_screenshot first to refresh elements."
+                )
+            }
+        if label is not None:
+            return {
+                "error": (
+                    f"No element found with label containing '{label}'"
+                    + (f" and type '{element_type_filter}'" if element_type_filter else "")
+                    + ". Call ios_screenshot first to refresh elements."
+                )
+            }
+        valid_indices = [e.index for e in _last_elements]
+        return {
+            "error": (
+                f"Element {element_index} not found. "
+                f"Call ios_screenshot first to refresh elements. "
+                f"Valid indices: {valid_indices}"
+            )
+        }
+
     cx = target.x + target.width / 2
     cy = target.y + target.height / 2
+
+    # Fix 6: hittable fallback — element found but obscured (behind sheet/overlay)
+    if getattr(target, "hittable", True) is False:
+        try:
+            _backend.tap(cx, cy)
+        except Exception as exc:
+            return {"error": f"Coordinate tap failed: {exc}"}
+
+        if _recorder is not None:
+            _recorder.record_tap(target.index, target.label, cx, cy, identifier=getattr(target, "identifier", ""))
+
+        _auto_checkpoint()
+
+        return {
+            "status": "ok",
+            "tapped": target.label,
+            "x": cx,
+            "y": cy,
+            "warning": "Element not hittable — used coordinate tap (may be behind overlay)",
+            **({"cache_refreshed": True} if was_refreshed else {}),
+        }
 
     try:
         _backend.tap(cx, cy)
@@ -608,17 +731,20 @@ def handle_tap(arguments: dict) -> dict:
 
     # Record the tap for replay
     if _recorder is not None:
-        _recorder.record_tap(target.index, target.label, cx, cy, identifier=getattr(target, 'identifier', ''))
+        _recorder.record_tap(target.index, target.label, cx, cy, identifier=getattr(target, "identifier", ""))
 
     # Auto-checkpoint: capture element state after action for replay verification
     _auto_checkpoint()
 
-    return {
+    result = {
         "status": "ok",
         "tapped": target.label,
         "x": cx,
         "y": cy,
     }
+    if was_refreshed:
+        result["cache_refreshed"] = True
+    return result
 
 
 def handle_wait(arguments: dict) -> dict:
@@ -688,8 +814,11 @@ def handle_start_recording(arguments: dict) -> dict:
     global _recorder
     if _recorder is None:
         return {"error": "No active session. Call ios_start_session first."}
-    _recorder.session.steps.clear()
-    return {"status": "ok", "message": "Recording started fresh — previous steps cleared"}
+    from specterqa.ios.replay import ReplayRecorder
+    bundle_id = _recorder.session.bundle_id
+    device_id = _recorder.session.device_id
+    _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
+    return {"status": "ok", "message": "Recording started — fresh buffer"}
 
 
 def handle_stop_recording(arguments: dict) -> dict:
@@ -1135,6 +1264,14 @@ def handle_set_appearance(arguments: dict) -> dict:
     if mode not in ("dark", "light"):
         return {"error": "mode must be 'dark' or 'light'"}
 
+    # Try the runner's /appearance endpoint first (faster, no simctl dependency)
+    try:
+        result = _backend.set_appearance(mode)
+        if result.get("success") or result.get("status") == "ok":
+            return {"status": "ok", "appearance": mode, "method": "runner"}
+    except Exception:
+        pass  # Fall back to simctl
+
     # The "booted" alias fails when multiple simulators are booted or when
     # xcodebuild keeps its own simulator context that simctl can't see via the
     # "booted" shorthand.  Instead, enumerate ALL booted simulators from
@@ -1169,7 +1306,7 @@ def handle_set_appearance(arguments: dict) -> dict:
             timeout=10,
         )
         if result.returncode == 0:
-            return {"status": "ok", "appearance": mode, "udid": udid}
+            return {"status": "ok", "appearance": mode, "udid": udid, "method": "simctl"}
         last_error = result.stderr.strip()
 
     return {"error": f"All booted sims rejected appearance change: {last_error}"}
@@ -1278,6 +1415,67 @@ def handle_webview_elements(arguments: dict) -> dict:
         return {"error": str(exc)}
 
 
+def handle_wait_idle(arguments: dict) -> dict:
+    """Wait for the app to become idle (element tree stabilizes).
+
+    Args:
+        timeout: Maximum wait in seconds (default 10.0, max 30.0).
+
+    Returns:
+        Runner response dict, or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    timeout = min(float(arguments.get("timeout", 10.0)), 30.0)
+    try:
+        result = _backend._post("/idle", {"timeout": timeout})
+        return result
+    except Exception as exc:
+        return {"error": f"wait_idle failed: {exc}"}
+
+
+def handle_app_state(arguments: dict) -> dict:
+    """Check if the app is running, backgrounded, or crashed.
+
+    Returns:
+        Runner response dict with app lifecycle state, or {"error": "<message>"}.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    try:
+        result = _backend._get("/app_state")
+        return result
+    except Exception as exc:
+        return {"error": f"app_state failed: {exc}"}
+
+
+def handle_dismiss_sheet(arguments: dict) -> dict:
+    """Dismiss a presented sheet by swiping down.
+
+    Returns:
+        {"status": "ok", "action": "swipe_down_dismiss"}
+        or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    try:
+        # Swipe down from top-center of screen to dismiss a sheet
+        _backend.swipe(x1=195, y1=300, x2=195, y2=700, duration=0.3)
+        time.sleep(0.5)
+        return {"status": "ok", "action": "swipe_down_dismiss"}
+    except Exception as exc:
+        return {"error": f"dismiss_sheet failed: {exc}"}
+
+
 # ---------------------------------------------------------------------------
 # MCP server factory
 # ---------------------------------------------------------------------------
@@ -1305,7 +1503,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (19 total):
+AVAILABLE TOOLS (22 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -1326,6 +1524,9 @@ AVAILABLE TOOLS (19 total):
   Waiting:
     ios_wait             — Sleep for N seconds (animations, splash screens)
     ios_wait_for_element — Poll until a labelled element appears (async loads)
+    ios_wait_idle        — Wait for app to become idle (element tree stabilizes)
+    ios_app_state        — Check app lifecycle state (foreground/background/suspended)
+    ios_dismiss_sheet    — Dismiss a sheet/modal by swiping down
 
   Recording & Replay:
     ios_start_recording  — Clear step buffer; begin clean recording
@@ -1755,6 +1956,47 @@ SETUP CHECK:
             result = handle_webview_elements({})
         except RuntimeError as exc:
             result = {"error": str(exc)}
+        return json.dumps(result)
+
+    # ── Tool: ios_wait_idle ────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_wait_idle",
+        description=(
+            "Wait for the app to become idle (no pending UI changes). "
+            "Monitors element tree stability. "
+            "Use instead of ios_wait for navigation transitions, async loads, and animations. "
+            "timeout defaults to 10s, max 30s."
+        ),
+    )
+    async def ios_wait_idle(timeout: float = 10.0) -> str:
+        result = handle_wait_idle({"timeout": timeout})
+        return json.dumps(result)
+
+    # ── Tool: ios_app_state ────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_app_state",
+        description=(
+            "Check app lifecycle state (foreground, background, suspended). "
+            "Use to diagnose session issues or verify app is active before interactions."
+        ),
+    )
+    async def ios_app_state() -> str:
+        result = handle_app_state({})
+        return json.dumps(result)
+
+    # ── Tool: ios_dismiss_sheet ────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_dismiss_sheet",
+        description=(
+            "Dismiss a presented sheet (half-sheet, action sheet, modal) by swiping down. "
+            "Use when a sheet is blocking access to underlying content like the tab bar."
+        ),
+    )
+    async def ios_dismiss_sheet() -> str:
+        result = handle_dismiss_sheet({})
         return json.dumps(result)
 
     return mcp
