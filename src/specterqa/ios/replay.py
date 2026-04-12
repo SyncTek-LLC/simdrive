@@ -752,9 +752,9 @@ class ReplayPlayer:
         if target is not None:
             cx = target.x + target.width / 2
             cy = target.y + target.height / 2
-            backend.tap(cx, cy, duration=duration)
+            backend.long_press(cx, cy, duration=duration)
         elif step.get("x") is not None and step.get("y") is not None:
-            backend.tap(step["x"], step["y"], duration=duration)
+            backend.long_press(step["x"], step["y"], duration=duration)
         else:
             if result["exit_code"] == 0:
                 result["exit_code"] = 2
