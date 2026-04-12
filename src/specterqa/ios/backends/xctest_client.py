@@ -178,6 +178,36 @@ class XCTestBackend:
         """Check runner health."""
         return self._get("/health")
 
+    def app_state(self) -> dict[str, Any]:
+        """Check app lifecycle state (foreground, background, suspended).
+
+        Returns:
+            Runner response dict with app state information.
+        """
+        return self._get("/app_state")
+
+    def wait_idle(self, timeout: float = 10.0) -> dict[str, Any]:
+        """Wait for the app to become idle (element tree stabilizes).
+
+        Args:
+            timeout: Maximum wait in seconds (default 10.0).
+
+        Returns:
+            Runner response dict.
+        """
+        return self._post("/idle", {"timeout": timeout})
+
+    def set_appearance(self, mode: str) -> dict[str, Any]:
+        """Set the simulator appearance via the runner's /appearance endpoint.
+
+        Args:
+            mode: "dark" or "light".
+
+        Returns:
+            Runner response dict.
+        """
+        return self._post("/appearance", {"mode": mode})
+
     # ------------------------------------------------------------------
     # Gesture API
     # ------------------------------------------------------------------

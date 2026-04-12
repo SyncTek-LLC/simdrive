@@ -96,19 +96,27 @@ final class TouchInjector {
     /// after each successful strategy so the accessibility tree is consistent
     /// before the next HTTP request is processed.
     ///
+    /// For "tab", uses the same two-strategy crash mitigation to avoid SIGABRT
+    /// on iOS 26 when calling app.keys["tab"].tap() directly.
+    ///
     /// Recognised key names (case-insensitive):
-    ///   return, enter, delete, backspace, escape, tab, space,
+    ///   return, enter, tab, delete, backspace, escape, space,
     ///   up, down, left, right, home, end, pageup, pagedown
     func pressKey(_ name: String) throws {
         let normalized = name.lowercased().trimmingCharacters(in: .whitespaces)
         switch normalized {
         case "return", "enter":
             try pressReturnKey()
+        case "tab":
+            pressTabKey()
         default:
             guard let key = keyboardKey(for: normalized) else {
                 throw TouchInjectorError.unknownKey(name)
             }
+            // Insert a short stabilization delay to prevent cascading crashes
+            // for other keys on iOS 26 (mirrors the return key mitigation).
             app.keys[key.rawValue].tap()
+            Thread.sleep(forTimeInterval: 0.5)
         }
     }
 
@@ -140,6 +148,46 @@ final class TouchInjector {
     func screenshot() -> (Data, CGSize) {
         let shot = app.screenshot()
         return (shot.pngRepresentation, shot.image.size)
+    }
+
+    // MARK: - Tab Key (Two-Strategy Crash Mitigation — mirrors Return Key v3)
+    //
+    //  iOS 26: app.keys["tab"].tap() can SIGABRT identically to the return key.
+    //  Strategy order mirrors pressReturnKey():
+    //    1. Find and tap the Tab/Next keyboard button by label (safest)
+    //    2. Coordinate tap at the known Tab key position (top-left of keyboard)
+    //       Tab is typically ~8% across and ~15% down from the keyboard's origin.
+
+    private let tabKeyLabels = ["Tab", "Next"]
+
+    private func pressTabKey() {
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.waitForExistence(timeout: 2) {
+            // Strategy 1: find and tap by label
+            for label in tabKeyLabels {
+                let btn = keyboard.buttons[label]
+                if btn.exists && btn.isHittable {
+                    btn.tap()
+                    NSLog("[SpecterQA] pressKey(tab): tapped keyboard button '\(label)'")
+                    Thread.sleep(forTimeInterval: 0.5)
+                    return
+                }
+            }
+
+            // Strategy 2: coordinate tap at Tab key position (top-left area)
+            let kbFrame = keyboard.frame
+            let tabX = kbFrame.origin.x + kbFrame.width  * 0.08
+            let tabY = kbFrame.origin.y + kbFrame.height * 0.15
+            let coord = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: tabX, dy: tabY))
+            coord.tap()
+            NSLog("[SpecterQA] pressKey(tab): coordinate fallback (\(tabX), \(tabY))")
+            Thread.sleep(forTimeInterval: 0.5)
+            return
+        }
+
+        // No keyboard visible — nothing to do.
+        NSLog("[SpecterQA] pressKey(tab): no keyboard visible — assuming already dismissed")
     }
 
     // MARK: - Return Key (Two-Strategy Crash Mitigation — v3)
@@ -220,7 +268,8 @@ final class TouchInjector {
         switch name {
         case "delete", "backspace": return .delete
         case "escape":              return .escape
-        case "tab":                 return .tab
+        // "tab" is intentionally absent — handled by pressTabKey() above to
+        // avoid SIGABRT on iOS 26 when calling app.keys["tab"].tap() directly.
         case "space":               return .space
         case "up":                  return .upArrow
         case "down":                return .downArrow
