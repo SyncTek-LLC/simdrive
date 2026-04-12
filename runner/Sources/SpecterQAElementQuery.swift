@@ -20,6 +20,7 @@ struct ElementDescriptor {
     let frame: CGRect
     let isEnabled: Bool
     let isSelected: Bool
+    let isHittable: Bool
     let value: String
     let index: Int
 
@@ -41,6 +42,7 @@ struct ElementDescriptor {
             ],
             "enabled": isEnabled,
             "selected": isSelected,
+            "hittable": isHittable,
             "value": value,
             "index": index
         ]
@@ -110,6 +112,7 @@ final class SpecterQAElementQuery {
                         frame: element.frame,
                         isEnabled: element.isEnabled,
                         isSelected: element.isSelected,
+                        isHittable: element.isHittable,
                         value: (element.value as? String) ?? "",
                         index: descriptors.count
                     ))
@@ -142,13 +145,20 @@ final class SpecterQAElementQuery {
             let label = snapshot.label
             let ident = snapshot.identifier
             if !label.isEmpty || !ident.isEmpty {
+                // XCUIElementSnapshot does not expose isHittable — derive a
+                // best-effort value: enabled + non-zero frame + not off-screen.
+                let fr = snapshot.frame
+                let snapshotHittable = snapshot.isEnabled
+                    && fr.width > 0 && fr.height > 0
+                    && fr.origin.x >= 0 && fr.origin.y >= 0
                 descriptors.append(ElementDescriptor(
                     label: label,
                     type: elementTypeName(snapshot.elementType),
                     identifier: ident,
-                    frame: snapshot.frame,
+                    frame: fr,
                     isEnabled: snapshot.isEnabled,
                     isSelected: snapshot.isSelected,
+                    isHittable: snapshotHittable,
                     value: (snapshot.value as? String) ?? "",
                     index: descriptors.count
                 ))
@@ -186,6 +196,7 @@ final class SpecterQAElementQuery {
                     frame: element.frame,
                     isEnabled: element.isEnabled,
                     isSelected: element.isSelected,
+                    isHittable: element.isHittable,
                     value: (element.value as? String) ?? "",
                     index: descriptors.count
                 ))
