@@ -108,7 +108,7 @@ class TestLookupScoredMatching:
         )
         elements = [forgot_btn, password_field]
 
-        result = _lookup(elements, label="Password")
+        result = _lookup(label="Password", identifier=None, element_index=None, element_type=None, elements=elements)
         assert result is password_field, (
             f"Exact match 'Password' should win over substring match. Got: {result}"
         )
@@ -125,7 +125,7 @@ class TestLookupScoredMatching:
         )
         elements = [forgot_btn, password_field]
 
-        result = _lookup(elements, label="Pass")
+        result = _lookup(label="Pass", identifier=None, element_index=None, element_type=None, elements=elements)
         assert result is password_field, (
             "'Pass' prefix of 'Password' should beat substring of 'Forgot your password?'"
         )
@@ -138,7 +138,7 @@ class TestLookupScoredMatching:
         long_el = MockElement(index=2, label="OK Button", identifier="", element_type="Button")
         elements = [long_el, short_el]
 
-        result = _lookup(elements, label="OK")
+        result = _lookup(label="OK", identifier=None, element_index=None, element_type=None, elements=elements)
         assert result is short_el, "Shorter exact match should win over longer one"
 
     def test_lookup_type_filter_narrows(self):
@@ -153,7 +153,7 @@ class TestLookupScoredMatching:
         )
         elements = [label_el, secure_field]
 
-        result = _lookup(elements, label="Password", element_type="SecureTextField")
+        result = _lookup(label="Password", identifier=None, element_index=None, element_type="SecureTextField", elements=elements)
         assert result is secure_field, "Type filter should narrow to SecureTextField"
 
     def test_lookup_identifier_takes_priority(self):
@@ -168,7 +168,7 @@ class TestLookupScoredMatching:
         )
         elements = [label_match, id_match]
 
-        result = _lookup(elements, label="Save", identifier="saveBtn")
+        result = _lookup(label="Save", identifier="saveBtn", element_index=None, element_type=None, elements=elements)
         assert result is id_match, "Identifier match must take priority over label match"
 
     def test_lookup_index_no_scoring(self):
@@ -180,7 +180,7 @@ class TestLookupScoredMatching:
         el7 = MockElement(index=7, label="Seven", identifier="", element_type="Button")
         elements = [el3, el5, el7]
 
-        result = _lookup(elements, element_index=5)
+        result = _lookup(label=None, identifier=None, element_index=5, element_type=None, elements=elements)
         assert result is el5, "Index lookup must return element with matching index"
 
 
@@ -204,6 +204,7 @@ class TestResolveElement:
 
     def test_resolve_auto_refreshes_on_label_miss(self):
         """Cache has old elements; resolver calls annotator.get_elements_from_runner() and finds element in fresh list."""
+        import specterqa.ios.mcp.server as srv
         _resolve_element = self._get_resolve_element()
 
         # Old cache: element not present
@@ -214,44 +215,49 @@ class TestResolveElement:
         mock_annotator = MagicMock()
         mock_annotator.get_elements_from_runner.return_value = [target]
 
-        result_element, was_refreshed = _resolve_element(
-            label="NewButton",
-            cached_elements=[old_element],
-            annotator=mock_annotator,
-        )
+        # Set module globals that _resolve_element reads
+        srv._last_elements = [old_element]
+        srv._annotator = mock_annotator
+        srv._backend = MagicMock()
+
+        result_element, was_refreshed = _resolve_element(label="NewButton")
         assert result_element is target
         assert was_refreshed is True
         mock_annotator.get_elements_from_runner.assert_called_once()
 
     def test_resolve_no_refresh_on_index_miss(self):
         """Index miss does NOT trigger refresh (indices are stale post-refresh)."""
+        import specterqa.ios.mcp.server as srv
         _resolve_element = self._get_resolve_element()
 
         mock_annotator = MagicMock()
         mock_annotator.get_elements_from_runner.return_value = []
 
-        result_element, was_refreshed = _resolve_element(
-            element_index=99,
-            cached_elements=[MockElement(index=1, label="Btn")],
-            annotator=mock_annotator,
-        )
+        # Set module globals that _resolve_element reads
+        srv._last_elements = [MockElement(index=1, label="Btn")]
+        srv._annotator = mock_annotator
+        srv._backend = MagicMock()
+
+        result_element, was_refreshed = _resolve_element(element_index=99)
         # Index miss: no refresh should have been triggered
         mock_annotator.get_elements_from_runner.assert_not_called()
         assert result_element is None
 
     def test_resolve_returns_was_refreshed_flag(self):
         """Returns (element, True) when cache was refreshed to find the element."""
+        import specterqa.ios.mcp.server as srv
         _resolve_element = self._get_resolve_element()
 
         target = MockElement(index=1, label="TargetBtn", identifier="", element_type="Button")
         mock_annotator = MagicMock()
         mock_annotator.get_elements_from_runner.return_value = [target]
 
-        _, was_refreshed = _resolve_element(
-            label="TargetBtn",
-            cached_elements=[],  # empty cache forces refresh
-            annotator=mock_annotator,
-        )
+        # Set module globals: empty cache forces refresh
+        srv._last_elements = []
+        srv._annotator = mock_annotator
+        srv._backend = MagicMock()
+
+        _, was_refreshed = _resolve_element(label="TargetBtn")
         assert was_refreshed is True
 
 
@@ -539,11 +545,18 @@ class TestSessionStateMachine:
         if not hasattr(srv, "_session_state"):
             pytest.skip("_session_state not yet implemented")
 
-        with patch("specterqa.ios.mcp.server.XCTestBackend", autospec=True) as MockBackend:
-            mock_instance = MagicMock()
-            MockBackend.return_value = mock_instance
-            mock_instance.health.return_value = {"status": "ok"}
-            mock_instance.start_session.return_value = {"session_id": "test-123"}
+        with patch("specterqa.ios.backends.xctest_client.XCTestBackend", autospec=True) as MockBackend, \
+             patch("specterqa.ios.session_manager.TestSession", autospec=True) as MockSession, \
+             patch("specterqa.ios.replay.ReplayRecorder", autospec=True):
+            mock_backend_instance = MagicMock()
+            MockBackend.return_value = mock_backend_instance
+            mock_backend_instance.health.return_value = {"status": "ok"}
+
+            mock_session_instance = MagicMock()
+            MockSession.return_value = mock_session_instance
+            mock_session_instance._target_udid = "clone-udid"
+            mock_session_instance._port = 8222
+            mock_session_instance.runner_url = "http://localhost:8222"
 
             try:
                 handle_start_session({"bundle_id": "com.example.app", "udid": "test-udid"})
