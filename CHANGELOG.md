@@ -7,6 +7,22 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.0.0 (2026-04-13)
+
+### Breaking: ios_type now accepts target field parameters
+- `ios_type(text, label=, identifier=, element_index=, x=, y=)` — specify WHICH field to type into
+- The runner taps the target field first (using element-relative coordinate tap), then types
+- Solves multi-field form typing: `ios_type(text="mypass", label="Password")`
+- Without a target, types into whatever has focus (legacy behavior preserved)
+- This is the systemic fix for the Example Reader sign-in form focus issue
+
+### Fixes
+- fix(client): HTTP timeout bumped 5s → 10s for element-based operations (element lookup + settle delays exceed 5s)
+- fix(runner): Element-relative coordinate tap (`el.coordinate(withNormalizedOffset:).tap()`) instead of `el.tap()` — prevents iOS 26 SIGABRT crashes
+- Live tested: Safari Address bar — targeted type by label, text verified in element tree ✅
+
+---
+
 ## v11.9.5 (2026-04-13)
 
 ### Critical Fix
