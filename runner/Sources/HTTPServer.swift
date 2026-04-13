@@ -381,48 +381,73 @@ final class HTTPServer {
             if let label = body["label"] as? String {
                 let type = body["type"] as? String
                 var found = false
+                var usedCoordFallback = false
                 var autoRecovered = false
                 runOnMain {
-                    if let el = self.elementQuery?.findByLabel(label, type: type) {
+                    guard let el = self.elementQuery?.findByLabel(label, type: type),
+                          el.exists else { return }
+                    // Try XCTest element.tap() first (transfers first-responder
+                    // focus on SwiftUI SecureField). If that crashes or the
+                    // element isn't hittable, fall back to coordinate tap.
+                    if el.isHittable {
                         el.tap()
-                        found = true
+                    } else {
+                        let frame = el.frame
+                        self.injector.tap(x: Double(frame.midX), y: Double(frame.midY))
+                        usedCoordFallback = true
                     }
-                    if found && self.injector.app.state != .runningForeground {
+                    found = true
+                    Thread.sleep(forTimeInterval: 0.3)
+                    if self.injector.app.state != .runningForeground {
                         self.injector.app.activate()
                         Thread.sleep(forTimeInterval: 1.0)
                         autoRecovered = true
                     }
                 }
-                if !found {
-                    return HTTPResponse.error("Element with label '\(label)' not found", code: 404)
+                if found {
+                    var result: [String: Any] = [
+                        "mode": usedCoordFallback ? "element_coord_fallback" : "element",
+                        "label": label,
+                    ]
+                    if autoRecovered { result["warning"] = "App was backgrounded and auto-recovered" }
+                    self.addLog("tap element: '\(label)' (coord_fallback=\(usedCoordFallback))")
+                    return HTTPResponse.success(result)
                 }
-                var result: [String: Any] = ["mode": "element", "label": label]
-                if autoRecovered { result["warning"] = "App was backgrounded and auto-recovered" }
-                self.addLog("tap element: '\(label)'")
-                return HTTPResponse.success(result)
+                // Element not found by runner — fall through to coordinate tap
             }
 
             if let identifier = body["identifier"] as? String {
                 var found = false
+                var usedCoordFallback = false
                 var autoRecovered = false
                 runOnMain {
-                    if let el = self.elementQuery?.findByIdentifier(identifier) {
+                    guard let el = self.elementQuery?.findByIdentifier(identifier),
+                          el.exists else { return }
+                    if el.isHittable {
                         el.tap()
-                        found = true
+                    } else {
+                        let frame = el.frame
+                        self.injector.tap(x: Double(frame.midX), y: Double(frame.midY))
+                        usedCoordFallback = true
                     }
-                    if found && self.injector.app.state != .runningForeground {
+                    found = true
+                    Thread.sleep(forTimeInterval: 0.3)
+                    if self.injector.app.state != .runningForeground {
                         self.injector.app.activate()
                         Thread.sleep(forTimeInterval: 1.0)
                         autoRecovered = true
                     }
                 }
-                if !found {
-                    return HTTPResponse.error("Element with identifier '\(identifier)' not found", code: 404)
+                if found {
+                    var result: [String: Any] = [
+                        "mode": usedCoordFallback ? "element_coord_fallback" : "element",
+                        "identifier": identifier,
+                    ]
+                    if autoRecovered { result["warning"] = "App was backgrounded and auto-recovered" }
+                    self.addLog("tap element id: '\(identifier)' (coord_fallback=\(usedCoordFallback))")
+                    return HTTPResponse.success(result)
                 }
-                var result: [String: Any] = ["mode": "element", "identifier": identifier]
-                if autoRecovered { result["warning"] = "App was backgrounded and auto-recovered" }
-                self.addLog("tap element id: '\(identifier)'")
-                return HTTPResponse.success(result)
+                // Element not found by runner — fall through to coordinate tap
             }
 
             // Coordinate-based tap (fallback)
