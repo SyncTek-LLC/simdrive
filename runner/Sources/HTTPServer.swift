@@ -374,6 +374,58 @@ final class HTTPServer {
         // ── Tap ───────────────────────────────────────────────────────────────
         case ("POST", "/tap"):
             let body = request.body
+
+            // Element-based tap: find by label/identifier and use XCTest's
+            // element.tap() which reliably transfers first-responder focus
+            // even on SwiftUI SecureField inside List/Form cells.
+            if let label = body["label"] as? String {
+                let type = body["type"] as? String
+                var found = false
+                var autoRecovered = false
+                runOnMain {
+                    if let el = self.elementQuery?.findByLabel(label, type: type) {
+                        el.tap()
+                        found = true
+                    }
+                    if found && self.injector.app.state != .runningForeground {
+                        self.injector.app.activate()
+                        Thread.sleep(forTimeInterval: 1.0)
+                        autoRecovered = true
+                    }
+                }
+                if !found {
+                    return HTTPResponse.error("Element with label '\(label)' not found", code: 404)
+                }
+                var result: [String: Any] = ["mode": "element", "label": label]
+                if autoRecovered { result["warning"] = "App was backgrounded and auto-recovered" }
+                self.addLog("tap element: '\(label)'")
+                return HTTPResponse.success(result)
+            }
+
+            if let identifier = body["identifier"] as? String {
+                var found = false
+                var autoRecovered = false
+                runOnMain {
+                    if let el = self.elementQuery?.findByIdentifier(identifier) {
+                        el.tap()
+                        found = true
+                    }
+                    if found && self.injector.app.state != .runningForeground {
+                        self.injector.app.activate()
+                        Thread.sleep(forTimeInterval: 1.0)
+                        autoRecovered = true
+                    }
+                }
+                if !found {
+                    return HTTPResponse.error("Element with identifier '\(identifier)' not found", code: 404)
+                }
+                var result: [String: Any] = ["mode": "element", "identifier": identifier]
+                if autoRecovered { result["warning"] = "App was backgrounded and auto-recovered" }
+                self.addLog("tap element id: '\(identifier)'")
+                return HTTPResponse.success(result)
+            }
+
+            // Coordinate-based tap (fallback)
             if let x = body["x"] as? Double, let y = body["y"] as? Double {
                 let duration = body["duration"] as? Double ?? 0.0
                 var autoRecovered = false
@@ -393,7 +445,7 @@ final class HTTPServer {
                 }
                 return HTTPResponse.success(result)
             }
-            return HTTPResponse.error("tap requires x, y (numbers)", code: 422)
+            return HTTPResponse.error("tap requires x+y, label, or identifier", code: 422)
 
         // ── Swipe ─────────────────────────────────────────────────────────────
         case ("POST", "/swipe"):

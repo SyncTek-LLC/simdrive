@@ -971,23 +971,42 @@ def handle_tap(arguments: dict) -> dict:
             **({"cache_refreshed": True} if was_refreshed else {}),
         }
 
+    # Prefer element-based tap via the runner (uses XCTest element.tap()
+    # which reliably transfers first-responder focus, even on SwiftUI
+    # SecureField inside List/Form cells). Fall back to coordinate tap.
+    tap_mode = "coordinate"
+    target_label = target.label
+    target_identifier = getattr(target, "identifier", "")
     try:
-        _backend.tap(cx, cy)
-    except Exception as exc:
-        return {"error": f"Tap failed: {exc}"}
+        if target_label or target_identifier:
+            _backend.tap_element(
+                label=target_label or None,
+                identifier=target_identifier or None,
+            )
+            tap_mode = "element"
+        else:
+            _backend.tap(cx, cy)
+    except Exception:
+        # Element tap failed — fall back to coordinate tap
+        try:
+            _backend.tap(cx, cy)
+            tap_mode = "coordinate_fallback"
+        except Exception as exc:
+            return {"error": f"Tap failed: {exc}"}
 
     # Record the tap for replay
     if _recorder is not None:
-        _recorder.record_tap(target.index, target.label, cx, cy, identifier=getattr(target, "identifier", ""))
+        _recorder.record_tap(target.index, target_label, cx, cy, identifier=target_identifier)
 
     # Auto-checkpoint: capture element state after action for replay verification
     _auto_checkpoint()
 
     result = {
         "status": "ok",
-        "tapped": target.label,
+        "tapped": target_label,
         "x": cx,
         "y": cy,
+        "tap_mode": tap_mode,
     }
     if was_refreshed:
         result["cache_refreshed"] = True
