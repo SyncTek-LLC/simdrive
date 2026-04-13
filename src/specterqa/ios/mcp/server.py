@@ -10,7 +10,7 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (24 total):
+Tools (27 total):
     ios_start_session       Start XCTest runner on the iOS Simulator
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
@@ -35,6 +35,9 @@ Tools (24 total):
     ios_accessibility_audit Audit current screen for accessibility issues
     ios_logs                Get recent app console logs from the iOS Simulator
     ios_crashes             Check for app crashes since session start
+    ios_perf                CPU, memory (RSS), and thread count snapshot
+    ios_memory              Detailed memory breakdown via footprint tool
+    ios_network             Network activity: URLs, bytes in/out, throughput
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -69,6 +72,8 @@ _recorder = None  # ReplayRecorder instance (None when recording is not active)
 _session_state = "idle"  # idle | running | crashed
 _console_monitor = None  # ConsoleMonitor instance (None when session is not active)
 _crash_detector = None  # CrashDetector instance (None when session is not active)
+_perf_profiler = None  # PerfProfiler instance (None when session is not active)
+_network_inspector = None  # NetworkInspector instance (None when session is not active)
 
 
 def _require_session() -> None:
@@ -247,8 +252,9 @@ def handle_start_session(arguments: dict) -> dict:
     Returns:
         {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
         or {"error": "<message>"} on failure.
+        (Starts PerfProfiler and NetworkInspector alongside the session.)
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
@@ -379,6 +385,20 @@ def handle_start_session(arguments: dict) -> dict:
             _crash_detector = CrashDetector(device_id=_session._target_udid, bundle_id=bundle_id)
             _crash_detector.start()
 
+            # Start performance profiler and network inspector
+            from specterqa.ios.drivers.simulator.perf import PerfProfiler
+            from specterqa.ios.drivers.simulator.network import NetworkInspector
+
+            _perf_profiler = PerfProfiler(
+                device_id=_session._target_udid,
+                bundle_id=bundle_id,
+            )
+
+            _network_inspector = NetworkInspector(device_id=_session._target_udid)
+            _network_inspector.start()
+            # Wire CFNetwork log watcher to capture HTTP activity from os_log
+            _network_inspector.setup_log_watcher(_console_monitor)
+
             _session_state = "running"
             return {
                 "status": "ok",
@@ -395,6 +415,8 @@ def handle_start_session(arguments: dict) -> dict:
             _recorder = None
             _console_monitor = None
             _crash_detector = None
+            _perf_profiler = None
+            _network_inspector = None
             _session_state = "idle"
             return {"error": str(exc)}
 
@@ -405,7 +427,7 @@ def handle_stop_session(arguments: dict) -> dict:
     Returns:
         {"status": "stopped"}
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector
 
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
@@ -435,6 +457,14 @@ def handle_stop_session(arguments: dict) -> dict:
             except Exception as exc:
                 logger.warning("Error stopping crash detector: %s", exc)
 
+        # Stop network inspector (terminates nettop background thread)
+        if _network_inspector is not None:
+            try:
+                _network_inspector.stop()
+            except Exception as exc:
+                logger.warning("Error stopping network inspector: %s", exc)
+
+        # PerfProfiler has no background thread — just clear the reference
         _session = None
         _backend = None
         _annotator = None
@@ -442,6 +472,8 @@ def handle_stop_session(arguments: dict) -> dict:
         _recorder = None
         _console_monitor = None
         _crash_detector = None
+        _perf_profiler = None
+        _network_inspector = None
         _session_state = "idle"
 
     return {"status": "stopped"}
@@ -1612,6 +1644,109 @@ def handle_dismiss_sheet(arguments: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Performance / Memory / Network tool handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_perf(arguments: dict) -> dict:
+    """Get CPU, memory, and thread metrics for the app under test.
+
+    Returns:
+        {"cpu_percent": float, "memory_mb": float, "thread_count": int,
+         "pid": int | null, "timestamp": float}
+        or {"error": "<message>"} on failure.
+    """
+    if _perf_profiler is None:
+        return {"error": "No active session. Call ios_start_session first."}
+
+    try:
+        snap = _perf_profiler.snapshot()
+        pid = _perf_profiler._get_app_pid()
+        return {
+            "cpu_percent": snap.cpu_percent,
+            "memory_mb": snap.memory_mb,
+            "thread_count": snap.thread_count,
+            "disk_usage_mb": snap.disk_usage_mb,
+            "fps_estimate": snap.fps_estimate,
+            "pid": pid,
+            "timestamp": snap.timestamp,
+        }
+    except Exception as exc:
+        return {"error": f"perf snapshot failed: {exc}"}
+
+
+def handle_memory(arguments: dict) -> dict:
+    """Get detailed memory breakdown via the ``footprint`` tool.
+
+    Returns a dict with physical footprint, dirty pages, swapped/compressed,
+    and clean pages — all in MB.  Falls back gracefully if footprint is
+    unavailable or the app is not running.
+
+    Returns:
+        {"pid": int, "footprint_mb": float, "dirty_mb": float,
+         "swapped_mb": float, "clean_mb": float}
+        or {"pid": int | null, "error": "<message>"} on failure.
+    """
+    if _perf_profiler is None:
+        return {"error": "No active session. Call ios_start_session first."}
+
+    try:
+        return _perf_profiler.memory_detail()
+    except Exception as exc:
+        return {"error": f"memory_detail failed: {exc}"}
+
+
+def handle_network(arguments: dict) -> dict:
+    """Get network activity for the app under test.
+
+    Args:
+        seconds: Time window for recent requests (default 30.0).
+
+    Returns:
+        {"requests": [...], "bytes_in": int, "bytes_out": int,
+         "throughput_in": float, "throughput_out": float,
+         "active_connections": int, "nettop_available": bool}
+        or {"error": "<message>"} on failure.
+    """
+    if _network_inspector is None:
+        return {"error": "No active session. Call ios_start_session first."}
+
+    seconds = float(arguments.get("seconds", 30))
+    try:
+        snap = _network_inspector.snapshot(seconds=seconds)
+
+        request_list = []
+        for req in snap.requests[-50:]:  # Cap at 50 most recent
+            request_list.append({
+                "url": getattr(req, "url", ""),
+                "method": getattr(req, "method", ""),
+                "host": getattr(req, "host", ""),
+                "path": getattr(req, "path", ""),
+                "status_code": getattr(req, "status_code", None),
+                "duration_ms": getattr(req, "duration_ms", None),
+                "started_at": getattr(req, "started_at", None),
+                "completed_at": getattr(req, "completed_at", None),
+                "is_failed": getattr(req, "is_failed", False),
+                "is_auth": getattr(req, "is_auth", False),
+                "error": getattr(req, "error", None),
+            })
+
+        return {
+            "requests": request_list,
+            "request_count": len(request_list),
+            "bytes_in": snap.bytes_in,
+            "bytes_out": snap.bytes_out,
+            "throughput_in_bps": snap.throughput_in,
+            "throughput_out_bps": snap.throughput_out,
+            "active_connections": snap.active_connections,
+            "nettop_available": snap.nettop_available,
+            "window_seconds": seconds,
+        }
+    except Exception as exc:
+        return {"error": f"network snapshot failed: {exc}"}
+
+
+# ---------------------------------------------------------------------------
 # MCP server factory
 # ---------------------------------------------------------------------------
 
@@ -1638,7 +1773,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (24 total):
+AVAILABLE TOOLS (27 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -1675,6 +1810,11 @@ AVAILABLE TOOLS (24 total):
     ios_webview_elements    — Query elements inside WKWebView (EPUB, PDF, audiobook UI)
     ios_logs                — Get recent app console logs (filterable by level, category, regex)
     ios_crashes             — Check for app crashes since session start (parses .ips files)
+
+  Performance & Network Monitoring:
+    ios_perf                — CPU %, RSS memory, thread count snapshot (call periodically for regression detection)
+    ios_memory              — Detailed memory breakdown: footprint, dirty, swapped, clean pages
+    ios_network             — Network activity: recent HTTP URLs, bytes in/out, throughput
 
 WORKFLOW (follow this sequence):
 
@@ -2182,6 +2322,61 @@ SETUP CHECK:
     )
     async def ios_crashes() -> str:
         result = handle_crashes({})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_perf ─────────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_perf",
+        description=(
+            "Get real-time CPU usage, memory footprint (RSS), and thread count for the app "
+            "under test. "
+            "Use to detect performance regressions, memory leaks, and thread explosion. "
+            "Call before and after test flows to capture baseline and post-action metrics. "
+            "Returns cpu_percent, memory_mb (resident set size), thread_count, and the PID. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_perf() -> str:
+        result = handle_perf({})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_memory ───────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_memory",
+        description=(
+            "Get a detailed memory breakdown for the app under test via the macOS footprint tool. "
+            "Reports: physical memory footprint, dirty pages, swapped/compressed pages, clean pages — all in MB. "
+            "More detailed than ios_perf memory (RSS). "
+            "Use to diagnose memory leaks (growing dirty_mb), excessive caching (high clean_mb), "
+            "or memory pressure (non-zero swapped_mb). "
+            "Requires an active session (ios_start_session). "
+            "Falls back gracefully if footprint is unavailable."
+        ),
+    )
+    async def ios_memory() -> str:
+        result = handle_memory({})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_network ──────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_network",
+        description=(
+            "Get network activity for the app under test. "
+            "Returns recent HTTP requests captured from CFNetwork / URLSession os_log entries: "
+            "URL, method, status code, host, whether the request failed, whether it is auth-related. "
+            "Also reports cumulative bytes in/out and real-time throughput (bytes/sec) when "
+            "nettop is available. "
+            "Use seconds=N to control the time window (default 30s). "
+            "Use to verify API calls fire correctly, detect failed requests (4xx/5xx), "
+            "and measure network performance during test flows. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_network(seconds: float = 30.0) -> str:
+        result = handle_network({"seconds": seconds})
         return json.dumps(result, default=str)
 
     return mcp
