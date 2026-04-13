@@ -7,6 +7,21 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.7.0 (2026-04-12)
+
+### Features
+- feat(mcp): `ios_perf` tool — real-time CPU %, RSS memory, thread count for app under test
+- feat(mcp): `ios_memory` tool — detailed memory breakdown via footprint (dirty, swapped, clean, physical footprint)
+- feat(mcp): `ios_network` tool — network activity from CFNetwork log parsing (URL, method, status) + nettop bandwidth (bytes in/out, throughput)
+- feat(network): `NetworkInspector` upgraded from stub to real implementation with CFNetwork log watcher + nettop background thread
+
+### Fixes
+- fix(perf): Thread count on macOS — replaced `ps -o nlwp=` (Linux-only) with `ps -M` line counting
+- Tool count: 24 → 27
+- 16 new tests (942 total passing)
+
+---
+
 ## v11.6.0 (2026-04-12)
 
 ### Features
