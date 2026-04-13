@@ -7,6 +7,17 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.9.4 (2026-04-13)
+
+### Critical Fix
+- fix(runner): Safe element-based tap — prevents runner crash from `el.tap()` on non-hittable elements
+- When element is hittable: uses XCTest `el.tap()` (proper focus transfer for SecureField)
+- When element is NOT hittable: uses coordinate tap on element center (safe fallback, no crash)
+- Response includes `mode: "element"` or `"element_coord_fallback"` for transparency
+- Live tested: Safari Address bar — tap, navigate away, tap back, type, verify ✅ (2 cycles, 0 crashes)
+
+---
+
 ## v11.9.3 (2026-04-13)
 
 ### Critical Fix
