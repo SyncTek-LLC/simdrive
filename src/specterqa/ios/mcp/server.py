@@ -1290,10 +1290,14 @@ def handle_swipe_back(arguments: dict) -> dict:
 
 
 def handle_type(arguments: dict) -> dict:
-    """Type text into the currently focused field.
+    """Type text into a field — optionally targeting a specific field.
 
     Args:
         text: String to type (required).
+        label: Target field by label (taps it first to transfer focus).
+        identifier: Target field by accessibilityIdentifier.
+        element_index: Target field by element index from ios_elements.
+        x, y: Target field by coordinates (taps first).
 
     Returns:
         {"status": "ok", "typed": "<text>"}
@@ -1308,8 +1312,40 @@ def handle_type(arguments: dict) -> dict:
     if not text:
         return {"error": "text is required and must be non-empty"}
 
+    label = arguments.get("label")
+    identifier = arguments.get("identifier")
+    element_index = arguments.get("element_index")
+    x = arguments.get("x")
+    y = arguments.get("y")
+
+    # If a target field is specified, resolve it and pass to the runner.
+    # The runner taps the field first, then types.
+    payload: dict = {"text": text}
+    focused_info = None
+
+    if label is not None:
+        payload["label"] = label
+        focused_info = f"label:{label}"
+    elif identifier is not None:
+        payload["identifier"] = identifier
+        focused_info = f"identifier:{identifier}"
+    elif element_index is not None:
+        # Resolve element_index to coordinates from the cache
+        target = next((e for e in _last_elements if e.index == int(element_index)), None)
+        if target is None:
+            return {"error": f"Element index {element_index} not found. Call ios_elements first."}
+        cx = target.x + target.width / 2
+        cy = target.y + target.height / 2
+        payload["x"] = cx
+        payload["y"] = cy
+        focused_info = f"index:{element_index} ({target.label})"
+    elif x is not None and y is not None:
+        payload["x"] = float(x)
+        payload["y"] = float(y)
+        focused_info = f"coordinates:({x},{y})"
+
     try:
-        _backend.type_text(text)
+        _backend._post("/type", payload)
     except Exception as exc:
         return {"error": f"Type failed: {exc}"}
 
@@ -1320,7 +1356,10 @@ def handle_type(arguments: dict) -> dict:
     # Auto-checkpoint: capture element state after action for replay verification
     _auto_checkpoint()
 
-    return {"status": "ok", "typed": text}
+    result = {"status": "ok", "typed": text}
+    if focused_info:
+        result["focused"] = focused_info
+    return result
 
 
 def handle_elements(arguments: dict) -> dict:
@@ -2249,13 +2288,31 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_type",
         description=(
-            "Type text into the currently focused text field on the iOS Simulator. "
-            "Tap a text field first (ios_tap) to focus it, then call ios_type. "
+            "Type text into a text field on the iOS Simulator. "
+            "RECOMMENDED: specify the target field with label, identifier, or element_index "
+            "to ensure text goes into the correct field. Without a target, types into "
+            "whatever field currently has focus (unreliable on multi-field forms). "
+            "Examples: ios_type(text='hello', label='Password') or "
+            "ios_type(text='hello', element_index=5). "
             "text is required and must be non-empty."
         ),
     )
-    async def ios_type(text: str) -> str:
-        result = handle_type({"text": text})
+    async def ios_type(
+        text: str,
+        label: str | None = None,
+        identifier: str | None = None,
+        element_index: int | None = None,
+        x: float | None = None,
+        y: float | None = None,
+    ) -> str:
+        result = handle_type({
+            "text": text,
+            "label": label,
+            "identifier": identifier,
+            "element_index": element_index,
+            "x": x,
+            "y": y,
+        })
         return json.dumps(result)
 
     # ── Tool: ios_elements ─────────────────────────────────────────────────
