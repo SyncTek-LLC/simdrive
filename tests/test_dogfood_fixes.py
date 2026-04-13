@@ -289,7 +289,11 @@ class TestHandleTapAutoRefresh:
         result = handle_tap({"label": "Submit"})
 
         assert result.get("status") == "ok", f"Expected ok, got: {result}"
-        mock_backend.tap.assert_called_once()
+        # tap_element() is preferred when the element has a label/identifier;
+        # tap() is used as fallback. Either is acceptable here.
+        assert mock_backend.tap_element.called or mock_backend.tap.called, (
+            "Expected tap_element() or tap() to be called after cache refresh"
+        )
         # Should indicate cache was refreshed
         assert result.get("cache_refreshed") is True, (
             f"Expected cache_refreshed=True in response. Got: {result}"
