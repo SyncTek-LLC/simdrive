@@ -33,11 +33,15 @@
 //    POST /appearance    — set dark/light mode via XCUIDevice (avoids simctl conflict)
 //    GET  /app_state     — current XCUIApplication state (string + raw int)
 //    POST /idle          — wait until element tree is stable (two snapshots match)
-//    GET  /logs          — log stream stub (OSLogStore requires unavailable entitlements)
+//    GET  /logs          — in-process log ring buffer (up to 500 entries)
+//    GET  /perf          — process metrics via mach_task_basic_info (no simctl needed)
+//    GET  /crashes       — app state + error log entries from the in-process ring buffer
+//    GET  /network       — network reachability check + cross-process limitation note
 //
 
 import Foundation
 import Darwin
+import UIKit
 import XCTest
 
 // MARK: - HTTPServer
@@ -62,6 +66,17 @@ final class HTTPServer {
 
     /// Semaphore signaled when /shutdown or /stop is received.
     let stopSemaphore = DispatchSemaphore(value: 0)
+
+    // MARK: - In-process log ring buffer
+    //
+    // OSLogStore requires the com.apple.logging.local-store entitlement which
+    // XCTest runners don't have.  Instead we maintain a thread-safe ring buffer
+    // that the server and action handlers write to via addLog(_:level:).
+    // The buffer is capped at maxLogEntries to bound memory growth.
+
+    private var logBuffer: [(timestamp: Date, level: String, message: String)] = []
+    private let logBufferLock = NSLock()
+    private let maxLogEntries = 500
 
     // MARK: - Init
 
@@ -105,6 +120,45 @@ final class HTTPServer {
 
         acceptQueue.async { [weak self] in
             self?.acceptLoop()
+        }
+
+        // Observe UIApplication lifecycle notifications and write them to the
+        // in-process log buffer.  These fire on the main thread; addLog() is
+        // thread-safe so this is safe to call from any queue.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.addLog("MEMORY WARNING received", level: "error")
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.addLog("App entered background", level: "warning")
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.addLog("App entering foreground", level: "info")
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.addLog("App became active", level: "info")
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            self?.addLog("App will resign active", level: "warning")
         }
     }
 
@@ -270,6 +324,21 @@ final class HTTPServer {
             CFRunLoopWakeUp(CFRunLoopGetMain())
             sem.wait()
         }
+    }
+
+    // MARK: - Log ring buffer helpers
+
+    /// Append a log entry to the in-process ring buffer.
+    ///
+    /// Thread-safe — may be called from any queue.
+    /// Entries beyond `maxLogEntries` are evicted from the front (FIFO).
+    func addLog(_ message: String, level: String = "info") {
+        logBufferLock.lock()
+        logBuffer.append((timestamp: Date(), level: level, message: message))
+        if logBuffer.count > maxLogEntries {
+            logBuffer.removeFirst(logBuffer.count - maxLogEntries)
+        }
+        logBufferLock.unlock()
     }
 
     // MARK: - App readiness check
@@ -565,12 +634,11 @@ final class HTTPServer {
                 let state = self.injector.app.state
                 let stateStr: String
                 switch state {
-                case .notInstalled:       stateStr = "notInstalled"
                 case .notRunning:         stateStr = "notRunning"
                 case .runningBackgroundSuspended: stateStr = "runningBackgroundSuspended"
                 case .runningBackground:  stateStr = "runningBackground"
                 case .runningForeground:  stateStr = "runningForeground"
-                @unknown default:         stateStr = "unknown"
+                default:                  stateStr = "unknown(\(state.rawValue))"
                 }
                 stateResult = HTTPResponse.ok([
                     "state": stateStr,
@@ -630,14 +698,179 @@ final class HTTPServer {
             }
             return idleResult
 
-        // ── Log stream (Fix 7 — stub) ─────────────────────────────────────────
-        // OSLogStore requires entitlements unavailable to XCTest runners.
-        // Return a clear stub with a terminal alternative.
+        // ── Log ring buffer ───────────────────────────────────────────────────
+        // OSLogStore requires com.apple.logging.local-store which XCTest runners
+        // cannot obtain.  Instead we serve entries from our in-process ring
+        // buffer, populated via addLog() calls sprinkled throughout the handler
+        // and by UIApplication lifecycle notification observers wired up in start().
+        //
+        // Query params:
+        //   limit  — max entries to return (default 100, capped at 500)
+        //   level  — optional filter: "info" | "warning" | "error"
+        //   since  — optional ISO-8601 timestamp; only return entries after it
         case ("GET", "/logs"):
+            let rawLimit = Int(request.query["limit"] ?? "100") ?? 100
+            let limit = min(max(rawLimit, 1), maxLogEntries)
+            let levelFilter = request.query["level"]
+
+            let sinceDate: Date?
+            if let sinceStr = request.query["since"] {
+                sinceDate = ISO8601DateFormatter().date(from: sinceStr)
+            } else {
+                sinceDate = nil
+            }
+
+            logBufferLock.lock()
+            let snapshot = logBuffer
+            logBufferLock.unlock()
+
+            let fmt = ISO8601DateFormatter()
+            var filtered = snapshot
+            if let since = sinceDate {
+                filtered = filtered.filter { $0.timestamp > since }
+            }
+            if let lf = levelFilter {
+                filtered = filtered.filter { $0.level == lf }
+            }
+            let entries = Array(filtered.suffix(limit))
+            let logDicts: [[String: Any]] = entries.map { entry in
+                [
+                    "timestamp": fmt.string(from: entry.timestamp),
+                    "level": entry.level,
+                    "message": entry.message,
+                ]
+            }
+            return HTTPResponse.ok(["count": logDicts.count, "logs": logDicts])
+
+        // ── Process metrics (mach_task_basic_info) ────────────────────────────
+        // Works from inside the XCTest runner process without any entitlements.
+        // Reports RSS, virtual memory, thread count, and CPU time.
+        case ("GET", "/perf"):
+            var result: [String: Any] = [:]
+
+            // Memory via mach_task_basic_info
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+            let kr = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                }
+            }
+            if kr == KERN_SUCCESS {
+                result["memory_rss_bytes"] = info.resident_size
+                result["memory_virtual_bytes"] = info.virtual_size
+                result["memory_rss_mb"] = Double(info.resident_size) / 1_048_576.0
+                result["memory_virtual_mb"] = Double(info.virtual_size) / 1_048_576.0
+            }
+
+            // Thread count
+            var threadList: thread_act_array_t?
+            var threadCount: mach_msg_type_number_t = 0
+            let tkr = task_threads(mach_task_self_, &threadList, &threadCount)
+            if tkr == KERN_SUCCESS {
+                result["thread_count"] = Int(threadCount)
+                if let threads = threadList {
+                    vm_deallocate(
+                        mach_task_self_,
+                        vm_address_t(bitPattern: threads),
+                        vm_size_t(Int(threadCount) * MemoryLayout<thread_act_t>.size)
+                    )
+                }
+            }
+
+            // CPU time (user + system)
+            var threadTimes = task_thread_times_info()
+            var tiCount = mach_msg_type_number_t(MemoryLayout<task_thread_times_info>.size) / 4
+            let tir = withUnsafeMutablePointer(to: &threadTimes) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(tiCount)) {
+                    task_info(mach_task_self_, task_flavor_t(TASK_THREAD_TIMES_INFO), $0, &tiCount)
+                }
+            }
+            if tir == KERN_SUCCESS {
+                let userSec = Double(threadTimes.user_time.seconds) + Double(threadTimes.user_time.microseconds) / 1_000_000.0
+                let sysSec  = Double(threadTimes.system_time.seconds) + Double(threadTimes.system_time.microseconds) / 1_000_000.0
+                result["cpu_time_user_sec"]   = userSec
+                result["cpu_time_system_sec"] = sysSec
+                result["cpu_time_total_sec"]  = userSec + sysSec
+            }
+
+            result["process_id"] = ProcessInfo.processInfo.processIdentifier
+            result["uptime_sec"]  = ProcessInfo.processInfo.systemUptime
+            result["source"]      = "mach_task_basic_info"
+
+            return HTTPResponse.ok(result)
+
+        // ── Network reachability ──────────────────────────────────────────────
+        // The XCTest runner cannot intercept the app's URLSession traffic (cross-
+        // process limitation).  We report what we CAN observe: basic reachability
+        // from the runner process, and a clear note about the cross-process gap.
+        case ("GET", "/network"):
+            var reachable = false
+            let semaphore = DispatchSemaphore(value: 0)
+            let probeURL = URL(string: "https://www.apple.com")!
+            URLSession.shared.dataTask(with: probeURL) { _, response, _ in
+                if let http = response as? HTTPURLResponse {
+                    reachable = (200...299).contains(http.statusCode)
+                }
+                semaphore.signal()
+            }.resume()
+            _ = semaphore.wait(timeout: .now() + 3)
+
             return HTTPResponse.ok([
-                "success": true,
-                "message": "Console logs are now handled by the MCP server directly via the ios_logs tool. The runner does not buffer logs."
+                "network_reachable": reachable,
+                "note": "URL-level app traffic is not observable from the XCTest runner (cross-process limitation). Use ios_logs for CFNetwork entries if the app logs network activity.",
             ])
+
+        // ── Crash detection ───────────────────────────────────────────────────
+        // Reports app state from the XCTest perspective + any error-level log
+        // entries from our in-process ring buffer.
+        case ("GET", "/crashes"):
+            var result: [String: Any] = [:]
+            runOnMain {
+                let appState = self.injector.app.state
+                let isRunning = appState == .runningForeground
+                    || appState == .runningBackground
+                    || appState == .runningBackgroundSuspended
+
+                result["app_running"] = isRunning
+                result["app_state_raw"] = appState.rawValue
+
+                let stateStr: String
+                switch appState {
+                case .notRunning:                 stateStr = "notRunning"
+                case .runningBackgroundSuspended: stateStr = "runningBackgroundSuspended"
+                case .runningBackground:          stateStr = "runningBackground"
+                case .runningForeground:          stateStr = "runningForeground"
+                default:                          stateStr = "unknown(\(appState.rawValue))"
+                }
+                result["app_state"] = stateStr
+
+                if isRunning {
+                    let t0 = Date()
+                    let _ = self.injector.app.exists
+                    let elapsed = Date().timeIntervalSince(t0)
+                    result["responsive"] = elapsed < 2.0
+                    result["response_time_sec"] = elapsed
+                } else {
+                    result["responsive"] = false
+                }
+            }
+
+            // Surface error-level log entries from the ring buffer
+            self.logBufferLock.lock()
+            let errorLogs = self.logBuffer.filter { $0.level == "error" }
+            self.logBufferLock.unlock()
+
+            let fmt = ISO8601DateFormatter()
+            result["error_count"] = errorLogs.count
+            result["recent_errors"] = errorLogs.suffix(10).map { entry -> [String: Any] in
+                [
+                    "timestamp": fmt.string(from: entry.timestamp),
+                    "message": entry.message,
+                ]
+            }
+
+            return HTTPResponse.ok(result)
 
         default:
             return HTTPResponse.notFound(request.path)

@@ -277,22 +277,29 @@ def handle_start_session(arguments: dict) -> dict:
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
 
-        # Auto-build runner if not built
-        from specterqa.ios.session_manager import _find_xctestrun, _DEFAULT_RUNNER_BUILD_DIR
+        # Auto-build runner if not built or stale (version marker mismatch).
+        from specterqa.ios.session_manager import (
+            _find_xctestrun,
+            _DEFAULT_RUNNER_BUILD_DIR,
+            _needs_rebuild,
+            write_version_marker,
+        )
 
-        if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None:
-            logger.info("Runner not built — building automatically...")
+        if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None or _needs_rebuild(_DEFAULT_RUNNER_BUILD_DIR):
+            logger.info("Runner not built or stale — building automatically...")
             try:
                 runner_dir = Path(__file__).parent.parent.parent.parent / "runner"
                 build_sh = runner_dir / "build.sh"
                 if build_sh.exists():
-                    subprocess.run(
+                    result = subprocess.run(
                         ["bash", str(build_sh)],
                         capture_output=True,
                         text=True,
                         timeout=120,
                         cwd=str(runner_dir),
                     )
+                    if result.returncode == 0:
+                        write_version_marker(_DEFAULT_RUNNER_BUILD_DIR)
             except Exception as exc:
                 logger.warning("Auto-build failed: %s", exc)
 
@@ -480,21 +487,46 @@ def handle_stop_session(arguments: dict) -> dict:
 
 
 def handle_logs(arguments: dict) -> dict:
-    """Get recent app console logs from the iOS Simulator.
+    """Get recent app console logs.
+
+    Strategy (bridge-first):
+    1. Try the runner HTTP bridge (GET /logs) — works during XCTest sessions
+       because the runner maintains an in-process ring buffer.
+    2. Fall back to the simctl-based ConsoleMonitor when the bridge is
+       unavailable (e.g. standalone mode without an XCTest runner).
 
     Args:
-        seconds:  Time window to query (default 30.0).
+        seconds:  Time window to query (default 30.0).  Only used in fallback.
         level:    Optional level filter, e.g. ``"error"`` or ``"fault"``.
-                  When set to ``"error"`` or ``"fault"``, the dedicated error
-                  buffer is queried instead of the main ring buffer.
-        category: Optional category filter (exact match).
-        pattern:  Optional regex pattern applied to the message field.
-                  When provided, overrides ``level`` and ``seconds``.
+                  Passed as a query param to the bridge; used as a filter in
+                  the simctl fallback path.
+        category: Optional category filter (exact match, fallback only).
+        pattern:  Optional regex pattern applied to the message field
+                  (fallback only).
+        limit:    Max entries to return from the bridge (default 100).
 
     Returns:
-        {"count": <int>, "logs": [...], "summary": {...}}
+        {"count": <int>, "logs": [...], "source": "bridge"|"simctl"}
         or {"error": "<message>"} on failure.
     """
+    # ── 1. Bridge path (runner HTTP server) ──────────────────────────────────
+    if _backend is not None:
+        try:
+            limit = int(arguments.get("limit", 100))
+            level = arguments.get("level", "")
+            path = f"/logs?limit={limit}"
+            if level:
+                path += f"&level={level}"
+            resp = _backend._get(path)
+            # Bridge returns {"count": N, "logs": [...]} — enrich and return.
+            if "logs" in resp and "error" not in resp:
+                resp["source"] = "bridge"
+                return resp
+            # Bridge returned an error (e.g. old runner without /logs) — fall through.
+        except Exception as exc:
+            logger.debug("handle_logs: bridge unavailable (%s), falling back to simctl", exc)
+
+    # ── 2. Simctl fallback (ConsoleMonitor) ───────────────────────────────────
     if _console_monitor is None:
         return {
             "error": (
@@ -531,22 +563,53 @@ def handle_logs(arguments: dict) -> dict:
         "count": len(log_list),
         "logs": log_list,
         "summary": _console_monitor.summary(),
+        "source": "simctl",
     }
 
 
 def handle_crashes(arguments: dict) -> dict:
     """Check for app crashes since the session started.
 
+    Strategy (bridge-first):
+    1. Try GET /crashes on the runner HTTP bridge — returns app responsiveness
+       and any error-level log entries from the in-process ring buffer.
+    2. Merge bridge results with simctl CrashDetector data when available.
+    3. Fall back to CrashDetector alone when the bridge is unavailable.
+
     Returns:
         {
             "crashes_since_session_start": <int>,
             "crashes": [...],
             "app_running": <bool>,
+            "app_state": <str>,           # from bridge when available
+            "responsive": <bool>,         # from bridge when available
+            "error_count": <int>,         # error-level logs from bridge buffer
+            "recent_errors": [...],       # from bridge buffer
             "latest_crash": {...} | null,
+            "source": "bridge+simctl"|"simctl",
         }
         or {"error": "<message>"} on failure.
     """
+    bridge_data: dict = {}
+
+    # ── 1. Bridge path ─────────────────────────────────────────────────────────
+    if _backend is not None:
+        try:
+            resp = _backend._get("/crashes")
+            if "error" not in resp:
+                bridge_data = resp
+        except Exception as exc:
+            logger.debug("handle_crashes: bridge unavailable (%s), using simctl only", exc)
+
+    # ── 2. Simctl CrashDetector ────────────────────────────────────────────────
     if _crash_detector is None:
+        if bridge_data:
+            # Bridge-only result (no simctl session)
+            bridge_data["source"] = "bridge"
+            bridge_data.setdefault("crashes_since_session_start", 0)
+            bridge_data.setdefault("crashes", [])
+            bridge_data.setdefault("latest_crash", None)
+            return bridge_data
         return {
             "error": (
                 "No active session or crash detector not started. "
@@ -570,16 +633,25 @@ def handle_crashes(arguments: dict) -> dict:
             "os_version": getattr(crash, "os_version", ""),
         })
 
-    return {
+    result: dict = {
         "crashes_since_session_start": len(crash_list),
         "crashes": crash_list,
-        "app_running": is_running,
+        "app_running": bridge_data.get("app_running", is_running),
         "latest_crash": {
             "timestamp": str(latest.timestamp),
             "exception_type": latest.exception_type,
             "backtrace": latest.backtrace,
         } if latest is not None else None,
+        "source": "bridge+simctl" if bridge_data else "simctl",
     }
+
+    # Merge in bridge-only fields (app_state, responsive, error_count, recent_errors)
+    for key in ("app_state", "app_state_raw", "responsive", "response_time_sec",
+                "error_count", "recent_errors"):
+        if key in bridge_data:
+            result[key] = bridge_data[key]
+
+    return result
 
 
 def handle_screenshot(arguments: dict) -> dict:
@@ -1651,11 +1723,30 @@ def handle_dismiss_sheet(arguments: dict) -> dict:
 def handle_perf(arguments: dict) -> dict:
     """Get CPU, memory, and thread metrics for the app under test.
 
+    Strategy (bridge-first):
+    1. Try GET /perf on the runner HTTP bridge — returns mach_task_basic_info
+       metrics from inside the XCTest process (RSS, virtual, threads, CPU time).
+       This works when simctl-based monitoring fails due to "device not booted"
+       errors during XCTest sessions.
+    2. Fall back to the simctl-based PerfProfiler when the bridge is unavailable
+       (e.g. standalone mode without an XCTest runner).
+
     Returns:
-        {"cpu_percent": float, "memory_mb": float, "thread_count": int,
-         "pid": int | null, "timestamp": float}
+        {"memory_rss_mb": float, "thread_count": int, "cpu_time_total_sec": float,
+         ...}  (bridge fields differ slightly from simctl fields — both are useful)
         or {"error": "<message>"} on failure.
     """
+    # ── 1. Bridge path ─────────────────────────────────────────────────────────
+    if _backend is not None:
+        try:
+            resp = _backend._get("/perf")
+            if "error" not in resp and resp:
+                resp["source"] = "bridge"
+                return resp
+        except Exception as exc:
+            logger.debug("handle_perf: bridge unavailable (%s), falling back to simctl", exc)
+
+    # ── 2. Simctl fallback (PerfProfiler) ─────────────────────────────────────
     if _perf_profiler is None:
         return {"error": "No active session. Call ios_start_session first."}
 
@@ -1670,6 +1761,7 @@ def handle_perf(arguments: dict) -> dict:
             "fps_estimate": snap.fps_estimate,
             "pid": pid,
             "timestamp": snap.timestamp,
+            "source": "simctl",
         }
     except Exception as exc:
         return {"error": f"perf snapshot failed: {exc}"}
@@ -1699,16 +1791,38 @@ def handle_memory(arguments: dict) -> dict:
 def handle_network(arguments: dict) -> dict:
     """Get network activity for the app under test.
 
+    Strategy (bridge-first):
+    1. Try GET /network on the runner HTTP bridge — returns basic reachability
+       from inside the XCTest process and a clear note about the cross-process
+       limitation (the runner cannot intercept the app's URLSession traffic).
+    2. Merge bridge reachability with simctl NetworkInspector data when both
+       are available.
+    3. Fall back to NetworkInspector alone when the bridge is unavailable.
+
     Args:
         seconds: Time window for recent requests (default 30.0).
 
     Returns:
-        {"requests": [...], "bytes_in": int, "bytes_out": int,
-         "throughput_in": float, "throughput_out": float,
-         "active_connections": int, "nettop_available": bool}
+        {"requests": [...], "bytes_in": int, ..., "network_reachable": bool,
+         "source": "bridge+simctl"|"simctl"}
         or {"error": "<message>"} on failure.
     """
+    bridge_data: dict = {}
+
+    # ── 1. Bridge path ─────────────────────────────────────────────────────────
+    if _backend is not None:
+        try:
+            resp = _backend._get("/network")
+            if "error" not in resp:
+                bridge_data = resp
+        except Exception as exc:
+            logger.debug("handle_network: bridge unavailable (%s), using simctl only", exc)
+
+    # ── 2. Simctl fallback (NetworkInspector) ──────────────────────────────────
     if _network_inspector is None:
+        if bridge_data:
+            bridge_data["source"] = "bridge"
+            return bridge_data
         return {"error": "No active session. Call ios_start_session first."}
 
     seconds = float(arguments.get("seconds", 30))
@@ -1731,7 +1845,7 @@ def handle_network(arguments: dict) -> dict:
                 "error": getattr(req, "error", None),
             })
 
-        return {
+        result: dict = {
             "requests": request_list,
             "request_count": len(request_list),
             "bytes_in": snap.bytes_in,
@@ -1741,7 +1855,15 @@ def handle_network(arguments: dict) -> dict:
             "active_connections": snap.active_connections,
             "nettop_available": snap.nettop_available,
             "window_seconds": seconds,
+            "source": "bridge+simctl" if bridge_data else "simctl",
         }
+
+        # Merge in bridge-only fields (reachability, note)
+        for key in ("network_reachable", "note"):
+            if key in bridge_data:
+                result[key] = bridge_data[key]
+
+        return result
     except Exception as exc:
         return {"error": f"network snapshot failed: {exc}"}
 

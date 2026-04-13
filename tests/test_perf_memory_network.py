@@ -95,7 +95,10 @@ def _setup_perf_network(perf_profiler=None, network_inspector=None):
     """Inject mock profiler / inspector into server module globals."""
     import specterqa.ios.mcp.server as srv
 
-    srv._backend = MagicMock()
+    mock_backend = MagicMock()
+    # Make bridge calls fail so tests exercise the Python-side fallback path
+    mock_backend._get.side_effect = Exception("bridge unavailable")
+    srv._backend = mock_backend
     srv._session = MagicMock()
     if hasattr(srv, "_perf_profiler"):
         srv._perf_profiler = perf_profiler
