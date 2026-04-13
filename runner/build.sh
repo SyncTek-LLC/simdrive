@@ -55,6 +55,28 @@ if [[ ! -f "$PROJECT/project.pbxproj" ]]; then
     exit 1
 fi
 
+# ── Stale-cache detection ────────────────────────────────────────────────────────
+# If any Swift source file is newer than the cached .xctestrun, invalidate the
+# cache so the runner always reflects the current source.  This prevents stale
+# binary deployments after source edits without requiring --clean.
+if [[ "$CLEAN" -eq 0 && -d "$DERIVED_DATA" ]]; then
+    CACHED_XCTESTRUN=$(find "$DERIVED_DATA" -name "*.xctestrun" 2>/dev/null | head -1)
+    if [[ -n "$CACHED_XCTESTRUN" ]]; then
+        STALE=0
+        while IFS= read -r -d '' SRC; do
+            if [[ "$SRC" -nt "$CACHED_XCTESTRUN" ]]; then
+                STALE=1
+                echo "  Source newer than cache: $SRC"
+                break
+            fi
+        done < <(find "$SCRIPT_DIR/Sources" -name "*.swift" -print0 2>/dev/null)
+        if [[ "$STALE" -eq 1 ]]; then
+            echo "▶ Source files changed — invalidating stale build cache …"
+            rm -rf "$DERIVED_DATA"
+        fi
+    fi
+fi
+
 # ── Optional clean ──────────────────────────────────────────────────────────────
 if [[ "$CLEAN" -eq 1 && -d "$DERIVED_DATA" ]]; then
     echo "▶ Cleaning $DERIVED_DATA …"
