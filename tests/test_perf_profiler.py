@@ -64,7 +64,11 @@ PID\tStatus\tLabel
 
 PS_RSS_OUTPUT = "81920\n"  # 81920 KB == 80.0 MB
 PS_CPU_OUTPUT = "12.5\n"
-PS_THREADS_OUTPUT = "32\n"
+# ps -M outputs 1 header line + 1 line per thread
+PS_THREADS_OUTPUT = (
+    "  USER   PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND\n"
+    + "  user  5678   ??    0.0 S    31T   0:00.00   0:00.00 com.example.testapp\n" * 32
+)
 
 
 # ===========================================================================
