@@ -83,6 +83,15 @@ include-package-data = true
 where = ["src"]
 include = ["specterqa*"]
 
+[tool.setuptools.package-data]
+"specterqa.ios.runner_source" = [
+    "Sources/*.swift",
+    "SpecterQARunner.xcodeproj/project.pbxproj",
+    "build.sh",
+    "launch.sh",
+    "Package.swift",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

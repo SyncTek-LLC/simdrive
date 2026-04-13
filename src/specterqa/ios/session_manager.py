@@ -529,20 +529,25 @@ class TestSession:
         """
         build_dir = self._runner_build_dir
 
-        # Resolve Swift source: installed package root → runner/
+        # Resolve Swift source: prefer bundled runner_source (wheel), fall back to repo root runner/
         try:
-            import specterqa.ios as _pkg
+            # Primary: bundled inside the installed wheel at specterqa.ios.runner_source
+            from specterqa.ios.runner_source import RUNNER_SOURCE_DIR
 
-            # src/specterqa/ios → parent × 3 → repo/package root → runner/
-            pkg_ios_dir = Path(_pkg.__file__).parent
-            pkg_root = pkg_ios_dir.parent.parent  # specterqa → src root
-            runner_dir = pkg_root / "runner"
-            if not (runner_dir / "SpecterQARunner.xcodeproj").exists():
-                # Installed wheel: package root is site-packages/specterqa_ios/
-                # runner/ is a sibling of the top-level package dir.
-                runner_dir = pkg_ios_dir.parent / "runner"
-        except (ImportError, OSError) as exc:
-            raise SessionError(f"Cannot locate runner source directory: {exc}") from exc
+            runner_dir = RUNNER_SOURCE_DIR
+        except ImportError:
+            # Development/editable install fallback: runner/ at repo root
+            try:
+                import specterqa.ios as _pkg
+
+                pkg_ios_dir = Path(_pkg.__file__).parent
+                pkg_root = pkg_ios_dir.parent.parent  # specterqa/ios → src → repo root
+                runner_dir = pkg_root / "runner"
+                if not (runner_dir / "SpecterQARunner.xcodeproj").exists():
+                    # Last-resort: sibling of the top-level package dir
+                    runner_dir = pkg_ios_dir.parent / "runner"
+            except (ImportError, OSError) as exc:
+                raise SessionError(f"Cannot locate runner source directory: {exc}") from exc
 
         xcodeproj = runner_dir / "SpecterQARunner.xcodeproj"
         if not xcodeproj.exists():

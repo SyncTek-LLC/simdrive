@@ -288,8 +288,16 @@ def handle_start_session(arguments: dict) -> dict:
         if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None or _needs_rebuild(_DEFAULT_RUNNER_BUILD_DIR):
             logger.info("Runner not built or stale — building automatically...")
             try:
-                runner_dir = Path(__file__).parent.parent.parent.parent / "runner"
-                build_sh = runner_dir / "build.sh"
+                # Prefer bundled runner source (wheel install); fall back to dev repo layout
+                try:
+                    from specterqa.ios.runner_source import RUNNER_SOURCE_DIR, BUILD_SCRIPT
+
+                    runner_dir = RUNNER_SOURCE_DIR
+                    build_sh = BUILD_SCRIPT
+                except ImportError:
+                    runner_dir = Path(__file__).parent.parent.parent.parent / "runner"
+                    build_sh = runner_dir / "build.sh"
+
                 if build_sh.exists():
                     result = subprocess.run(
                         ["bash", str(build_sh)],
