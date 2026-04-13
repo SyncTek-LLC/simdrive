@@ -32,6 +32,67 @@ _HEALTH_TIMEOUT_S = 60.0
 # Default location where `runner build` places the xctestrun file.
 _DEFAULT_RUNNER_BUILD_DIR = Path.home() / ".specterqa" / "runner-build"
 
+# Filename written into the build dir after a successful build.  Contains the
+# installed package version so we can detect stale builds on session start.
+_VERSION_MARKER_FILENAME = ".specterqa-version"
+
+
+def _current_package_version() -> str:
+    """Return the currently installed specterqa-ios package version.
+
+    Returns:
+        Version string (e.g. ``"11.3.0"``), or ``"unknown"`` if it cannot be
+        determined.
+    """
+    try:
+        import specterqa
+
+        return specterqa.__version__
+    except (ImportError, AttributeError):
+        return "unknown"
+
+
+def _needs_rebuild(build_dir: Path) -> bool:
+    """Check whether the cached runner build is stale.
+
+    The build is considered stale when:
+    - The version marker file does not exist in *build_dir*, or
+    - The marker's content does not match the currently installed package
+      version, or
+    - The package version cannot be determined (fail-safe → rebuild).
+
+    Args:
+        build_dir: The runner derived-data directory (e.g. ``~/.specterqa/runner-build``).
+
+    Returns:
+        True if a rebuild is required, False if the cached build is current.
+    """
+    current = _current_package_version()
+    if current == "unknown":
+        return True
+
+    marker = build_dir / _VERSION_MARKER_FILENAME
+    if not marker.exists():
+        return True
+
+    cached = marker.read_text(encoding="utf-8").strip()
+    return cached != current
+
+
+def write_version_marker(build_dir: Path) -> None:
+    """Write (or overwrite) the version marker file after a successful build.
+
+    Args:
+        build_dir: The runner derived-data directory where the marker is stored.
+    """
+    version = _current_package_version()
+    marker = build_dir / _VERSION_MARKER_FILENAME
+    try:
+        marker.write_text(version + "\n", encoding="utf-8")
+        logger.debug("Wrote version marker %s → %s", marker, version)
+    except OSError as exc:
+        logger.warning("Could not write version marker %s: %s", marker, exc)
+
 
 class SessionError(Exception):
     """Raised when a simulator session operation fails."""
@@ -455,6 +516,81 @@ class TestSession:
 
         raise SessionError("No booted simulator found. Boot one first with: specterqa-ios boot")
 
+    def _rebuild_runner(self) -> None:
+        """Rebuild the XCTest runner from the installed package source.
+
+        Resolves the Swift runner source directory relative to the installed
+        specterqa-ios package (not a temp directory) and runs ``xcodebuild
+        build-for-testing``.  On success, writes the version marker so
+        subsequent sessions skip the rebuild.
+
+        Raises:
+            SessionError: If the runner source cannot be found or the build fails.
+        """
+        build_dir = self._runner_build_dir
+
+        # Resolve Swift source: installed package root → runner/
+        try:
+            import specterqa.ios as _pkg
+
+            # src/specterqa/ios → parent × 3 → repo/package root → runner/
+            pkg_ios_dir = Path(_pkg.__file__).parent
+            pkg_root = pkg_ios_dir.parent.parent  # specterqa → src root
+            runner_dir = pkg_root / "runner"
+            if not (runner_dir / "SpecterQARunner.xcodeproj").exists():
+                # Installed wheel: package root is site-packages/specterqa_ios/
+                # runner/ is a sibling of the top-level package dir.
+                runner_dir = pkg_ios_dir.parent / "runner"
+        except (ImportError, OSError) as exc:
+            raise SessionError(f"Cannot locate runner source directory: {exc}") from exc
+
+        xcodeproj = runner_dir / "SpecterQARunner.xcodeproj"
+        if not xcodeproj.exists():
+            raise SessionError(
+                f"Runner Xcode project not found at {xcodeproj}.\n"
+                "The specterqa-ios package may be missing runner source files."
+            )
+
+        build_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Auto-rebuilding runner from %s → %s", runner_dir, build_dir)
+
+        result = subprocess.run(
+            [
+                "xcodebuild",
+                "build-for-testing",
+                "-project",
+                str(xcodeproj),
+                "-scheme",
+                "SpecterQARunner",
+                "-sdk",
+                "iphonesimulator",
+                "-destination",
+                "generic/platform=iOS Simulator",
+                "-derivedDataPath",
+                str(build_dir),
+                "CODE_SIGN_IDENTITY=-",
+                "CODE_SIGNING_REQUIRED=NO",
+                "CODE_SIGNING_ALLOWED=YES",
+                "DEVELOPMENT_TEAM=",
+                "SUPPORTED_PLATFORMS=iphonesimulator",
+            ],
+            cwd=str(runner_dir),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if result.returncode != 0:
+            raise SessionError(
+                f"Auto-rebuild failed (exit {result.returncode}).\n"
+                f"Run 'specterqa-ios runner build --verbose' for full output.\n"
+                f"stderr tail:\n{result.stderr[-1500:]}"
+            )
+
+        logger.info("Auto-rebuild succeeded.")
+        # Stamp the version marker so subsequent sessions skip the rebuild.
+        write_version_marker(build_dir)
+
     def _deploy_runner(self) -> None:
         """Launch the XCTest runner via ``xcodebuild test-without-building``.
 
@@ -462,9 +598,25 @@ class TestSession:
         xcodebuild as a background process.  The port is passed via the
         SPECTERQA_PORT environment variable so the Swift runner can bind to it.
 
+        If the cached build is stale (version marker mismatch) the runner is
+        rebuilt automatically before deployment.
+
         Raises:
             SessionError: If no .xctestrun is found or the process fails to start.
         """
+        # ── Cache invalidation ───────────────────────────────────────────────
+        # Rebuild automatically when the installed package version has changed
+        # since the last build.  This prevents stale runners (compiled from an
+        # older source tree) from missing newly-added HTTP endpoints.
+        if _needs_rebuild(self._runner_build_dir):
+            logger.info(
+                "Runner build is stale or missing version marker — triggering rebuild "
+                "(installed=%s, marker=%s)",
+                _current_package_version(),
+                self._runner_build_dir / _VERSION_MARKER_FILENAME,
+            )
+            self._rebuild_runner()
+
         xctestrun = _find_xctestrun(self._runner_build_dir)
         if xctestrun is None:
             raise SessionError(
