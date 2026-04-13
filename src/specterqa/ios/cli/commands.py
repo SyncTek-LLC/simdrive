@@ -1333,6 +1333,14 @@ def runner_build(
             xctestrun = injector.build(verbose=verbose)
         except ProjectInjectorError as exc:
             raise click.ClickException(str(exc))
+
+        # Stamp the version marker so TestSession detects future stale builds.
+        from specterqa.ios.session_manager import write_version_marker
+
+        # Project-injection stores artifacts under runner-build/<bundle_id>/;
+        # the marker lives in the top-level runner-build/ dir for consistency.
+        write_version_marker(_runner_build_dir())
+
         console.print(
             Panel(
                 f"[bold green]Runner built successfully.[/bold green]\n\n"
@@ -1404,6 +1412,11 @@ def runner_build(
     artifact_line = f"  Artifact: {matches[0]}\n\n" if matches else ""
     if not matches:
         logger.warning("No .xctestrun found at %s — run 'runner status' to verify.", pattern)
+
+    # Stamp the version marker so TestSession can detect stale builds.
+    from specterqa.ios.session_manager import write_version_marker
+
+    write_version_marker(build_dir)
 
     console.print(
         Panel(

@@ -277,22 +277,29 @@ def handle_start_session(arguments: dict) -> dict:
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
 
-        # Auto-build runner if not built
-        from specterqa.ios.session_manager import _find_xctestrun, _DEFAULT_RUNNER_BUILD_DIR
+        # Auto-build runner if not built or stale (version marker mismatch).
+        from specterqa.ios.session_manager import (
+            _find_xctestrun,
+            _DEFAULT_RUNNER_BUILD_DIR,
+            _needs_rebuild,
+            write_version_marker,
+        )
 
-        if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None:
-            logger.info("Runner not built — building automatically...")
+        if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None or _needs_rebuild(_DEFAULT_RUNNER_BUILD_DIR):
+            logger.info("Runner not built or stale — building automatically...")
             try:
                 runner_dir = Path(__file__).parent.parent.parent.parent / "runner"
                 build_sh = runner_dir / "build.sh"
                 if build_sh.exists():
-                    subprocess.run(
+                    result = subprocess.run(
                         ["bash", str(build_sh)],
                         capture_output=True,
                         text=True,
                         timeout=120,
                         cwd=str(runner_dir),
                     )
+                    if result.returncode == 0:
+                        write_version_marker(_DEFAULT_RUNNER_BUILD_DIR)
             except Exception as exc:
                 logger.warning("Auto-build failed: %s", exc)
 
