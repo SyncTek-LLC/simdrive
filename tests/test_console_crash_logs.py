@@ -87,7 +87,9 @@ def _setup_monitors(console_monitor=None, crash_detector=None):
     """Inject mock monitors into server module globals."""
     import specterqa.ios.mcp.server as srv
 
-    srv._backend = MagicMock()
+    mock_backend = MagicMock()
+    mock_backend._get.side_effect = Exception("bridge unavailable")
+    srv._backend = mock_backend
     srv._session = MagicMock()
     if hasattr(srv, "_console_monitor"):
         srv._console_monitor = console_monitor
