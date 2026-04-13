@@ -3,6 +3,11 @@ include runner/SpecterQARunner.xcodeproj/project.pbxproj
 include runner/Package.swift
 include runner/build.sh
 include runner/launch.sh
+recursive-include src/specterqa/ios/runner_source/Sources *.swift
+include src/specterqa/ios/runner_source/SpecterQARunner.xcodeproj/project.pbxproj
+include src/specterqa/ios/runner_source/Package.swift
+include src/specterqa/ios/runner_source/build.sh
+include src/specterqa/ios/runner_source/launch.sh
 recursive-include examples *.yaml *.yml *.md
 recursive-include tests *.py
 include README.md
