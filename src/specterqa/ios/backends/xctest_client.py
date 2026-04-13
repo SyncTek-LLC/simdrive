@@ -24,7 +24,7 @@ logger = logging.getLogger("specterqa.ios.backends.xctest_client")
 
 _DEFAULT_HOST = "localhost"
 _DEFAULT_PORT = 8222
-_DEFAULT_TIMEOUT = 5  # seconds
+_DEFAULT_TIMEOUT = 10  # seconds — element-based tap+type needs time for focus + a11y settle
 
 
 class XCTestBackend:
