@@ -26,7 +26,7 @@ except ImportError:
     pytest.skip("perf module not available", allow_module_level=True)
 
 try:
-    from specterqa.ios.drivers.simulator.network import NetworkRequest, NetworkInspector
+    from specterqa.ios.drivers.simulator.network import NetworkRequest, NetworkInspector, NetworkSnapshot
 except ImportError:
     pytest.skip("network module not available", allow_module_level=True)
 
@@ -393,14 +393,15 @@ class TestHandleNetwork:
         ]
 
         mock_inspector = MagicMock()
-        mock_inspector.completed_requests.return_value = requests
-        mock_inspector.summary.return_value = {
-            "total_requests": 2,
-            "by_status": {200: 1, 201: 1},
-            "by_host": {"api.example.com": 2},
-            "avg_latency_ms": 142.3,
-            "failed_count": 0,
-        }
+        mock_inspector.snapshot.return_value = NetworkSnapshot(
+            bytes_in=4096,
+            bytes_out=256,
+            throughput_in=100.0,
+            throughput_out=50.0,
+            requests=requests,
+            active_connections=0,
+            nettop_available=True,
+        )
 
         _setup_perf_network(network_inspector=mock_inspector)
 
@@ -488,12 +489,12 @@ class TestHandleNetwork:
 
         assert "error" not in result, f"Unexpected error: {result}"
 
-        # completed_requests must have been called with 60 (or 60.0)
-        mock_inspector.completed_requests.assert_called_once()
-        call_args = mock_inspector.completed_requests.call_args
-        passed_seconds = call_args[0][0] if call_args[0] else call_args[1].get("seconds")
+        # snapshot must have been called with seconds=60
+        mock_inspector.snapshot.assert_called_once()
+        call_args = mock_inspector.snapshot.call_args
+        passed_seconds = call_args[0][0] if call_args[0] else call_args[1].get("seconds", 30.0)
         assert float(passed_seconds) == 60.0, (
-            f"Expected seconds=60 passed to completed_requests. Got: {passed_seconds}"
+            f"Expected seconds=60 passed to snapshot. Got: {passed_seconds}"
         )
 
     def test_network_empty_when_no_activity(self):
