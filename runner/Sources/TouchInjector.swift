@@ -55,7 +55,18 @@ final class TouchInjector {
 
     /// Type arbitrary text into the currently focused element.
     ///
-    /// v4 crash mitigation for iOS 26:
+    /// v5 error-reporting + focus-detection (fixes silent success bug):
+    /// Prior to v5 this function returned `Void` and silently returned
+    /// when no text field was found, while the HTTP handler always responded
+    /// 200 OK.  Now the function throws `TouchInjectorError.noTextFieldFound`
+    /// so the HTTP handler can return a 500 with a meaningful error message.
+    ///
+    /// Focus detection strategy (in priority order):
+    ///   1. Scan textFields, secureTextFields, searchFields for `hasFocus == true`
+    ///   2. Fall back to the first visible text field (any type)
+    ///   3. Throw if no field is found or visible
+    ///
+    /// v4 crash mitigation for iOS 26 (retained):
     /// ``XCUIApplication.typeText()`` can corrupt the XCTest accessibility
     /// tree state on iOS 26 — the HTTP response returns OK but the next
     /// interaction crashes the runner with a delayed SIGABRT.
@@ -64,14 +75,34 @@ final class TouchInjector {
     /// an autoreleasepool to bound any internal allocations, then wait 0.8 s
     /// for the keyboard animation and accessibility tree to fully stabilize
     /// before the runner accepts the next HTTP request.
-    func typeText(_ text: String) {
-        let focused = focusedTextElement() ?? app.textFields.firstMatch
-        guard focused.exists else {
-            NSLog("[SpecterQA] typeText: no text field found")
-            return
+    func typeText(_ text: String) throws {
+        // Strategy 1: find whichever text-input element currently has keyboard focus.
+        var target: XCUIElement? = nil
+        let inputTypes: [XCUIElementQuery] = [
+            app.textFields, app.secureTextFields, app.searchFields
+        ]
+        outerLoop: for query in inputTypes {
+            for element in query.allElementsBoundByIndex {
+                // `hasFocus` is a standard XCUIElement property (available iOS 9+).
+                if element.exists && element.hasFocus {
+                    target = element
+                    break outerLoop
+                }
+            }
         }
 
-        // Ensure the field is focused before typing.
+        // Strategy 2: fall back to the first visible field of any type.
+        if target == nil {
+            target = focusedTextElement()
+        }
+
+        guard let focused = target, focused.exists else {
+            NSLog("[SpecterQA] typeText: no text field found or focused")
+            throw TouchInjectorError.noTextFieldFound(
+                "No visible text field found. Tap a text field first.")
+        }
+
+        // Ensure the field is focused before typing (needed when strategy 2 fires).
         focused.tap()
         Thread.sleep(forTimeInterval: 0.3)
 
@@ -310,11 +341,13 @@ extension XCUIElement {
 enum TouchInjectorError: Error, CustomStringConvertible {
     case unknownKey(String)
     case unknownButton(String)
+    case noTextFieldFound(String)
 
     var description: String {
         switch self {
-        case .unknownKey(let k):    return "Unknown keyboard key: '\(k)'"
-        case .unknownButton(let b): return "Unknown hardware button: '\(b)'"
+        case .unknownKey(let k):       return "Unknown keyboard key: '\(k)'"
+        case .unknownButton(let b):    return "Unknown hardware button: '\(b)'"
+        case .noTextFieldFound(let m): return m
         }
     }
 }
