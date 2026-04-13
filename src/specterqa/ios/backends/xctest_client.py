@@ -230,6 +230,30 @@ class XCTestBackend:
             payload["duration"] = float(duration)
         return self._post("/tap", payload)
 
+    def tap_element(
+        self,
+        label: str | None = None,
+        identifier: str | None = None,
+        element_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Tap an element by label or identifier using XCTest's element.tap().
+
+        Unlike coordinate tap, this uses the XCTest accessibility API to find
+        and tap the element, which reliably transfers first-responder focus
+        even on SwiftUI SecureField inside List/Form cells.
+
+        Returns:
+            Runner response dict with ``mode: "element"``.
+        """
+        payload: dict[str, Any] = {}
+        if label is not None:
+            payload["label"] = label
+        if identifier is not None:
+            payload["identifier"] = identifier
+        if element_type is not None:
+            payload["type"] = element_type
+        return self._post("/tap", payload)
+
     def swipe(
         self,
         x1: float,
