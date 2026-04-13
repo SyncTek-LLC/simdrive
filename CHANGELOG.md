@@ -7,6 +7,30 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.8.0 (2026-04-12)
+
+### Critical Fix
+- fix(bridge): Route ALL observability through XCTest HTTP bridge — fixes ios_logs, ios_perf, ios_crashes, ios_network returning empty during XCTest sessions
+- Root cause: `simctl spawn` reports "device not booted" during active XCTest sessions; HTTP bridge is the only working channel
+
+### New Swift Runner Endpoints
+- GET /perf — mach_task_basic_info + task_threads (RSS, virtual memory, thread count, CPU time)
+- GET /logs — in-process ring buffer (500 entries) with UIApplication lifecycle notifications
+- GET /crashes — XCUIApplication.state + responsiveness probe + error log buffer
+- GET /network — reachability probe (cross-process URL interception is an iOS limitation)
+
+### Runner Build Pipeline
+- fix(build): Auto-rebuild runner when package version changes — version marker + staleness check
+- build.sh checks Swift source timestamps against cached binary
+- Eliminates stale xctestrun causing 404s on new endpoints
+
+### Python Bridge-First Fallback
+- All MCP handlers try runner HTTP bridge first, fall back to Python-side monitors
+- Response includes source: "bridge" or source: "simctl" for transparency
+- 961 tests passing, 24 new tests for bridge + cache invalidation
+
+---
+
 ## v11.7.0 (2026-04-12)
 
 ### Features
