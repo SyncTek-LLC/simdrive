@@ -7,6 +7,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.9.5 (2026-04-13)
+
+### Critical Fix
+- fix(runner): Use element-relative coordinate tap instead of `el.tap()` — prevents SIGABRT crash on iOS 26
+- `el.tap()` throws ObjC NSExceptions that Swift cannot catch, killing the runner process
+- `el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()` is element-aware (proper focus transfer) but goes through XCTest's coordinate system (no crash)
+- Live tested: Safari — element tap → type → verify, no crashes ✅
+
+---
+
 ## v11.9.4 (2026-04-13)
 
 ### Critical Fix
