@@ -414,7 +414,16 @@ final class HTTPServer {
             guard let text = request.body["text"] as? String else {
                 return HTTPResponse.error("type requires text (string)", code: 422)
             }
-            runOnMain { self.injector.typeText(text) }
+            var typeError: String? = nil
+            runOnMain {
+                do { try self.injector.typeText(text) }
+                catch { typeError = error.localizedDescription }
+            }
+            if let err = typeError {
+                self.addLog("typeText FAILED: \(err)", level: "error")
+                return HTTPResponse.error("typeText failed: \(err)", code: 500)
+            }
+            self.addLog("typed \(text.count) chars")
             return HTTPResponse.success(["characters": text.count])
 
         // ── Key ───────────────────────────────────────────────────────────────
