@@ -6,11 +6,14 @@ Tracks a history of PerfSnapshot objects for trend detection.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger("specterqa.ios.drivers.simulator.perf")
 
@@ -118,13 +121,23 @@ class PerfProfiler:
         return float(result.stdout.strip())
 
     def _get_thread_count(self, pid: int) -> int:
-        """Return the thread count for the given PID."""
+        """Return the thread count for the given PID.
+
+        ``ps -o nlwp=`` reports the number of lightweight processes (threads)
+        on Linux but is not supported on macOS.  Instead, ``ps -M`` prints one
+        row per thread (the first row is the main thread / header description
+        and subsequent rows are additional threads).  Counting all output lines
+        and subtracting 1 gives the real thread count.
+        """
         result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "nlwp="],
+            ["ps", "-M", "-p", str(pid)],
             capture_output=True,
             text=True,
         )
-        return int(result.stdout.strip())
+        lines = [l for l in result.stdout.splitlines() if l.strip()]
+        # First line is the column header; each subsequent line is one thread.
+        thread_count = max(0, len(lines) - 1)
+        return thread_count if thread_count > 0 else 1
 
     # ------------------------------------------------------------------
     # Public API
@@ -187,6 +200,79 @@ class PerfProfiler:
                 break
             time.sleep(0.1)
         return time.time() - start
+
+    def memory_detail(self) -> dict[str, Any]:
+        """Return a detailed memory breakdown via the ``footprint`` tool.
+
+        Invokes ``footprint -j <tempfile> <PID>`` and parses the JSON output
+        for total footprint, dirty bytes, swapped/compressed bytes, and clean
+        bytes.  Falls back gracefully when the app is not running or when
+        ``footprint`` is unavailable.
+
+        Returns:
+            A dict with keys:
+            - ``pid``: int or None — process ID queried.
+            - ``footprint_mb``: float — physical memory footprint in MB.
+            - ``dirty_mb``: float — dirty pages in MB.
+            - ``swapped_mb``: float — swapped/compressed pages in MB.
+            - ``clean_mb``: float — clean (file-backed) pages in MB.
+            - ``error``: str — present only when measurement failed.
+        """
+        pid = self._get_app_pid()
+        if pid is None:
+            return {"pid": None, "error": "App is not running"}
+
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", prefix=f"specterqa_fp_{pid}_", delete=False
+        ) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                ["footprint", "-j", tmp_path, str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode != 0:
+                return {
+                    "pid": pid,
+                    "error": f"footprint exited {result.returncode}: {result.stderr.strip()}",
+                }
+
+            raw = Path(tmp_path).read_text()
+            data = json.loads(raw)
+
+            # footprint JSON schema: top-level "processes" list, each entry has
+            # "memoryFootprint", "dirty", "swapped", "clean" keys in bytes.
+            processes = data.get("processes", [])
+            entry = next((p for p in processes if p.get("pid") == pid), None)
+            if entry is None and processes:
+                entry = processes[0]
+
+            def _mb(key: str) -> float:
+                return round(entry.get(key, 0) / (1024 * 1024), 2) if entry else 0.0
+
+            return {
+                "pid": pid,
+                "footprint_mb": _mb("memoryFootprint"),
+                "dirty_mb": _mb("dirty"),
+                "swapped_mb": _mb("swapped"),
+                "clean_mb": _mb("clean"),
+            }
+        except FileNotFoundError:
+            return {"pid": pid, "error": "footprint tool not found (requires macOS + Xcode)"}
+        except subprocess.TimeoutExpired:
+            return {"pid": pid, "error": "footprint timed out after 15s"}
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            return {"pid": pid, "error": f"footprint output parse error: {exc}"}
+        except Exception as exc:  # noqa: BLE001
+            return {"pid": pid, "error": f"footprint failed: {exc}"}
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
 
     def summary(self) -> dict:
         """Return a trend summary over the recorded snapshot history.
