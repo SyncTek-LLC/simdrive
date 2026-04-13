@@ -7,6 +7,19 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.9.2 (2026-04-13)
+
+### Critical Fix
+- fix(runner): `ios_type` focus transfer bug (#43) — `typeText()` no longer steals focus from the user's selected field
+- When a field already has `hasFocus`, skip the redundant `tap()` that was resetting focus to the first field
+- Only tap to focus when NO field has focus (strategy 2 fallback)
+- Live simulator smoke test: Safari URL bar — tap, type, text verified in element tree ✅
+
+### Process
+- First release with mandatory live simulator smoke test before publish
+
+---
+
 ## v11.9.1 (2026-04-13)
 
 ### Critical Fix
