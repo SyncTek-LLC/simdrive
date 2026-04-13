@@ -472,9 +472,53 @@ final class HTTPServer {
 
         // ── Type ──────────────────────────────────────────────────────────────
         case ("POST", "/type"):
-            guard let text = request.body["text"] as? String else {
+            let body = request.body
+            guard let text = body["text"] as? String else {
                 return HTTPResponse.error("type requires text (string)", code: 422)
             }
+
+            // Optional: target a specific field by label, identifier, or coordinates.
+            // If provided, tap the field first to transfer focus before typing.
+            let targetLabel = body["label"] as? String
+            let targetIdentifier = body["identifier"] as? String
+            let targetX = body["x"] as? Double
+            let targetY = body["y"] as? Double
+            var focusTarget: String? = nil
+            var focusError: String? = nil
+
+            if targetLabel != nil || targetIdentifier != nil || (targetX != nil && targetY != nil) {
+                runOnMain {
+                    if let label = targetLabel {
+                        if let el = self.elementQuery?.findByLabel(label, type: body["type"] as? String),
+                           el.exists {
+                            let coord = el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                            coord.tap()
+                            focusTarget = "label:\(label)"
+                            Thread.sleep(forTimeInterval: 0.3)
+                        } else {
+                            focusError = "Element with label '\(label)' not found"
+                        }
+                    } else if let identifier = targetIdentifier {
+                        if let el = self.elementQuery?.findByIdentifier(identifier),
+                           el.exists {
+                            let coord = el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                            coord.tap()
+                            focusTarget = "identifier:\(identifier)"
+                            Thread.sleep(forTimeInterval: 0.3)
+                        } else {
+                            focusError = "Element with identifier '\(identifier)' not found"
+                        }
+                    } else if let x = targetX, let y = targetY {
+                        self.injector.tap(x: x, y: y)
+                        focusTarget = "coordinates:(\(x),\(y))"
+                        Thread.sleep(forTimeInterval: 0.3)
+                    }
+                }
+                if let err = focusError {
+                    return HTTPResponse.error("type focus failed: \(err)", code: 404)
+                }
+            }
+
             var typeError: String? = nil
             runOnMain {
                 do { try self.injector.typeText(text) }
@@ -484,8 +528,10 @@ final class HTTPServer {
                 self.addLog("typeText FAILED: \(err)", level: "error")
                 return HTTPResponse.error("typeText failed: \(err)", code: 500)
             }
-            self.addLog("typed \(text.count) chars")
-            return HTTPResponse.success(["characters": text.count])
+            var result: [String: Any] = ["characters": text.count]
+            if let ft = focusTarget { result["focused"] = ft }
+            self.addLog("typed \(text.count) chars into \(focusTarget ?? "current focus")")
+            return HTTPResponse.success(result)
 
         // ── Key ───────────────────────────────────────────────────────────────
         case ("POST", "/key"):
