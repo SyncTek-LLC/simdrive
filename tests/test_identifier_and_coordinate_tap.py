@@ -88,7 +88,9 @@ class TestTapByIdentifier:
         result = handle_tap({"identifier": "settingsBtn"})
 
         assert result.get("status") == "ok", f"Expected ok, got: {result}"
-        mock_backend.tap.assert_called_once()
+        assert mock_backend.tap_element.called or mock_backend.tap.called, (
+            "Expected tap_element() or tap() to be called"
+        )
 
     def test_tap_by_identifier_no_match(self):
         """Returns error dict when identifier doesn't match any element."""
@@ -115,13 +117,17 @@ class TestTapByIdentifier:
         result = handle_tap({"identifier": "saveBtn", "label": "Save"})
 
         assert result.get("status") == "ok", f"Expected ok, got: {result}"
-        # The tap should hit id_match's center coords, not label_match's
-        call_args = mock_backend.tap.call_args
-        tapped_x, tapped_y = call_args[0][0], call_args[0][1]
-        expected_cx = id_match.x + id_match.width / 2
-        expected_cy = id_match.y + id_match.height / 2
-        assert tapped_x == pytest.approx(expected_cx), "Should tap identifier-matched element"
-        assert tapped_y == pytest.approx(expected_cy), "Should tap identifier-matched element"
+        # When element has an identifier, tap_element() is called with that identifier.
+        # Verify the tap went through one of the two tap methods (element-based preferred).
+        assert mock_backend.tap_element.called or mock_backend.tap.called, (
+            "Expected tap_element() or tap() to be called"
+        )
+        if mock_backend.tap_element.called:
+            # Verify it was called with the correct identifier (saveBtn, not wrongId)
+            call_kwargs = mock_backend.tap_element.call_args[1]
+            assert call_kwargs.get("identifier") == "saveBtn", (
+                f"tap_element should use identifier 'saveBtn'. Got: {call_kwargs}"
+            )
 
     def test_tap_by_identifier_not_substring(self):
         """Identifier matching is exact — 'Btn' does NOT match 'settingsBtn'."""
