@@ -7,6 +7,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.9.1 (2026-04-13)
+
+### Critical Fix
+- fix(runner): `ios_type` regression — typeText now throws on failure instead of silently returning success
+- Focus detection upgraded: scans all input types (textFields, secureTextFields, searchFields) for `hasFocus` before falling back to firstMatch
+- HTTP `/type` handler propagates errors (returns 500 with message instead of false 200 OK)
+- `ios_wait_idle` 404 was stale runner binary — auto-rebuild on version change resolves this
+
+---
+
 ## v11.9.0 (2026-04-13)
 
 ### Critical Fix
