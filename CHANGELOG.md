@@ -7,6 +7,19 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.9.3 (2026-04-13)
+
+### Critical Fix
+- fix(runner): Element-based tap via XCTest `element.tap()` — fixes SecureField focus transfer (#43)
+- `POST /tap` now accepts `label` or `identifier` params for element-based tapping
+- When label/identifier is provided, runner uses `elementQuery.findByLabel()` → `element.tap()` instead of coordinate tap
+- This properly transfers first-responder focus even on SwiftUI SecureField inside List/Form cells
+- Python `handle_tap` prefers element-based tap, falls back to coordinate tap on failure
+- Response includes `tap_mode: "element"` or `"coordinate"` for transparency
+- Live smoke test verified: Safari URL bar — element tap → type → text confirmed in element tree ✅
+
+---
+
 ## v11.9.2 (2026-04-13)
 
 ### Critical Fix
