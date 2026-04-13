@@ -106,7 +106,7 @@ class TestBridgePerfFallback:
     # feature is implemented.
     # ------------------------------------------------------------------
 
-    @pytest.mark.xfail(reason="bridge-first not yet implemented in handle_perf", strict=False)
+    # Bridge-first is now implemented
     def test_perf_uses_bridge_when_available(self):
         """When bridge responds on /perf, result uses bridge data, not profiler."""
         handle_perf = _get_handler("handle_perf")
@@ -138,7 +138,7 @@ class TestBridgePerfFallback:
             "Bridge data should be used when bridge is available; profiler should be skipped"
         )
 
-    @pytest.mark.xfail(reason="bridge-first not yet implemented in handle_perf", strict=False)
+    # Bridge-first is now implemented
     def test_perf_bridge_call_precedes_profiler(self):
         """Bridge _get('/perf') is called before snapshot() when bridge is active."""
         handle_perf = _get_handler("handle_perf")
