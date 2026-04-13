@@ -7,6 +7,23 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.9.0 (2026-04-13)
+
+### Critical Fix
+- fix(packaging): Bundle XCTest runner Swift source in wheel — `pip install specterqa-ios` now includes the runner, auto-builds on first session
+- Previous versions only included runner in sdist (tar.gz), not the wheel (.whl) that pip installs
+
+### Runner Build Pipeline
+- Runner source now packaged at `specterqa.ios.runner_source` with `RUNNER_SOURCE_DIR`, `SOURCES_DIR`, `BUILD_SCRIPT` constants
+- `session_manager._rebuild_runner()` resolves source from installed package first, falls back to repo root for development
+- Version marker ensures runner rebuilds automatically after `pip install --upgrade`
+
+### Test Suite
+- fix(test): Click stderr access in test_build_prints_progress_message
+- 962 passed, 0 failed, 0 "pre-existing" exceptions
+
+---
+
 ## v11.8.1 (2026-04-12)
 
 ### Fixes
