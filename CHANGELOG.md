@@ -7,6 +7,13 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v11.8.1 (2026-04-12)
+
+### Fixes
+- fix(test): Fix Click stderr access in test_build_prints_progress_message — test suite now 962 passed, 0 failed
+
+---
+
 ## v11.8.0 (2026-04-12)
 
 ### Critical Fix
