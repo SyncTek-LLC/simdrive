@@ -142,7 +142,11 @@ class TestRunnerBuildCommand:
             result = _invoke("runner", "build")
         assert result.output or result.output == "", "build command should produce output"
         # At minimum it must not silently succeed with no feedback
-        combined = (result.output or "") + (result.stderr if hasattr(result, "stderr") else "")
+        try:
+            stderr_text = result.stderr if result.stderr_bytes is not None else ""
+        except (ValueError, AttributeError):
+            stderr_text = ""
+        combined = (result.output or "") + stderr_text
         assert len(combined) > 0 or result.exit_code == 0
 
 
