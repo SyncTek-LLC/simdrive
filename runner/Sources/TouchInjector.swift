@@ -78,14 +78,15 @@ final class TouchInjector {
     func typeText(_ text: String) throws {
         // Strategy 1: find whichever text-input element currently has keyboard focus.
         var target: XCUIElement? = nil
+        var alreadyFocused = false
         let inputTypes: [XCUIElementQuery] = [
             app.textFields, app.secureTextFields, app.searchFields
         ]
         outerLoop: for query in inputTypes {
             for element in query.allElementsBoundByIndex {
-                // `hasFocus` is a standard XCUIElement property (available iOS 9+).
                 if element.exists && element.hasFocus {
                     target = element
+                    alreadyFocused = true
                     break outerLoop
                 }
             }
@@ -102,9 +103,13 @@ final class TouchInjector {
                 "No visible text field found. Tap a text field first.")
         }
 
-        // Ensure the field is focused before typing (needed when strategy 2 fires).
-        focused.tap()
-        Thread.sleep(forTimeInterval: 0.3)
+        // Only tap to focus if the field wasn't already focused (strategy 2).
+        // When strategy 1 found a hasFocus field, tapping it would be redundant
+        // at best and could steal focus from the intended field at worst.
+        if !alreadyFocused {
+            focused.tap()
+            Thread.sleep(forTimeInterval: 0.3)
+        }
 
         // Wrap in autoreleasepool to bound any internal XCTest allocations.
         autoreleasepool {
