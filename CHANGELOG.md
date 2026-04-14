@@ -7,6 +7,27 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.1.0 (2026-04-14)
+
+### Test Harness — Live Simulator Testing Infrastructure
+- TestKitApp: SwiftUI test target with TextField, SecureField, tabs, sheets (io.synctek.specterqa.testkit)
+- 10 live smoke tests passing against real iOS simulator — the quality gate for every release
+- Packaging tests verify wheel contents (Swift source, build scripts)
+- 8 regression tests verify source patterns for every historical bug
+- GitHub Actions CI workflow for every PR
+- No mock tests — all new tests exercise real behavior
+
+### Critical Fix: Multi-Field Form Typing
+- Dismiss keyboard → tap target field → app.typeText() — the ONLY approach that works on SwiftUI Forms
+- /dismiss_keyboard endpoint: taps above keyboard, swipe fallback
+- Element query depth 10 → 50 for deep SwiftUI Form nesting
+- Default element types expanded: secureTextField, searchField, cell, tabBar, etc.
+- Identifier resolution via Python cache avoids slow 10s findByIdentifier tree walk
+
+### 27 MCP tools, 10/10 smoke tests, 0 regressions
+
+---
+
 ## v12.0.0 (2026-04-13)
 
 ### Breaking: ios_type now accepts target field parameters
