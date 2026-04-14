@@ -129,14 +129,18 @@ class TestTabNavigation:
     """Scenario 4: tab switch tests element cache refresh."""
 
     def test_cache_refreshes_after_tab_switch(self):
+        # Dismiss keyboard first — it covers the tab bar
+        _tap(x=200, y=55)  # tap nav bar area
+        time.sleep(0.5)
+
         # Navigate to Nav tab
-        _tap(identifier="tab_nav")
+        _tap(label="Nav")
         time.sleep(1.0)
         el = _find(identifier="lbl_nav_title")
         assert el is not None, "Nav tab title not found — cache not refreshed"
 
         # Navigate back to Form tab
-        _tap(identifier="tab_form")
+        _tap(label="Form")
         time.sleep(1.0)
         el = _find(identifier="field_first_name")
         assert el is not None, "Form tab field not found after return"
@@ -147,8 +151,10 @@ class TestSheetDismiss:
     """Scenario 5: open and dismiss a half-sheet."""
 
     def test_sheet_lifecycle(self):
-        # Must be on Nav tab
-        _tap(identifier="tab_nav")
+        # Dismiss keyboard, then navigate to Nav tab
+        _tap(x=200, y=55)
+        time.sleep(0.5)
+        _tap(label="Nav")
         time.sleep(0.5)
 
         _tap(identifier="btn_open_sheet")
@@ -162,7 +168,7 @@ class TestSheetDismiss:
         assert el is None, "Sheet didn't close"
 
         # Go back to form tab for other tests
-        _tap(identifier="tab_form")
+        _tap(label="Form")
         time.sleep(0.5)
 
 
@@ -221,12 +227,16 @@ class TestFormSubmitEndToEnd:
         _type("mypass", identifier="field_password")
         time.sleep(0.3)
 
+        # Dismiss keyboard before tapping Submit (it may be covered)
+        _tap(x=200, y=55)
+        time.sleep(0.3)
         _tap(identifier="btn_submit")
-        time.sleep(0.5)
+        time.sleep(1.0)
 
         result = _find(identifier="lbl_result")
         assert result is not None, "Result label not found"
-        val = str(result.get("value", "") or result.get("label", ""))
+        # StaticText uses label for display text, not value
+        val = str(result.get("label", "") or result.get("value", ""))
         assert "Alice" in val, f"First name missing from result: {val!r}"
         assert "Smith" in val, f"Last name missing from result: {val!r}"
         assert "set" in val, f"Password not confirmed: {val!r}"
