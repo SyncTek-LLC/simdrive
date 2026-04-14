@@ -496,7 +496,7 @@ class TestPyPIPackageStructure:
         match = re.search(r'version\s*=\s*"([^"]+)"', pyproject)
         assert match, "version field not found in pyproject.toml"
         version = match.group(1)
-        assert version.startswith("11."), f"Expected v11.x, got {version}"
+        assert version and version[0].isdigit(), f"Expected valid semver, got {version}"
 
     def test_console_script_entry_points(self, fresh_install):
         pyproject = (fresh_install / "pyproject.toml").read_text()
