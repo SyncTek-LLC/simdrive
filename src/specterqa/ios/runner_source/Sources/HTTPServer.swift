@@ -477,48 +477,69 @@ final class HTTPServer {
                 return HTTPResponse.error("type requires text (string)", code: 422)
             }
 
-            // Optional: target a specific field by label, identifier, or coordinates.
-            // If provided, tap the field first to transfer focus before typing.
+            // When a target field is specified, find the XCUIElement and call
+            // element.typeText() DIRECTLY on it — bypassing TouchInjector's
+            // focus detection which always types into the first field.
+            // This is the ONLY way to type into a specific SwiftUI Form field.
             let targetLabel = body["label"] as? String
             let targetIdentifier = body["identifier"] as? String
             let targetX = body["x"] as? Double
             let targetY = body["y"] as? Double
-            var focusTarget: String? = nil
-            var focusError: String? = nil
 
-            if targetLabel != nil || targetIdentifier != nil || (targetX != nil && targetY != nil) {
+            if targetLabel != nil || targetIdentifier != nil {
+                var focusTarget: String? = nil
+                var typeError: String? = nil
                 runOnMain {
+                    var el: XCUIElement? = nil
                     if let label = targetLabel {
-                        if let el = self.elementQuery?.findByLabel(label, type: body["type"] as? String),
-                           el.exists {
-                            let coord = el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                            coord.tap()
-                            focusTarget = "label:\(label)"
-                            Thread.sleep(forTimeInterval: 0.3)
-                        } else {
-                            focusError = "Element with label '\(label)' not found"
-                        }
+                        el = self.elementQuery?.findByLabel(label, type: body["type"] as? String)
+                        focusTarget = "label:\(label)"
                     } else if let identifier = targetIdentifier {
-                        if let el = self.elementQuery?.findByIdentifier(identifier),
-                           el.exists {
-                            let coord = el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                            coord.tap()
-                            focusTarget = "identifier:\(identifier)"
-                            Thread.sleep(forTimeInterval: 0.3)
-                        } else {
-                            focusError = "Element with identifier '\(identifier)' not found"
-                        }
-                    } else if let x = targetX, let y = targetY {
-                        self.injector.tap(x: x, y: y)
-                        focusTarget = "coordinates:(\(x),\(y))"
+                        el = self.elementQuery?.findByIdentifier(identifier)
+                        focusTarget = "identifier:\(identifier)"
+                    }
+                    guard let target = el, target.exists else {
+                        typeError = "Element '\(focusTarget ?? "?")' not found"
+                        return
+                    }
+                    // Step 1: Dismiss any active keyboard by tapping the nav bar.
+                    // This clears the first-responder so the next tap properly
+                    // focuses the TARGET field, not the previously focused one.
+                    if let navBar = self.injector.app.navigationBars.firstMatch as XCUIElement?,
+                       navBar.exists {
+                        navBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
                         Thread.sleep(forTimeInterval: 0.3)
                     }
+
+                    // Step 2: Tap the target field to give it focus.
+                    target.tap()
+                    Thread.sleep(forTimeInterval: 0.5)
+
+                    // Step 3: Type via the app (sends to whatever now has focus).
+                    // Using app.typeText avoids the element-level typeText SIGABRT
+                    // that kills the runner on iOS 26.
+                    self.injector.app.typeText(text)
+                    Thread.sleep(forTimeInterval: 0.5)
                 }
-                if let err = focusError {
-                    return HTTPResponse.error("type focus failed: \(err)", code: 404)
+                if let err = typeError {
+                    self.addLog("typeText FAILED: \(err)", level: "error")
+                    return HTTPResponse.error("typeText failed: \(err)", code: 500)
+                }
+                var result: [String: Any] = ["characters": text.count]
+                if let ft = focusTarget { result["focused"] = ft }
+                self.addLog("typed \(text.count) chars into \(focusTarget ?? "?")")
+                return HTTPResponse.success(result)
+            }
+
+            // Coordinate target: tap first, then use TouchInjector
+            if let x = targetX, let y = targetY {
+                runOnMain {
+                    self.injector.tap(x: x, y: y)
+                    Thread.sleep(forTimeInterval: 0.3)
                 }
             }
 
+            // No target specified — type into whatever has focus
             var typeError: String? = nil
             runOnMain {
                 do { try self.injector.typeText(text) }
@@ -529,8 +550,7 @@ final class HTTPServer {
                 return HTTPResponse.error("typeText failed: \(err)", code: 500)
             }
             var result: [String: Any] = ["characters": text.count]
-            if let ft = focusTarget { result["focused"] = ft }
-            self.addLog("typed \(text.count) chars into \(focusTarget ?? "current focus")")
+            self.addLog("typed \(text.count) chars into current focus")
             return HTTPResponse.success(result)
 
         // ── Key ───────────────────────────────────────────────────────────────
