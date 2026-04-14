@@ -7,6 +7,35 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.3.0 (2026-04-14)
+
+### TestKit: Example Reader Sign-In Pattern
+- ListTab added to TestKitApp: SwiftUI List with TextField + SecureField rows mirroring the Example Reader Library sign-in form
+- 3 new smoke tests: List navigation, List element discovery, multi-field List typing with sign-in verification
+- Tab navigation uses safe coordinate tap to avoid element-based tap crash during view transitions
+
+### Test Suite
+- 13/13 live smoke tests passing against real simulator (up from 10)
+- 4-tier architecture: smoke (13), integration (47), regression (13), packaging (4)
+- Test architecture overhaul: 19,932 lines of mock theater deleted, 0% mock usage
+
+### 13 Smoke Test Scenarios
+1. Single field typing ✅
+2. Multi-field form (Form) ✅
+3. SecureField (password) ✅
+4. Tab navigation + cache refresh ✅
+5. Sheet open/close ✅
+6. Screenshot JPEG under 1MB ✅
+7. Element list structure ✅
+8. Perf via XCTest bridge ✅
+9. Health endpoint ✅
+10. E2E Form fill + submit ✅
+11. List tab navigation (crash-safe) ✅
+12. List element discovery ✅
+13. List multi-field typing + sign-in ✅
+
+---
+
 ## v12.2.1 (2026-04-14)
 
 ### Critical Fix
