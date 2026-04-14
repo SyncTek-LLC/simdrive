@@ -1323,14 +1323,35 @@ def handle_type(arguments: dict) -> dict:
     payload: dict = {"text": text}
     focused_info = None
 
-    if label is not None:
+    # Resolve ALL target types to label (fast runner lookup) or coordinates.
+    # Never send identifier directly — findByIdentifier walks the full 50-deep
+    # tree and takes 10+ seconds on SwiftUI Forms.
+    if identifier is not None:
+        # Resolve from element cache first
+        target = next(
+            (e for e in _last_elements if getattr(e, "identifier", "") == identifier),
+            None,
+        )
+        if target is not None:
+            # Send label to runner (fast findByLabel lookup)
+            if target.label:
+                payload["label"] = target.label
+                focused_info = f"identifier:{identifier} (via label:{target.label})"
+            else:
+                # No label — send coordinates
+                cx = target.x + target.width / 2
+                cy = target.y + target.height / 2
+                payload["x"] = cx
+                payload["y"] = cy
+                focused_info = f"identifier:{identifier} (via coords:{cx:.0f},{cy:.0f})"
+        else:
+            # Not in cache — fall back to runner-side lookup (slow but correct)
+            payload["identifier"] = identifier
+            focused_info = f"identifier:{identifier}"
+    elif label is not None:
         payload["label"] = label
         focused_info = f"label:{label}"
-    elif identifier is not None:
-        payload["identifier"] = identifier
-        focused_info = f"identifier:{identifier}"
     elif element_index is not None:
-        # Resolve element_index to coordinates from the cache
         target = next((e for e in _last_elements if e.index == int(element_index)), None)
         if target is None:
             return {"error": f"Element index {element_index} not found. Call ios_elements first."}
