@@ -198,17 +198,22 @@ final class SpecterQAElementQuery {
             let elements = webView.descendants(matching: .any).allElementsBoundByIndex
             for element in elements {
                 if descriptors.count >= limit { break }
+                guard element.exists else { continue }
                 let label = element.label
                 let ident = element.identifier
                 if label.isEmpty && ident.isEmpty { continue }
+                let fr = element.frame
+                // Derive hittable from frame geometry — avoids live .isHittable
+                // property access which can crash on certain web view element types.
+                let hittable = element.isEnabled && fr.width > 0 && fr.height > 0
                 descriptors.append(ElementDescriptor(
                     label: label,
                     type: self.elementTypeName(element.elementType),
                     identifier: ident,
-                    frame: element.frame,
+                    frame: fr,
                     isEnabled: element.isEnabled,
                     isSelected: element.isSelected,
-                    isHittable: element.isHittable,
+                    isHittable: hittable,
                     value: (element.value as? String) ?? "",
                     index: descriptors.count
                 ))
