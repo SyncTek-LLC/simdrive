@@ -10,7 +10,7 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (27 total):
+Tools (29 total):
     ios_start_session       Start XCTest runner on the iOS Simulator
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
@@ -38,6 +38,8 @@ Tools (27 total):
     ios_perf                CPU, memory (RSS), and thread count snapshot
     ios_memory              Detailed memory breakdown via footprint tool
     ios_network             Network activity: URLs, bytes in/out, throughput
+    ios_perf_baseline       Capture a perf snapshot as a reference baseline
+    ios_perf_compare        Compare current perf to the stored baseline (deltas + severity)
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -74,6 +76,7 @@ _console_monitor = None  # ConsoleMonitor instance (None when session is not act
 _crash_detector = None  # CrashDetector instance (None when session is not active)
 _perf_profiler = None  # PerfProfiler instance (None when session is not active)
 _network_inspector = None  # NetworkInspector instance (None when session is not active)
+_perf_baseline: dict | None = None  # Stored perf baseline for ios_perf_compare
 
 
 def _require_session() -> None:
@@ -1854,6 +1857,92 @@ def handle_perf(arguments: dict) -> dict:
         return {"error": f"perf snapshot failed: {exc}"}
 
 
+def handle_perf_baseline(arguments: dict) -> dict:
+    """Capture current performance metrics as a baseline for comparison.
+
+    Stores the current ios_perf snapshot so that a subsequent call to
+    handle_perf_compare can show deltas.  Call this BEFORE running the
+    user flow you want to measure.
+
+    Returns:
+        {"status": "ok", "baseline": {...}, "message": "..."}
+        or {"error": "<message>"} if the perf snapshot failed.
+    """
+    global _perf_baseline
+    current = handle_perf({})
+    if "error" in current:
+        return current
+    _perf_baseline = current
+    return {
+        "status": "ok",
+        "baseline": current,
+        "message": "Baseline captured. Call ios_perf_compare after your test actions.",
+    }
+
+
+def handle_perf_compare(arguments: dict) -> dict:
+    """Compare current performance metrics against the stored baseline.
+
+    Computes deltas for RSS, CPU time, and thread count and applies a simple
+    severity classification so that the agent can decide whether to escalate.
+
+    Returns:
+        {
+          "baseline": {...},
+          "current": {...},
+          "deltas": {"memory_rss_mb": float, "cpu_time_sec": float, "thread_count": int},
+          "issues": [...],
+          "verdict": "ISSUES_FOUND" | "OK",
+        }
+        or {"error": "<message>"} if no baseline has been captured or the
+        current perf snapshot failed.
+    """
+    if _perf_baseline is None:
+        return {"error": "No baseline captured. Call ios_perf_baseline first."}
+
+    current = handle_perf({})
+    if "error" in current:
+        return current
+
+    baseline = _perf_baseline
+
+    def _delta(key: str) -> float | None:
+        c = current.get(key, None)
+        b = baseline.get(key, None)
+        if isinstance(c, (int, float)) and isinstance(b, (int, float)):
+            return round(c - b, 2)
+        return None
+
+    # Bridge exposes memory_rss_mb; simctl fallback uses memory_mb — handle both.
+    rss_delta = _delta("memory_rss_mb") if _delta("memory_rss_mb") is not None else _delta("memory_mb")
+    cpu_delta = _delta("cpu_time_total_sec") if _delta("cpu_time_total_sec") is not None else _delta("cpu_time")
+    thread_delta = _delta("thread_count")
+
+    issues: list[str] = []
+    if rss_delta is not None and rss_delta > 50:
+        issues.append(f"HIGH: RSS grew {rss_delta}MB — possible memory leak")
+    elif rss_delta is not None and rss_delta > 20:
+        issues.append(f"MEDIUM: RSS grew {rss_delta}MB — monitor for leak")
+
+    if thread_delta is not None and thread_delta > 10:
+        issues.append(f"HIGH: {thread_delta} new threads — possible thread leak")
+
+    if cpu_delta is not None and cpu_delta > 5:
+        issues.append(f"MEDIUM: {cpu_delta}s CPU time consumed — heavy processing")
+
+    return {
+        "baseline": baseline,
+        "current": current,
+        "deltas": {
+            "memory_rss_mb": rss_delta,
+            "cpu_time_sec": cpu_delta,
+            "thread_count": thread_delta,
+        },
+        "issues": issues if issues else ["No significant performance issues detected"],
+        "verdict": "ISSUES_FOUND" if any("HIGH" in i for i in issues) else "OK",
+    }
+
+
 def handle_memory(arguments: dict) -> dict:
     """Get detailed memory breakdown via the ``footprint`` tool.
 
@@ -1982,7 +2071,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (27 total):
+AVAILABLE TOOLS (29 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -1999,6 +2088,7 @@ AVAILABLE TOOLS (27 total):
     ios_press_key        — Press a named key: return, escape, delete, tab, space
     ios_swipe            — Swipe in a direction: up, down, left, right
     ios_swipe_back       — iOS edge swipe back navigation gesture
+    ios_dismiss_keyboard — Dismiss the software keyboard
 
   Waiting:
     ios_wait             — Sleep for N seconds (animations, splash screens)
@@ -2024,47 +2114,51 @@ AVAILABLE TOOLS (27 total):
     ios_perf                — CPU %, RSS memory, thread count snapshot (call periodically for regression detection)
     ios_memory              — Detailed memory breakdown: footprint, dirty, swapped, clean pages
     ios_network             — Network activity: recent HTTP URLs, bytes in/out, throughput
+    ios_perf_baseline       — Capture a perf snapshot as a reference baseline for comparison
+    ios_perf_compare        — Compare current perf to the stored baseline (deltas + severity)
 
-WORKFLOW (follow this sequence):
+WORKFLOW:
+1. ios_start_session(bundle_id="com.app.id") — starts the runner, launches the app
+2. ios_elements() or ios_screenshot() — observe the current screen
+3. ios_tap(label="Button") — interact with elements
+4. ios_type(text="hello", identifier="field_id") — type into specific fields
+5. ios_stop_session() — always clean up when done
 
-1. START: ios_start_session(bundle_id="com.example.App")
-   - Deploys the XCTest runner to the booted simulator
-   - The app launches automatically
-   - Recording begins immediately — every action is captured
+PERFORMANCE TESTING:
+1. Call ios_perf_baseline() at app launch — this is your BASELINE
+2. Perform the user flow you're testing
+3. Call ios_perf_compare() — compare RSS and CPU to baseline
+4. Repeat the flow 3-5 times, calling ios_perf_compare after each iteration
+5. If RSS grows monotonically (never decreases), you have a MEMORY LEAK
 
-2. OBSERVE: ios_screenshot() or ios_elements()
-   - ios_screenshot returns an annotated image with numbered elements
-   - ios_elements returns just the element list (faster, no image)
-   - Use element index numbers with ios_tap
+INTERPRETING ios_perf():
+- memory_rss_mb: Physical RAM used. <100MB = good, 100-200MB = normal, >300MB = investigate, >500MB = critical
+- thread_count: Active threads. <20 = normal, >50 = thread leak
+- cpu_time_total_sec: Cumulative CPU. Compare deltas between calls — >2s delta for a simple action = perf issue
 
-3. INTERACT: ios_tap(label="Save"), ios_swipe(direction="down"),
-   ios_type(text="hello"), ios_press_key(key="return"), ios_swipe_back()
-   - PREFER label-based tapping: ios_tap(label="Login Button") — more stable than indices
-   - Use type= to narrow label matches: ios_tap(label="Cancel", type="Button")
-   - Fall back to element_index only when no meaningful label exists
-   - After each interaction, call ios_screenshot to verify the result
+INTERPRETING ios_memory():
+- dirty_mb: Memory that cannot be reclaimed. High dirty = app is caching too much
+- swapped_mb: Memory pushed to compressed storage. >50MB = memory pressure
 
-3b. WAIT: ios_wait(seconds=1.0) or ios_wait_for_element(label="Home")
-   - Use ios_wait_for_element after navigations that load content asynchronously
-   - Use ios_wait for fixed delays (animations, splash screens)
+DEBUGGING:
+- ios_logs(level="error") — check for errors after unexpected behavior
+- ios_crashes() — check if the app crashed (app_running=false means crash)
+- ios_network() — check recent HTTP requests if the app seems stuck
+- ios_app_state() — verify the app is in foreground
 
-4. RECORD: ios_start_recording() / ios_stop_recording(name="...")
-   - ios_start_recording() clears exploratory steps — call before the clean flow
-   - ios_stop_recording(name="login-flow") saves AND clears (marks end of flow)
-   - ios_save_replay(name="...") saves without clearing (keep recording)
+TYPING INTO FORMS:
+- ALWAYS specify the target field: ios_type(text="value", identifier="field_id")
+- For password/secure fields, use coordinates if identifier lookup is slow:
+  1. Call ios_elements() to get the field's frame
+  2. Calculate center: x = frame.x + frame.width/2, y = frame.y + frame.height/2
+  3. ios_type(text="password", x=center_x, y=center_y)
+- After typing, call ios_elements() to verify the value was accepted
 
-5. SAVE: ios_save_replay(name="descriptive-name")
-   - ALWAYS save a replay after a successful test flow
-   - The replay runs in CI without AI: specterqa-ios replay <file>
-   - Saves to .specterqa/replays/<name>.yaml
-   - Checkpoints are captured automatically from the current element state
-
-6. AUDIT: ios_accessibility_audit()
-   - Run on each key screen to surface missing labels, small targets, duplicate labels
-   - Results feed directly into an accessibility report
-
-7. CLEANUP: ios_stop_session()
-   - Always call this when testing is complete
+COMMON PITFALLS:
+- Keyboard covers buttons: call ios_dismiss_keyboard() before tapping buttons below the keyboard
+- Tab bar covered: dismiss keyboard before switching tabs
+- Stale elements after navigation: ios_tap auto-refreshes, but call ios_elements() if unsure
+- SecureField value masked: SecureField shows bullet characters (•), not the actual text
 
 RECORDING WORKFLOW (best practice):
   1. ios_start_session → exploratory taps to find the right flow
@@ -2073,25 +2167,10 @@ RECORDING WORKFLOW (best practice):
   4. ios_stop_recording(name="feature-name") → saves YAML + clears buffer
   5. Next flow: ios_start_recording() → repeat
 
-TIPS:
-- Take a screenshot BEFORE and AFTER every tap to verify the action worked
-- If an element isn't visible, try ios_swipe(direction="down") to scroll
-- Use ios_elements() for fast element checks without screenshots
-- Use ios_wait_for_element(label="...") after navigations — never assume instant load
-- Name replays descriptively: "settings-privacy-toggles" not "test1"
-- One replay per user flow — keep them focused and short
-- Run ios_accessibility_audit on the home screen and each major screen
-
 PROVIDERS:
 - Local simulator (default) — requires macOS + Xcode 15+
 - BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + BROWSERSTACK_ACCESS_KEY
 - CI replay — specterqa-ios ci .specterqa/replays/ --json-output results.json
-
-WKWebView content:
-Use ios_webview_elements to query elements inside WKWebView (EPUB readers,
-PDF viewers, audiobook UI). XCTest's .webViews descendants chain exposes
-labelled/identified web elements. For complex DOM nodes without accessibility
-labels, a JavaScript bridge requires app-side instrumentation (out of scope).
 
 SETUP CHECK:
   specterqa-ios doctor              — diagnose your environment
@@ -2604,6 +2683,40 @@ SETUP CHECK:
     )
     async def ios_network(seconds: float = 30.0) -> str:
         result = handle_network({"seconds": seconds})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_perf_baseline ────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_perf_baseline",
+        description=(
+            "Capture current CPU, memory, and thread metrics as a baseline. "
+            "Call this BEFORE running the user flow you want to measure. "
+            "Then call ios_perf_compare after to see the impact. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_perf_baseline() -> str:
+        result = handle_perf_baseline({})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_perf_compare ─────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_perf_compare",
+        description=(
+            "Compare current performance metrics against the baseline captured by ios_perf_baseline. "
+            "Returns deltas for RSS memory, CPU time, and thread count, plus a severity assessment. "
+            "verdict=ISSUES_FOUND means at least one HIGH-severity issue was detected — investigate immediately. "
+            "verdict=OK means metrics are within normal range. "
+            "HIGH: RSS grew >50MB or >10 new threads. "
+            "MEDIUM: RSS grew >20MB or >5s CPU time consumed. "
+            "Use after completing the user flow you are measuring. "
+            "Requires ios_perf_baseline to have been called first."
+        ),
+    )
+    async def ios_perf_compare() -> str:
+        result = handle_perf_compare({})
         return json.dumps(result, default=str)
 
     return mcp
