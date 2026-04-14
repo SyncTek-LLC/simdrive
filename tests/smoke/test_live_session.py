@@ -35,7 +35,9 @@ def _get(path):
 
 def _elements():
     """Get current element list from runner."""
-    return _get("/elements").get("elements", [])
+    data = _get("/elements")
+    # Runner returns elements under "result" key (list of dicts)
+    return data.get("result") or data.get("elements") or []
 
 
 def _find(identifier=None, label=None):
@@ -171,7 +173,9 @@ class TestScreenshotSize:
     def test_screenshot_is_jpeg_under_1mb(self):
         import base64
         data = _get("/screenshot")
-        b64 = data.get("image") or data.get("data") or data.get("screenshot", "")
+        # Runner nests image under result.data
+        result = data.get("result", {}) if isinstance(data.get("result"), dict) else {}
+        b64 = result.get("data") or data.get("image") or data.get("data") or data.get("screenshot", "")
         assert b64, "No image data in screenshot response"
         raw = base64.b64decode(b64)
         assert raw[:3] == b'\xff\xd8\xff', f"Not JPEG: {raw[:3].hex()}"

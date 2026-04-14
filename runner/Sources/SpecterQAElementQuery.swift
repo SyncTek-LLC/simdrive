@@ -87,7 +87,15 @@ final class SpecterQAElementQuery {
                 .slider, .alert, .sheet, .link
             ]
         } else {
-            queryTypes = [.button, .staticText, .textField]
+            // Default: all interactive types. Prior versions only queried
+            // button + staticText + textField, missing secureTextField,
+            // searchField, cell, tabBar — causing empty element lists on
+            // SwiftUI Form screens.
+            queryTypes = [
+                .button, .staticText, .textField, .secureTextField,
+                .searchField, .cell, .tabBar, .navigationBar,
+                .switch, .slider, .link, .image
+            ]
         }
 
         let typeSet = Set(queryTypes.map { $0.rawValue })
@@ -138,7 +146,7 @@ final class SpecterQAElementQuery {
                               limit: Int,
                               depth: Int = 0) {
         guard descriptors.count < limit else { return }
-        guard depth < 10 else { return }
+        guard depth < 50 else { return }
 
         let rawType = snapshot.elementType.rawValue
         if types.contains(rawType) {
