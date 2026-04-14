@@ -37,7 +37,20 @@ def _simulator_booted():
     except Exception:
         return False
 
-requires_live = pytest.mark.skipif(
-    not (_simulator_booted() and _runner_healthy()),
-    reason="Requires booted simulator with active SpecterQA session on TestKitApp"
-)
+def requires_live(cls):
+    """Class decorator that skips all tests if no live session is available.
+
+    Evaluates at test execution time, not import time.
+    The runner being healthy is the authoritative check — if the runner
+    responds on /health, the session is active regardless of simctl state.
+    """
+    original_setup = getattr(cls, "setup_method", None)
+
+    def setup_method(self, method=None):
+        if not _runner_healthy():
+            pytest.skip("Requires active SpecterQA session (runner not responding on port 8222)")
+        if original_setup:
+            original_setup(self, method)
+
+    cls.setup_method = setup_method
+    return cls
