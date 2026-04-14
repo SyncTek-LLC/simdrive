@@ -50,6 +50,15 @@ def _find(identifier=None, label=None):
     return None
 
 
+def _dismiss_keyboard():
+    """Dismiss the on-screen keyboard if visible."""
+    try:
+        return _post("/dismiss_keyboard")
+    except Exception:
+        # Fallback: tap above center of screen
+        return _post("/tap", {"x": 200, "y": 55})
+
+
 def _tap(label=None, identifier=None, x=None, y=None):
     payload = {}
     if label: payload["label"] = label
@@ -59,10 +68,12 @@ def _tap(label=None, identifier=None, x=None, y=None):
     return _post("/tap", payload)
 
 
-def _type(text, label=None, identifier=None):
+def _type(text, label=None, identifier=None, x=None, y=None):
     payload = {"text": text}
     if label: payload["label"] = label
     if identifier: payload["identifier"] = identifier
+    if x is not None: payload["x"] = x
+    if y is not None: payload["y"] = y
     return _post("/type", payload)
 
 
@@ -114,14 +125,29 @@ class TestSecureField:
     """Scenario 3: SecureField typing (the Example Reader password field bug)."""
 
     def test_secure_field_accepts_text(self):
-        _type("s3cret!", identifier="field_password")
+        # Refresh element cache first (previous test may have left keyboard open)
+        _dismiss_keyboard()
         time.sleep(0.5)
+        _elements()  # refresh
+
+        # Resolve password field to coordinates first (findByIdentifier is
+        # too slow on deep SwiftUI trees — 10s+ tree walk).
         el = _find(identifier="field_password")
-        assert el is not None, "field_password not found"
-        # SecureField masks value but should NOT show placeholder
-        val = str(el.get("value", ""))
-        assert val != "" and val != "Password", \
-            f"SecureField still shows placeholder: {val!r}"
+        assert el is not None, "field_password not found in elements"
+        frame = el.get("frame", {})
+        cx = frame.get("x", 0) + frame.get("width", 0) / 2
+        cy = frame.get("y", 0) + frame.get("height", 0) / 2
+
+        # Type using coordinates (avoid sending identifier to runner)
+        _type("s3cret9", x=cx, y=cy)
+        time.sleep(0.5)
+
+        el2 = _find(identifier="field_password")
+        assert el2 is not None, "field_password not found after typing"
+        val = str(el2.get("value", ""))
+        # SecureField shows bullet characters (•) when text is entered
+        assert len(val) > 0, f"SecureField value is empty after typing"
+        assert val != "Password", f"SecureField still shows placeholder"
 
 
 @requires_live
@@ -130,7 +156,7 @@ class TestTabNavigation:
 
     def test_cache_refreshes_after_tab_switch(self):
         # Dismiss keyboard first — it covers the tab bar
-        _tap(x=200, y=55)  # tap nav bar area
+        _dismiss_keyboard()
         time.sleep(0.5)
 
         # Navigate to Nav tab
@@ -152,7 +178,7 @@ class TestSheetDismiss:
 
     def test_sheet_lifecycle(self):
         # Dismiss keyboard, then navigate to Nav tab
-        _tap(x=200, y=55)
+        _dismiss_keyboard()
         time.sleep(0.5)
         _tap(label="Nav")
         time.sleep(0.5)
@@ -202,7 +228,7 @@ class TestElementList:
 
 @requires_live
 class TestObservability:
-    """Scenario 8: perf and logs via XCTest bridge."""
+    """Scenario 8: perf, logs, crashes via XCTest bridge."""
 
     def test_perf_returns_real_data(self):
         data = _get("/perf")
@@ -228,7 +254,7 @@ class TestFormSubmitEndToEnd:
         time.sleep(0.3)
 
         # Dismiss keyboard before tapping Submit (it may be covered)
-        _tap(x=200, y=55)
+        _dismiss_keyboard()
         time.sleep(0.3)
         _tap(identifier="btn_submit")
         time.sleep(1.0)

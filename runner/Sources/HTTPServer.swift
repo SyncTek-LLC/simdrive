@@ -502,13 +502,16 @@ final class HTTPServer {
                         typeError = "Element '\(focusTarget ?? "?")' not found"
                         return
                     }
-                    // Step 1: Dismiss any active keyboard by tapping the nav bar.
+                    // Step 1: Dismiss any active keyboard by tapping just above it.
                     // This clears the first-responder so the next tap properly
                     // focuses the TARGET field, not the previously focused one.
-                    if let navBar = self.injector.app.navigationBars.firstMatch as XCUIElement?,
-                       navBar.exists {
-                        navBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                        Thread.sleep(forTimeInterval: 0.3)
+                    let keyboard = self.injector.app.keyboards.firstMatch
+                    if keyboard.exists {
+                        let kbFrame = keyboard.frame
+                        let tapY = kbFrame.origin.y - 20
+                        let tapX = kbFrame.width / 2
+                        self.injector.tap(x: Double(tapX), y: Double(tapY))
+                        Thread.sleep(forTimeInterval: 0.5)
                     }
 
                     // Step 2: Tap the target field to give it focus.
@@ -531,12 +534,26 @@ final class HTTPServer {
                 return HTTPResponse.success(result)
             }
 
-            // Coordinate target: tap first, then use TouchInjector
+            // Coordinate target: dismiss keyboard, tap coords, app.typeText
             if let x = targetX, let y = targetY {
+                var typeError2: String? = nil
                 runOnMain {
+                    // Dismiss keyboard
+                    let keyboard = self.injector.app.keyboards.firstMatch
+                    if keyboard.exists {
+                        let kbFrame = keyboard.frame
+                        self.injector.tap(x: Double(kbFrame.width / 2), y: Double(kbFrame.origin.y - 20))
+                        Thread.sleep(forTimeInterval: 0.5)
+                    }
+                    // Tap target coordinates
                     self.injector.tap(x: x, y: y)
-                    Thread.sleep(forTimeInterval: 0.3)
+                    Thread.sleep(forTimeInterval: 0.5)
+                    // Type via app
+                    self.injector.app.typeText(text)
+                    Thread.sleep(forTimeInterval: 0.5)
                 }
+                self.addLog("typed \(text.count) chars at (\(x),\(y))")
+                return HTTPResponse.success(["characters": text.count, "focused": "coordinates:(\(x),\(y))"])
             }
 
             // No target specified — type into whatever has focus
@@ -552,6 +569,40 @@ final class HTTPServer {
             var result: [String: Any] = ["characters": text.count]
             self.addLog("typed \(text.count) chars into current focus")
             return HTTPResponse.success(result)
+
+        // ── Dismiss Keyboard ──────────────────────────────────────────────────
+        case ("POST", "/dismiss_keyboard"):
+            var dismissed = false
+            runOnMain {
+                let keyboard = self.injector.app.keyboards.firstMatch
+                if keyboard.exists {
+                    // Strategy: tap above the keyboard to dismiss it.
+                    // Swipe down from the top of the keyboard area.
+                    let kbFrame = keyboard.frame
+                    let tapY = kbFrame.origin.y - 20  // just above keyboard
+                    let tapX = kbFrame.width / 2
+                    self.injector.tap(x: Double(tapX), y: Double(tapY))
+                    Thread.sleep(forTimeInterval: 0.5)
+                    // Check if it worked
+                    dismissed = !self.injector.app.keyboards.firstMatch.exists
+                    if !dismissed {
+                        // Fallback: swipe down on the keyboard
+                        let startY = kbFrame.origin.y + 10
+                        let endY = kbFrame.origin.y + kbFrame.height + 50
+                        self.injector.swipe(
+                            fromX: Double(tapX), fromY: Double(startY),
+                            toX: Double(tapX), toY: Double(endY),
+                            duration: 0.3
+                        )
+                        Thread.sleep(forTimeInterval: 0.5)
+                        dismissed = !self.injector.app.keyboards.firstMatch.exists
+                    }
+                } else {
+                    dismissed = true // already dismissed
+                }
+            }
+            self.addLog("dismiss_keyboard: \(dismissed ? "ok" : "failed")")
+            return HTTPResponse.success(["dismissed": dismissed])
 
         // ── Key ───────────────────────────────────────────────────────────────
         case ("POST", "/key"):
