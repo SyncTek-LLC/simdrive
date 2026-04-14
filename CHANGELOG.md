@@ -7,6 +7,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.2.1 (2026-04-14)
+
+### Critical Fix
+- fix(runner): Restore snapshot-based element query — per-element iteration via `allElementsBoundByIndex` hangs/crashes on iOS 26
+- `findByLabel`/`findByIdentifier` use XCTest subscript lookup (no element iteration)
+- Safe fallback to per-element query only when snapshot throws
+- 10/10 live smoke tests verified against real simulator ✅
+
+---
+
 ## v12.2.0 (2026-04-14)
 
 ### Test Architecture Overhaul
