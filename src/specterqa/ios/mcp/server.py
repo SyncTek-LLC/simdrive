@@ -11,7 +11,7 @@ Usage:
     specterqa ios serve          # via CLI serve command
 
 Tools (29 total):
-    ios_start_session       Start XCTest runner on the iOS Simulator
+    ios_start_session       Start XCTest runner on the iOS Simulator or physical device
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
     ios_tap                 Tap element by label (preferred) or index number
@@ -243,14 +243,18 @@ def handle_save_replay(arguments: dict) -> dict:
 
 
 def handle_start_session(arguments: dict) -> dict:
-    """Start the XCTest runner on the booted simulator.
+    """Start the XCTest runner on the booted simulator or a physical device.
 
     Args:
         bundle_id:   Bundle ID of the app under test (required).
-        device_id:   Source simulator UDID or "booted" (default "booted").
-        app_path:    Path to a .app bundle to install before starting (optional).
+        device_id:   Source simulator UDID, "booted" (default), or a physical
+                     device UDID when device_type="physical".
+        app_path:    Path to a .app bundle to install before starting (optional;
+                     ignored for physical devices — app must already be installed).
         license_key: SpecterQA license key (optional — falls back to
                      ``SPECTERQA_IOS_LICENSE`` env var; omit for trial mode).
+        device_type: "simulator" (default) or "physical".  Use "physical" to
+                     target a USB- or WiFi-connected iOS device.
 
     Returns:
         {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
@@ -279,6 +283,7 @@ def handle_start_session(arguments: dict) -> dict:
 
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
+        device_type = arguments.get("device_type", "simulator")
 
         # Auto-build runner if not built or stale (version marker mismatch).
         from specterqa.ios.session_manager import (
@@ -378,13 +383,15 @@ def handle_start_session(arguments: dict) -> dict:
                 bundle_id=bundle_id,
                 app_path=app_path,
                 clone=bool(clone),
+                device_type=device_type,
             )
             _session.start()
 
             port = _session._port
             runner_url = _session.runner_url
+            device_host = _session._device_host or "localhost"
 
-            _backend = XCTestBackend(port=port)
+            _backend = XCTestBackend(host=device_host, port=port)
             _annotator = SoMAnnotator(runner_url=runner_url)
             _last_elements = []
 
@@ -418,12 +425,18 @@ def handle_start_session(arguments: dict) -> dict:
             _network_inspector.setup_log_watcher(_console_monitor)
 
             _session_state = "running"
-            return {
+            response: dict = {
                 "status": "ok",
-                "clone_udid": _session._target_udid,
+                "device_type": device_type,
+                "target_udid": _session._target_udid,
                 "port": port,
                 "runner_url": runner_url,
             }
+            # Keep clone_udid for backwards compat
+            response["clone_udid"] = _session._target_udid
+            if device_type == "physical":
+                response["device_host"] = device_host
+            return response
         except Exception as exc:
             # Clean up partial state on failure
             _session = None
@@ -2167,17 +2180,26 @@ RECORDING WORKFLOW (best practice):
   4. ios_stop_recording(name="feature-name") → saves YAML + clears buffer
   5. Next flow: ios_start_recording() → repeat
 
+PHYSICAL DEVICE TESTING:
+- ios_start_session(bundle_id="com.app", device_type="physical") — targets a USB or WiFi-connected device
+- device_id defaults to "booted" (auto-detects first connected device); pass a specific UDID to target one device
+- The app must already be installed on the device before starting the session
+- Runner auto-deploys via xcodebuild (requires code signing configured in the Xcode project)
+- All MCP tools work identically on physical devices — same tap/type/screenshot API
+- For best performance data, use a physical device — ios_perf gives real CPU/memory under actual hardware constraints
+- Discovery: xcrun devicectl list devices -j shows all connected devices with their UDIDs
+
 LIMITATIONS:
-- Physical device support is NOT available yet — MCP sessions only target iOS Simulators
-- For real-device performance profiling, use xctrace directly:
+- Physical device runner requires code signing — ensure the Xcode project has a valid team/provisioning profile
+- For Instruments-grade profiling, use xctrace directly:
     xcrun xctrace record --device <UDID> --template 'Leaks' --attach <PID> --time-limit 30s --output /tmp/profile.trace
-  This gives Instruments-grade data (allocation graphs, leak detection, CPU flame graphs) that ios_perf cannot match.
-- ios_perf/ios_perf_compare give lightweight snapshots useful for regression detection on simulator, NOT production profiling
+  This gives allocation graphs, leak detection, CPU flame graphs that ios_perf cannot match.
+- ios_perf/ios_perf_compare give lightweight snapshots useful for regression detection, NOT production profiling
 
 PROVIDERS:
 - Local simulator (default) — requires macOS + Xcode 15+
+- Physical device — ios_start_session(device_type="physical") — USB or WiFi-connected device
 - BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + BROWSERSTACK_ACCESS_KEY
-- Physical device — coming soon (issue #46). For now, use xctrace for device profiling.
 - CI replay — specterqa-ios ci .specterqa/replays/ --json-output results.json
 
 SETUP CHECK:
@@ -2192,11 +2214,13 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_start_session",
         description=(
-            "Start the XCTest runner on the booted iOS Simulator. "
-            "Deploys directly to the booted sim — no cloning, full networking. "
+            "Start the XCTest runner on the booted iOS Simulator or a physical device. "
+            "Deploys directly to the target — no cloning, full networking. "
             "bundle_id is required (e.g. 'com.example.MyApp'). "
-            "device_id defaults to 'booted'. "
-            "app_path is an optional path to a .app bundle to install. "
+            "device_id defaults to 'booted' (simulator) or a specific UDID for physical devices. "
+            "device_type: 'simulator' (default) or 'physical' for a USB/WiFi-connected device. "
+            "For physical devices: the app must already be installed; runner auto-deploys via xcodebuild. "
+            "app_path is an optional path to a .app bundle to install (simulator only). "
             "license_key is optional — omit for trial mode or set to 'founder'."
         ),
     )
@@ -2206,6 +2230,7 @@ SETUP CHECK:
         app_path: str | None = None,
         license_key: str | None = None,
         clone: bool = False,
+        device_type: str = "simulator",
     ) -> str:
         result = handle_start_session(
             {
@@ -2214,6 +2239,7 @@ SETUP CHECK:
                 "app_path": app_path,
                 "license_key": license_key or "",
                 "clone": clone,
+                "device_type": device_type,
             }
         )
         return json.dumps(result)

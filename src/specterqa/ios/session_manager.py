@@ -1,8 +1,11 @@
-"""TestSession — Non-blocking iOS Simulator clone lifecycle manager.
+"""TestSession — iOS test session lifecycle manager.
 
-Clones the user's simulator, boots it headless, deploys the XCTest runner,
-and tears it down cleanly when the test is done.  The user's simulator and
-cursor are never touched.
+Manages simulator sessions (direct, clone) and physical device sessions.
+For simulators: clones the user's simulator, boots it headless, deploys the
+XCTest runner, and tears it down cleanly when the test is done.  The user's
+simulator and cursor are never touched.
+For physical devices: skips all simctl operations, deploys the runner via
+xcodebuild, and connects to the device over USB/WiFi.
 
 INIT-2026-506 — SpecterQA iOS v3 session manager.
 """
@@ -96,6 +99,41 @@ def write_version_marker(build_dir: Path) -> None:
 
 class SessionError(Exception):
     """Raised when a simulator session operation fails."""
+
+
+def _discover_physical_devices() -> list[dict]:
+    """List connected physical iOS devices via devicectl.
+
+    Returns:
+        List of dicts with keys: udid, name, model, os_version, identifier.
+        Empty list if devicectl is unavailable or no devices are connected.
+    """
+    try:
+        result = subprocess.run(
+            ["xcrun", "devicectl", "list", "devices", "-j"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout)
+        devices = []
+        for d in data.get("result", {}).get("devices", []):
+            transport = d.get("connectionProperties", {}).get("transportType", "")
+            if transport in ("wired", "localNetwork"):
+                devices.append(
+                    {
+                        "udid": d.get("hardwareProperties", {}).get("udid", ""),
+                        "name": d.get("deviceProperties", {}).get("name", ""),
+                        "model": d.get("hardwareProperties", {}).get("marketingName", ""),
+                        "os_version": d.get("deviceProperties", {}).get("osVersionNumber", ""),
+                        "identifier": d.get("identifier", ""),  # CoreDevice identifier
+                    }
+                )
+        return devices
+    except Exception:  # noqa: BLE001 — best-effort device discovery
+        return []
 
 
 def _find_free_port(start: int = 8222, end: int = 8231) -> int:
@@ -226,18 +264,21 @@ class TestSession:
         bundle_id: Optional[str] = None,
         runner_build_dir: Optional[Path] = None,
         clone: bool = False,
+        device_type: str = "simulator",  # "simulator" or "physical"
     ) -> None:
         self.source_udid = source_udid
         self.app_path = app_path
         self.bundle_id = bundle_id
         self.clone = clone
+        self.device_type = device_type
         self._runner_build_dir = runner_build_dir or _DEFAULT_RUNNER_BUILD_DIR
 
         self._clone_udid: Optional[str] = None
         self._clone_name: Optional[str] = None
         self._runner_process: Optional[subprocess.Popen] = None
         self._port: int = 8222
-        self._target_udid: Optional[str] = None  # the sim we actually deploy to
+        self._target_udid: Optional[str] = None  # the sim or device we actually deploy to
+        self._device_host: Optional[str] = None  # IP/hostname for physical device runner
 
     # ------------------------------------------------------------------
     # Public API
@@ -245,8 +286,13 @@ class TestSession:
 
     @property
     def runner_url(self) -> str:
-        """HTTP base URL to the running XCTest runner."""
-        return f"http://localhost:{self._port}"
+        """HTTP base URL to the running XCTest runner.
+
+        For simulators: always ``http://localhost:<port>``.
+        For physical devices: ``http://<device-ip>:<port>``.
+        """
+        host = self._device_host if self._device_host else "localhost"
+        return f"http://{host}:{self._port}"
 
     @property
     def clone_udid(self) -> Optional[str]:
@@ -374,16 +420,25 @@ class TestSession:
     def _start(self) -> None:
         """Internal start implementation (called by start() with error cleanup).
 
-        Two modes:
-        - **Direct mode** (default, ``clone=False``): Deploy runner directly to the
-          booted simulator.  Faster (~5s startup).  XCTest runner doesn't steal the
-          mouse — user can keep working.  App state is shared with the user's sim.
-        - **Clone mode** (``clone=True``): Clone the sim for full isolation.
-          Slower (~15s startup) but app state is disposable.  Use for CI or when
-          test actions (login, delete) would corrupt the user's data.
+        Three modes:
+        - **Direct mode** (default, ``clone=False``, ``device_type="simulator"``): Deploy
+          runner directly to the booted simulator.  Faster (~5s startup).  XCTest
+          runner doesn't steal the mouse — user can keep working.  App state is shared
+          with the user's sim.
+        - **Clone mode** (``clone=True``, ``device_type="simulator"``): Clone the sim
+          for full isolation.  Slower (~15s startup) but app state is disposable.  Use
+          for CI or when test actions (login, delete) would corrupt the user's data.
+        - **Physical device mode** (``device_type="physical"``): Skip all simctl
+          operations.  The app must already be installed on the device.  Runner is
+          deployed via xcodebuild (iphoneos SDK + code signing).  The runner HTTP
+          server is reached via the device's IP address.
         """
         # Step 0 — kill stale xcodebuild processes from previous sessions.
         self._kill_stale_runners()
+
+        if self.device_type == "physical":
+            self._start_physical_mode()
+            return
 
         # Step 1 — resolve "booted" to a real UDID.
         source = self._resolve_udid(self.source_udid)
@@ -490,6 +545,99 @@ class TestSession:
             _simctl("launch", self._clone_udid, self.bundle_id)
             time.sleep(2)
 
+    def _start_physical_mode(self) -> None:
+        """Deploy runner to a USB- or WiFi-connected physical iOS device.
+
+        Physical device rules:
+        - No simctl operations (no clone, no boot, no install via simctl).
+        - App must already be installed on the device.
+        - Runner is built with the ``iphoneos`` SDK and requires code signing.
+        - Runner HTTP server on the device is reached via the device's IP address.
+
+        Raises:
+            SessionError: If no device is connected, the runner cannot be
+                deployed, or the runner does not become healthy in time.
+        """
+        # Resolve UDID — auto-detect if not provided.
+        if self.source_udid and self.source_udid != "booted":
+            self._target_udid = self.source_udid
+        else:
+            devices = _discover_physical_devices()
+            if not devices:
+                raise SessionError(
+                    "No physical iOS device connected. "
+                    "Connect via USB or enable WiFi pairing in Xcode → Devices."
+                )
+            self._target_udid = devices[0]["udid"]
+            logger.info(
+                "Auto-detected physical device: %s (%s)",
+                devices[0]["name"],
+                self._target_udid,
+            )
+
+        logger.info("Physical device mode — target UDID: %s", self._target_udid)
+
+        # Find a free port on the Mac side (used as the forwarded port).
+        self._port = _find_free_port()
+
+        # Deploy runner — _deploy_runner reads self.device_type to pick iphoneos SDK.
+        self._deploy_runner()
+
+        # Resolve the device's reachable IP/hostname.
+        self._device_host = self._get_device_ip()
+        logger.info("Device host resolved to: %s", self._device_host)
+
+        health_url = f"{self.runner_url}/health"
+        logger.info("Waiting for physical device runner health at %s...", health_url)
+        # Physical devices may take longer — they need app launch + runner init.
+        _wait_for_health(health_url, timeout_s=90.0)
+        logger.info("Runner is healthy on physical device, port %d", self._port)
+
+    def _get_device_ip(self) -> str:
+        """Resolve the physical device's reachable hostname or IP address.
+
+        Queries devicectl for the device's connection hostname, then resolves
+        it to an IP via ``socket.gethostbyname``.  Falls back to the Bonjour
+        hostname ``<udid>.local`` if resolution fails.
+
+        Returns:
+            IP address string (e.g. ``"192.168.1.42"``), or the ``.local``
+            hostname as a last resort.
+        """
+        import socket
+
+        try:
+            result = subprocess.run(
+                ["xcrun", "devicectl", "list", "devices", "-j"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                for d in data.get("result", {}).get("devices", []):
+                    udid = d.get("hardwareProperties", {}).get("udid", "")
+                    if udid == self._target_udid:
+                        hostname = d.get("connectionProperties", {}).get("hostname", "")
+                        if hostname:
+                            try:
+                                ip = socket.gethostbyname(hostname)
+                                logger.debug("Resolved %s → %s", hostname, ip)
+                                return ip
+                            except OSError as exc:
+                                logger.warning(
+                                    "Could not resolve device hostname %r: %s — trying .local fallback",
+                                    hostname,
+                                    exc,
+                                )
+        except Exception as exc:  # noqa: BLE001 — best-effort resolution
+            logger.warning("Could not query devicectl for device IP: %s", exc)
+
+        # Bonjour fallback — works on USB-connected devices that broadcast mDNS.
+        fallback = f"{self._target_udid}.local"
+        logger.warning("Device IP resolution failed — falling back to %s", fallback)
+        return fallback
+
     def _resolve_udid(self, udid: str) -> str:
         """Resolve ``"booted"`` to the actual UDID of the booted simulator.
 
@@ -557,28 +705,43 @@ class TestSession:
             )
 
         build_dir.mkdir(parents=True, exist_ok=True)
-        logger.info("Auto-rebuilding runner from %s → %s", runner_dir, build_dir)
 
-        result = subprocess.run(
-            [
-                "xcodebuild",
-                "build-for-testing",
-                "-project",
-                str(xcodeproj),
-                "-scheme",
-                "SpecterQARunner",
-                "-sdk",
-                "iphonesimulator",
-                "-destination",
-                "generic/platform=iOS Simulator",
-                "-derivedDataPath",
-                str(build_dir),
+        # Physical devices require the iphoneos SDK and real code signing.
+        # Simulators use iphonesimulator SDK with identity=- (no signing).
+        is_physical = self.device_type == "physical"
+        sdk = "iphoneos" if is_physical else "iphonesimulator"
+        destination = "generic/platform=iOS" if is_physical else "generic/platform=iOS Simulator"
+
+        logger.info("Auto-rebuilding runner from %s → %s (sdk=%s)", runner_dir, build_dir, sdk)
+
+        cmd = [
+            "xcodebuild",
+            "build-for-testing",
+            "-project",
+            str(xcodeproj),
+            "-scheme",
+            "SpecterQARunner",
+            "-sdk",
+            sdk,
+            "-destination",
+            destination,
+            "-derivedDataPath",
+            str(build_dir),
+        ]
+
+        if not is_physical:
+            # Simulator builds don't need real signing.
+            cmd += [
                 "CODE_SIGN_IDENTITY=-",
                 "CODE_SIGNING_REQUIRED=NO",
                 "CODE_SIGNING_ALLOWED=YES",
                 "DEVELOPMENT_TEAM=",
                 "SUPPORTED_PLATFORMS=iphonesimulator",
-            ],
+            ]
+        # Physical device builds rely on Xcode's automatic signing configured in the project.
+
+        result = subprocess.run(
+            cmd,
             cwd=str(runner_dir),
             capture_output=True,
             text=True,
@@ -701,20 +864,25 @@ class TestSession:
     def _teardown(self) -> None:
         """Kill the runner process and clean up.
 
-        In direct mode: SIGKILL xcodebuild (not SIGTERM — SIGTERM triggers
-        xcodebuild's cleanup which shuts down the sim), then re-boot the sim
-        if xcodebuild killed it.
+        Physical device mode: SIGKILL xcodebuild only — no simctl operations.
+        The device state (app running, etc.) is left untouched.
 
-        In clone mode: shutdown and delete the clone.
+        Simulator direct mode: SIGKILL xcodebuild (not SIGTERM — SIGTERM
+        triggers xcodebuild's cleanup which shuts down the sim), then re-boot
+        the sim if xcodebuild killed it.
+
+        Simulator clone mode: shutdown and delete the clone.
         """
         target = self._target_udid
+        is_physical = self.device_type == "physical"
         is_direct = self._clone_udid is None
 
-        # Kill xcodebuild — use SIGKILL in direct mode to prevent it from
-        # shutting down the user's simulator during its cleanup sequence.
+        # Kill xcodebuild.
+        # Physical/direct: SIGKILL — don't let xcodebuild tear down the device/sim.
+        # Clone: SIGTERM — let xcodebuild clean up the clone.
         if self._runner_process is not None:
             try:
-                if is_direct:
+                if is_physical or is_direct:
                     self._runner_process.kill()  # SIGKILL — no cleanup
                 else:
                     self._runner_process.terminate()  # SIGTERM — let it clean up clone
@@ -722,6 +890,12 @@ class TestSession:
             except Exception as exc:
                 logger.warning("Could not stop runner process: %s", exc)
             self._runner_process = None
+
+        # Physical device: no further cleanup needed — device is untouched.
+        if is_physical:
+            self._target_udid = None
+            self._device_host = None
+            return
 
         # Clone mode: shutdown and delete the clone.
         if self._clone_udid is not None:
