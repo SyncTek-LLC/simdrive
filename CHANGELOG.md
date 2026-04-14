@@ -7,6 +7,24 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.4.0 (2026-04-14)
+
+### Crash-Proof: 27/27 Live Smoke Tests
+- 14 new crash pattern scenarios covering every known iOS 26 XCTest crash trigger
+- StressTab: LazyVStack recycling, List + 10 TextFields, nested 3-level Form, alert-over-field
+- UIKitBridgeTab: UIViewRepresentable TextField/Label/Button, NavigationLink to hybrid detail view
+- All crash patterns survived: List+TextField, LazyVStack scroll, nested Form, UIKit↔SwiftUI bridge, rapid tab switching, keyboard during transition, sheet over field, element query during animation, screenshot during animation
+
+### Runner Hardening
+- Removed `allElementsBoundByIndex` from web view element query — derives hittable from frame geometry
+- Removed `allElementsBoundByIndex` from dismiss-alert handler — uses `buttons.firstMatch` subscript
+- Added 200ms idle settle before element queries to prevent stale snapshot during view transitions
+- `findByLabel` and `findByIdentifier` use XCTest subscript exclusively (no element iteration)
+
+### Test Suite: 27 smoke + 47 integration + 13 regression + 4 packaging = 91 real tests
+
+---
+
 ## v12.3.0 (2026-04-14)
 
 ### TestKit: Palace Sign-In Pattern
