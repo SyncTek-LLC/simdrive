@@ -7,6 +7,17 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.2.0 (2026-04-14)
+
+### Test Architecture Overhaul
+- Deleted 38 mock test files (19,932 lines) that caught 0 bugs across 10 production regressions
+- 4-tier architecture: smoke (live sim), integration (real code paths), regression (pattern guards), packaging (wheel verification)
+- 9 test files, 2,472 lines, 102 tests — every one exercises real behavior
+- Mock-to-real ratio: 81% → 0%
+- 10/10 live smoke tests remain the release gate
+
+---
+
 ## v12.1.0 (2026-04-14)
 
 ### Test Harness — Live Simulator Testing Infrastructure
