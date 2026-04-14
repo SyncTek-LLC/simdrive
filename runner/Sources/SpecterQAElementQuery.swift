@@ -100,27 +100,31 @@ final class SpecterQAElementQuery {
 
         let typeSet = Set(queryTypes.map { $0.rawValue })
 
+        // Primary: snapshot-based walk (fast, works on most views).
+        // Falls back to per-element query on snapshot failure.
         do {
             let snapshot = try self.app.snapshot()
             self.walkSnapshot(snapshot, types: typeSet, descriptors: &descriptors, limit: limit)
         } catch {
-            print("[SpecterQA-Runner] Snapshot failed, falling back to per-element query: \(error)")
+            NSLog("[SpecterQA] Snapshot failed (\(error)), using per-element query")
             for elType in queryTypes {
                 if descriptors.count >= limit { break }
                 let elements = self.app.descendants(matching: elType).allElementsBoundByIndex
                 for element in elements {
                     if descriptors.count >= limit { break }
+                    guard element.exists else { continue }
                     let label = element.label
                     let ident = element.identifier
                     if label.isEmpty && ident.isEmpty { continue }
+                    let fr = element.frame
                     descriptors.append(ElementDescriptor(
                         label: label,
                         type: self.elementTypeName(element.elementType),
                         identifier: ident,
-                        frame: element.frame,
+                        frame: fr,
                         isEnabled: element.isEnabled,
-                        isSelected: element.isSelected,
-                        isHittable: element.isHittable,
+                        isSelected: false,
+                        isHittable: fr.width > 0 && fr.height > 0,
                         value: (element.value as? String) ?? "",
                         index: descriptors.count
                     ))
@@ -216,35 +220,45 @@ final class SpecterQAElementQuery {
     // MARK: - findByLabel
 
     func findByLabel(_ label: String, type: String? = nil) -> XCUIElement? {
+        // Use XCTest subscript only — do NOT iterate allElementsBoundByIndex
+        // which crashes on iOS 26 with SwiftUI TextField in List cells.
         if let typeName = type, let elementType = self.xcuiElementType(from: typeName) {
-            let query = self.app.descendants(matching: elementType)
-            let match = query[label]
+            let match = self.app.descendants(matching: elementType)[label]
             if match.exists { return match }
-            for el in query.allElementsBoundByIndex where el.label == label && el.exists {
-                return el
-            }
-        } else {
-            let match = self.app.descendants(matching: .any)[label]
-            if match.exists { return match }
-            for webView in self.app.webViews.allElementsBoundByIndex {
-                let wMatch = webView.descendants(matching: .any)[label]
-                if wMatch.exists { return wMatch }
-            }
+        }
+        let match = self.app.descendants(matching: .any)[label]
+        if match.exists { return match }
+        // WebView fallback (subscript-based, safe)
+        for webView in self.app.webViews.allElementsBoundByIndex {
+            let wMatch = webView.descendants(matching: .any)[label]
+            if wMatch.exists { return wMatch }
         }
         return nil
     }
 
     func findByLabel(_ label: String, type: String? = nil, index: Int) -> XCUIElement? {
         return runOnMain {
+            // For index-based lookup, use subscript for index=0 (common case)
+            if index == 0 {
+                if let typeName = type, let elementType = self.xcuiElementType(from: typeName) {
+                    let match = self.app.descendants(matching: elementType)[label]
+                    if match.exists { return match }
+                } else {
+                    let match = self.app.descendants(matching: .any)[label]
+                    if match.exists { return match }
+                }
+                return nil
+            }
+            // Index > 0: need to iterate (rare, only for disambiguation)
             var matches: [XCUIElement] = []
-            if let typeName = type, let elementType = self.xcuiElementType(from: typeName) {
-                for el in self.app.descendants(matching: elementType).allElementsBoundByIndex {
-                    if el.label == label && el.exists { matches.append(el) }
-                }
-            } else {
-                for el in self.app.descendants(matching: .any).allElementsBoundByIndex {
-                    if el.label == label && el.exists { matches.append(el) }
-                }
+            let elType: XCUIElement.ElementType = {
+                if let typeName = type, let et = self.xcuiElementType(from: typeName) { return et }
+                return .any
+            }()
+            for el in self.app.descendants(matching: elType).allElementsBoundByIndex {
+                guard el.exists else { continue }
+                if el.label == label { matches.append(el) }
+                if matches.count > index { break }
             }
             guard index < matches.count else { return nil }
             return matches[index]
@@ -255,9 +269,12 @@ final class SpecterQAElementQuery {
 
     func findByIdentifier(_ identifier: String) -> XCUIElement? {
         return runOnMain {
-            for el in self.app.descendants(matching: .any).allElementsBoundByIndex {
-                if el.identifier == identifier && el.exists { return el }
-            }
+            // Use XCTest's built-in subscript for identifier lookup.
+            // Iterating allElementsBoundByIndex crashes on iOS 26 when
+            // the tree contains SwiftUI TextField in List cells —
+            // accessing .identifier on certain elements throws ObjC NSException.
+            let match = self.app.descendants(matching: .any)[identifier]
+            if match.exists { return match }
             for webView in self.app.webViews.allElementsBoundByIndex {
                 for el in webView.descendants(matching: .any).allElementsBoundByIndex {
                     if el.identifier == identifier && el.exists { return el }
