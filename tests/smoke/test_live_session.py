@@ -59,6 +59,24 @@ def _dismiss_keyboard():
         return _post("/tap", {"x": 200, "y": 55})
 
 
+def _tap_tab(label):
+    """Tap a tab bar button by finding it in elements and using coordinate tap.
+
+    Element-based tap on tab bar buttons can crash when the destination
+    view triggers a complex accessibility tree rebuild (iOS 26 SIGABRT).
+    Coordinate tap is safe.
+    """
+    for el in _elements():
+        if el.get("label") == label and el.get("type") == "button":
+            f = el.get("frame", {})
+            if f.get("y", 0) > 700:  # tab bar is near bottom
+                cx = f.get("x", 0) + f.get("width", 0) / 2
+                cy = f.get("y", 0) + f.get("height", 0) / 2
+                return _tap(x=cx, y=cy)
+    # Fallback to label-based tap
+    return _tap(label=label)
+
+
 def _tap(label=None, identifier=None, x=None, y=None):
     payload = {}
     if label: payload["label"] = label
@@ -160,13 +178,13 @@ class TestTabNavigation:
         time.sleep(0.5)
 
         # Navigate to Nav tab
-        _tap(label="Nav")
+        _tap_tab("Nav")
         time.sleep(1.0)
         el = _find(identifier="lbl_nav_title")
         assert el is not None, "Nav tab title not found — cache not refreshed"
 
         # Navigate back to Form tab
-        _tap(label="Form")
+        _tap_tab("Form")
         time.sleep(1.0)
         el = _find(identifier="field_first_name")
         assert el is not None, "Form tab field not found after return"
@@ -180,7 +198,7 @@ class TestSheetDismiss:
         # Dismiss keyboard, then navigate to Nav tab
         _dismiss_keyboard()
         time.sleep(0.5)
-        _tap(label="Nav")
+        _tap_tab("Nav")
         time.sleep(0.5)
 
         _tap(identifier="btn_open_sheet")
@@ -194,7 +212,7 @@ class TestSheetDismiss:
         assert el is None, "Sheet didn't close"
 
         # Go back to form tab for other tests
-        _tap(label="Form")
+        _tap_tab("Form")
         time.sleep(0.5)
 
 
@@ -266,3 +284,85 @@ class TestFormSubmitEndToEnd:
         assert "Alice" in val, f"First name missing from result: {val!r}"
         assert "Smith" in val, f"Last name missing from result: {val!r}"
         assert "set" in val, f"Password not confirmed: {val!r}"
+
+
+@requires_live
+class TestListNavigation:
+    """Scenario 10: navigate to List tab without crashing the runner."""
+
+    def test_navigate_to_list_tab(self):
+        """The Palace crash: navigating to a SwiftUI List with TextField rows
+        caused the runner to crash via snapshot/element query.
+        This test verifies the runner survives the navigation."""
+        _dismiss_keyboard()
+        time.sleep(0.5)
+        _tap_tab("List")
+        time.sleep(1.0)
+
+        # Runner must still be alive
+        data = _get("/health")
+        assert data.get("status") == "ok", "Runner crashed after navigating to List tab"
+
+        # Elements must be queryable
+        els = _elements()
+        assert len(els) > 0, "Empty element list on List tab"
+
+    def test_list_elements_include_text_fields(self):
+        """List tab must expose barcode and PIN fields."""
+        _dismiss_keyboard()
+        time.sleep(0.5)
+        _tap_tab("List")
+        time.sleep(1.0)
+
+        barcode = _find(identifier="list_field_barcode")
+        pin = _find(identifier="list_field_pin")
+        signin = _find(identifier="list_btn_signin")
+        assert barcode is not None, "list_field_barcode not found — TextField in List not exposed"
+        assert pin is not None, "list_field_pin not found — SecureField in List not exposed"
+        assert signin is not None, "list_btn_signin not found"
+
+
+@requires_live
+class TestListFormTyping:
+    """Scenario 11: type into TextField and SecureField inside a List (Palace pattern)."""
+
+    def test_list_multi_field_typing(self):
+        """The core Palace regression: type into two fields inside a List."""
+        _dismiss_keyboard()
+        time.sleep(0.5)
+        _tap_tab("List")
+        time.sleep(1.0)
+
+        # Type barcode
+        _type("12345678", identifier="list_field_barcode")
+        time.sleep(0.5)
+
+        # Type PIN
+        barcode_el = _find(identifier="list_field_barcode")
+        pin_el = _find(identifier="list_field_pin")
+
+        if pin_el is not None:
+            frame = pin_el.get("frame", {})
+            cx = frame.get("x", 0) + frame.get("width", 0) / 2
+            cy = frame.get("y", 0) + frame.get("height", 0) / 2
+            _type("9999", x=cx, y=cy)
+            time.sleep(0.5)
+
+        # Tap Sign In
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap(identifier="list_btn_signin")
+        time.sleep(1.0)
+
+        # Verify result
+        result = _find(identifier="list_lbl_result")
+        assert result is not None, "List sign-in result not found"
+        val = str(result.get("label", "") or result.get("value", ""))
+        assert "12345678" in val, f"Barcode not in result: {val!r}"
+        assert "set" in val, f"PIN not confirmed: {val!r}"
+
+        # Navigate back to Form tab for other tests
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("Form")
+        time.sleep(0.5)
