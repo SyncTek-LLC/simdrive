@@ -7,6 +7,23 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.5.0 (2026-04-14)
+
+### Agent-First: Complete MCP Instructions + Perf Workflow Tools
+- MCP server `instructions` rewritten as a complete agent guide: workflow, perf testing, debugging, form typing, common pitfalls
+- `ios_perf_baseline` — capture reference metrics before testing
+- `ios_perf_compare` — compare current vs baseline with delta calculation and severity assessment (HIGH/MEDIUM/OK)
+- Agents can now run structured performance tests without human guidance
+- 29 MCP tools total
+
+### Performance Testing Guide (in MCP instructions)
+- RSS thresholds: <100MB good, 100-200MB normal, >300MB investigate, >500MB critical
+- Memory leak detection: monotonic RSS growth across repeated actions = leak
+- CPU time interpretation: >2s delta for simple action = perf issue
+- Thread count: <20 normal, >50 = thread leak
+
+---
+
 ## v12.4.0 (2026-04-14)
 
 ### Crash-Proof: 27/27 Live Smoke Tests
