@@ -105,6 +105,8 @@ class ProjectInjector:
         Raises:
             ProjectInjectorError: When xcodebuild exits non-zero.
         """
+        is_device = "platform=iOS," in self.destination and "Simulator" not in self.destination
+        sdk = "iphoneos" if is_device else "iphonesimulator"
         result = subprocess.run(
             [
                 "xcodebuild",
@@ -114,7 +116,7 @@ class ProjectInjector:
                 "-scheme",
                 self.scheme,
                 "-sdk",
-                "iphonesimulator",
+                sdk,
             ],
             capture_output=True,
             text=True,
@@ -234,6 +236,10 @@ class ProjectInjector:
 
         derived_data = build_dir / "DerivedData"
 
+        # Pick SDK based on destination — physical device needs iphoneos
+        is_device = "platform=iOS," in self.destination and "Simulator" not in self.destination
+        sdk = "iphoneos" if is_device else "iphonesimulator"
+
         cmd = [
             "xcodebuild",
             "build-for-testing",
@@ -242,7 +248,7 @@ class ProjectInjector:
             "-scheme",
             "SpecterQARunner",
             "-sdk",
-            "iphonesimulator",
+            sdk,
             "-destination",
             self.destination,
             "-derivedDataPath",
@@ -250,6 +256,16 @@ class ProjectInjector:
             "-xcconfig",
             str(xcconfig),
         ]
+
+        # For physical devices, override team and signing
+        if is_device:
+            team = settings.get("DEVELOPMENT_TEAM", "")
+            if team:
+                cmd.extend([f"DEVELOPMENT_TEAM={team}"])
+            cmd.extend([
+                "CODE_SIGN_STYLE=Automatic",
+                "CODE_SIGN_IDENTITY=Apple Development",
+            ])
 
         if verbose:
             logger.info("[specterqa] Building runner for %s...", bundle_id)
