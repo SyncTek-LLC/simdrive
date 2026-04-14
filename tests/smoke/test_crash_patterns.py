@@ -212,7 +212,7 @@ class TestLazyVStackScrollRecycling:
         time.sleep(1.0)
 
         # Scroll down: swipe from bottom-third to top-third of screen
-        _post("/swipe", {"startX": 200, "startY": 600, "endX": 200, "endY": 200})
+        _post("/swipe", {"fromX": 200, "fromY": 600, "toX": 200, "toY": 200})
         time.sleep(0.8)
 
         # Query elements post-scroll — re-registration must not have crashed runner
