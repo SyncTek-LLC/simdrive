@@ -6,6 +6,9 @@ struct ContentView: View {
             FormTab()
                 .tabItem { Label("Form", systemImage: "doc.text") }
                 .accessibilityIdentifier("tab_form")
+            ListTab()
+                .tabItem { Label("List", systemImage: "list.bullet") }
+                .accessibilityIdentifier("tab_list")
             NavigationTab()
                 .tabItem { Label("Nav", systemImage: "arrow.right") }
                 .accessibilityIdentifier("tab_nav")
