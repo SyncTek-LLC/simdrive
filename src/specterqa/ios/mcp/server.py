@@ -2167,9 +2167,17 @@ RECORDING WORKFLOW (best practice):
   4. ios_stop_recording(name="feature-name") → saves YAML + clears buffer
   5. Next flow: ios_start_recording() → repeat
 
+LIMITATIONS:
+- Physical device support is NOT available yet — MCP sessions only target iOS Simulators
+- For real-device performance profiling, use xctrace directly:
+    xcrun xctrace record --device <UDID> --template 'Leaks' --attach <PID> --time-limit 30s --output /tmp/profile.trace
+  This gives Instruments-grade data (allocation graphs, leak detection, CPU flame graphs) that ios_perf cannot match.
+- ios_perf/ios_perf_compare give lightweight snapshots useful for regression detection on simulator, NOT production profiling
+
 PROVIDERS:
 - Local simulator (default) — requires macOS + Xcode 15+
 - BrowserStack (auto-detected) — set BROWSERSTACK_USERNAME + BROWSERSTACK_ACCESS_KEY
+- Physical device — coming soon (issue #46). For now, use xctrace for device profiling.
 - CI replay — specterqa-ios ci .specterqa/replays/ --json-output results.json
 
 SETUP CHECK:
