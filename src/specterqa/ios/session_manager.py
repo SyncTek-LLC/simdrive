@@ -109,15 +109,18 @@ def _discover_physical_devices() -> list[dict]:
         Empty list if devicectl is unavailable or no devices are connected.
     """
     try:
+        import tempfile
+        json_out = Path(tempfile.mktemp(suffix=".json"))
         result = subprocess.run(
-            ["xcrun", "devicectl", "list", "devices", "-j"],
+            ["xcrun", "devicectl", "list", "devices", "--json-output", str(json_out)],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if result.returncode != 0:
+        if result.returncode != 0 or not json_out.exists():
             return []
-        data = json.loads(result.stdout)
+        data = json.loads(json_out.read_text())
+        json_out.unlink(missing_ok=True)
         devices = []
         for d in data.get("result", {}).get("devices", []):
             transport = d.get("connectionProperties", {}).get("transportType", "")
@@ -577,20 +580,37 @@ class TestSession:
 
         logger.info("Physical device mode — target UDID: %s", self._target_udid)
 
-        # Find a free port on the Mac side (used as the forwarded port).
+        # Find a free port on the Mac side for iproxy forwarding.
         self._port = _find_free_port()
+        # The runner on the device always binds to 8222.
+        device_port = 8222
 
         # Deploy runner — _deploy_runner reads self.device_type to pick iphoneos SDK.
         self._deploy_runner()
 
-        # Resolve the device's reachable IP/hostname.
-        self._device_host = self._get_device_ip()
-        logger.info("Device host resolved to: %s", self._device_host)
+        # Start iproxy: forward localhost:PORT → device:8222 via USB.
+        # This is the ONLY reliable way to reach the runner on a physical device —
+        # direct IP (tunnelIPAddress) is IPv6-only and often not routable.
+        try:
+            self._iproxy_process = subprocess.Popen(
+                ["iproxy", f"{self._port}:{device_port}", "-u", self._target_udid],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("iproxy started: localhost:%d → device:%d (UDID=%s)", self._port, device_port, self._target_udid)
+        except FileNotFoundError:
+            raise SessionError(
+                "iproxy not found. Install with: brew install libimobiledevice\n"
+                "iproxy forwards the device's runner port to localhost via USB."
+            )
+
+        # Physical device: runner is on localhost via iproxy, same as simulator.
+        self._device_host = "localhost"
 
         health_url = f"{self.runner_url}/health"
         logger.info("Waiting for physical device runner health at %s...", health_url)
-        # Physical devices may take longer — they need app launch + runner init.
-        _wait_for_health(health_url, timeout_s=90.0)
+        # Physical devices take longer: app launch + runner init + iproxy setup.
+        _wait_for_health(health_url, timeout_s=120.0)
         logger.info("Runner is healthy on physical device, port %d", self._port)
 
     def _get_device_ip(self) -> str:
@@ -607,18 +627,25 @@ class TestSession:
         import socket
 
         try:
+            import tempfile as _tf
+            _json_out = Path(_tf.mktemp(suffix=".json"))
             result = subprocess.run(
-                ["xcrun", "devicectl", "list", "devices", "-j"],
+                ["xcrun", "devicectl", "list", "devices", "--json-output", str(_json_out)],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
+            if result.returncode == 0 and _json_out.exists():
+                data = json.loads(_json_out.read_text())
+                _json_out.unlink(missing_ok=True)
                 for d in data.get("result", {}).get("devices", []):
                     udid = d.get("hardwareProperties", {}).get("udid", "")
                     if udid == self._target_udid:
-                        hostname = d.get("connectionProperties", {}).get("hostname", "")
+                        # Prefer tunnelIPAddress (direct), fall back to hostname
+                        hostname = (
+                            d.get("connectionProperties", {}).get("tunnelIPAddress", "")
+                            or d.get("connectionProperties", {}).get("hostname", "")
+                        )
                         if hostname:
                             try:
                                 ip = socket.gethostbyname(hostname)
@@ -876,6 +903,16 @@ class TestSession:
         target = self._target_udid
         is_physical = self.device_type == "physical"
         is_direct = self._clone_udid is None
+
+        # Kill iproxy if running (physical device port forwarding).
+        iproxy = getattr(self, "_iproxy_process", None)
+        if iproxy is not None:
+            try:
+                iproxy.kill()
+                iproxy.wait(timeout=3)
+            except Exception:
+                pass
+            self._iproxy_process = None
 
         # Kill xcodebuild.
         # Physical/direct: SIGKILL — don't let xcodebuild tear down the device/sim.
