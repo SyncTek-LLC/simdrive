@@ -1,0 +1,61 @@
+name: Smoke Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  unit-and-regression:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev,mcp]"
+      - name: Regression tests
+        run: pytest tests/test_regression.py -v --tb=short
+      - name: Packaging tests
+        run: pytest tests/test_packaging.py -v --tb=short
+
+  live-smoke:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev,mcp]"
+      - name: Boot simulator
+        run: |
+          RUNTIME=$(xcrun simctl list runtimes iOS -j | python3 -c "import json,sys; rs=json.load(sys.stdin)['runtimes']; print(rs[-1]['identifier'])")
+          UDID=$(xcrun simctl create "TestKit" "iPhone 16 Pro" "$RUNTIME")
+          xcrun simctl boot "$UDID"
+          echo "SIM_UDID=$UDID" >> $GITHUB_ENV
+      - name: Build and install TestKitApp
+        run: |
+          cd TestKitApp
+          chmod +x build.sh
+          ./build.sh "$SIM_UDID"
+      - name: Build SpecterQA runner
+        run: specterqa-ios runner build
+      - name: Start session
+        run: |
+          SPECTERQA_IOS_LICENSE=founder specterqa-ios session start \
+            --bundle-id io.synctek.specterqa.testkit \
+            --device-id "$SIM_UDID" &
+          sleep 15
+      - name: Run live smoke tests
+        run: pytest tests/smoke/ -v -m live --tb=short
+      - name: Stop session
+        if: always()
+        run: specterqa-ios session stop 2>/dev/null || true
+      - name: Shutdown simulator
+        if: always()
+        run: xcrun simctl shutdown "$SIM_UDID" 2>/dev/null || true
