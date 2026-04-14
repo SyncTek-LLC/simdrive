@@ -689,6 +689,10 @@ final class HTTPServer {
             guard let eq = elementQuery else {
                 return HTTPResponse.error("element query not available", code: 503)
             }
+            // Brief settle wait — lets in-progress SwiftUI animations complete
+            // before we request a snapshot, preventing stale tree reads during
+            // view transitions (e.g., NavigationLink push, tab switch).
+            Thread.sleep(forTimeInterval: 0.2)
             let limit = Int(request.query["limit"] ?? "200") ?? 200
             let types = request.query["types"]
             let elements = eq.queryAll(limit: limit, types: types)
@@ -788,11 +792,14 @@ final class HTTPServer {
                         return
                     }
                 }
-                // Last resort: first non-denial button
+                // Last resort: first non-denial button — use firstMatch subscript
+                // rather than allElementsBoundByIndex + isHittable, which can crash
+                // on iOS 26 when the alert tree contains SwiftUI-bridged elements.
                 let denials: Set<String> = ["Don't Allow", "Deny", "Cancel", "Not Now", "Never"]
-                for btn in target.buttons.allElementsBoundByIndex where !denials.contains(btn.label) && btn.isHittable {
-                    btn.tap()
-                    dismissResult = HTTPResponse.success(["dismissed_via": btn.label, "fallback": true])
+                let fallback = target.buttons.firstMatch
+                if fallback.exists && !denials.contains(fallback.label) {
+                    fallback.tap()
+                    dismissResult = HTTPResponse.success(["dismissed_via": fallback.label, "fallback": true])
                     return
                 }
                 dismissResult = HTTPResponse.error("Alert found but no tappable dismiss button")

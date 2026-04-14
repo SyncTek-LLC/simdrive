@@ -12,6 +12,12 @@ struct ContentView: View {
             NavigationTab()
                 .tabItem { Label("Nav", systemImage: "arrow.right") }
                 .accessibilityIdentifier("tab_nav")
+            StressTab()
+                .tabItem { Label("Stress", systemImage: "flame") }
+                .accessibilityIdentifier("tab_stress")
+            UIKitBridgeTab()
+                .tabItem { Label("Bridge", systemImage: "arrow.left.arrow.right") }
+                .accessibilityIdentifier("tab_bridge")
         }
     }
 }
