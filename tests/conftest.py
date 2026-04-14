@@ -22,6 +22,12 @@ import pytest
 _REPO_ROOT = Path(__file__).parent.parent
 
 
+@pytest.fixture
+def repo_root() -> Path:
+    """Return the repository root as a Path. Available to all test tiers."""
+    return _REPO_ROOT
+
+
 @pytest.fixture(scope="session")
 def fresh_install(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build a clean editable install and return the repo root path.
