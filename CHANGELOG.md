@@ -7,6 +7,21 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.5.1 (2026-04-14)
+
+### Cleanup
+- Physical device references removed from MCP API and documentation (blocked by Xcode 26 beta — implementation preserved for GM)
+- MCP instructions clarified: simulator-only for now, xctrace recommended for device profiling
+- Runner hardening: removed allElementsBoundByIndex from web view + dismiss-alert paths
+- 200ms idle settle before element queries prevents stale snapshot during transitions
+
+### Verified
+- 27/27 live smoke tests passing (14 crash patterns + 13 functional)
+- 101 regression/integration tests passing
+- 29 MCP tools, agent-first instructions
+
+---
+
 ## v12.5.0 (2026-04-14)
 
 ### Agent-First: Complete MCP Instructions + Perf Workflow Tools
