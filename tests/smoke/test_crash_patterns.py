@@ -269,7 +269,7 @@ class TestUIKitSwiftUIBridge:
         """Navigate to Bridge tab — runner must not crash on hosting controller swap."""
         _dismiss_keyboard()
         time.sleep(0.5)
-        _tap_tab("Bridge")
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Bridge")
         time.sleep(1.0)
 
         _assert_runner_alive("navigation to Bridge tab")
@@ -278,7 +278,7 @@ class TestUIKitSwiftUIBridge:
         """Bridge tab must expose a UIKit-backed TextField via accessibility."""
         _dismiss_keyboard()
         time.sleep(0.5)
-        _tap_tab("Bridge")
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Bridge")
         time.sleep(1.0)
 
         els = _elements()
@@ -297,7 +297,7 @@ class TestUIKitSwiftUIBridge:
         """Type into UIKit-wrapped TextField on Bridge tab; runner survives."""
         _dismiss_keyboard()
         time.sleep(0.5)
-        _tap_tab("Bridge")
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Bridge")
         time.sleep(1.0)
 
         bridge_field = _find(identifier="bridge_uikit_field")
@@ -346,16 +346,14 @@ class TestRapidTabSwitching:
         _dismiss_keyboard()
         time.sleep(0.5)
 
-        tab_sequence = ["Form", "List", "Stress", "Bridge", "Nav", "Form"]
+        # Only use directly visible tabs (not behind More menu)
+        tab_sequence = ["Form", "List", "Nav", "Stress", "List", "Form"]
         for tab in tab_sequence:
             _tap_tab(tab)
-            # Minimal sleep — enough for the tap to register but tight enough
-            # to catch races between the transition animation and /health poll.
             time.sleep(0.15)
 
-        # One final settle before health check
         time.sleep(0.5)
-        _assert_runner_alive("rapid tab switching (Form→List→Stress→Bridge→Nav→Form)")
+        _assert_runner_alive("rapid tab switching (Form→List→Nav→Stress→List→Form)")
 
 
 # ---------------------------------------------------------------------------
@@ -522,5 +520,203 @@ class TestScreenshotDuringTransition:
         _assert_runner_alive("screenshot during tab transition animation")
 
         # Return to Form
+        _tap_tab("Form")
+        time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Dogfood Issue 1: Runner survives rapid state changes
+# ---------------------------------------------------------------------------
+
+@requires_live
+class TestNotificationFloodResilience:
+    """Dogfood Issue 1: runner crashes during rapid UI state mutations.
+
+    The crash is in XCTest's debug logging (NSKeyedArchiver) when the app
+    fires rapid NotificationCenter posts. We test this by triggering
+    multiple rapid taps and element queries in quick succession.
+    """
+
+    def test_rapid_tap_sequence_survives(self):
+        """Fire 10 taps in quick succession — runner must not crash."""
+        _dismiss_keyboard()
+        time.sleep(0.5)
+        _tap_tab("Form")
+        time.sleep(0.5)
+
+        for i in range(10):
+            _tap(x=200, y=300 + (i * 10))  # rapid coordinate taps
+            # NO sleep — stress the runner
+
+        time.sleep(1.0)
+        _assert_runner_alive("rapid 10-tap sequence")
+
+    def test_rapid_element_queries_survives(self):
+        """Fire 10 element queries in quick succession."""
+        for i in range(10):
+            _elements()  # no sleep between queries
+
+        _assert_runner_alive("rapid 10 element queries")
+
+    def test_tap_type_screenshot_burst_survives(self):
+        """Mixed operation burst: tap + type + elements in rapid succession."""
+        _tap(identifier="field_first_name")
+        _type("BURST", identifier="field_first_name")
+        _elements()
+        _tap(identifier="field_last_name")
+        _type("TEST", identifier="field_last_name")
+        _elements()
+        _tap(identifier="btn_submit")
+        _elements()
+
+        time.sleep(1.0)
+        _assert_runner_alive("mixed operation burst")
+
+
+# ---------------------------------------------------------------------------
+# Dogfood Issue 2: Screenshot parsing resilience
+# ---------------------------------------------------------------------------
+
+@requires_live
+class TestScreenshotParsing:
+    """Dogfood Issue 2: ios_screenshot must handle all quality levels
+    and return valid JPEG data that PIL can decode."""
+
+    def test_screenshot_standard_returns_valid_jpeg(self):
+        import base64
+        data = _get("/screenshot")
+        result = data.get("result", {}) if isinstance(data.get("result"), dict) else {}
+        b64 = result.get("data") or data.get("image") or ""
+        assert b64, f"No image data in response: {list(data.keys())}"
+        raw = base64.b64decode(b64)
+        assert raw[:3] == b'\xff\xd8\xff', f"Not JPEG: {raw[:4].hex()}"
+
+    def test_screenshot_after_navigation_survives(self):
+        """Screenshot on a different tab — must not crash."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("List")
+        time.sleep(1.0)
+        data = _get("/screenshot")
+        _assert_runner_alive("screenshot on List tab")
+        result = data.get("result", {}) if isinstance(data.get("result"), dict) else {}
+        b64 = result.get("data") or ""
+        assert len(b64) > 100, "Screenshot data too small after navigation"
+
+        # Return to Form
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("Form")
+        time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Dogfood Issue 1 (Example Reader-specific): State mutation + notification cascade
+# ---------------------------------------------------------------------------
+
+@requires_live
+class TestExample ReaderNotificationCascade:
+    """Reproduces the Example Reader crash: state-mutating operations fire rapid
+    NotificationCenter posts that crash XCTest's debug logging.
+
+    The Example ReaderPatternTab simulates borrow/download/return/library-switch
+    with the same notification patterns as Example Reader.
+    """
+
+    def test_borrow_flow_survives(self):
+        """Tap Borrow — fires 5 rapid notifications. Runner must survive."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Example Reader")
+        time.sleep(1.0)
+
+        _tap(identifier="example_btn_borrow")
+        time.sleep(2.0)  # wait for async completion
+
+        _assert_runner_alive("Example Reader borrow flow")
+
+        # Verify state changed
+        el = _find(identifier="example_book_state")
+        assert el is not None, "example_book_state not found"
+        val = str(el.get("label", "") or el.get("value", ""))
+        assert "borrowed" in val.lower(), f"Expected 'borrowed', got: {val!r}"
+
+    def test_download_flow_survives(self):
+        """Tap Download — fires rapid Combine progress updates + notifications."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Example Reader")
+        time.sleep(0.5)
+
+        # Borrow first
+        _tap(identifier="example_btn_borrow")
+        time.sleep(1.5)
+
+        # Download — rapid progress updates via Combine
+        _tap(identifier="example_btn_download")
+        time.sleep(3.0)  # wait for simulated download (20 progress ticks × 100ms)
+
+        _assert_runner_alive("Example Reader download flow")
+
+        el = _find(identifier="example_book_state")
+        assert el is not None
+        val = str(el.get("label", "") or el.get("value", ""))
+        assert "ready" in val.lower(), f"Expected 'ready', got: {val!r}"
+
+    def test_return_flow_survives(self):
+        """Tap Return — fires notification cascade during state transition."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Example Reader")
+        time.sleep(0.5)
+
+        _tap(identifier="example_btn_return")
+        time.sleep(1.0)
+
+        _assert_runner_alive("Example Reader return flow")
+
+    def test_notification_flood_10_rapid_survives(self):
+        """Fire 10 notifications in burst — the exact Example Reader crash trigger."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Example Reader")
+        time.sleep(0.5)
+
+        _tap(identifier="example_btn_fire_notifications")
+        time.sleep(1.0)
+
+        _assert_runner_alive("10-notification flood")
+
+        el = _find(identifier="example_notification_count")
+        assert el is not None
+        val = str(el.get("label", "") or el.get("value", ""))
+        assert int("".join(c for c in val if c.isdigit())) >= 10, f"Expected >= 10 notifications, got: {val!r}"
+
+    def test_library_switch_modal_survives(self):
+        """Open library switch sheet (UIKit VC in SwiftUI) — runner must survive."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("More"); time.sleep(0.5); _tap(label="Example Reader")
+        time.sleep(0.5)
+
+        _tap(identifier="example_btn_switch_library")
+        time.sleep(1.5)
+
+        _assert_runner_alive("Example Reader library switch modal")
+
+        # Verify the UIKit table view is visible
+        els = _elements()
+        has_library = any("Library" in str(e.get("label", "")) for e in els)
+        assert has_library, "Library list not visible after opening sheet"
+
+        # Select a library (fires notification cascade + dismisses sheet)
+        _tap(identifier="example_library_0")
+        time.sleep(2.0)
+
+        _assert_runner_alive("Example Reader library selection + notification cascade")
+
+        # Return to Form tab
+        _dismiss_keyboard()
+        time.sleep(0.3)
         _tap_tab("Form")
         time.sleep(0.5)

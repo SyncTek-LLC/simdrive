@@ -18,6 +18,9 @@ struct ContentView: View {
             UIKitBridgeTab()
                 .tabItem { Label("Bridge", systemImage: "arrow.left.arrow.right") }
                 .accessibilityIdentifier("tab_bridge")
+            Example ReaderPatternTab()
+                .tabItem { Label("Example Reader", systemImage: "books.vertical") }
+                .accessibilityIdentifier("tab_example")
         }
     }
 }
