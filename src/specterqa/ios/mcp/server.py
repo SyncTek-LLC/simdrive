@@ -118,8 +118,15 @@ def _get_annotated_screenshot() -> tuple[str, list]:
     _require_session()
 
     result = _backend.screenshot()
-    # The runner may return the image under 'base64', 'data', or 'image'.
-    b64 = result.get("base64") or result.get("data") or result.get("image", "")
+    # v2 runner wraps image data under result["result"]["data"].
+    # v1 fallback returns it at the top level under "base64", "data", or "image".
+    nested = result.get("result") if isinstance(result.get("result"), dict) else {}
+    b64 = (
+        nested.get("data")
+        or result.get("base64")
+        or result.get("data")
+        or result.get("image", "")
+    )
     img_w = result.get("width", 390)
     img_h = result.get("height", 844)
 
