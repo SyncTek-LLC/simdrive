@@ -316,6 +316,93 @@ class AXBackend:
         return best_elem
 
     # ------------------------------------------------------------------
+    # Tab bar probing (iOS 26+ workaround)
+    # ------------------------------------------------------------------
+
+    def _get_tab_bar_buttons(self) -> list[dict]:
+        """Probe the tab bar area using AXUIElementCopyElementAtPosition.
+
+        On iOS 26 the tab bar buttons are ``AXRadioButton`` elements accessible
+        via position lookup, but they are NOT exposed as children of the
+        ``AXGroup desc="Tab Bar"`` node.  This method sweeps x-positions along
+        the tab bar's y-centre to collect all distinct buttons.
+
+        Returns:
+            List of element dicts (same shape as :meth:`get_elements` output)
+            for each distinct tab button found.
+        """
+        # Find the Tab Bar AXGroup to get its screen frame.
+        root = self._ios_content_group or self._root
+        tab_bar_frame: dict | None = None
+        for child in self._ax_children(root):
+            desc = self._ax_attr(child, "AXDescription") or ""
+            if "Tab Bar" in desc:
+                tab_bar_frame = self._ax_frame(child)
+                break
+
+        if tab_bar_frame is None:
+            return []
+
+        try:
+            from ApplicationServices import AXUIElementCopyElementAtPosition  # type: ignore[import]
+        except ImportError:
+            return []
+
+        bar_x = tab_bar_frame["x"]
+        bar_y = tab_bar_frame["y"]
+        bar_w = tab_bar_frame["width"]
+        bar_h = tab_bar_frame["height"]
+        center_y = bar_y + bar_h / 2
+
+        # Sweep x positions in small increments to find all radio buttons.
+        step = max(1.0, bar_w / 40)  # ~40 samples across the bar
+        seen_labels: set[str] = set()
+        buttons: list[dict] = []
+
+        x = bar_x + step / 2
+        while x < bar_x + bar_w:
+            with _ax_lock:
+                err, el = AXUIElementCopyElementAtPosition(self._root, x, center_y, None)
+            if err == 0 and el is not None:
+                role = self._ax_attr(el, "AXRole") or ""
+                if role == "AXRadioButton":
+                    label = (
+                        self._ax_attr(el, "AXDescription")
+                        or self._ax_attr(el, "AXTitle")
+                        or self._ax_attr(el, "AXLabel")
+                        or ""
+                    )
+                    label_str = str(label) if label else ""
+                    if label_str and label_str not in seen_labels:
+                        seen_labels.add(label_str)
+                        # Build a frame for this button.
+                        ax_frame = self._ax_frame(el)
+                        if ax_frame is None:
+                            ax_frame = {
+                                "x": x - step / 2,
+                                "y": center_y - bar_h / 2,
+                                "width": step,
+                                "height": bar_h,
+                            }
+                        device_frame = self._ax_to_device(ax_frame)
+                        ident = str(self._ax_attr(el, "AXIdentifier") or "")
+                        buttons.append(
+                            {
+                                "type": "button",
+                                "typeLabel": "button",
+                                "label": label_str,
+                                "identifier": ident,
+                                "value": "",
+                                "enabled": True,
+                                "hittable": True,
+                                "frame": device_frame,
+                            }
+                        )
+            x += step
+
+        return buttons
+
+    # ------------------------------------------------------------------
     # Coordinate conversion
     # ------------------------------------------------------------------
 
@@ -362,7 +449,7 @@ class AXBackend:
         element: Any,
         results: list[dict],
         depth: int = 0,
-        max_depth: int = 10,
+        max_depth: int = 20,
         limit: int = 200,
     ) -> None:
         """Recursively walk the AX tree from *element*, appending to *results*.
@@ -371,7 +458,7 @@ class AXBackend:
             element:   Current AX element to inspect.
             results:   Accumulator list (mutated in-place).
             depth:     Current recursion depth.
-            max_depth: Maximum depth to descend.
+            max_depth: Maximum depth to descend (default 20 for deep List/SwiftUI trees).
             limit:     Stop collecting once this many elements are found.
         """
         if len(results) >= limit:
@@ -382,7 +469,13 @@ class AXBackend:
         role = self._ax_attr(element, "AXRole") or ""
         ios_type = AX_ROLE_MAP.get(role, "other")
 
-        label = self._ax_attr(element, "AXDescription") or self._ax_attr(element, "AXLabel") or ""
+        # AXDescription is primary; fall back to AXTitle (tab buttons) then AXLabel.
+        label = (
+            self._ax_attr(element, "AXDescription")
+            or self._ax_attr(element, "AXTitle")
+            or self._ax_attr(element, "AXLabel")
+            or ""
+        )
         identifier = self._ax_attr(element, "AXIdentifier") or ""
         value = self._ax_attr(element, "AXValue")
         value_str = str(value) if value is not None else ""
@@ -431,6 +524,10 @@ class AXBackend:
         ``value``, ``enabled``, ``hittable``, ``frame`` — compatible with
         :meth:`~specterqa.ios.som_annotator.SoMAnnotator.parse_elements_from_json`.
 
+        On iOS 26+ the tab bar buttons are not accessible via ``AXChildren``
+        traversal; they are collected separately via :meth:`_get_tab_bar_buttons`
+        and appended to the result set so tests can find and tap them by label.
+
         Args:
             limit: Maximum number of elements to return (default 200).
 
@@ -441,6 +538,15 @@ class AXBackend:
         results: list[dict] = []
         with _ax_lock:
             self._walk_tree(root, results, limit=limit)
+
+        # Append tab bar buttons (iOS 26 position-probe workaround).
+        tab_buttons = self._get_tab_bar_buttons()
+        # Avoid duplicating buttons that the tree walk already found.
+        existing_labels = {e["label"] for e in results if e.get("type") == "button"}
+        for btn in tab_buttons:
+            if btn["label"] not in existing_labels:
+                results.append(btn)
+
         # Strip the non-serialisable _ax_ref before returning.
         return [{k: v for k, v in e.items() if k != "_ax_ref"} for e in results]
 
@@ -450,6 +556,10 @@ class AXBackend:
         identifier: str | None = None,
     ) -> Any | None:
         """Find and return a raw AXUIElement matching *label* or *identifier*.
+
+        Searches ``AXDescription``, ``AXLabel``, and ``AXTitle`` for label
+        matching (tab bar buttons surface their label via ``AXDescription`` or
+        ``AXTitle`` depending on iOS/macOS version).
 
         Args:
             label:      Accessibility label (case-insensitive substring match).
@@ -462,21 +572,24 @@ class AXBackend:
         result: list[Any] = []
 
         def _search(element: Any, depth: int = 0) -> None:
-            if result or depth > 12:
+            if result or depth > 20:
                 return
-            elem_label = str(self._ax_attr(element, "AXDescription") or
-                             self._ax_attr(element, "AXLabel") or "")
+            # Check identifier first (exact match, fast).
             elem_id = str(self._ax_attr(element, "AXIdentifier") or "")
-
-            matched = False
             if identifier is not None and elem_id == identifier:
-                matched = True
-            if label is not None and label.lower() in elem_label.lower():
-                matched = True
-
-            if matched:
                 result.append(element)
                 return
+
+            # Check label across all attributes tab buttons may use.
+            if label is not None:
+                elem_label = (
+                    str(self._ax_attr(element, "AXDescription") or "")
+                    or str(self._ax_attr(element, "AXTitle") or "")
+                    or str(self._ax_attr(element, "AXLabel") or "")
+                )
+                if label.lower() in elem_label.lower():
+                    result.append(element)
+                    return
 
             for child in self._ax_children(element):
                 _search(child, depth + 1)
@@ -530,21 +643,117 @@ class AXBackend:
                     cy = dev["y"] + dev["height"] / 2
                     return self._cg_tap(cx, cy, duration)
 
+            # AX tree walk didn't find it.  Try the synthesised element list
+            # (which includes position-probed tab bar buttons not in the tree).
+            def _tap_from_elements(el_list: list[dict]) -> dict | None:
+                for el_dict in el_list:
+                    matched = False
+                    if identifier is not None and el_dict.get("identifier") == identifier:
+                        matched = True
+                    elif label is not None and label.lower() in el_dict.get("label", "").lower():
+                        matched = True
+                    if matched:
+                        frame = el_dict.get("frame", {})
+                        if frame.get("width", 0) > 0 and frame.get("height", 0) > 0:
+                            cx = frame["x"] + frame["width"] / 2
+                            cy = frame["y"] + frame["height"] / 2
+                            return self._cg_tap(cx, cy, duration)
+                return None
+
+            els = self.get_elements(limit=300)
+            result = _tap_from_elements(els)
+            if result is not None:
+                return result
+
+            # Element not found.  If there is a visible navigation Back button,
+            # we may be in a sub-page (e.g. More tab retains Bridge view when
+            # the Palace view is requested).  Navigate back once and retry.
+            back_btn = next(
+                (
+                    e for e in els
+                    if e.get("identifier") == "BackButton"
+                    or (e.get("label", "").lower() in ("back", "more") and e.get("type") == "button")
+                ),
+                None,
+            )
+            if back_btn is not None:
+                frame = back_btn.get("frame", {})
+                if frame.get("width", 0) > 0:
+                    bx = frame["x"] + frame["width"] / 2
+                    by = frame["y"] + frame["height"] / 2
+                    self._cg_tap(bx, by)
+                    time.sleep(0.5)
+                    els2 = self.get_elements(limit=300)
+                    result2 = _tap_from_elements(els2)
+                    if result2 is not None:
+                        return result2
+
         if x is not None and y is not None:
             return self._cg_tap(float(x), float(y), duration)
 
         return {"success": False, "error": "No tap target: provide label, identifier, or x+y coordinates"}
 
     def _cg_tap(self, x: float, y: float, duration: float = 0.0) -> dict[str, Any]:
-        """Tap at iOS device-point coordinates via CGEvent/CGEventBackend."""
-        try:
-            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+        """Tap at iOS device-point coordinates via a direct CGEvent mouse click.
 
-            cg = CGEventBackend(udid=self.device_udid)
-            cg.tap(x, y)
+        Uses the ``_ios_content_frame`` (macOS screen coordinates of the
+        Simulator's iOS content area) to accurately convert iOS device points
+        to macOS screen coordinates, then posts a CGEvent left-click.  This
+        bypasses the ``CGEventBackend._image_to_screen`` path which relies on
+        an image-pixel coordinate system that does not account for the
+        Simulator toolbar offset.
+        """
+        try:
+            import Quartz  # type: ignore[import]
+
+            if self._ios_content_frame is not None:
+                # Direct conversion: iOS device pts → macOS screen pts using
+                # the known content rect from the AX frame query.
+                ios_x = self._ios_content_frame["x"]
+                ios_y = self._ios_content_frame["y"]
+                ios_w = self._ios_content_frame["width"]
+                ios_h = self._ios_content_frame["height"]
+
+                scale_x = ios_w / self._device_w if self._device_w > 0 else 1.0
+                scale_y = ios_h / self._device_h if self._device_h > 0 else 1.0
+
+                screen_x = ios_x + x * scale_x
+                screen_y = ios_y + y * scale_y
+            else:
+                # Fallback: use CGEventBackend image-space conversion.
+                from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+                cg = CGEventBackend(udid=self.device_udid)
+                img_w = cg._img_w
+                img_h = cg._img_h
+                img_x = x * (img_w / self._device_w) if self._device_w > 0 else x
+                img_y = y * (img_h / self._device_h) if self._device_h > 0 else y
+                screen_x, screen_y = cg._layer._image_to_screen(img_x, img_y, img_w, img_h)
+
+            # Activate the Simulator window before posting events.
+            try:
+                from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+                CGEventBackend(udid=self.device_udid)._layer._activate_simulator()
+            except Exception:  # noqa: BLE001
+                pass
+
+            pos = Quartz.CGPointMake(screen_x, screen_y)
+            down = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventLeftMouseDown, pos, Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+            time.sleep(0.08)
+            up = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventLeftMouseUp, pos, Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
             if duration > 0.0:
                 time.sleep(duration)
-            return {"success": True, "mode": "cg_event", "x": x, "y": y}
+            else:
+                time.sleep(0.4)  # post-tap cooldown (mirrors CGEventBackend.tap)
+
+            return {"success": True, "mode": "cg_event_direct", "x": x, "y": y}
         except Exception as exc:  # noqa: BLE001
             logger.warning("CGEvent tap failed: %s", exc)
             return {"success": False, "error": str(exc)}
@@ -572,8 +781,15 @@ class AXBackend:
         text: str,
         label: str | None = None,
         identifier: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
     ) -> dict[str, Any]:
         """Type *text* into an element or the currently focused field.
+
+        When ``x`` and ``y`` are supplied (device-point coordinates), the
+        method first taps those coordinates to focus the field and then types
+        via CGEvent keystrokes.  This is required for ``SecureTextField``
+        elements where ``AXSetValue`` does not work.
 
         Attempts ``AXSetValue`` on the target element first; falls back to
         CGEvent keystrokes.
@@ -582,10 +798,27 @@ class AXBackend:
             text:       String to type.
             label:      Target element label (optional).
             identifier: Target element identifier (optional).
+            x:          Horizontal device point — tap to focus before typing.
+            y:          Vertical device point — tap to focus before typing.
 
         Returns:
             ``{"success": True}`` or error dict.
         """
+        # If coordinates are given, tap first to focus the field.
+        if x is not None and y is not None:
+            self._cg_tap(float(x), float(y))
+            time.sleep(0.2)
+            # Then type via CGEvent keystrokes into the now-focused field.
+            try:
+                from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+                cg = CGEventBackend(udid=self.device_udid)
+                cg.type_text(text)
+                return {"success": True, "mode": "cg_tap_then_keystroke"}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("type_text (coordinate path) failed: %s", exc)
+                return {"success": False, "error": str(exc)}
+
         target = None
         if label is not None or identifier is not None:
             target = self.find_element(label=label, identifier=identifier)
@@ -636,11 +869,57 @@ class AXBackend:
             ``{"success": True}`` or error dict.
         """
         try:
-            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+            import Quartz  # type: ignore[import]
 
-            cg = CGEventBackend(udid=self.device_udid)
-            cg.swipe(x1, y1, x2, y2, duration=duration)
-            return {"success": True, "mode": "cg_event"}
+            def _to_screen(dev_x: float, dev_y: float) -> tuple[float, float]:
+                """Convert iOS device points to macOS screen coords."""
+                if self._ios_content_frame is not None:
+                    ios_x = self._ios_content_frame["x"]
+                    ios_y = self._ios_content_frame["y"]
+                    ios_w = self._ios_content_frame["width"]
+                    ios_h = self._ios_content_frame["height"]
+                    sx = ios_x + dev_x * (ios_w / self._device_w if self._device_w > 0 else 1.0)
+                    sy = ios_y + dev_y * (ios_h / self._device_h if self._device_h > 0 else 1.0)
+                    return sx, sy
+                from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+                cg = CGEventBackend(udid=self.device_udid)
+                img_x = dev_x * (cg._img_w / self._device_w) if self._device_w > 0 else dev_x
+                img_y = dev_y * (cg._img_h / self._device_h) if self._device_h > 0 else dev_y
+                return cg._layer._image_to_screen(img_x, img_y, cg._img_w, cg._img_h)
+
+            try:
+                from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+                CGEventBackend(udid=self.device_udid)._layer._activate_simulator()
+            except Exception:  # noqa: BLE001
+                pass
+
+            sx1, sy1 = _to_screen(x1, y1)
+            sx2, sy2 = _to_screen(x2, y2)
+            steps = max(10, int(duration / 0.01))
+            dx = (sx2 - sx1) / steps
+            dy = (sy2 - sy1) / steps
+
+            pos_start = Quartz.CGPointMake(sx1, sy1)
+            down = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventLeftMouseDown, pos_start, Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+            for i in range(1, steps + 1):
+                pos = Quartz.CGPointMake(sx1 + dx * i, sy1 + dy * i)
+                drag = Quartz.CGEventCreateMouseEvent(
+                    None, Quartz.kCGEventLeftMouseDragged, pos, Quartz.kCGMouseButtonLeft
+                )
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, drag)
+                time.sleep(duration / steps)
+            pos_end = Quartz.CGPointMake(sx2, sy2)
+            up = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventLeftMouseUp, pos_end, Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+            time.sleep(0.3)
+            return {"success": True, "mode": "cg_event_direct"}
         except Exception as exc:  # noqa: BLE001
             logger.warning("swipe failed: %s", exc)
             return {"success": False, "error": str(exc)}
@@ -652,11 +931,13 @@ class AXBackend:
     def screenshot(self) -> dict[str, Any]:
         """Capture a screenshot of the booted simulator via simctl.
 
-        Returns a dict compatible with the XCTestBackend screenshot response so
-        that the MCP server's ``_get_annotated_screenshot`` helper works unchanged::
+        Captures a PNG via simctl, converts it to JPEG (for MCP/size
+        compatibility), and returns a dict compatible with the XCTestBackend
+        screenshot response::
 
             {
-                "base64": "<base64 PNG string>",
+                "data": "<base64 JPEG string>",
+                "format": "jpeg",
                 "width": <int>,
                 "height": <int>,
             }
@@ -665,6 +946,7 @@ class AXBackend:
             RuntimeError: If the screenshot command fails.
         """
         import base64 as _b64
+        import io as _io
         from PIL import Image as _Image  # type: ignore[import]
 
         tmp = f"/tmp/specterqa_screenshot_{os.getpid()}.png"
@@ -684,30 +966,38 @@ class AXBackend:
         except OSError:
             pass
 
-        # Determine image dimensions.
+        # Convert PNG → JPEG for MCP compatibility and size reduction.
         try:
-            import io as _io
-            img = _Image.open(_io.BytesIO(raw))
+            img = _Image.open(_io.BytesIO(raw)).convert("RGB")
             w, h = img.size
+            buf = _io.BytesIO()
+            img.save(buf, format="JPEG", quality=85, optimize=True)
+            jpeg_bytes = buf.getvalue()
         except Exception:  # noqa: BLE001
-            w, h = int(self._device_w), int(self._device_h)
+            # Fallback: return PNG as-is if PIL conversion fails.
+            jpeg_bytes = raw
+            try:
+                img = _Image.open(_io.BytesIO(raw))
+                w, h = img.size
+            except Exception:  # noqa: BLE001
+                w, h = int(self._device_w), int(self._device_h)
 
-        encoded = _b64.standard_b64encode(raw).decode("ascii")
-        return {"base64": encoded, "width": w, "height": h}
+        encoded = _b64.standard_b64encode(jpeg_bytes).decode("ascii")
+        return {"data": encoded, "format": "jpeg", "width": w, "height": h}
 
     def screenshot_bytes(self) -> bytes:
-        """Return raw PNG bytes (convenience wrapper around :meth:`screenshot`).
+        """Return raw image bytes (convenience wrapper around :meth:`screenshot`).
 
         Decodes the base64 payload from :meth:`screenshot` for callers that
         need the binary data directly.
 
         Returns:
-            Raw PNG bytes.
+            Raw JPEG bytes.
         """
         import base64 as _b64
 
         result = self.screenshot()
-        return _b64.standard_b64decode(result["base64"])
+        return _b64.standard_b64decode(result["data"])
 
     def press_key(self, key: str) -> dict[str, Any]:
         """Press a named key via CGEvent keystrokes.
@@ -856,6 +1146,57 @@ class AXBackend:
         output_lines = result.stdout.strip().splitlines()[-lines:]
         return {"lines": output_lines, "count": len(output_lines)}
 
+    def perf(self) -> dict[str, Any]:
+        """Return basic performance metrics for the Simulator process.
+
+        Uses the Simulator.app host-side PID (``self._sim_pid``) which is
+        always available and reflects the full simulated session load.
+        Returns keys matching the XCTest bridge format:
+
+            {
+                "memory_rss_mb": <float>,
+                "thread_count": <int>,
+                "process_id": <int|None>,
+            }
+
+        Returns:
+            Dict with ``memory_rss_mb``, ``thread_count``, ``process_id``.
+        """
+        pid: int | None = self._sim_pid if self._sim_pid else None
+        rss_mb: float = 0.0
+        thread_count: int = 0
+
+        if pid:
+            try:
+                # macOS ps: rss is in KB.
+                rss_result = subprocess.run(
+                    ["ps", "-p", str(pid), "-o", "rss="],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                rss_kb_str = rss_result.stdout.strip()
+                if rss_kb_str.lstrip().isdigit():
+                    rss_mb = round(int(rss_kb_str) / 1024, 2)
+
+                # macOS: -M shows one row per thread (first row is header).
+                thread_result = subprocess.run(
+                    ["ps", "-M", "-p", str(pid)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                thread_lines = [ln for ln in thread_result.stdout.splitlines() if ln.strip()]
+                thread_count = max(0, len(thread_lines) - 1)
+            except Exception:  # noqa: BLE001
+                pass
+
+        return {
+            "memory_rss_mb": rss_mb,
+            "thread_count": thread_count,
+            "process_id": pid,
+        }
+
     # ------------------------------------------------------------------
     # SoMAnnotator-compatible source feed
     # ------------------------------------------------------------------
@@ -1003,6 +1344,9 @@ class AXHTTPServer:
                         self._respond(backend.health())
                     elif path == '/elements':
                         els = backend.get_elements(limit=200)
+                        # Inject index field for clients that need positional refs.
+                        for i, el in enumerate(els):
+                            el.setdefault("index", i)
                         self._respond({"success": True, "result": els, "count": len(els)})
                     elif path == '/source':
                         els = backend.get_elements(limit=500)
@@ -1045,6 +1389,8 @@ class AXHTTPServer:
                             body.get('text', ''),
                             label=body.get('label'),
                             identifier=body.get('identifier'),
+                            x=body.get('x'),
+                            y=body.get('y'),
                         )
                         self._respond({"success": True, **result})
                     elif path == '/swipe':
