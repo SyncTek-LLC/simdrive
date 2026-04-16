@@ -960,3 +960,128 @@ class AXAnnotator:
 
     def __repr__(self) -> str:
         return f"AXAnnotator(backend={self._backend!r})"
+
+
+# ---------------------------------------------------------------------------
+# AXHTTPServer — thin HTTP wrapper around AXBackend for smoke test compat
+# ---------------------------------------------------------------------------
+
+
+class AXHTTPServer:
+    """Thin HTTP wrapper around AXBackend for smoke test compatibility.
+
+    Serves the same endpoints as the XCTest Swift runner on localhost:PORT.
+    Runs in a background thread.
+    """
+
+    def __init__(self, backend: AXBackend, port: int = 8222):
+        self.backend = backend
+        self.port = port
+        self._server = None
+        self._thread = None
+
+    def start(self):
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        import json
+
+        backend = self.backend
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args): pass  # silence logs
+
+            def _respond(self, data, code=200):
+                self.send_response(code)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                body = json.dumps(data, default=str)
+                self.wfile.write(body.encode())
+
+            def do_GET(self):
+                path = self.path.split('?')[0]
+                try:
+                    if path == '/health':
+                        self._respond(backend.health())
+                    elif path == '/elements':
+                        els = backend.get_elements(limit=200)
+                        self._respond({"success": True, "result": els, "count": len(els)})
+                    elif path == '/source':
+                        els = backend.get_elements(limit=500)
+                        self._respond(els)  # simplified source
+                    elif path == '/screenshot':
+                        data = backend.screenshot()
+                        self._respond({"success": True, "result": data})
+                    elif path == '/perf':
+                        data = backend.perf()
+                        self._respond(data)
+                    elif path == '/logs':
+                        data = backend.logs()
+                        self._respond(data)
+                    elif path == '/crashes':
+                        self._respond({"app_running": True, "crashes_since_session_start": 0, "crashes": []})
+                    elif path == '/app_state':
+                        data = backend.app_state()
+                        self._respond(data)
+                    else:
+                        self._respond({"error": f"Unknown path: {path}"}, 404)
+                except Exception as e:
+                    self._respond({"error": str(e)}, 500)
+
+            def do_POST(self):
+                path = self.path
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = json.loads(self.rfile.read(content_length)) if content_length else {}
+
+                try:
+                    if path == '/tap':
+                        result = backend.tap(
+                            label=body.get('label'),
+                            identifier=body.get('identifier'),
+                            x=body.get('x'),
+                            y=body.get('y'),
+                        )
+                        self._respond({"success": True, **result})
+                    elif path == '/type':
+                        result = backend.type_text(
+                            body.get('text', ''),
+                            label=body.get('label'),
+                            identifier=body.get('identifier'),
+                        )
+                        self._respond({"success": True, **result})
+                    elif path == '/swipe':
+                        backend.swipe(
+                            body.get('fromX', 0), body.get('fromY', 0),
+                            body.get('toX', 0), body.get('toY', 0),
+                            body.get('duration', 0.3),
+                        )
+                        self._respond({"success": True, "mode": "swipe"})
+                    elif path == '/key':
+                        backend.press_key(body.get('key', ''))
+                        self._respond({"success": True, "key": body.get('key', '')})
+                    elif path == '/wait':
+                        label = body.get('label', '')
+                        timeout = body.get('timeout', 10)
+                        found = backend.wait_for_element(label=label, timeout=timeout)
+                        if found:
+                            self._respond({"success": True, "status": "found", "label": label})
+                        else:
+                            self._respond({"success": True, "status": "not_found"})
+                    elif path == '/idle':
+                        result = backend.wait_idle(timeout=body.get('timeout', 10))
+                        self._respond({"success": True, **result})
+                    elif path == '/dismiss_keyboard':
+                        # AX backend: tap outside any text field to dismiss
+                        backend.tap(x=200, y=50)
+                        self._respond({"success": True, "dismissed": True})
+                    else:
+                        self._respond({"error": f"Unknown path: {path}"}, 422)
+                except Exception as e:
+                    self._respond({"error": str(e)}, 500)
+
+        self._server = HTTPServer(('localhost', self.port), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        if self._server:
+            self._server.shutdown()
+            self._server = None

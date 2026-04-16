@@ -77,6 +77,7 @@ _crash_detector = None  # CrashDetector instance (None when session is not activ
 _perf_profiler = None  # PerfProfiler instance (None when session is not active)
 _network_inspector = None  # NetworkInspector instance (None when session is not active)
 _perf_baseline: dict | None = None  # Stored perf baseline for ios_perf_compare
+_ax_http_server = None  # AXHTTPServer instance (None when AX backend is not active)
 
 
 def _require_session() -> None:
@@ -270,7 +271,7 @@ def handle_start_session(arguments: dict) -> dict:
         or {"error": "<message>"} on failure.
         (Starts PerfProfiler and NetworkInspector alongside the session.)
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
@@ -372,7 +373,7 @@ def handle_start_session(arguments: dict) -> dict:
 
         if use_ax and provider == "local":
             try:
-                from specterqa.ios.backends.ax_backend import AXBackend, AXAnnotator  # noqa: PLC0415
+                from specterqa.ios.backends.ax_backend import AXBackend, AXAnnotator, AXHTTPServer  # noqa: PLC0415
                 from specterqa.ios.replay import ReplayRecorder  # noqa: PLC0415
                 from specterqa.ios.drivers.simulator.console import ConsoleMonitor  # noqa: PLC0415
                 from specterqa.ios.drivers.simulator.crash import CrashDetector  # noqa: PLC0415
@@ -404,6 +405,9 @@ def handle_start_session(arguments: dict) -> dict:
                 _network_inspector = NetworkInspector(device_id=device_id)
                 _network_inspector.start()
                 _network_inspector.setup_log_watcher(_console_monitor)
+
+                _ax_http_server = AXHTTPServer(ax_backend, port=8222)
+                _ax_http_server.start()
 
                 _session_state = "running"
                 return {
@@ -547,7 +551,7 @@ def handle_stop_session(arguments: dict) -> dict:
     Returns:
         {"status": "stopped"}
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector
+    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
 
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
@@ -584,6 +588,13 @@ def handle_stop_session(arguments: dict) -> dict:
             except Exception as exc:
                 logger.warning("Error stopping network inspector: %s", exc)
 
+        # Stop AX HTTP server (shuts down background HTTPServer thread)
+        if _ax_http_server is not None:
+            try:
+                _ax_http_server.stop()
+            except Exception as exc:
+                logger.warning("Error stopping AX HTTP server: %s", exc)
+
         # PerfProfiler has no background thread — just clear the reference
         _session = None
         _backend = None
@@ -594,6 +605,7 @@ def handle_stop_session(arguments: dict) -> dict:
         _crash_detector = None
         _perf_profiler = None
         _network_inspector = None
+        _ax_http_server = None
         _session_state = "idle"
 
     return {"status": "stopped"}
