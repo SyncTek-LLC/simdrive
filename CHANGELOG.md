@@ -7,6 +7,30 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.6.0 (2026-04-15)
+
+### Example ReaderPatternTab — Real-World Crash Pattern Reproduction
+- New TestKitApp tab reproducing exact Example Reader Library crash patterns:
+  - Borrow/download/return state machine with NotificationCenter cascade (5+ rapid posts)
+  - Combine PassthroughSubject rapid progress updates (simulated download)
+  - UIViewControllerRepresentable library switcher in SwiftUI sheet modal
+  - 10-notification burst trigger button
+- All 5 Example Reader pattern tests pass — runner survives notification floods
+
+### Dogfood Issue Regression Tests
+- Screenshot parsing: valid JPEG verification + navigation screenshot survival
+- Notification flood: rapid tap sequence, rapid element queries, mixed operation burst
+- 37 total live smoke tests (up from 27)
+
+### Test Coverage
+- 19 crash pattern scenarios across 6 categories
+- 13 functional scenarios (form, list, tabs, sheets, perf, accessibility)
+- 5 Example Reader-specific state mutation scenarios
+- 28/28 UAT tool verification tests
+- 101 regression/integration tests
+
+---
+
 ## v12.5.1 (2026-04-14)
 
 ### Cleanup
