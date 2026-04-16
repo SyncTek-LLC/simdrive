@@ -7,6 +7,40 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v13.0.0 (2026-04-16)
+
+### BREAKING: AXUIElement Backend — No XCTest Runner
+- Replaces the fragile on-device XCTest runner with host-side macOS Accessibility APIs
+- All automation runs from the Mac — no process on the simulator, no deployment, no SIGABRT
+- Session start is instant (find Simulator PID) vs ~30s (build + deploy + health wait)
+- Zero crashes across all 37 smoke tests — impossible to crash because there's no runner to crash
+- Auto-detection: backend="auto" (default) uses AX if available, falls back to XCTest
+
+### AXBackend Implementation
+- Element tree: AXUIElement tree walk with AXRole/AXDescription/AXIdentifier extraction
+- Tap: AXPress (element-based) or CGEvent (coordinate-based)
+- Type: AXSetValue (instant, no keystroke injection) or CGEvent fallback
+- Screenshot: simctl io screenshot → PNG→JPEG conversion via PIL
+- Swipe: CGEvent backend
+- Perf: ps on Simulator.app PID
+- Logs: simctl spawn log stream
+- Tab bar: probed via AXUIElementCopyElementAtPosition for iOS 26 radio buttons
+
+### AXHTTPServer
+- Thin HTTP wrapper on localhost:8222 for backward compatibility
+- All smoke tests work unchanged against both XCTest and AX backends
+
+### 37/37 Smoke Tests Passing (Zero Crashes)
+- 19 crash pattern scenarios
+- 13 functional scenarios
+- 5 Palace-specific state mutation scenarios
+
+### Requirements
+- macOS Accessibility permission for the Python process (one-time system dialog)
+- pyobjc-framework-ApplicationServices (added to dependencies)
+
+---
+
 ## v12.6.1 (2026-04-15)
 
 ### Physical Device Infrastructure (WIP)
