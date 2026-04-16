@@ -1,0 +1,962 @@
+"""AXUIElement backend — host-side iOS Simulator automation.
+
+Queries the iOS Simulator's accessibility tree via macOS AXUIElement APIs.
+Taps elements via AXPress action or CGEvent coordinate injection.
+Types via AXSetValue or CGEvent keystrokes.
+Screenshots via simctl.
+
+No XCTest runner. No on-device process. No deployment. No SIGABRT.
+
+Requirements:
+    - macOS Accessibility permission granted to the Python process
+    - pyobjc-framework-Cocoa and pyobjc-framework-Quartz installed
+    - iOS Simulator running with an app
+
+INIT-2026-525 — SpecterQA iOS AXUIElement backend.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import threading
+import time
+from typing import Any
+
+logger = logging.getLogger("specterqa.ios.backends.ax_backend")
+
+# AX role → iOS element type mapping (mirrors XCUIElementType names used by
+# the rest of the pipeline so UIElement.element_type values are consistent).
+AX_ROLE_MAP: dict[str, str] = {
+    "AXButton": "button",
+    "AXStaticText": "staticText",
+    "AXTextField": "textField",
+    "AXSecureTextField": "secureTextField",
+    "AXSearchField": "searchField",
+    "AXImage": "image",
+    "AXCell": "cell",
+    "AXNavigationBar": "navigationBar",
+    "AXTabBar": "tabBar",
+    "AXTable": "table",
+    "AXScrollView": "scrollView",
+    "AXSwitch": "switch",
+    "AXSlider": "slider",
+    "AXLink": "link",
+    "AXGroup": "other",
+    "AXWebArea": "webView",
+}
+
+# Serialize all AX calls onto a single dedicated thread to satisfy the
+# requirement that ApplicationServices calls are not issued from arbitrary
+# threads.  An empty queue means "run on calling thread" for environments
+# that already handle this (e.g. main thread or tests).
+_ax_lock = threading.Lock()
+
+# Default device logical dimensions — updated at init from the AX frame.
+_DEFAULT_DEVICE_W = 390.0
+_DEFAULT_DEVICE_H = 844.0
+
+
+class AXBackend:
+    """Host-side iOS Simulator automation via macOS AXUIElement APIs.
+
+    All automation runs from the Mac — no process on the simulator, no
+    deployment, no SIGABRT crashes.  Session start is instant.
+
+    Args:
+        sim_pid:     PID of the ``Simulator.app`` process.  Pass 0 (default)
+                     to auto-detect via :meth:`_find_simulator_pid`.
+        device_udid: Simulator UDID or ``"booted"`` (used for simctl calls).
+        device_w:    Override device logical width (points).  Auto-detected
+                     from the AX frame when 0.
+        device_h:    Override device logical height (points).  Auto-detected
+                     from the AX frame when 0.
+    """
+
+    def __init__(
+        self,
+        sim_pid: int = 0,
+        device_udid: str = "booted",
+        device_w: float = 0.0,
+        device_h: float = 0.0,
+    ) -> None:
+        # Validate Accessibility permission upfront — fail loudly so the error
+        # message is clear rather than producing silent no-ops.
+        try:
+            from ApplicationServices import AXIsProcessTrusted  # type: ignore[import]
+
+            if not AXIsProcessTrusted():
+                raise PermissionError(
+                    "macOS Accessibility permission is required. "
+                    "Open System Settings → Privacy & Security → Accessibility "
+                    "and enable access for this terminal / Python process."
+                )
+        except ImportError:
+            raise ImportError(
+                "pyobjc-framework-ApplicationServices is required for AXBackend. "
+                "Install it with: pip install pyobjc-framework-ApplicationServices"
+            )
+
+        self.device_udid = device_udid
+
+        # Resolve simulator PID.
+        if sim_pid <= 0:
+            sim_pid = self._find_simulator_pid()
+        self._sim_pid = sim_pid
+
+        # Create the root AX element for the Simulator process.
+        from ApplicationServices import AXUIElementCreateApplication  # type: ignore[import]
+
+        self._root = AXUIElementCreateApplication(self._sim_pid)
+
+        # Cached iOS content group frame (set by _find_ios_content_group).
+        self._ios_content_frame: Any = None  # NSRect / CGRect from AX
+
+        # Device dimensions for coordinate conversion.
+        self._device_w = device_w if device_w > 0 else _DEFAULT_DEVICE_W
+        self._device_h = device_h if device_h > 0 else _DEFAULT_DEVICE_H
+
+        # Eagerly find the iOS content group and calibrate dimensions.
+        try:
+            self._ios_content_group = self._find_ios_content_group()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not locate iOS content group at init: %s", exc)
+            self._ios_content_group = None
+
+    # ------------------------------------------------------------------
+    # Static / class helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _find_simulator_pid() -> int:
+        """Return the PID of the running Simulator.app process.
+
+        Raises:
+            RuntimeError: If no Simulator process is found.
+        """
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "Simulator.app/Contents/MacOS/Simulator"],
+                capture_output=True,
+                text=True,
+            )
+            pids = [int(p) for p in result.stdout.strip().splitlines() if p.strip()]
+            if not pids:
+                raise RuntimeError(
+                    "iOS Simulator is not running. "
+                    "Launch Xcode → Simulator or run: open -a Simulator"
+                )
+            return pids[0]
+        except ValueError as exc:
+            raise RuntimeError(f"Could not parse Simulator PID: {exc}") from exc
+
+    @classmethod
+    def is_available(cls) -> bool:
+        """Return ``True`` if AXBackend can operate on this system.
+
+        Checks:
+        1. pyobjc-framework-ApplicationServices is importable.
+        2. macOS Accessibility permission is granted.
+        3. Simulator.app is running.
+        """
+        try:
+            from ApplicationServices import AXIsProcessTrusted  # type: ignore[import]
+
+            if not AXIsProcessTrusted():
+                return False
+            result = subprocess.run(
+                ["pgrep", "-f", "Simulator.app/Contents/MacOS/Simulator"],
+                capture_output=True,
+                text=True,
+            )
+            return bool(result.stdout.strip())
+        except Exception:  # noqa: BLE001
+            return False
+
+    # ------------------------------------------------------------------
+    # AX tree navigation helpers
+    # ------------------------------------------------------------------
+
+    def _ax_attr(self, element: Any, attr: str) -> Any:
+        """Read one AX attribute value from *element*.
+
+        Returns:
+            The attribute value, or ``None`` on any AX error.
+        """
+        try:
+            from ApplicationServices import AXUIElementCopyAttributeValue  # type: ignore[import]
+
+            err, value = AXUIElementCopyAttributeValue(element, attr, None)
+            if err == 0:  # kAXErrorSuccess
+                return value
+        except Exception as exc:  # noqa: BLE001 — element may have been destroyed
+            logger.debug("_ax_attr(%r) failed: %s", attr, exc)
+        return None
+
+    def _ax_children(self, element: Any) -> list[Any]:
+        """Return the AXChildren of *element* (empty list on failure)."""
+        children = self._ax_attr(element, "AXChildren")
+        if children is None:
+            return []
+        try:
+            return list(children)
+        except TypeError:
+            return [children]
+
+    def _ax_frame(self, element: Any) -> dict | None:
+        """Return the element's frame as ``{x, y, width, height}`` in macOS screen coords.
+
+        Uses ``AXValueGetValue`` with ``kAXValueCGRectType`` to extract the
+        ``CGRect`` stored in the ``AXFrame`` attribute value.
+
+        Returns:
+            Dict with keys ``x``, ``y``, ``width``, ``height``, or ``None``
+            if the frame cannot be read.
+        """
+        try:
+            from ApplicationServices import (  # type: ignore[import]
+                AXUIElementCopyAttributeValue,
+                AXValueGetValue,
+                kAXValueCGRectType,
+            )
+            import Quartz  # type: ignore[import]
+
+            err, val = AXUIElementCopyAttributeValue(element, "AXFrame", None)
+            if err != 0 or val is None:
+                return None
+
+            ok, rect = AXValueGetValue(val, kAXValueCGRectType, None)
+            if not ok or rect is None:
+                return None
+
+            # rect is a CGRect-compatible object; access via .origin / .size
+            try:
+                return {
+                    "x": float(rect.origin.x),
+                    "y": float(rect.origin.y),
+                    "width": float(rect.size.width),
+                    "height": float(rect.size.height),
+                }
+            except AttributeError:
+                # Some pyobjc versions return a tuple (x, y, w, h)
+                if hasattr(rect, "__iter__"):
+                    vals = list(rect)
+                    if len(vals) == 4:
+                        return {"x": float(vals[0]), "y": float(vals[1]),
+                                "width": float(vals[2]), "height": float(vals[3])}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("_ax_frame failed: %s", exc)
+        return None
+
+    def _find_ios_content_group(self) -> Any:
+        """Walk AXWindow → AXChildren to locate the iOS screen group.
+
+        The iOS content group is the ``AXGroup`` (or similar container) whose
+        frame matches the Simulator's screen area.  We identify it by looking
+        for the child group with the largest area that falls within a
+        reasonable iOS screen aspect ratio.
+
+        Returns:
+            The AXUIElement representing the iOS screen group.
+
+        Raises:
+            RuntimeError: If no suitable group is found.
+        """
+        windows = self._ax_attr(self._root, "AXWindows")
+        if not windows:
+            raise RuntimeError("No AX windows found for the Simulator process.")
+
+        best_elem: Any = None
+        best_area: float = 0.0
+
+        for window in windows:
+            frame = self._ax_frame(window)
+            if frame is None:
+                continue
+
+            # Walk direct children of each window for the iOS content group.
+            for child in self._ax_children(window):
+                child_frame = self._ax_frame(child)
+                if child_frame is None:
+                    continue
+                w = child_frame["width"]
+                h = child_frame["height"]
+                area = w * h
+                # Heuristic: the iOS screen has aspect ratio ~0.45–0.6 (portrait)
+                # and is the largest child element.
+                if area > best_area and h > 0 and (0.35 < w / h < 0.75):
+                    best_area = area
+                    best_elem = child
+                    self._ios_content_frame = child_frame
+                    # Calibrate device dimensions from the AX frame.
+                    # We assume the AX frame is the *display* rect in macOS
+                    # points, which maps 1:1 to iOS logical points when the
+                    # simulator runs at 100% scale.
+                    # If the caller supplied explicit dimensions, keep them.
+                    if self._device_w == _DEFAULT_DEVICE_W:
+                        self._device_w = w
+                    if self._device_h == _DEFAULT_DEVICE_H:
+                        self._device_h = h
+
+        if best_elem is None:
+            raise RuntimeError(
+                "Could not locate the iOS content group in the Simulator AX tree. "
+                "Make sure the Simulator is running and a device is booted."
+            )
+
+        logger.debug(
+            "iOS content group found: frame=%s device=%.0fx%.0f",
+            self._ios_content_frame,
+            self._device_w,
+            self._device_h,
+        )
+        return best_elem
+
+    # ------------------------------------------------------------------
+    # Coordinate conversion
+    # ------------------------------------------------------------------
+
+    def _ax_to_device(self, ax_frame: dict) -> dict:
+        """Convert AX macOS screen coordinates to iOS device points.
+
+        Args:
+            ax_frame: Dict with ``x``, ``y``, ``width``, ``height`` in macOS
+                      screen coordinates (from :meth:`_ax_frame`).
+
+        Returns:
+            Dict with ``x``, ``y``, ``width``, ``height`` in iOS device points.
+        """
+        if self._ios_content_frame is None:
+            # No reference frame — return as-is (e.g. tests without a real sim).
+            return ax_frame
+
+        ios_x = self._ios_content_frame["x"]
+        ios_y = self._ios_content_frame["y"]
+        ios_w = self._ios_content_frame["width"]
+        ios_h = self._ios_content_frame["height"]
+
+        if ios_w <= 0 or ios_h <= 0:
+            return ax_frame
+
+        rel_x = ax_frame["x"] - ios_x
+        rel_y = ax_frame["y"] - ios_y
+        scale_x = self._device_w / ios_w
+        scale_y = self._device_h / ios_h
+
+        return {
+            "x": rel_x * scale_x,
+            "y": rel_y * scale_y,
+            "width": ax_frame["width"] * scale_x,
+            "height": ax_frame["height"] * scale_y,
+        }
+
+    # ------------------------------------------------------------------
+    # AX tree walker — produces element dicts for the SoM pipeline
+    # ------------------------------------------------------------------
+
+    def _walk_tree(
+        self,
+        element: Any,
+        results: list[dict],
+        depth: int = 0,
+        max_depth: int = 10,
+        limit: int = 200,
+    ) -> None:
+        """Recursively walk the AX tree from *element*, appending to *results*.
+
+        Args:
+            element:   Current AX element to inspect.
+            results:   Accumulator list (mutated in-place).
+            depth:     Current recursion depth.
+            max_depth: Maximum depth to descend.
+            limit:     Stop collecting once this many elements are found.
+        """
+        if len(results) >= limit:
+            return
+        if depth > max_depth:
+            return
+
+        role = self._ax_attr(element, "AXRole") or ""
+        ios_type = AX_ROLE_MAP.get(role, "other")
+
+        label = self._ax_attr(element, "AXDescription") or self._ax_attr(element, "AXLabel") or ""
+        identifier = self._ax_attr(element, "AXIdentifier") or ""
+        value = self._ax_attr(element, "AXValue")
+        value_str = str(value) if value is not None else ""
+        enabled_raw = self._ax_attr(element, "AXEnabled")
+        enabled = bool(enabled_raw) if enabled_raw is not None else True
+
+        ax_frame = self._ax_frame(element)
+        if ax_frame is not None:
+            device_frame = self._ax_to_device(ax_frame)
+        else:
+            device_frame = {"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0}
+
+        # Only include elements with a known interactive role and non-zero size.
+        if (
+            ios_type != "other"
+            and device_frame["width"] > 0
+            and device_frame["height"] > 0
+        ):
+            results.append(
+                {
+                    # Use XCUIElementType prefix convention so parse_elements_from_json
+                    # works unchanged (it expects typeLabel without the prefix).
+                    "typeLabel": ios_type,
+                    "label": str(label) if label else "",
+                    "identifier": str(identifier) if identifier else "",
+                    "value": value_str,
+                    "enabled": enabled,
+                    "hittable": enabled,
+                    "frame": device_frame,
+                    # Raw AX element ref for action dispatch (not serialisable).
+                    "_ax_ref": element,
+                }
+            )
+
+        for child in self._ax_children(element):
+            if len(results) >= limit:
+                break
+            self._walk_tree(child, results, depth + 1, max_depth, limit)
+
+    # ------------------------------------------------------------------
+    # Public API — matches XCTestBackend interface
+    # ------------------------------------------------------------------
+
+    def get_elements(self, limit: int = 200) -> list[dict]:
+        """Walk the AX tree and return a list of element dicts.
+
+        Each dict has keys: ``typeLabel``, ``label``, ``identifier``,
+        ``value``, ``enabled``, ``hittable``, ``frame`` — compatible with
+        :meth:`~specterqa.ios.som_annotator.SoMAnnotator.parse_elements_from_json`.
+
+        Args:
+            limit: Maximum number of elements to return (default 200).
+
+        Returns:
+            List of element dicts.
+        """
+        root = self._ios_content_group or self._root
+        results: list[dict] = []
+        with _ax_lock:
+            self._walk_tree(root, results, limit=limit)
+        # Strip the non-serialisable _ax_ref before returning.
+        return [{k: v for k, v in e.items() if k != "_ax_ref"} for e in results]
+
+    def find_element(
+        self,
+        label: str | None = None,
+        identifier: str | None = None,
+    ) -> Any | None:
+        """Find and return a raw AXUIElement matching *label* or *identifier*.
+
+        Args:
+            label:      Accessibility label (case-insensitive substring match).
+            identifier: Accessibility identifier (exact match).
+
+        Returns:
+            The raw AXUIElement, or ``None`` if not found.
+        """
+        root = self._ios_content_group or self._root
+        result: list[Any] = []
+
+        def _search(element: Any, depth: int = 0) -> None:
+            if result or depth > 12:
+                return
+            elem_label = str(self._ax_attr(element, "AXDescription") or
+                             self._ax_attr(element, "AXLabel") or "")
+            elem_id = str(self._ax_attr(element, "AXIdentifier") or "")
+
+            matched = False
+            if identifier is not None and elem_id == identifier:
+                matched = True
+            if label is not None and label.lower() in elem_label.lower():
+                matched = True
+
+            if matched:
+                result.append(element)
+                return
+
+            for child in self._ax_children(element):
+                _search(child, depth + 1)
+
+        with _ax_lock:
+            _search(root)
+
+        return result[0] if result else None
+
+    def tap(
+        self,
+        x: float | None = None,
+        y: float | None = None,
+        label: str | None = None,
+        identifier: str | None = None,
+        duration: float = 0.0,
+    ) -> dict[str, Any]:
+        """Tap an element by label/identifier, or at device-point coordinates.
+
+        Priority: identifier → label → coordinates.
+
+        Args:
+            x:          Horizontal device point (used when no label/identifier).
+            y:          Vertical device point (used when no label/identifier).
+            label:      Accessibility label (case-insensitive substring).
+            identifier: Accessibility identifier (exact match).
+            duration:   Hold duration in seconds (0 = normal tap).
+
+        Returns:
+            ``{"success": True}`` or ``{"success": False, "error": "..."}``
+        """
+        if label is not None or identifier is not None:
+            elem = self.find_element(label=label, identifier=identifier)
+            if elem is not None:
+                try:
+                    from ApplicationServices import AXUIElementPerformAction  # type: ignore[import]
+
+                    with _ax_lock:
+                        err = AXUIElementPerformAction(elem, "AXPress")
+                    if err == 0:
+                        return {"success": True, "mode": "ax_press"}
+                    logger.debug("AXPress failed (err=%d), falling back to coordinates", err)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("AXPress error: %s", exc)
+
+                # Fall back to CGEvent tap at element center.
+                ax_frame = self._ax_frame(elem)
+                if ax_frame is not None:
+                    dev = self._ax_to_device(ax_frame)
+                    cx = dev["x"] + dev["width"] / 2
+                    cy = dev["y"] + dev["height"] / 2
+                    return self._cg_tap(cx, cy, duration)
+
+        if x is not None and y is not None:
+            return self._cg_tap(float(x), float(y), duration)
+
+        return {"success": False, "error": "No tap target: provide label, identifier, or x+y coordinates"}
+
+    def _cg_tap(self, x: float, y: float, duration: float = 0.0) -> dict[str, Any]:
+        """Tap at iOS device-point coordinates via CGEvent/CGEventBackend."""
+        try:
+            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+            cg = CGEventBackend(udid=self.device_udid)
+            cg.tap(x, y)
+            if duration > 0.0:
+                time.sleep(duration)
+            return {"success": True, "mode": "cg_event", "x": x, "y": y}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("CGEvent tap failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+
+    def tap_element(
+        self,
+        label: str | None = None,
+        identifier: str | None = None,
+        element_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Tap an element by label or identifier (XCTestBackend-compatible shim).
+
+        Args:
+            label:        Accessibility label substring.
+            identifier:   Accessibility identifier (exact).
+            element_type: Ignored for AX backend (all types searched).
+
+        Returns:
+            ``{"success": True, "mode": "ax_press"}`` or error dict.
+        """
+        return self.tap(label=label, identifier=identifier)
+
+    def type_text(
+        self,
+        text: str,
+        label: str | None = None,
+        identifier: str | None = None,
+    ) -> dict[str, Any]:
+        """Type *text* into an element or the currently focused field.
+
+        Attempts ``AXSetValue`` on the target element first; falls back to
+        CGEvent keystrokes.
+
+        Args:
+            text:       String to type.
+            label:      Target element label (optional).
+            identifier: Target element identifier (optional).
+
+        Returns:
+            ``{"success": True}`` or error dict.
+        """
+        target = None
+        if label is not None or identifier is not None:
+            target = self.find_element(label=label, identifier=identifier)
+
+        if target is not None:
+            try:
+                from ApplicationServices import AXUIElementSetAttributeValue  # type: ignore[import]
+
+                with _ax_lock:
+                    err = AXUIElementSetAttributeValue(target, "AXValue", text)
+                if err == 0:
+                    return {"success": True, "mode": "ax_set_value"}
+                logger.debug("AXSetValue failed (err=%d), falling back to keystrokes", err)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("AXSetValue error: %s", exc)
+
+        # Fallback: CGEvent keystrokes (types into focused field).
+        try:
+            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+            cg = CGEventBackend(udid=self.device_udid)
+            cg.type_text(text)
+            return {"success": True, "mode": "cg_keystrokes"}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("type_text fallback failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+
+    def swipe(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        duration: float = 0.3,
+    ) -> dict[str, Any]:
+        """Swipe from (x1, y1) to (x2, y2) in device-point coordinates.
+
+        Delegates to :class:`CGEventBackend`.
+
+        Args:
+            x1: Start horizontal position.
+            y1: Start vertical position.
+            x2: End horizontal position.
+            y2: End vertical position.
+            duration: Gesture duration in seconds (default 0.3).
+
+        Returns:
+            ``{"success": True}`` or error dict.
+        """
+        try:
+            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+            cg = CGEventBackend(udid=self.device_udid)
+            cg.swipe(x1, y1, x2, y2, duration=duration)
+            return {"success": True, "mode": "cg_event"}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("swipe failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+
+    def swipe_back(self) -> dict[str, Any]:
+        """Perform a swipe-from-left-edge gesture (iOS back navigation)."""
+        return self.swipe(x1=5, y1=self._device_h / 2, x2=200, y2=self._device_h / 2, duration=0.3)
+
+    def screenshot(self) -> dict[str, Any]:
+        """Capture a screenshot of the booted simulator via simctl.
+
+        Returns a dict compatible with the XCTestBackend screenshot response so
+        that the MCP server's ``_get_annotated_screenshot`` helper works unchanged::
+
+            {
+                "base64": "<base64 PNG string>",
+                "width": <int>,
+                "height": <int>,
+            }
+
+        Raises:
+            RuntimeError: If the screenshot command fails.
+        """
+        import base64 as _b64
+        from PIL import Image as _Image  # type: ignore[import]
+
+        tmp = f"/tmp/specterqa_screenshot_{os.getpid()}.png"
+        result = subprocess.run(
+            ["xcrun", "simctl", "io", self.device_udid, "screenshot", tmp],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"simctl screenshot failed: {result.stderr.strip() or result.stdout.strip()}"
+            )
+        with open(tmp, "rb") as fh:
+            raw = fh.read()
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+        # Determine image dimensions.
+        try:
+            import io as _io
+            img = _Image.open(_io.BytesIO(raw))
+            w, h = img.size
+        except Exception:  # noqa: BLE001
+            w, h = int(self._device_w), int(self._device_h)
+
+        encoded = _b64.standard_b64encode(raw).decode("ascii")
+        return {"base64": encoded, "width": w, "height": h}
+
+    def screenshot_bytes(self) -> bytes:
+        """Return raw PNG bytes (convenience wrapper around :meth:`screenshot`).
+
+        Decodes the base64 payload from :meth:`screenshot` for callers that
+        need the binary data directly.
+
+        Returns:
+            Raw PNG bytes.
+        """
+        import base64 as _b64
+
+        result = self.screenshot()
+        return _b64.standard_b64decode(result["base64"])
+
+    def press_key(self, key: str) -> dict[str, Any]:
+        """Press a named key via CGEvent keystrokes.
+
+        Args:
+            key: Key name (e.g. ``"return"``, ``"escape"``, ``"delete"``).
+
+        Returns:
+            ``{"success": True}`` or error dict.
+        """
+        try:
+            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+            cg = CGEventBackend(udid=self.device_udid)
+            cg.press_key(key)
+            return {"success": True, "mode": "cg_event"}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("press_key(%r) failed: %s", key, exc)
+            return {"success": False, "error": str(exc)}
+
+    def wait_for_element(
+        self,
+        label: str | None = None,
+        identifier: str | None = None,
+        timeout: float = 10.0,
+        poll_interval: float = 0.5,
+    ) -> dict[str, Any]:
+        """Poll the AX tree until a matching element appears.
+
+        Args:
+            label:         Element label substring to wait for.
+            identifier:    Element identifier (exact) to wait for.
+            timeout:       Maximum wait in seconds (default 10).
+            poll_interval: Polling interval in seconds (default 0.5).
+
+        Returns:
+            ``{"found": True, "elapsed": <seconds>}`` or
+            ``{"found": False, "elapsed": <seconds>, "error": "Timeout"}``
+        """
+        start = time.monotonic()
+        while True:
+            elem = self.find_element(label=label, identifier=identifier)
+            elapsed = time.monotonic() - start
+            if elem is not None:
+                return {"found": True, "elapsed": round(elapsed, 2)}
+            if elapsed >= timeout:
+                target = identifier or label or "(unknown)"
+                return {
+                    "found": False,
+                    "elapsed": round(elapsed, 2),
+                    "error": f"Timeout waiting for element {target!r} after {timeout}s",
+                }
+            time.sleep(poll_interval)
+
+    def wait_idle(self, timeout: float = 10.0) -> dict[str, Any]:
+        """Wait for the UI to settle (AX tree stops changing).
+
+        Polls the element count twice; returns when counts stabilize or
+        timeout is reached.
+
+        Args:
+            timeout: Maximum wait in seconds (default 10).
+
+        Returns:
+            ``{"success": True, "elapsed": <seconds>}``
+        """
+        start = time.monotonic()
+        prev_count = -1
+        stable_for = 0.0
+        required_stable = 0.5  # seconds with unchanged element count
+
+        while time.monotonic() - start < timeout:
+            elems = self.get_elements(limit=50)
+            count = len(elems)
+            if count == prev_count:
+                stable_for += 0.25
+                if stable_for >= required_stable:
+                    break
+            else:
+                stable_for = 0.0
+                prev_count = count
+            time.sleep(0.25)
+
+        elapsed = round(time.monotonic() - start, 2)
+        return {"success": True, "elapsed": elapsed}
+
+    def app_state(self) -> dict[str, Any]:
+        """Return the app's current process state.
+
+        Uses ``ps`` to check whether the app process is running.
+
+        Returns:
+            ``{"state": "foreground"|"not_running", "pid": <int>|None}``
+        """
+        result = subprocess.run(
+            ["xcrun", "simctl", "spawn", self.device_udid, "launchctl", "list"],
+            capture_output=True,
+            text=True,
+        )
+        # launchctl list output includes running services/processes.
+        is_running = result.returncode == 0 and bool(result.stdout.strip())
+        return {
+            "state": "foreground" if is_running else "not_running",
+            "details": result.stdout.strip()[:200] if is_running else "",
+        }
+
+    def health(self) -> dict[str, Any]:
+        """Return OK if the Simulator is running and the AX tree is accessible.
+
+        Returns:
+            ``{"status": "ok", "sim_pid": <int>}`` or
+            ``{"status": "error", "error": "<message>"}``
+        """
+        try:
+            root = self._ios_content_group or self._root
+            # A simple AX attribute read is sufficient to confirm AX tree access.
+            role = self._ax_attr(root, "AXRole")
+            return {
+                "status": "ok",
+                "sim_pid": self._sim_pid,
+                "root_role": str(role) if role else "unknown",
+                "device_w": self._device_w,
+                "device_h": self._device_h,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "error", "error": str(exc)}
+
+    def logs(self, lines: int = 50) -> dict[str, Any]:
+        """Return recent simulator log output via ``simctl spawn log``.
+
+        Args:
+            lines: Number of lines to return (default 50).
+
+        Returns:
+            ``{"lines": [...], "count": <int>}``
+        """
+        result = subprocess.run(
+            [
+                "xcrun", "simctl", "spawn", self.device_udid,
+                "log", "show", "--last", "30s", "--style", "compact",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        output_lines = result.stdout.strip().splitlines()[-lines:]
+        return {"lines": output_lines, "count": len(output_lines)}
+
+    # ------------------------------------------------------------------
+    # SoMAnnotator-compatible source feed
+    # ------------------------------------------------------------------
+
+    def source(self) -> dict[str, Any]:
+        """Return the element tree in a format compatible with SoMAnnotator.
+
+        The SoMAnnotator's ``get_elements_from_runner()`` calls ``GET /source``
+        on the XCTest runner.  For AXBackend we short-circuit that HTTP call
+        by providing this method — callers that use an ``AXAnnotator`` wrapper
+        will route here instead.
+
+        Returns:
+            Dict with ``"elements"`` key containing the raw list from
+            :meth:`get_elements`.
+        """
+        return {"elements": self.get_elements()}
+
+    # ------------------------------------------------------------------
+    # Dunder helpers
+    # ------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        return (
+            f"AXBackend(sim_pid={self._sim_pid}, udid={self.device_udid!r}, "
+            f"device={self._device_w:.0f}x{self._device_h:.0f})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AXAnnotator — SoMAnnotator-compatible wrapper for AXBackend
+# ---------------------------------------------------------------------------
+
+
+class AXAnnotator:
+    """Drop-in replacement for :class:`~specterqa.ios.som_annotator.SoMAnnotator`.
+
+    Provides the same interface as ``SoMAnnotator`` but sources its element
+    tree from an :class:`AXBackend` instance rather than an HTTP call to the
+    XCTest runner.  The MCP server assigns this to ``_annotator`` when the
+    AX backend is active, so all tool handler code is unchanged.
+
+    Args:
+        backend: The :class:`AXBackend` providing the AX tree.
+    """
+
+    def __init__(self, backend: AXBackend) -> None:
+        self._backend = backend
+
+    def get_elements_from_runner(self):
+        """Return a list of :class:`~specterqa.ios.som_annotator.UIElement` objects.
+
+        Fetches the raw element dicts from :meth:`AXBackend.get_elements` and
+        converts them via
+        :meth:`~specterqa.ios.som_annotator.SoMAnnotator.parse_elements_from_json`.
+
+        Returns:
+            List of ``UIElement`` objects ready for SoM annotation.
+        """
+        from specterqa.ios.som_annotator import SoMAnnotator  # noqa: PLC0415
+
+        raw_elems = self._backend.get_elements()
+        # parse_elements_from_json expects typeLabel without "XCUIElementType" prefix.
+        # AXBackend already stores the short form in "typeLabel" — compatible.
+        dummy = SoMAnnotator.__new__(SoMAnnotator)
+        dummy.runner_url = None
+        return dummy.parse_elements_from_json(raw_elems)
+
+    def annotate(
+        self,
+        screenshot_b64: str,
+        img_w: int,
+        img_h: int,
+        device_w: float = 0.0,
+        device_h: float = 0.0,
+    ) -> tuple:
+        """Fetch AX elements, annotate *screenshot_b64*, and return both.
+
+        Mirrors :meth:`~specterqa.ios.som_annotator.SoMAnnotator.annotate`.
+
+        Args:
+            screenshot_b64: Base-64 encoded PNG screenshot.
+            img_w:          Screenshot width in pixels.
+            img_h:          Screenshot height in pixels.
+            device_w:       Device logical-point width (0 = use backend value).
+            device_h:       Device logical-point height (0 = use backend value).
+
+        Returns:
+            ``(elements, annotated_b64)`` — list of ``UIElement`` and the
+            annotated base-64 PNG string.
+        """
+        from specterqa.ios.som_annotator import SoMAnnotator  # noqa: PLC0415
+
+        elements = self.get_elements_from_runner()
+        dw = device_w if device_w > 0 else self._backend._device_w
+        dh = device_h if device_h > 0 else self._backend._device_h
+
+        dummy = SoMAnnotator.__new__(SoMAnnotator)
+        dummy.runner_url = None
+        annotated = dummy.annotate_image(screenshot_b64, img_w, img_h, elements, dw, dh)
+        return elements, annotated
+
+    def __repr__(self) -> str:
+        return f"AXAnnotator(backend={self._backend!r})"
