@@ -45,6 +45,12 @@ AX_ROLE_MAP: dict[str, str] = {
     "AXLink": "link",
     "AXGroup": "other",
     "AXWebArea": "webView",
+    "AXTextArea": "textView",
+    "AXHeading": "staticText",
+    "AXProgressIndicator": "progressIndicator",
+    "AXCheckBox": "switch",
+    "AXPopUpButton": "button",
+    "AXMenuButton": "button",
 }
 
 # Serialize all AX calls onto a single dedicated thread to satisfy the
@@ -289,15 +295,11 @@ class AXBackend:
                     best_area = area
                     best_elem = child
                     self._ios_content_frame = child_frame
-                    # Calibrate device dimensions from the AX frame.
-                    # We assume the AX frame is the *display* rect in macOS
-                    # points, which maps 1:1 to iOS logical points when the
-                    # simulator runs at 100% scale.
-                    # If the caller supplied explicit dimensions, keep them.
-                    if self._device_w == _DEFAULT_DEVICE_W:
-                        self._device_w = w
-                    if self._device_h == _DEFAULT_DEVICE_H:
-                        self._device_h = h
+                    # Keep default device dimensions (390x844).
+                    # The AX frame is in macOS screen points which
+                    # differ from iOS device points. _ax_to_device
+                    # handles the coordinate conversion using the
+                    # ios_content_frame as the reference rect.
 
         if best_elem is None:
             raise RuntimeError(
@@ -401,8 +403,7 @@ class AXBackend:
         ):
             results.append(
                 {
-                    # Use XCUIElementType prefix convention so parse_elements_from_json
-                    # works unchanged (it expects typeLabel without the prefix).
+                    "type": ios_type,
                     "typeLabel": ios_type,
                     "label": str(label) if label else "",
                     "identifier": str(identifier) if identifier else "",
@@ -410,7 +411,6 @@ class AXBackend:
                     "enabled": enabled,
                     "hittable": enabled,
                     "frame": device_frame,
-                    # Raw AX element ref for action dispatch (not serialisable).
                     "_ax_ref": element,
                 }
             )
