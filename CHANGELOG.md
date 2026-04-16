@@ -7,6 +7,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v12.6.1 (2026-04-15)
+
+### Physical Device Infrastructure (WIP)
+- SpecterQAHost thin app target added — builds, signs, installs on physical devices via devicectl
+- iproxy USB port forwarding integrated in session manager
+- Device discovery via xcrun devicectl (3 devices detected)
+- BLOCKED: xcodebuild test-without-building CLI broken on iOS 26 beta ("Root install style not supported") — tracked in #46, awaiting Xcode 26 GM
+- Runner builds for iphoneos with automatic provisioning (-allowProvisioningUpdates)
+- SUPPORTED_PLATFORMS expanded to "iphoneos iphonesimulator" across all configs
+
 ## v12.6.0 (2026-04-15)
 
 ### Example ReaderPatternTab — Real-World Crash Pattern Reproduction
