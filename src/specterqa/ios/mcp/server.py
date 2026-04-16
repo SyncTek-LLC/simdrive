@@ -11,7 +11,7 @@ Usage:
     specterqa ios serve          # via CLI serve command
 
 Tools (29 total):
-    ios_start_session       Start XCTest runner on the iOS Simulator
+    ios_start_session       Start session on the iOS Simulator (AX or XCTest backend)
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
     ios_tap                 Tap element by label (preferred) or index number
@@ -250,7 +250,7 @@ def handle_save_replay(arguments: dict) -> dict:
 
 
 def handle_start_session(arguments: dict) -> dict:
-    """Start the XCTest runner on the booted iOS Simulator.
+    """Start the XCTest runner (or AX backend) on the booted iOS Simulator.
 
     Args:
         bundle_id:   Bundle ID of the app under test (required).
@@ -259,9 +259,14 @@ def handle_start_session(arguments: dict) -> dict:
         license_key: SpecterQA license key (optional — falls back to
                      ``SPECTERQA_IOS_LICENSE`` env var; omit for trial mode).
         device_type: Internal use only — reserved for future physical device support.
+        backend:     Backend selection: "auto" (default), "ax", or "xctest".
+                     "auto" uses AX if available, falls back to XCTest.
+                     "ax" forces the AXUIElement host-side backend (instant start,
+                     no XCTest runner needed).
+                     "xctest" forces the legacy XCTest runner.
 
     Returns:
-        {"status": "ok", "clone_udid": "...", "port": 8222, "runner_url": "..."}
+        {"status": "ok", "backend": "ax"|"xctest", ...}
         or {"error": "<message>"} on failure.
         (Starts PerfProfiler and NetworkInspector alongside the session.)
     """
@@ -346,6 +351,86 @@ def handle_start_session(arguments: dict) -> dict:
             provider = "local"
 
         from specterqa.ios.som_annotator import SoMAnnotator
+
+        # --- Backend selection: AX vs XCTest ----------------------------
+        # "auto" uses AXBackend if Accessibility permission is granted and
+        # the Simulator is running; falls back to XCTest otherwise.
+        # "ax" forces AX; "xctest" forces XCTest (legacy).
+        backend_pref = str(arguments.get("backend", "auto")).lower()
+        if backend_pref not in ("auto", "ax", "xctest"):
+            backend_pref = "auto"
+
+        use_ax = False
+        if backend_pref == "ax":
+            use_ax = True
+        elif backend_pref == "auto" and provider == "local":
+            try:
+                from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
+                use_ax = AXBackend.is_available()
+            except Exception:  # noqa: BLE001
+                use_ax = False
+
+        if use_ax and provider == "local":
+            try:
+                from specterqa.ios.backends.ax_backend import AXBackend, AXAnnotator  # noqa: PLC0415
+                from specterqa.ios.replay import ReplayRecorder  # noqa: PLC0415
+                from specterqa.ios.drivers.simulator.console import ConsoleMonitor  # noqa: PLC0415
+                from specterqa.ios.drivers.simulator.crash import CrashDetector  # noqa: PLC0415
+                from specterqa.ios.drivers.simulator.perf import PerfProfiler  # noqa: PLC0415
+                from specterqa.ios.drivers.simulator.network import NetworkInspector  # noqa: PLC0415
+
+                # Install the app if requested (still uses simctl — no runner needed).
+                if app_path:
+                    subprocess.run(
+                        ["xcrun", "simctl", "install", device_id, app_path],
+                        check=True,
+                    )
+                    subprocess.run(
+                        ["xcrun", "simctl", "launch", device_id, bundle_id],
+                        check=True,
+                    )
+
+                ax_backend = AXBackend(device_udid=device_id)
+                _backend = ax_backend
+                _annotator = AXAnnotator(ax_backend)
+                _last_elements = []
+                _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
+
+                _console_monitor = ConsoleMonitor(device_id=device_id)
+                _console_monitor.start()
+                _crash_detector = CrashDetector(device_id=device_id, bundle_id=bundle_id)
+                _crash_detector.start()
+                _perf_profiler = PerfProfiler(device_id=device_id, bundle_id=bundle_id)
+                _network_inspector = NetworkInspector(device_id=device_id)
+                _network_inspector.start()
+                _network_inspector.setup_log_watcher(_console_monitor)
+
+                _session_state = "running"
+                return {
+                    "status": "ok",
+                    "backend": "ax",
+                    "device_type": device_type,
+                    "target_udid": device_id,
+                    "sim_pid": ax_backend._sim_pid,
+                    "device_w": ax_backend._device_w,
+                    "device_h": ax_backend._device_h,
+                }
+            except Exception as exc:
+                # Clean up partial state and fall through to XCTest on auto mode.
+                _backend = None
+                _annotator = None
+                _last_elements = []
+                _recorder = None
+                _console_monitor = None
+                _crash_detector = None
+                _perf_profiler = None
+                _network_inspector = None
+                _session_state = "idle"
+                if backend_pref == "ax":
+                    # Explicit ax request — surface the error.
+                    return {"error": f"AX backend failed: {exc}"}
+                # auto mode — fall through to XCTest below.
+                logger.info("AX backend unavailable (%s); falling back to XCTest", exc)
 
         if provider == "browserstack":
             try:
@@ -2208,11 +2293,16 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_start_session",
         description=(
-            "Start the XCTest runner on the booted iOS Simulator. "
+            "Start a SpecterQA session on the booted iOS Simulator. "
             "bundle_id is the app's CFBundleIdentifier (required). "
             "device_id defaults to 'booted' (uses the currently booted simulator). "
             "app_path is an optional path to a .app bundle to install before starting. "
-            "license_key is optional — omit for trial mode or set to 'founder'."
+            "license_key is optional — omit for trial mode or set to 'founder'. "
+            "backend controls the automation engine: "
+            "'auto' (default) uses the AXUIElement host-side backend when available "
+            "and falls back to the XCTest runner; "
+            "'ax' forces the AX backend (instant start, no runner deployment, no SIGABRT); "
+            "'xctest' forces the legacy XCTest runner."
         ),
     )
     async def ios_start_session(
@@ -2221,6 +2311,7 @@ SETUP CHECK:
         app_path: str | None = None,
         license_key: str | None = None,
         clone: bool = False,
+        backend: str = "auto",
     ) -> str:
         result = handle_start_session(
             {
@@ -2230,6 +2321,7 @@ SETUP CHECK:
                 "license_key": license_key or "",
                 "clone": clone,
                 "device_type": "simulator",  # physical device support hidden until Xcode 26 GM
+                "backend": backend,
             }
         )
         return json.dumps(result)
