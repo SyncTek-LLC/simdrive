@@ -2,6 +2,11 @@
 
 Available backends (priority order):
 
+* :class:`~specterqa.ios.backends.ax_backend.AXBackend` —
+  Host-side automation via macOS AXUIElement APIs.  Instant session start;
+  no XCTest runner, no on-device process, no SIGABRT crashes.  Requires
+  macOS Accessibility permission and pyobjc-framework-ApplicationServices.
+
 * :class:`~specterqa.ios.backends.xctest_client.XCTestBackend` —
   HTTP client for the Swift XCTest runner.  Highest fidelity; no window
   required.  Port 8222.
@@ -31,6 +36,7 @@ Usage::
 
 from __future__ import annotations
 
+from specterqa.ios.backends.ax_backend import AXBackend
 from specterqa.ios.backends.browserstack import BrowserStackBackend
 from specterqa.ios.backends.cgevents import CGEventBackend
 from specterqa.ios.backends.indigo_hid import IndigoHIDBackend
@@ -39,6 +45,7 @@ from specterqa.ios.backends.xctest_client import XCTestBackend
 from specterqa.ios.wda_driver import WDADriver
 
 __all__ = [
+    "AXBackend",
     "XCTestBackend",
     "WDADriver",
     "IndigoHIDBackend",
