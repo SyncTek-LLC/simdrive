@@ -1,16 +1,23 @@
 """BackendSelector — runtime backend selection for SpecterQA iOS.
 
-Probes available backends in priority order and returns the best one:
+This module is the **single** backend-decision point for the MCP product path.
+Use :meth:`BackendSelector.choose` (new) from ``mcp/server.py`` and anywhere
+else that needs to pick a backend at runtime.
 
+``get_backend`` is retained for backward-compatibility but internally delegates
+to the same lazy-import logic.
+
+Backend priority for ``choose()``:
     1. XCTestBackend  — highest fidelity, no window required, on-device gestures
-    2. WDABackend     — Appium WebDriverAgent, W3C Actions, headless, port 8100
-    3. IndigoHIDBackend — headless, Mach IPC, no window required
-    4. CGEventBackend — fallback, requires visible Simulator window
+    2. AXBackend      — host-side AX tree, instant start, no runner required
+    3. BrowserStack   — remote real-device cloud (requires license + credentials)
 
-The ``preferred`` argument bypasses auto-selection and forces a specific backend.
+Legacy auto-select path (``get_backend()``) also probes WDA, IndigoHID, and
+CGEvents for backward-compat with CLI commands — those backends are not on the
+MCP product path.
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
-INIT-2026-493 — WDA backend added.
+INIT-2026-525 — Consolidate backend selection; define IOSBackend Protocol.
 """
 
 from __future__ import annotations
@@ -19,16 +26,14 @@ import logging
 from typing import Any
 
 from specterqa.ios.backends.xctest_client import XCTestBackend
-from specterqa.ios.backends.indigo_hid import IndigoHIDBackend
-from specterqa.ios.backends.cgevents import CGEventBackend
-from specterqa.ios.wda_driver import WDADriver
 
 logger = logging.getLogger("specterqa.ios.backends.selector")
 
-# Backend name aliases accepted by the ``preferred`` parameter
+# Backend name aliases accepted by ``preferred`` / ``requested`` parameters
 _PREFERRED_MAP: dict[str, str] = {
     "xctest": "xctest",
     "xc_test": "xctest",
+    "ax": "ax",
     "wda": "wda",
     "webdriveragent": "wda",
     "indigo": "indigo",
@@ -36,20 +41,19 @@ _PREFERRED_MAP: dict[str, str] = {
     "cgevents": "cgevents",
     "cg_events": "cgevents",
     "cgevent": "cgevents",
+    "browserstack": "browserstack",
+    "bs": "browserstack",
 }
 
 
 class BackendSelector:
     """Select and return the best available iOS interaction backend at runtime.
 
-    Backends are probed in priority order on each :meth:`get_backend` call so
-    that availability changes (e.g. the XCTest runner coming online mid-session)
-    are picked up automatically.
-
     Args:
-        udid: Simulator UDID (or ``"booted"``).
-        preferred: Force a specific backend — ``"xctest"``, ``"indigo"``,
-            ``"cgevents"``, or ``None`` for auto-selection.
+        udid:      Simulator UDID (or ``"booted"``).
+        preferred: Force a specific backend — ``"xctest"``, ``"ax"``,
+                   ``"browserstack"``, ``"wda"``, ``"indigo"``, ``"cgevents"``,
+                   or ``None`` for auto-selection.
     """
 
     def __init__(
@@ -61,134 +65,315 @@ class BackendSelector:
         self.preferred = preferred
 
     # ------------------------------------------------------------------
-    # Public API
+    # Primary public API — MCP product path
+    # ------------------------------------------------------------------
+
+    def choose(
+        self,
+        device_udid: str | None = None,
+        requested: str | None = None,
+        license_tier: str = "free",
+    ) -> Any:
+        """Select and return the best available backend.
+
+        This is the **canonical** backend-selection entry point for the MCP
+        product path.  ``mcp/server.py`` must call this instead of making its
+        own inline backend decisions.
+
+        Selection logic:
+          1. If *requested* is set, try that backend first.  Raise
+             ``RuntimeError`` if it is unavailable.
+          2. Otherwise: XCTestBackend → AXBackend → BrowserStack (if license
+             permits).
+
+        Args:
+            device_udid:   Simulator UDID or ``"booted"`` (overrides ``self.udid``).
+            requested:     Backend name override (user-supplied ``backend=`` argument).
+            license_tier:  ``"free"`` (default) or ``"pro"``/``"enterprise"`` —
+                           controls whether BrowserStack is eligible.
+
+        Returns:
+            An instantiated backend object.
+
+        Raises:
+            RuntimeError: When no eligible backend is available.
+        """
+        udid = device_udid if device_udid is not None else self.udid
+
+        if requested is not None:
+            key = _PREFERRED_MAP.get(requested.lower())
+            if key is None:
+                raise ValueError(
+                    f"Unknown backend {requested!r}. Valid: 'xctest', 'ax', 'browserstack'."
+                )
+            backend = self._instantiate(key, udid)
+            if backend is None:
+                raise RuntimeError(
+                    f"Requested backend {requested!r} is not available on this system."
+                )
+            logger.info("BackendSelector.choose: explicit %r (udid=%r)", requested, udid)
+            return backend
+
+        # Auto-selection: XCTest → AX → BrowserStack
+        if self._check_available(XCTestBackend):
+            backend = XCTestBackend(udid=udid)
+            logger.info("BackendSelector.choose: selected XCTestBackend (udid=%r)", udid)
+            return backend
+
+        try:
+            from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
+
+            if AXBackend.is_available():
+                backend = AXBackend(device_udid=udid)
+                logger.info("BackendSelector.choose: selected AXBackend (udid=%r)", udid)
+                return backend
+        except ImportError:
+            pass
+
+        if license_tier not in ("free",):
+            try:
+                from specterqa.ios.backends.browserstack import BrowserStackBackend  # noqa: PLC0415
+
+                if BrowserStackBackend.is_available():
+                    backend = BrowserStackBackend()
+                    logger.info("BackendSelector.choose: selected BrowserStackBackend")
+                    return backend
+            except ImportError:
+                pass
+
+        raise RuntimeError(
+            "No iOS backend is available on this system. "
+            "Ensure one of the following:\n"
+            "  (1) XCTest runner is listening on port 8222 (run: specterqa ios build-runner), or\n"
+            "  (2) iOS Simulator is booted and macOS Accessibility permission is granted (for AX backend)."
+        )
+
+    # ------------------------------------------------------------------
+    # Legacy public API — backward-compat for CLI commands
     # ------------------------------------------------------------------
 
     def get_backend(self) -> Any:
-        """Return the best available backend instance.
+        """Return the best available backend instance (legacy interface).
+
+        Retained for backward-compatibility.  New code should call ``choose()``.
 
         When ``preferred`` is set, instantiates that backend directly.
         Otherwise probes availability in priority order:
-            XCTestBackend → IndigoHIDBackend → CGEventBackend
+            XCTestBackend → AXBackend → WDADriver → IndigoHIDBackend → CGEventBackend
 
         Returns:
-            An instantiated backend object exposing at minimum:
-            ``tap``, ``swipe``, ``type_text``, ``screenshot``.
+            An instantiated backend object.
 
         Raises:
-            RuntimeError: When no backend is available (all probes fail).
+            RuntimeError: When no backend is available.
         """
         if self.preferred is not None:
-            return self._get_preferred()
-        return self._auto_select()
+            return self._get_preferred_legacy()
+        return self._auto_select_legacy()
 
     def available_backends(self) -> list[str]:
-        """Return a list of names of all currently available backends.
-
-        Re-evaluates availability on each call.
-
-        Returns:
-            List of backend name strings (e.g. ``["xctest", "wda", "cgevents"]``).
-        """
+        """Return a list of names of all currently available backends."""
         names: list[str] = []
         if self._check_available(XCTestBackend):
             names.append("xctest")
-        if self._check_available(WDADriver):
-            names.append("wda")
-        if self._check_available(IndigoHIDBackend):
-            names.append("indigo")
-        if self._check_available(CGEventBackend):
-            names.append("cgevents")
+
+        try:
+            from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
+
+            if AXBackend.is_available():
+                names.append("ax")
+        except ImportError:
+            pass
+
+        try:
+            from specterqa.ios.wda_driver import WDADriver  # noqa: PLC0415
+
+            if self._check_available(WDADriver):
+                names.append("wda")
+        except ImportError:
+            pass
+
+        try:
+            from specterqa.ios.backends.indigo_hid import IndigoHIDBackend  # noqa: PLC0415
+
+            if self._check_available(IndigoHIDBackend):
+                names.append("indigo")
+        except ImportError:
+            pass
+
+        try:
+            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+            if self._check_available(CGEventBackend):
+                names.append("cgevents")
+        except ImportError:
+            pass
+
+        try:
+            from specterqa.ios.backends.browserstack import BrowserStackBackend  # noqa: PLC0415
+
+            if BrowserStackBackend.is_available():
+                names.append("browserstack")
+        except ImportError:
+            pass
+
         return names
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _instantiate(self, key: str, udid: str) -> Any | None:
+        """Instantiate the backend named *key* if it is available.
+
+        Returns the backend object or ``None`` if unavailable / not importable.
+        """
+        if key == "xctest":
+            if self._check_available(XCTestBackend):
+                return XCTestBackend(udid=udid)
+            return None
+
+        if key == "ax":
+            try:
+                from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
+
+                if AXBackend.is_available():
+                    return AXBackend(device_udid=udid)
+            except ImportError:
+                pass
+            return None
+
+        if key == "browserstack":
+            try:
+                from specterqa.ios.backends.browserstack import BrowserStackBackend  # noqa: PLC0415
+
+                if BrowserStackBackend.is_available():
+                    return BrowserStackBackend()
+            except ImportError:
+                pass
+            return None
+
+        if key == "wda":
+            try:
+                from specterqa.ios.wda_driver import WDADriver  # noqa: PLC0415
+
+                if self._check_available(WDADriver):
+                    return WDADriver(udid=udid)
+            except ImportError:
+                pass
+            return None
+
+        if key == "indigo":
+            try:
+                from specterqa.ios.backends.indigo_hid import IndigoHIDBackend  # noqa: PLC0415
+
+                if self._check_available(IndigoHIDBackend):
+                    return IndigoHIDBackend(udid=udid)
+            except ImportError:
+                pass
+            return None
+
+        if key == "cgevents":
+            try:
+                from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+                if self._check_available(CGEventBackend):
+                    return CGEventBackend(udid=udid)
+            except ImportError:
+                pass
+            return None
+
+        return None
+
     @staticmethod
     def _check_available(backend_class: type) -> bool:
-        """Call ``is_available()`` on *backend_class* defensively.
-
-        Supports both classmethod-style and instance-method-style ``is_available``:
-          - If the class has a classmethod or staticmethod named ``is_available``,
-            call it directly on the class.
-          - Otherwise, instantiate the class and call the instance method.
-
-        This keeps the selector compatible with mock classes (used in tests) as
-        well as the real backend classes.
-        """
+        """Call ``is_available()`` on *backend_class* defensively."""
         try:
             return backend_class.is_available()  # works for classmethods & mocks
         except TypeError:
-            # is_available is an instance method — instantiate with no args
             try:
                 return backend_class().is_available()
-            except Exception:  # noqa: BLE001 — backend probe: any failure = unavailable
+            except Exception:  # noqa: BLE001
                 return False
-        except Exception:  # noqa: BLE001 — backend probe: any failure = unavailable
+        except Exception:  # noqa: BLE001
             return False
 
-    def _auto_select(self) -> Any:
-        """Probe backends in priority order and return the first available."""
-        # Priority 1: XCTestBackend (custom Swift runner, port 8222)
+    def _auto_select_legacy(self) -> Any:
+        """Probe backends in priority order (legacy CLI path)."""
+        # Priority 1: XCTestBackend
         if self._check_available(XCTestBackend):
             backend = XCTestBackend(udid=self.udid)
             logger.info("BackendSelector: selected XCTestBackend (udid=%r)", self.udid)
             return backend
 
-        # Priority 2: WDADriver (Appium WebDriverAgent, port 8100)
-        if self._check_available(WDADriver):
-            backend = WDADriver(udid=self.udid)
-            logger.info("BackendSelector: selected WDADriver (udid=%r)", self.udid)
-            return backend
+        # Priority 2: AXBackend
+        try:
+            from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
 
-        # Priority 3: IndigoHIDBackend (headless Mach IPC)
-        if self._check_available(IndigoHIDBackend):
-            backend = IndigoHIDBackend(udid=self.udid)
-            logger.info("BackendSelector: selected IndigoHIDBackend (udid=%r)", self.udid)
-            return backend
+            if AXBackend.is_available():
+                backend = AXBackend(device_udid=self.udid)
+                logger.info("BackendSelector: selected AXBackend (udid=%r)", self.udid)
+                return backend
+        except ImportError:
+            pass
 
-        # Priority 4: CGEventBackend (fallback, requires visible window)
-        if self._check_available(CGEventBackend):
-            backend = CGEventBackend(udid=self.udid)
-            logger.info("BackendSelector: selected CGEventBackend (udid=%r)", self.udid)
-            return backend
+        # Priority 3: WDADriver
+        try:
+            from specterqa.ios.wda_driver import WDADriver  # noqa: PLC0415
+
+            if self._check_available(WDADriver):
+                backend = WDADriver(udid=self.udid)
+                logger.info("BackendSelector: selected WDADriver (udid=%r)", self.udid)
+                return backend
+        except ImportError:
+            pass
+
+        # Priority 4: IndigoHIDBackend
+        try:
+            from specterqa.ios.backends.indigo_hid import IndigoHIDBackend  # noqa: PLC0415
+
+            if self._check_available(IndigoHIDBackend):
+                backend = IndigoHIDBackend(udid=self.udid)
+                logger.info("BackendSelector: selected IndigoHIDBackend (udid=%r)", self.udid)
+                return backend
+        except ImportError:
+            pass
+
+        # Priority 5: CGEventBackend
+        try:
+            from specterqa.ios.backends.cgevents import CGEventBackend  # noqa: PLC0415
+
+            if self._check_available(CGEventBackend):
+                backend = CGEventBackend(udid=self.udid)
+                logger.info("BackendSelector: selected CGEventBackend (udid=%r)", self.udid)
+                return backend
+        except ImportError:
+            pass
 
         raise RuntimeError(
             "No iOS backend is available. "
             "Ensure one of the following: "
             "(1) XCTest runner is listening on port 8222, "
-            "(2) WebDriverAgent is running on port 8100 (run: specterqa-ios wda start), "
-            "(3) Xcode + SimulatorKit are installed (for IndigoHID), or "
-            "(4) Simulator.app is running and visible (for CGEvents)."
+            "(2) macOS Accessibility permission granted (for AXBackend), "
+            "(3) WebDriverAgent is running on port 8100 (run: specterqa-ios wda start), "
+            "(4) Xcode + SimulatorKit are installed (for IndigoHID), or "
+            "(5) Simulator.app is running and visible (for CGEvents)."
         )
 
-    def _get_preferred(self) -> Any:
-        """Instantiate and return the backend named by ``self.preferred``."""
+    def _get_preferred_legacy(self) -> Any:
+        """Instantiate and return the backend named by ``self.preferred`` (legacy)."""
         key = _PREFERRED_MAP.get((self.preferred or "").lower())
-
-        if key == "xctest":
-            backend = XCTestBackend(udid=self.udid)
-            logger.info("BackendSelector: forced XCTestBackend (udid=%r)", self.udid)
+        if key is None:
+            raise ValueError(
+                f"Unknown preferred backend {self.preferred!r}. "
+                "Valid values: 'xctest', 'ax', 'wda', 'indigo', 'cgevents', 'browserstack'."
+            )
+        backend = self._instantiate(key, self.udid)
+        if backend is not None:
+            logger.info("BackendSelector: forced %r (udid=%r)", key, self.udid)
             return backend
-
-        if key == "wda":
-            backend = WDADriver(udid=self.udid)
-            logger.info("BackendSelector: forced WDADriver (udid=%r)", self.udid)
-            return backend
-
-        if key == "indigo":
-            backend = IndigoHIDBackend(udid=self.udid)
-            logger.info("BackendSelector: forced IndigoHIDBackend (udid=%r)", self.udid)
-            return backend
-
-        if key == "cgevents":
-            backend = CGEventBackend(udid=self.udid)
-            logger.info("BackendSelector: forced CGEventBackend (udid=%r)", self.udid)
-            return backend
-
-        raise ValueError(
-            f"Unknown preferred backend {self.preferred!r}. Valid values: 'xctest', 'wda', 'indigo', 'cgevents'."
+        raise RuntimeError(
+            f"Preferred backend {self.preferred!r} is not available on this system."
         )
 
     # ------------------------------------------------------------------
