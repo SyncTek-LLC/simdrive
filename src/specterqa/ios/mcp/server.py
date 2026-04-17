@@ -364,12 +364,9 @@ def handle_start_session(arguments: dict) -> dict:
         use_ax = False
         if backend_pref == "ax":
             use_ax = True
-        elif backend_pref == "auto" and provider == "local":
-            try:
-                from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
-                use_ax = AXBackend.is_available()
-            except Exception:  # noqa: BLE001
-                use_ax = False
+        # "auto" defaults to XCTest — AX backend is not production-ready
+        # for SwiftUI-heavy apps (limited element tree traversal).
+        # Use backend="ax" to opt-in explicitly.
 
         if use_ax and provider == "local":
             try:
