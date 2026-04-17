@@ -1430,4 +1430,5 @@ class AXHTTPServer:
     def stop(self):
         if self._server:
             self._server.shutdown()
+            self._server.server_close()
             self._server = None
