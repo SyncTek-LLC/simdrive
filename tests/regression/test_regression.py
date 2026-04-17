@@ -28,8 +28,13 @@ class TestReg002NoRawElementTap:
     """v11.9.3 bug: el.tap() throws ObjC SIGABRT on iOS 26."""
 
     def test_httpserver_uses_coordinate_tap_not_el_tap(self):
-        """Verify POST /tap uses element.coordinate().tap(), not element.tap()."""
-        swift = REPO_ROOT / "runner" / "Sources" / "HTTPServer.swift"
+        """Verify POST /tap uses element.coordinate().tap(), not element.tap().
+
+        After the HTTPServer split refactor, tap handling moved from the 24-case
+        switch in HTTPServer.swift into runner/Sources/Routes/TapRoute.swift.
+        The coordinate-tap invariant must still hold there.
+        """
+        swift = REPO_ROOT / "runner" / "Sources" / "Routes" / "TapRoute.swift"
         content = swift.read_text()
         # The element-based tap section should use coordinate, not raw tap
         assert "withNormalizedOffset" in content, \
@@ -40,12 +45,39 @@ class TestReg003RunnerSourceBundled:
     """v11.9.0 bug: Swift source not in wheel."""
 
     def test_runner_source_package_exists(self):
+        """Verify the runner_source dedup mechanism is intact.
+
+        After the runner_source dedup refactor, runner/Sources/ is the single
+        source of truth. runner_source/Sources/ is populated at BUILD TIME by
+        the build_py override in setup.py — it is NOT tracked in git.
+
+        We assert two invariants that together guarantee Swift source ships in
+        the wheel:
+          1. The authoritative Swift files exist in runner/Sources/.
+          2. setup.py contains the build_py override that copies them at build time.
+        """
+        # Invariant 1: authoritative source exists
+        runner_swift = REPO_ROOT / "runner" / "Sources" / "SpecterQARunner.swift"
+        assert runner_swift.exists(), \
+            "runner/Sources/SpecterQARunner.swift missing — authoritative Swift source gone"
+
+        swift_files = list((REPO_ROOT / "runner" / "Sources").rglob("*.swift"))
+        assert len(swift_files) >= 7, \
+            f"Only {len(swift_files)} Swift files in runner/Sources/ — source incomplete"
+
+        # Invariant 2: setup.py build_py override copies sources into the wheel
+        setup_py = REPO_ROOT / "setup.py"
+        assert setup_py.exists(), "setup.py missing"
+        setup_content = setup_py.read_text()
+        assert "build_py" in setup_content, \
+            "setup.py has no build_py override — runner_source/Sources won't be populated in wheel"
+        assert "runner_source" in setup_content, \
+            "setup.py build_py override doesn't reference runner_source — dedup mechanism broken"
+
+        # Invariant 3: runner_source package scaffold is in place
         pkg = REPO_ROOT / "src" / "specterqa" / "ios" / "runner_source"
         assert pkg.exists(), "runner_source package directory missing"
         assert (pkg / "__init__.py").exists(), "runner_source __init__.py missing"
-        assert (pkg / "Sources").exists(), "runner_source/Sources missing"
-        swift_files = list((pkg / "Sources").glob("*.swift"))
-        assert len(swift_files) >= 7, f"Only {len(swift_files)} Swift files bundled"
 
 
 class TestReg004GreedyLabelMatch:
