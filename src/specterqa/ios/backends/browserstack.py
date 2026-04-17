@@ -6,6 +6,8 @@ BrowserStack's real device cloud via their Appium REST API.
 Requires BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY env vars.
 """
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -213,3 +215,56 @@ class BrowserStackBackend:
             except (OSError, urllib.error.URLError, Exception) as exc:  # noqa: BLE001 — best-effort cleanup
                 logger.debug("BrowserStack session DELETE failed: %s", exc)
             self._session_id = None
+
+    # ------------------------------------------------------------------
+    # IOSBackend Protocol shims
+    # ------------------------------------------------------------------
+
+    def start(self, device_udid: str = "", bundle_id: str = "", **kwargs: Any) -> None:
+        """Start a BrowserStack session for *bundle_id*."""
+        app_path = kwargs.get("app_path", "")
+        if app_path:
+            self.upload_app(str(app_path))
+        self.start_session(bundle_id)
+
+    def app_state(self) -> str:
+        """Return a best-effort app state from BrowserStack.
+
+        BrowserStack Appium sessions don't expose app lifecycle directly;
+        return "foreground" when a session is active, "not_running" otherwise.
+        """
+        return "foreground" if self._session_id else "not_running"
+
+    def get_elements(self, max_elements: int = 0) -> dict:
+        """Return the element tree via Appium /elements query."""
+        try:
+            result = self._request(
+                "POST",
+                "/elements",
+                {"using": "xpath", "value": "//*"},
+            )
+            elements = result.get("value", [])
+            if max_elements and max_elements > 0:
+                elements = elements[:max_elements]
+            return {"elements": elements, "count": len(elements)}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("BrowserStackBackend.get_elements failed: %s", exc)
+            return {"elements": [], "count": 0}
+
+    def find_element(self, **criteria: Any) -> dict | None:
+        """Find a single element by label or accessibility ID."""
+        label = criteria.get("label") or criteria.get("identifier")
+        if not label:
+            return None
+        try:
+            result = self._request(
+                "POST",
+                "/element",
+                {"using": "accessibility id", "value": label},
+            )
+            element = result.get("value")
+            if element and isinstance(element, dict):
+                return element
+            return None
+        except Exception:  # noqa: BLE001
+            return None
