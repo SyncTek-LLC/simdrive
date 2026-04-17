@@ -29,6 +29,24 @@ Add to `.claude/mcp.json`:
 
 Then in Claude Code: _"Run a smoke test on the Palace app, record it as palace-smoke"_. Claude drives the simulator, records every action. After that, CI runs it free — no AI involved.
 
+### Your First Session (30 seconds)
+
+```python
+# Claude calls these 6 MCP tools in order:
+ios_start_session(bundle_id="com.example.app")
+ios_screenshot()                          # see what's on screen
+ios_tap(label="Sign In")                  # tap by label
+ios_screenshot()                          # verify result
+ios_stop_recording(name="signin-smoke")   # save replay YAML to .specterqa/replays/
+ios_stop_session()                        # clean up
+```
+
+The replay YAML is now in `.specterqa/replays/signin-smoke.yaml`. Run it in CI with:
+```bash
+specterqa-ios replay .specterqa/replays/signin-smoke.yaml
+```
+No AI needed on replay — it runs the deterministic engine directly.
+
 ## Dual-Mode Architecture
 
 | Phase | Who drives | Cost |
