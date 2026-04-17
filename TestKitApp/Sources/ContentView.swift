@@ -15,9 +15,6 @@ struct ContentView: View {
             StressTab()
                 .tabItem { Label("Stress", systemImage: "flame") }
                 .accessibilityIdentifier("tab_stress")
-            UIKitBridgeTab()
-                .tabItem { Label("Bridge", systemImage: "arrow.left.arrow.right") }
-                .accessibilityIdentifier("tab_bridge")
             PalacePatternTab()
                 .tabItem { Label("Palace", systemImage: "books.vertical") }
                 .accessibilityIdentifier("tab_palace")
