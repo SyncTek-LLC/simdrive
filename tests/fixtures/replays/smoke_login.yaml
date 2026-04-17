@@ -1,0 +1,22 @@
+replay:
+  name: smoke_login
+  bundle_id: com.example.testapp
+  device_id: booted
+  recorded_at: '2026-04-01T10:00:00'
+  settle_timeout: 2.0
+  step_timeout: 10.0
+  steps:
+  - action: tap
+    element_label: Sign In
+    element_identifier: signInButton
+    x: 195.0
+    y: 400.0
+  - action: type
+    text: test@example.com
+  - action: tap
+    element_label: Continue
+    x: 195.0
+    y: 500.0
+    expect_elements:
+    - Welcome
+    - Home
