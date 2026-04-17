@@ -79,20 +79,40 @@ _network_inspector = None  # NetworkInspector instance (None when session is not
 _perf_baseline: dict | None = None  # Stored perf baseline for ios_perf_compare
 _ax_http_server = None  # AXHTTPServer instance (None when AX backend is not active)
 
+# Circuit-breaker for session health — replaces the per-call health() probe.
+# After 3 consecutive ConnectionError failures the breaker opens and
+# _require_session() raises RuntimeError immediately without hitting the runner.
+from specterqa.ios.backends.retry_policy import RetryPolicy, SessionCrashedError  # noqa: E402
+
+_circuit_breaker = RetryPolicy(
+    max_retries=2,
+    base_backoff_s=0.3,
+    circuit_breaker_threshold=3,
+).stateful()
+
 
 def _require_session() -> None:
-    """Raise RuntimeError if no active session exists or session has crashed."""
+    """Raise RuntimeError if no active session exists or if the circuit breaker is open.
+
+    The per-call health() probe has been replaced by a circuit-breaker pattern:
+    after 3 consecutive ConnectionError failures (recorded by backend call sites)
+    the breaker opens and all subsequent tool calls fail fast with a clear message.
+
+    This eliminates the extra round-trip to the runner on every tool invocation.
+    """
     global _session_state
     if _session_state == "crashed":
-        raise RuntimeError("Session crashed. Call ios_stop_session then ios_start_session to recover.")
+        raise RuntimeError(
+            "Session crashed. Call ios_stop_session then ios_start_session to recover."
+        )
     if _backend is None:
         raise RuntimeError("No active session. Call ios_start_session first.")
-    # Health probe — detect runner death mid-session
-    try:
-        _backend.health()
-    except Exception:
+    if _circuit_breaker.is_open():
         _session_state = "crashed"
-        raise RuntimeError("Session crashed (runner unreachable). Call ios_stop_session then ios_start_session.")
+        raise RuntimeError(
+            "Session unreachable (circuit breaker open — 3 consecutive failures). "
+            "Call ios_stop_session then ios_start_session to recover."
+        )
 
 
 def _auto_checkpoint() -> None:
@@ -251,7 +271,11 @@ def handle_save_replay(arguments: dict) -> dict:
 
 
 def handle_start_session(arguments: dict) -> dict:
-    """Start the XCTest runner (or AX backend) on the booted iOS Simulator.
+    """Start the iOS backend on the booted simulator (or BrowserStack).
+
+    Backend selection is now handled exclusively by
+    :meth:`BackendSelector.choose` — this function no longer contains inline
+    AX/XCTest/BrowserStack decision logic.
 
     Args:
         bundle_id:   Bundle ID of the app under test (required).
@@ -260,23 +284,17 @@ def handle_start_session(arguments: dict) -> dict:
         license_key: SpecterQA license key (optional — falls back to
                      ``SPECTERQA_IOS_LICENSE`` env var; omit for trial mode).
         device_type: Internal use only — reserved for future physical device support.
-        backend:     Backend selection: "auto" (default), "ax", or "xctest".
-                     "auto" uses AX if available, falls back to XCTest.
-                     "ax" forces the AXUIElement host-side backend (instant start,
-                     no XCTest runner needed).
-                     "xctest" forces the legacy XCTest runner.
+        backend:     Backend name override: "auto" (default), "ax", "xctest",
+                     or "browserstack".  "auto" lets BackendSelector decide.
 
     Returns:
-        {"status": "ok", "backend": "ax"|"xctest", ...}
+        {"status": "ok", "backend": "ax"|"xctest"|"browserstack", ...}
         or {"error": "<message>"} on failure.
-        (Starts PerfProfiler and NetworkInspector alongside the session.)
     """
     global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
-        # BUG V5-1 FIX: if the caller passes license_key="founder" as an argument,
-        # inject it into the environment so LicenseValidator's founder bypass fires.
         from specterqa.ios.license.validator import LicenseValidator
 
         license_key = arguments.get("license_key", os.environ.get("SPECTERQA_LICENSE_KEY", ""))
@@ -306,7 +324,6 @@ def handle_start_session(arguments: dict) -> dict:
         if _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR) is None or _needs_rebuild(_DEFAULT_RUNNER_BUILD_DIR):
             logger.info("Runner not built or stale — building automatically...")
             try:
-                # Prefer bundled runner source (wheel install); fall back to dev repo layout
                 try:
                     from specterqa.ios.runner_source import RUNNER_SOURCE_DIR, BUILD_SCRIPT
 
@@ -329,68 +346,55 @@ def handle_start_session(arguments: dict) -> dict:
             except Exception as exc:
                 logger.warning("Auto-build failed: %s", exc)
 
-        # Auto-detect provider: local sim or BrowserStack
-        provider = "local"
-        from specterqa.ios.backends.browserstack import BrowserStackBackend
+        # --- Backend selection via BackendSelector.choose() ---------------
+        # Normalise the caller's "backend" argument:
+        #   "auto" / missing   → None  (BackendSelector decides)
+        #   "xctest"           → "xctest"
+        #   "ax"               → "ax"
+        #   "browserstack"/"bs" → "browserstack"
+        backend_arg = str(arguments.get("backend", "auto")).lower()
+        if backend_arg == "auto":
+            backend_arg = None  # type: ignore[assignment]
 
-        if BrowserStackBackend.is_available():
-            # Check if a local sim is booted
-            sim_check = subprocess.run(
-                ["xcrun", "simctl", "list", "devices", "booted", "-j"],
-                capture_output=True,
-                text=True,
-            )
-            has_local_sim = '"state" : "Booted"' in sim_check.stdout
-            if not has_local_sim:
-                provider = "browserstack"
-
-        # Explicit env-var override wins over auto-detection
+        # Env-var override: SPECTERQA_PROVIDER=browserstack forces BS.
         env_provider = os.environ.get("SPECTERQA_PROVIDER", "").lower()
         if env_provider in ("browserstack", "bs"):
-            provider = "browserstack"
-        elif env_provider == "local":
-            provider = "local"
+            backend_arg = "browserstack"
+        elif env_provider == "local" and backend_arg == "browserstack":
+            backend_arg = None  # type: ignore[assignment]
 
+        from specterqa.ios.backends.selector import BackendSelector
         from specterqa.ios.som_annotator import SoMAnnotator
 
-        # --- Backend selection: AX vs XCTest ----------------------------
-        # "auto" uses AXBackend if Accessibility permission is granted and
-        # the Simulator is running; falls back to XCTest otherwise.
-        # "ax" forces AX; "xctest" forces XCTest (legacy).
-        backend_pref = str(arguments.get("backend", "auto")).lower()
-        if backend_pref not in ("auto", "ax", "xctest"):
-            backend_pref = "auto"
+        try:
+            chosen = BackendSelector(udid=device_id).choose(
+                device_udid=device_id,
+                requested=backend_arg,
+            )
+        except (RuntimeError, ValueError) as exc:
+            return {"error": str(exc)}
 
-        use_ax = False
-        if backend_pref == "ax":
-            use_ax = True
-        # "auto" defaults to XCTest — AX backend is not production-ready
-        # for SwiftUI-heavy apps (limited element tree traversal).
-        # Use backend="ax" to opt-in explicitly.
+        backend_name = type(chosen).__name__
 
-        if use_ax and provider == "local":
+        # Reset the circuit breaker for the new session.
+        _circuit_breaker.reset()
+
+        # --- AX backend path -------------------------------------------
+        if backend_name == "AXBackend":
             try:
-                from specterqa.ios.backends.ax_backend import AXBackend, AXAnnotator, AXHTTPServer  # noqa: PLC0415
+                from specterqa.ios.backends.ax_backend import AXAnnotator, AXHTTPServer  # noqa: PLC0415
                 from specterqa.ios.replay import ReplayRecorder  # noqa: PLC0415
                 from specterqa.ios.drivers.simulator.console import ConsoleMonitor  # noqa: PLC0415
                 from specterqa.ios.drivers.simulator.crash import CrashDetector  # noqa: PLC0415
                 from specterqa.ios.drivers.simulator.perf import PerfProfiler  # noqa: PLC0415
                 from specterqa.ios.drivers.simulator.network import NetworkInspector  # noqa: PLC0415
 
-                # Install the app if requested (still uses simctl — no runner needed).
                 if app_path:
-                    subprocess.run(
-                        ["xcrun", "simctl", "install", device_id, app_path],
-                        check=True,
-                    )
-                    subprocess.run(
-                        ["xcrun", "simctl", "launch", device_id, bundle_id],
-                        check=True,
-                    )
+                    subprocess.run(["xcrun", "simctl", "install", device_id, app_path], check=True)
+                    subprocess.run(["xcrun", "simctl", "launch", device_id, bundle_id], check=True)
 
-                ax_backend = AXBackend(device_udid=device_id)
-                _backend = ax_backend
-                _annotator = AXAnnotator(ax_backend)
+                _backend = chosen
+                _annotator = AXAnnotator(chosen)
                 _last_elements = []
                 _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
@@ -403,11 +407,10 @@ def handle_start_session(arguments: dict) -> dict:
                 _network_inspector.start()
                 _network_inspector.setup_log_watcher(_console_monitor)
 
-                _ax_http_server = AXHTTPServer(ax_backend, port=8222)
+                _ax_http_server = AXHTTPServer(chosen, port=8222)
                 _ax_http_server.start()
 
-                # Resolve frontmost simulator UDID for multi-sim disambiguation
-                # (Example Reader dogfood polish item 3b).
+                # Resolve frontmost simulator UDID for multi-sim disambiguation.
                 frontmost_udid: str = device_id
                 try:
                     _simlist = subprocess.run(
@@ -426,21 +429,18 @@ def handle_start_session(arguments: dict) -> dict:
                             frontmost_udid = _booted[0]
                         elif len(_booted) > 1:
                             logger.warning(
-                                "Multiple simulators booted (%s). "
-                                "AX backend reads the frontmost one only. "
-                                "frontmost_udid in response may not match device_id.",
+                                "Multiple simulators booted (%s). AX backend reads frontmost only.",
                                 _booted,
                             )
                             frontmost_udid = _booted[0]
                 except Exception:  # noqa: BLE001
                     pass
 
-                # Warm up: poll get_elements until count > 0 or 2 s elapses.
-                # Guards against the AX hydration race (Example Reader dogfood polish 3a).
+                # Warm up: AX hydration race guard.
                 _warmup_deadline = time.monotonic() + 2.0
                 while time.monotonic() < _warmup_deadline:
                     try:
-                        _probe = ax_backend.get_elements(limit=5)
+                        _probe = chosen.get_elements(limit=5)
                         if len(_probe) > 0:
                             break
                     except Exception:  # noqa: BLE001
@@ -454,12 +454,11 @@ def handle_start_session(arguments: dict) -> dict:
                     "device_type": device_type,
                     "target_udid": device_id,
                     "frontmost_udid": frontmost_udid,
-                    "sim_pid": ax_backend._sim_pid,
-                    "device_w": ax_backend._device_w,
-                    "device_h": ax_backend._device_h,
+                    "sim_pid": chosen._sim_pid,
+                    "device_w": chosen._device_w,
+                    "device_h": chosen._device_h,
                 }
             except Exception as exc:
-                # Clean up partial state and fall through to XCTest on auto mode.
                 _backend = None
                 _annotator = None
                 _last_elements = []
@@ -469,33 +468,28 @@ def handle_start_session(arguments: dict) -> dict:
                 _perf_profiler = None
                 _network_inspector = None
                 _session_state = "idle"
-                if backend_pref == "ax":
-                    # Explicit ax request — surface the error.
-                    return {"error": f"AX backend failed: {exc}"}
-                # auto mode — fall through to XCTest below.
-                logger.info("AX backend unavailable (%s); falling back to XCTest", exc)
+                return {"error": f"AX backend failed: {exc}"}
 
-        if provider == "browserstack":
+        # --- BrowserStack path -----------------------------------------
+        if backend_name == "BrowserStackBackend":
             try:
-                bs = BrowserStackBackend()
                 if app_path:
-                    bs.upload_app(app_path)
-                session_id = bs.start_session(bundle_id)
-                _backend = bs
+                    chosen.upload_app(app_path)
+                session_id = chosen.start_session(bundle_id)
+                _backend = chosen
                 _annotator = SoMAnnotator()
                 _last_elements = []
 
                 from specterqa.ios.replay import ReplayRecorder
 
                 _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
-
                 _session_state = "running"
                 return {
                     "status": "ok",
                     "provider": "browserstack",
                     "session_id": session_id,
-                    "device": bs.device,
-                    "os_version": bs.os_version,
+                    "device": chosen.device,
+                    "os_version": chosen.os_version,
                 }
             except Exception as exc:
                 _backend = None
@@ -505,6 +499,7 @@ def handle_start_session(arguments: dict) -> dict:
                 _session_state = "idle"
                 return {"error": str(exc)}
 
+        # --- XCTest path (default) -------------------------------------
         from specterqa.ios.session_manager import TestSession
         from specterqa.ios.backends.xctest_client import XCTestBackend
 
@@ -527,22 +522,18 @@ def handle_start_session(arguments: dict) -> dict:
             _annotator = SoMAnnotator(runner_url=runner_url)
             _last_elements = []
 
-            # Start recording — every subsequent tool call will be captured
             from specterqa.ios.replay import ReplayRecorder
 
             _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
 
-            # Start console log monitor and crash detector
             from specterqa.ios.drivers.simulator.console import ConsoleMonitor
             from specterqa.ios.drivers.simulator.crash import CrashDetector
 
             _console_monitor = ConsoleMonitor(device_id=_session._target_udid)
             _console_monitor.start()
-
             _crash_detector = CrashDetector(device_id=_session._target_udid, bundle_id=bundle_id)
             _crash_detector.start()
 
-            # Start performance profiler and network inspector
             from specterqa.ios.drivers.simulator.perf import PerfProfiler
             from specterqa.ios.drivers.simulator.network import NetworkInspector
 
@@ -550,10 +541,8 @@ def handle_start_session(arguments: dict) -> dict:
                 device_id=_session._target_udid,
                 bundle_id=bundle_id,
             )
-
             _network_inspector = NetworkInspector(device_id=_session._target_udid)
             _network_inspector.start()
-            # Wire CFNetwork log watcher to capture HTTP activity from os_log
             _network_inspector.setup_log_watcher(_console_monitor)
 
             _session_state = "running"
@@ -564,13 +553,11 @@ def handle_start_session(arguments: dict) -> dict:
                 "port": port,
                 "runner_url": runner_url,
             }
-            # Keep clone_udid for backwards compat
             response["clone_udid"] = _session._target_udid
             if device_type == "physical":
                 response["device_host"] = device_host
             return response
         except Exception as exc:
-            # Clean up partial state on failure
             _session = None
             _backend = None
             _annotator = None
@@ -646,6 +633,8 @@ def handle_stop_session(arguments: dict) -> dict:
         _network_inspector = None
         _ax_http_server = None
         _session_state = "idle"
+        # Reset the circuit breaker so the next ios_start_session starts clean.
+        _circuit_breaker.reset()
 
     return {"status": "stopped"}
 
