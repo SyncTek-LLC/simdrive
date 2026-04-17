@@ -517,6 +517,65 @@ class AXBackend:
     # Public API — matches XCTestBackend interface
     # ------------------------------------------------------------------
 
+    def _walk_sibling_windows(self, results: list[dict], limit: int) -> None:
+        """Walk all AX windows of the Simulator process and collect elements.
+
+        SwiftUI ``.sheet``-presented UIKit content appears in a sibling
+        ``AXWindow`` that is NOT descended from the main iOS content group.
+        SpringBoard-level system alerts (permission prompts) also appear in
+        separate windows.  This method enumerates every window exposed by the
+        Simulator process via ``kAXWindowsAttribute`` and walks each one,
+        de-duplicating against *results* so elements are not reported twice.
+
+        Palace dogfood Issue 2 fix (2026-04-17).
+
+        Args:
+            results: Accumulator list (already populated from the main walk).
+            limit:   Stop collecting once this many total elements are found.
+        """
+        windows = self._ax_attr(self._root, "AXWindows")
+        if not windows:
+            return
+
+        def _key(e: dict) -> tuple:
+            f = e.get("frame", {})
+            return (
+                e.get("label", ""),
+                e.get("type", ""),
+                round(f.get("x", 0), 1),
+                round(f.get("y", 0), 1),
+            )
+
+        existing_keys: set[tuple] = {_key(e) for e in results}
+
+        for window in windows:
+            if len(results) >= limit:
+                break
+
+            win_role = str(self._ax_attr(window, "AXRole") or "")
+            win_subrole = str(self._ax_attr(window, "AXSubrole") or "")
+            win_title = str(self._ax_attr(window, "AXTitle") or "")
+
+            is_modal = (
+                win_role in ("AXSheet", "AXDialog")
+                or any(kw in win_subrole for kw in ("Sheet", "Dialog", "Alert", "Modal"))
+                or any(kw in win_title for kw in ("Alert", "Permission"))
+            )
+
+            window_results: list[dict] = []
+            with _ax_lock:
+                self._walk_tree(window, window_results, limit=limit - len(results))
+
+            for elem in window_results:
+                k = _key(elem)
+                if k not in existing_keys:
+                    existing_keys.add(k)
+                    if is_modal:
+                        elem["_modal_window"] = True
+                    results.append(elem)
+                    if len(results) >= limit:
+                        break
+
     def get_elements(self, limit: int = 200) -> list[dict]:
         """Walk the AX tree and return a list of element dicts.
 
@@ -527,6 +586,11 @@ class AXBackend:
         On iOS 26+ the tab bar buttons are not accessible via ``AXChildren``
         traversal; they are collected separately via :meth:`_get_tab_bar_buttons`
         and appended to the result set so tests can find and tap them by label.
+
+        A second-pass sibling-window walk (:meth:`_walk_sibling_windows`)
+        enumerates all ``AXWindows`` of the Simulator process so that
+        SwiftUI ``.sheet``-presented UIKit content and SpringBoard-level
+        system alerts are included in the flat element list.
 
         Args:
             limit: Maximum number of elements to return (default 200).
@@ -539,16 +603,21 @@ class AXBackend:
         with _ax_lock:
             self._walk_tree(root, results, limit=limit)
 
+        # Second pass: walk sibling AX windows (sheets, alerts, modals).
+        self._walk_sibling_windows(results, limit)
+
         # Append tab bar buttons (iOS 26 position-probe workaround).
         tab_buttons = self._get_tab_bar_buttons()
-        # Avoid duplicating buttons that the tree walk already found.
         existing_labels = {e["label"] for e in results if e.get("type") == "button"}
         for btn in tab_buttons:
             if btn["label"] not in existing_labels:
                 results.append(btn)
 
-        # Strip the non-serialisable _ax_ref before returning.
-        return [{k: v for k, v in e.items() if k != "_ax_ref"} for e in results]
+        # Strip internal keys before returning.
+        return [
+            {k: v for k, v in e.items() if k not in ("_ax_ref", "_modal_window")}
+            for e in results
+        ]
 
     def find_element(
         self,
@@ -561,6 +630,10 @@ class AXBackend:
         matching (tab bar buttons surface their label via ``AXDescription`` or
         ``AXTitle`` depending on iOS/macOS version).
 
+        Also searches sibling AX windows so elements inside SwiftUI
+        ``.sheet``-presented UIKit content and SpringBoard-level alerts are
+        found without a separate tool call.
+
         Args:
             label:      Accessibility label (case-insensitive substring match).
             identifier: Accessibility identifier (exact match).
@@ -568,19 +641,16 @@ class AXBackend:
         Returns:
             The raw AXUIElement, or ``None`` if not found.
         """
-        root = self._ios_content_group or self._root
         result: list[Any] = []
 
         def _search(element: Any, depth: int = 0) -> None:
             if result or depth > 20:
                 return
-            # Check identifier first (exact match, fast).
             elem_id = str(self._ax_attr(element, "AXIdentifier") or "")
             if identifier is not None and elem_id == identifier:
                 result.append(element)
                 return
 
-            # Check label across all attributes tab buttons may use.
             if label is not None:
                 elem_label = (
                     str(self._ax_attr(element, "AXDescription") or "")
@@ -594,10 +664,186 @@ class AXBackend:
             for child in self._ax_children(element):
                 _search(child, depth + 1)
 
+        root = self._ios_content_group or self._root
         with _ax_lock:
             _search(root)
 
+        if not result:
+            windows = self._ax_attr(self._root, "AXWindows") or []
+            for window in windows:
+                if result:
+                    break
+                with _ax_lock:
+                    _search(window)
+
         return result[0] if result else None
+
+    # ------------------------------------------------------------------
+    # SpringBoard alert handling (Palace dogfood Issue 3)
+    # ------------------------------------------------------------------
+
+    def dismiss_springboard_alert(self, label: str = "Allow") -> dict[str, Any]:
+        """Dismiss a SpringBoard-level iOS system permission alert.
+
+        iOS permission alerts (Notifications, Location, Camera, Bluetooth)
+        appear in a separate ``AXWindow`` above the app.  Strategy:
+        1. Walk all ``AXWindows`` for a modal/alert window, find a button
+           matching *label*, and ``AXPress`` it.
+        2. Fall back to CGEvent coordinate tap if AXPress fails.
+        3. Fall back to scanning the full element list and tapping by coords.
+
+        Limitation on iOS 18.4: SpringBoard alerts for ``notifications``
+        cannot be pre-granted via ``xcrun simctl privacy grant`` and may not
+        appear in the Simulator.app AX tree.  Use :meth:`pre_grant_permissions`
+        BEFORE launching the app as a workaround.
+
+        Args:
+            label: Button label to press (default ``"Allow"``).
+
+        Returns:
+            ``{"success": True, "mode": "ax_press"|"cg_tap"|"cg_tap_fallback"}``
+            or ``{"success": False, "error": "<message>"}``
+        """
+        windows = self._ax_attr(self._root, "AXWindows") or []
+
+        def _is_alert_window(window: Any) -> bool:
+            role = str(self._ax_attr(window, "AXRole") or "")
+            subrole = str(self._ax_attr(window, "AXSubrole") or "")
+            title = str(self._ax_attr(window, "AXTitle") or "")
+            return (
+                role in ("AXSheet", "AXDialog")
+                or any(kw in subrole for kw in ("Sheet", "Dialog", "Alert", "Modal"))
+                or any(kw in title for kw in ("Alert", "Permission", "Allow", "Access"))
+            )
+
+        def _find_button(element: Any, target: str, depth: int = 0) -> Any | None:
+            if depth > 10:
+                return None
+            role = str(self._ax_attr(element, "AXRole") or "")
+            if role in ("AXButton", "AXStaticText"):
+                btn_label = (
+                    str(self._ax_attr(element, "AXTitle") or "")
+                    or str(self._ax_attr(element, "AXDescription") or "")
+                    or str(self._ax_attr(element, "AXLabel") or "")
+                )
+                if target.lower() in btn_label.lower():
+                    return element
+            for child in self._ax_children(element):
+                found = _find_button(child, target, depth + 1)
+                if found is not None:
+                    return found
+            return None
+
+        for window in windows:
+            if _is_alert_window(window):
+                btn = _find_button(window, label)
+                if btn is not None:
+                    try:
+                        from ApplicationServices import AXUIElementPerformAction  # type: ignore[import]
+
+                        with _ax_lock:
+                            err = AXUIElementPerformAction(btn, "AXPress")
+                        if err == 0:
+                            time.sleep(0.5)
+                            return {"success": True, "mode": "ax_press", "label": label}
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("AXPress on alert button failed: %s", exc)
+
+                    ax_frame = self._ax_frame(btn)
+                    if ax_frame is not None:
+                        dev = self._ax_to_device(ax_frame)
+                        cx = dev["x"] + dev["width"] / 2
+                        cy = dev["y"] + dev["height"] / 2
+                        tap_result = self._cg_tap(cx, cy)
+                        if tap_result.get("success"):
+                            time.sleep(0.5)
+                            return {"success": True, "mode": "cg_tap", "label": label}
+
+        # Fallback: search full element list (includes sibling windows).
+        all_elements = self.get_elements(limit=300)
+        for elem in all_elements:
+            if elem.get("type") in ("button", "staticText"):
+                elem_label = elem.get("label", "")
+                if label.lower() in elem_label.lower():
+                    frame = elem.get("frame", {})
+                    if frame.get("width", 0) > 0 and frame.get("height", 0) > 0:
+                        cx = frame["x"] + frame["width"] / 2
+                        cy = frame["y"] + frame["height"] / 2
+                        tap_result = self._cg_tap(cx, cy)
+                        if tap_result.get("success"):
+                            time.sleep(0.5)
+                            return {
+                                "success": True,
+                                "mode": "cg_tap_fallback",
+                                "label": label,
+                            }
+
+        return {
+            "success": False,
+            "error": (
+                f"Alert button {label!r} not found in any Simulator window. "
+                "On iOS 18.4, SpringBoard alerts may not be accessible via AX — "
+                "use ios_pre_grant_permissions() BEFORE launching the app as a workaround."
+            ),
+        }
+
+    @staticmethod
+    def pre_grant_permissions(
+        device_udid: str,
+        bundle_id: str,
+        permissions: list[str],
+    ) -> dict[str, Any]:
+        """Pre-grant iOS permissions via ``xcrun simctl privacy`` before app launch.
+
+        Call BEFORE launching the app to prevent runtime permission alerts.
+        Recommended workaround when :meth:`dismiss_springboard_alert` cannot
+        reach iOS 18.4 SpringBoard alerts.
+
+        iOS version compatibility:
+            - iOS 17.x and earlier: ``grant`` works for most services.
+            - iOS 18.4: ``grant notifications`` returns ``Operation not
+              permitted`` — OS-level restriction, cannot be worked around.
+              Other services (location, camera, etc.) typically work on 18.4.
+
+        Args:
+            device_udid:  Booted simulator UDID (or ``"booted"``).
+            bundle_id:    App bundle identifier.
+            permissions:  List of simctl service names to grant.
+                          Common: ``"notifications"``, ``"location"``,
+                          ``"camera"``, ``"microphone"``, ``"contacts"``,
+                          ``"photos"``, ``"bluetooth"``, ``"health"``.
+
+        Returns:
+            Dict with ``"granted"`` (list), ``"failed"`` (list of
+            ``{service, error}``), and ``"note"`` if any failures occurred.
+        """
+        granted: list[str] = []
+        failed: list[dict] = []
+
+        for service in permissions:
+            result = subprocess.run(
+                ["xcrun", "simctl", "privacy", device_udid, "grant", service, bundle_id],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                granted.append(service)
+            else:
+                err_text = result.stderr.strip() or result.stdout.strip()
+                failed.append({"service": service, "error": err_text})
+                logger.debug(
+                    "simctl privacy grant %s %s failed: %s", service, bundle_id, err_text
+                )
+
+        response: dict[str, Any] = {"granted": granted, "failed": failed}
+        if failed:
+            response["note"] = (
+                "Some permissions could not be pre-granted. "
+                "On iOS 18.4, 'notifications' cannot be granted via simctl — "
+                "this is an OS-level restriction. "
+                "See docs/troubleshooting.md for the compatibility matrix."
+            )
+        return response
 
     def tap(
         self,
