@@ -11,7 +11,7 @@ _Last updated: 2026-04-08 | Version: 11.3.0_
 
 **H2:** Record tests with AI. Replay free forever. Ship iOS apps with confidence.
 
-**Subtext:** SpecterQA iOS records test sessions once using Claude's vision — then replays them deterministically in CI with zero AI cost. 19 MCP tools. Maestro compatible. BYOK.
+**Subtext:** SpecterQA iOS records test sessions once using Claude's vision — then replays them deterministically in CI with zero AI cost. 32 MCP tools. Maestro compatible. BYOK.
 
 **CTA (primary):** Start Free Trial
 _Action: GitHub OAuth → activate Trial tier_
@@ -42,7 +42,7 @@ _Diagram suggestion: Record phase (Claude icon → simulator → YAML file) → 
 AI records. Deterministic engine replays. You pay for tokens exactly once — every subsequent CI run is free. Unlike tools that call AI on every run, SpecterQA's replay engine never touches the Anthropic API after the initial recording.
 
 ### 2. Agent-Native by Design
-19 MCP tools expose the full testing surface to any MCP-compatible agent. Add SpecterQA to your Claude Code session and drive iOS tests in plain English. A2A discoverable via `.well-known/agent.json`.
+32 MCP tools expose the full testing surface to any MCP-compatible agent. Add SpecterQA to your Claude Code session and drive iOS tests in plain English. A2A discoverable via `.well-known/agent.json`.
 
 ### 3. Maestro Compatible
 Your existing Maestro YAML files work natively. `tapOn`, `inputText`, `assertVisible`, `assertNotVisible`, `waitFor` — all understood. Zero migration cost. Mix Maestro shorthand with SpecterQA native syntax in the same file.
@@ -65,7 +65,7 @@ You own your Anthropic API key. Your data never touches our servers. Your test r
 | **Price** | Free | $29/mo | $99/mo | $299/mo | Custom |
 | **Simulators** | 1 | 2 | 4 | 10 | Unlimited |
 | **Runs/session** | 3 | Unlimited | Unlimited | Unlimited | Unlimited |
-| **MCP Tools** | 19 | 19 | 19 | 19 | 19 |
+| **MCP Tools** | 32 | 32 | 32 | 32 | 32 |
 | **Parallel CI** | — | — | Yes | Yes | Yes |
 | **Priority Support** | — | — | — | Yes | Yes |
 | **SLA** | — | — | — | — | Yes |
@@ -85,7 +85,7 @@ _All tiers require your own Anthropic API key (BYOK) for the record phase. Repla
 | Maestro YAML syntax | **Yes** | Native | No | No |
 | Parallel CI | **Yes** (`--parallel N`) | No | Yes | Yes |
 | Zero config | **Yes** | Yes | No | No |
-| MCP / agent-native | **Yes** (19 tools) | No | No | No |
+| MCP / agent-native | **Yes** (32 tools) | No | No | No |
 | BYOK | **Yes** | N/A | N/A | N/A |
 
 ---
@@ -117,7 +117,7 @@ Yes, fully. SpecterQA understands Maestro's shorthand syntax natively: `tapOn`, 
 The Trial tier is free — 1 simulator, 3 runs per session, no credit card required. Paid tiers unlock more simulators and parallel CI. All tiers are subscription-based (monthly). You can upgrade, downgrade, or cancel any time. The Anthropic API cost for recording is separate — you pay Anthropic directly using your own key.
 
 **Can my AI agent use it?**
-Yes — that's the primary design goal. SpecterQA ships an MCP server (`specterqa-ios-mcp`) with 19 tools. Add it to your Claude Code, Claude Desktop, or any MCP-compatible orchestrator config, and your agent can boot simulators, record sessions, run CI, and read results without leaving the agent session. It is also A2A discoverable via `.well-known/agent.json`.
+Yes — that's the primary design goal. SpecterQA ships an MCP server (`specterqa-ios-mcp`) with 32 tools. Add it to your Claude Code, Claude Desktop, or any MCP-compatible orchestrator config, and your agent can boot simulators, record sessions, run CI, and read results without leaving the agent session. It is also A2A discoverable via `.well-known/agent.json`.
 
 ---
 
@@ -128,7 +128,7 @@ Yes — that's the primary design goal. SpecterQA ships an MCP server (`specterq
 - **Version:** 11.3.0
 - **macOS + Xcode 15+** required
 - **MCP transport:** stdio
-- **MCP tools:** 19
+- **MCP tools:** 32
 - **Install:** `pip install 'specterqa-ios[mcp]'`
 - **GitHub:** https://github.com/SyncTek-LLC/specterqa-ios
 

@@ -1,6 +1,6 @@
 # SpecterQA iOS
 
-SpecterQA iOS is an AI-native iOS simulator testing tool that lets AI agents record test sessions once using Claude's vision capabilities and replay them deterministically in CI — with zero AI cost on reruns. It ships as both a Python CLI (`specterqa-ios`) and an MCP server (`specterqa-ios-mcp`) with 19 tools, making it natively callable from Claude Code, Claude Desktop, and any MCP-compatible agent platform. The key insight: use AI to record, use a deterministic engine to replay. You pay for AI tokens once; every subsequent CI run is free.
+SpecterQA iOS is an AI-native iOS simulator testing tool that lets AI agents record test sessions once using Claude's vision capabilities and replay them deterministically in CI — with zero AI cost on reruns. It ships as both a Python CLI (`specterqa-ios`) and an MCP server (`specterqa-ios-mcp`) with 32 tools, making it natively callable from Claude Code, Claude Desktop, and any MCP-compatible agent platform. The key insight: use AI to record, use a deterministic engine to replay. You pay for AI tokens once; every subsequent CI run is free.
 
 ## Install
 
@@ -36,8 +36,51 @@ Add to `.claude/mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude 
 
 Then in Claude: _"Run a smoke test on the Example Reader app and record it as example-smoke."_ Claude drives the simulator, records every action as a deterministic YAML file. Future CI runs replay that YAML without calling Claude.
 
-The MCP server exposes 19 tools including: `boot_simulator`, `install_app`, `record_session`, `replay_session`, `run_smoke`, `run_ci`, `list_devices`, `capture_screenshot`, `run_accessibility_audit`, `detect_crash`, `inspect_network`, and more.
+## Minimum Viable Session (5 calls)
 
+```python
+ios_start_session(bundle_id="com.example.app")
+ios_screenshot()                           # observe initial screen
+ios_tap(label="Sign In")                   # interact
+ios_screenshot()                           # verify state
+ios_stop_recording(name="signin-smoke")    # save replay YAML
+ios_stop_session()                         # clean up
+```
+
+## MCP Tool Registry (32 tools)
+
+- `ios_accessibility_audit` — Audit the current screen for common accessibility issues
+- `ios_app_state` — Check app lifecycle state (foreground, background, suspended)
+- `ios_crashes` — Check for app crashes since the session started
+- `ios_dismiss_keyboard` — Dismiss the software keyboard
+- `ios_dismiss_sheet` — Dismiss a presented sheet (half-sheet, action sheet, modal) by swiping down
+- `ios_dismiss_springboard_alert` — Dismiss a SpringBoard-level iOS system permission alert by tapping a named button
+- `ios_elements` — Get the current interactive element list without capturing a screenshot
+- `ios_logs` — Get recent app console logs from the iOS Simulator
+- `ios_long_press` — Long-press an element by its index number from the last screenshot
+- `ios_memory` — Get a detailed memory breakdown for the app under test via the macOS footprint tool
+- `ios_network` — Get network activity for the app under test
+- `ios_perf` — Get real-time CPU usage, memory footprint (RSS), and thread count for the app  under test
+- `ios_perf_baseline` — Capture current CPU, memory, and thread metrics as a baseline
+- `ios_perf_compare` — Compare current performance metrics against the baseline captured by ios_perf_baseline
+- `ios_pre_grant_permissions` — Pre-grant iOS app permissions via xcrun simctl BEFORE the app launches,  preventing permission alerts from appearing at runtime
+- `ios_press_key` — Press a named keyboard key on the iOS Simulator
+- `ios_save_replay` — [DEPRECATED in v12 — prefer ios_stop_recording which saves and clears the buffer.]  Save the current session as a deterministic replay YAML file WITHOUT clearing the step buffer
+- `ios_screenshot` — Capture an annotated screenshot of the running iOS app
+- `ios_set_appearance` — Toggle dark or light mode on the iOS Simulator
+- `ios_simctl` — Run an arbitrary simctl subcommand on the simulator
+- `ios_start_recording` — Clear the recorder's step buffer to start a fresh recording
+- `ios_start_session` — Start a SpecterQA session on the booted iOS Simulator
+- `ios_stop_recording` — Save the current recording as a replay YAML file AND clear the step buffer
+- `ios_stop_session` — Stop the XCTest runner and clean up
+- `ios_swipe` — Swipe in a cardinal direction on the iOS Simulator screen
+- `ios_swipe_back` — Perform the iOS swipe-from-left-edge back navigation gesture
+- `ios_tap` — Tap an element by IDENTIFIER (most reliable), LABEL, index number, or raw COORDINATES
+- `ios_type` — Type text into a text field on the iOS Simulator
+- `ios_wait` — Wait (sleep) for a specified number of seconds
+- `ios_wait_for_element` — Poll the element tree until an element matching label appears, or timeout expires
+- `ios_wait_idle` — Wait for the app to become idle (no pending UI changes)
+- `ios_webview_elements` — Get elements inside WKWebView content (EPUB readers, PDF viewers,  audiobook UI rendered in WKWebView)
 ## Use via CLI
 
 ```bash
@@ -71,15 +114,6 @@ specterqa-ios validate-replay .specterqa/replays/smoke.yaml
 | Enterprise | Custom    | Unlimited  | Unlimited    | Yes         |
 
 BYOK required: bring your own Anthropic API key for the record phase. Replay is free. SyncTek never sees your API key or test data.
-
-## Key Differentiators
-
-- **Record once, replay free** — AI records; deterministic engine replays. Zero API cost on reruns. This is the fundamental difference from tools that call AI on every run.
-- **~90% tap accuracy** (based on Set-of-Mark research) — Set-of-Mark (SoM) prompting annotates the simulator screenshot before asking Claude where to tap. No coordinate guessing, no brittle selectors.
-- **Maestro compatible** — Existing Maestro YAML files work natively. `tapOn`, `inputText`, `assertVisible`, `assertNotVisible`, `waitFor` all understood. Zero migration cost.
-- **Agent-native** — 19 MCP tools. A2A discoverable via `.well-known/agent.json`. Works in Claude Code, Claude Desktop, or any MCP-compatible orchestrator.
-- **BYOK** — You own your Anthropic API key. Your data never touches our servers. Full control, full privacy.
-- **Parallel CI** — Shared runner reuse and clone isolation allow running 10 replays in the time XCUITest runs 1. Pro tier and above.
 
 ## Links
 

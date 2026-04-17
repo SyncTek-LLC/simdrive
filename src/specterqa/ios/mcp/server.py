@@ -406,12 +406,54 @@ def handle_start_session(arguments: dict) -> dict:
                 _ax_http_server = AXHTTPServer(ax_backend, port=8222)
                 _ax_http_server.start()
 
+                # Resolve frontmost simulator UDID for multi-sim disambiguation
+                # (Example Reader dogfood polish item 3b).
+                frontmost_udid: str = device_id
+                try:
+                    _simlist = subprocess.run(
+                        ["xcrun", "simctl", "list", "devices", "booted", "-j"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    if _simlist.returncode == 0:
+                        import json as _json
+                        _sim_data = _json.loads(_simlist.stdout)
+                        _booted: list[str] = []
+                        for _runtime_devs in _sim_data.get("devices", {}).values():
+                            for _dev in _runtime_devs:
+                                if _dev.get("state") == "Booted":
+                                    _booted.append(_dev.get("udid", ""))
+                        if len(_booted) == 1:
+                            frontmost_udid = _booted[0]
+                        elif len(_booted) > 1:
+                            logger.warning(
+                                "Multiple simulators booted (%s). "
+                                "AX backend reads the frontmost one only. "
+                                "frontmost_udid in response may not match device_id.",
+                                _booted,
+                            )
+                            frontmost_udid = _booted[0]
+                except Exception:  # noqa: BLE001
+                    pass
+
+                # Warm up: poll get_elements until count > 0 or 2 s elapses.
+                # Guards against the AX hydration race (Example Reader dogfood polish 3a).
+                _warmup_deadline = time.monotonic() + 2.0
+                while time.monotonic() < _warmup_deadline:
+                    try:
+                        _probe = ax_backend.get_elements(limit=5)
+                        if len(_probe) > 0:
+                            break
+                    except Exception:  # noqa: BLE001
+                        pass
+                    time.sleep(0.2)
+
                 _session_state = "running"
                 return {
                     "status": "ok",
                     "backend": "ax",
                     "device_type": device_type,
                     "target_udid": device_id,
+                    "frontmost_udid": frontmost_udid,
                     "sim_pid": ax_backend._sim_pid,
                     "device_w": ax_backend._device_w,
                     "device_h": ax_backend._device_h,
@@ -1916,6 +1958,29 @@ def handle_dismiss_sheet(arguments: dict) -> dict:
         return {"error": f"dismiss_sheet failed: {exc}"}
 
 
+def handle_dismiss_keyboard(arguments: dict) -> dict:
+    """Dismiss the software keyboard by tapping just above it.
+
+    Calls the runner's /dismiss_keyboard endpoint which taps above the keyboard
+    frame to dismiss it, with a swipe-down fallback if the tap doesn't work.
+
+    Returns:
+        {"status": "ok", "dismissed": true}
+        or {"status": "ok", "dismissed": false} if no keyboard was visible
+        or {"error": "<message>"} on failure.
+    """
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    try:
+        result = _backend._post("/dismiss_keyboard", {})
+        return result
+    except Exception as exc:
+        return {"error": f"dismiss_keyboard failed: {exc}"}
+
+
 # ---------------------------------------------------------------------------
 # Performance / Memory / Network tool handlers
 # ---------------------------------------------------------------------------
@@ -2182,7 +2247,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (29 total):
+AVAILABLE TOOLS (32 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -2193,33 +2258,35 @@ AVAILABLE TOOLS (29 total):
     ios_elements         — Element list only (faster than screenshot, no image)
 
   Interaction:
-    ios_tap              — Tap by label (preferred) or element index
+    ios_tap              — Tap: identifier > label > element_index > (x,y) coordinates
     ios_long_press       — Long-press by index (context menus, drag init)
-    ios_type             — Type text into the focused field
+    ios_type             — Type text: identifier > label > element_index > (x,y) coordinates
     ios_press_key        — Press a named key: return, escape, delete, tab, space
     ios_swipe            — Swipe in a direction: up, down, left, right
     ios_swipe_back       — iOS edge swipe back navigation gesture
     ios_dismiss_keyboard — Dismiss the software keyboard
 
   Waiting:
-    ios_wait             — Sleep for N seconds (animations, splash screens)
-    ios_wait_for_element — Poll until a labelled element appears (async loads)
-    ios_wait_idle        — Wait for app to become idle (element tree stabilizes)
+    ios_wait             — Arbitrary delay (N seconds). Use only when no better option.
+    ios_wait_for_element — Poll until a labelled element appears. Use for specific element.
+    ios_wait_idle        — Wait for element tree to stabilize. Use after navigation/transitions.
     ios_app_state        — Check app lifecycle state (foreground/background/suspended)
     ios_dismiss_sheet    — Dismiss a sheet/modal by swiping down
 
   Recording & Replay:
     ios_start_recording  — Clear step buffer; begin clean recording
-    ios_stop_recording   — Save replay YAML + clear buffer (end of flow)
-    ios_save_replay      — Save replay YAML without clearing (keep recording)
+    ios_stop_recording   — Save replay YAML + clear buffer (end of flow); preferred save path
+    ios_save_replay      — [deprecated in v12 — use ios_stop_recording] Save YAML without clearing buffer
 
   Quality & Diagnostics:
-    ios_accessibility_audit — Audit for missing labels, small targets, duplicate labels
-    ios_set_appearance      — Toggle dark/light mode on the simulator
-    ios_simctl              — Run arbitrary xcrun simctl subcommand
-    ios_webview_elements    — Query elements inside WKWebView (EPUB, PDF, audiobook UI)
-    ios_logs                — Get recent app console logs (filterable by level, category, regex)
-    ios_crashes             — Check for app crashes since session start (parses .ips files)
+    ios_accessibility_audit        — Audit for missing labels, small targets, duplicate labels
+    ios_set_appearance             — Toggle dark/light mode on the simulator
+    ios_simctl                     — Run arbitrary xcrun simctl subcommand
+    ios_webview_elements           — Query elements inside WKWebView (EPUB, PDF, audiobook UI)
+    ios_logs                       — Get recent app console logs (filterable by level, category, regex)
+    ios_crashes                    — Check for app crashes since session start (parses .ips files)
+    ios_pre_grant_permissions      — Pre-grant system permissions via simctl (call before ios_start_session)
+    ios_dismiss_springboard_alert  — Dismiss a SpringBoard alert (requires backend='ax')
 
   Performance & Network Monitoring:
     ios_perf                — CPU %, RSS memory, thread count snapshot (call periodically for regression detection)
@@ -2228,12 +2295,23 @@ AVAILABLE TOOLS (29 total):
     ios_perf_baseline       — Capture a perf snapshot as a reference baseline for comparison
     ios_perf_compare        — Compare current perf to the stored baseline (deltas + severity)
 
-WORKFLOW:
-1. ios_start_session(bundle_id="com.app.id") — starts the runner, launches the app
-2. ios_elements() or ios_screenshot() — observe the current screen
-3. ios_tap(label="Button") — interact with elements
-4. ios_type(text="hello", identifier="field_id") — type into specific fields
-5. ios_stop_session() — always clean up when done
+FIRST SESSION — minimum viable loop:
+  ios_start_session(bundle_id="com.example.app")
+  → ios_screenshot()
+  → ios_tap(label="Sign In")
+  → ios_screenshot()
+  → ios_stop_recording(name="signin-flow")
+  → ios_stop_session()
+
+BACKEND SELECTION (ios_start_session backend= param):
+- Default to backend="xctest" for comprehensive element trees, typing into forms, and navigating .sheet-presented UIKit content.
+- Use backend="ax" when startup speed matters and you only need tap-by-label on root-level elements. Note: AX does not enumerate .sheet-presented UIKit content.
+- backend="auto" (default) uses AX if available, falls back to XCTest.
+
+WAITING — decision tree:
+- Waiting for a specific element to appear → ios_wait_for_element(label="...")
+- After navigation / screen transition → ios_wait_idle()
+- Fixed animation delay or splash screen → ios_wait(seconds=N)
 
 PERFORMANCE TESTING:
 1. Call ios_perf_baseline() at app launch — this is your BASELINE
@@ -2241,6 +2319,8 @@ PERFORMANCE TESTING:
 3. Call ios_perf_compare() — compare RSS and CPU to baseline
 4. Repeat the flow 3-5 times, calling ios_perf_compare after each iteration
 5. If RSS grows monotonically (never decreases), you have a MEMORY LEAK
+
+Run ios_perf_baseline + ios_perf_compare when the user says "check for leaks", "profile this flow", or "make sure nothing regressed".
 
 INTERPRETING ios_perf():
 - memory_rss_mb: Physical RAM used. <100MB = good, 100-200MB = normal, >300MB = investigate, >500MB = critical
@@ -2251,6 +2331,12 @@ INTERPRETING ios_memory():
 - dirty_mb: Memory that cannot be reclaimed. High dirty = app is caching too much
 - swapped_mb: Memory pushed to compressed storage. >50MB = memory pressure
 
+CRASH RECOVERY — capture diagnostics BEFORE restarting:
+If you see {"error": "Session crashed..."} or unexpected blank screens:
+  1. ios_crashes() — capture the crash report (exception type, backtrace)
+  2. ios_logs(level="error") — capture error logs
+  THEN restart. If you restart first, the .ips crash file is overwritten and diagnostics are lost.
+
 DEBUGGING:
 - ios_logs(level="error") — check for errors after unexpected behavior
 - ios_crashes() — check if the app crashed (app_running=false means crash)
@@ -2259,15 +2345,12 @@ DEBUGGING:
 
 TYPING INTO FORMS:
 - ALWAYS specify the target field: ios_type(text="value", identifier="field_id")
-- For password/secure fields, use coordinates if identifier lookup is slow:
-  1. Call ios_elements() to get the field's frame
-  2. Calculate center: x = frame.x + frame.width/2, y = frame.y + frame.height/2
-  3. ios_type(text="password", x=center_x, y=center_y)
+- Priority: identifier > label > element_index > (x,y) coordinates
 - After typing, call ios_elements() to verify the value was accepted
 
 COMMON PITFALLS:
 - Keyboard covers buttons: call ios_dismiss_keyboard() before tapping buttons below the keyboard
-- Tab bar covered: dismiss keyboard before switching tabs
+- Tab bar covered: call ios_dismiss_keyboard() before switching tabs
 - Stale elements after navigation: ios_tap auto-refreshes, but call ios_elements() if unsure
 - SecureField value masked: SecureField shows bullet characters (•), not the actual text
 
@@ -2277,6 +2360,11 @@ RECORDING WORKFLOW (best practice):
   3. Execute the clean, successful flow (tap, type, etc.)
   4. ios_stop_recording(name="feature-name") → saves YAML + clears buffer
   5. Next flow: ios_start_recording() → repeat
+
+  Recording trio — when to use which:
+  - ios_stop_recording(name=...) — end of flow, save + clear buffer (most common)
+  - ios_save_replay(name=...) — checkpoint mid-flow without clearing; continue recording after
+  - ios_start_recording() — discard exploratory steps, start a clean buffer
 
 LIMITATIONS:
 - Physical device support is under development — MCP sessions currently target iOS Simulators only
@@ -2310,8 +2398,10 @@ SETUP CHECK:
             "backend controls the automation engine: "
             "'auto' (default) uses the AXUIElement host-side backend when available "
             "and falls back to the XCTest runner; "
-            "'ax' forces the AX backend (instant start, no runner deployment, no SIGABRT); "
-            "'xctest' forces the legacy XCTest runner."
+            "'xctest' (recommended for most flows) — comprehensive element trees, reliable typing, "
+            "and .sheet-presented UIKit content; "
+            "'ax' — instant start, no runner deployment, tap-by-label on root-level elements only; "
+            "note AX does not enumerate .sheet-presented UIKit content — use xctest for those flows."
         ),
     )
     async def ios_start_session(
@@ -2408,9 +2498,10 @@ SETUP CHECK:
         name="ios_wait",
         description=(
             "Wait (sleep) for a specified number of seconds. "
-            "Use after interactions that trigger animations or async loading. "
+            "Use for fixed animation delays or splash screens. "
             "seconds defaults to 1.0; capped at 30. "
-            "For waiting until a specific element appears, use ios_wait_for_element instead."
+            "Decision: specific element → ios_wait_for_element. "
+            "Navigation/transition → ios_wait_idle. Arbitrary delay → ios_wait."
         ),
     )
     async def ios_wait(seconds: float = 1.0) -> str:
@@ -2426,7 +2517,8 @@ SETUP CHECK:
             "label is a case-insensitive substring matched against element labels (required). "
             "timeout is the maximum wait in seconds (default 10, max 30). "
             "Returns {status: 'found', label, index} on success or {status: 'not_found'} on timeout. "
-            "Use this instead of ios_wait when you need to wait for a specific UI element."
+            "Decision: specific element → ios_wait_for_element. "
+            "Navigation/transition → ios_wait_idle. Arbitrary delay → ios_wait."
         ),
     )
     async def ios_wait_for_element(label: str, timeout: float = 10.0) -> str:
@@ -2514,11 +2606,11 @@ SETUP CHECK:
         name="ios_type",
         description=(
             "Type text into a text field on the iOS Simulator. "
-            "RECOMMENDED: specify the target field with label, identifier, or element_index "
-            "to ensure text goes into the correct field. Without a target, types into "
-            "whatever field currently has focus (unreliable on multi-field forms). "
-            "Examples: ios_type(text='hello', label='Password') or "
-            "ios_type(text='hello', element_index=5). "
+            "Target field priority: identifier > label > element_index > (x,y) coordinates. "
+            "RECOMMENDED: always specify a target field to ensure text goes into the correct field. "
+            "Without a target, types into whatever field currently has focus (unreliable on multi-field forms). "
+            "Examples: ios_type(text='hello', identifier='emailField') or "
+            "ios_type(text='hello', label='Password') or ios_type(text='hello', element_index=5). "
             "text is required and must be non-empty."
         ),
     )
@@ -2607,16 +2699,16 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_save_replay",
         description=(
-            "Save the current session as a deterministic replay YAML file. "
+            "[DEPRECATED in v12 — prefer ios_stop_recording which saves and clears the buffer.] "
+            "Save the current session as a deterministic replay YAML file WITHOUT clearing the step buffer. "
+            "Use this only when you want to checkpoint mid-flow and continue recording after saving. "
+            "For end-of-flow saves, use ios_stop_recording(name=...) instead. "
             "The replay can be run in CI without AI: "
             "  specterqa-ios replay <file.yaml>. "
             "name is the human-readable test name used as the filename stem "
             "(default: 'replay'). "
             "path overrides the output location "
-            "(default: .specterqa/replays/<name>.yaml). "
-            "Recording starts automatically when ios_start_session is called — "
-            "every tap, swipe, type, press_key, and long_press is captured. "
-            "Call this tool when the test journey is complete."
+            "(default: .specterqa/replays/<name>.yaml)."
         ),
     )
     async def ios_save_replay(name: str = "replay", path: str = "") -> str:
@@ -2673,8 +2765,10 @@ SETUP CHECK:
         description=(
             "Wait for the app to become idle (no pending UI changes). "
             "Monitors element tree stability. "
-            "Use instead of ios_wait for navigation transitions, async loads, and animations. "
-            "timeout defaults to 10s, max 30s."
+            "Use after navigation transitions, screen pushes/pops, and tab switches. "
+            "timeout defaults to 10s, max 30s. "
+            "Decision: specific element → ios_wait_for_element. "
+            "Navigation/transition → ios_wait_idle. Arbitrary delay → ios_wait."
         ),
     )
     async def ios_wait_idle(timeout: float = 10.0) -> str:
@@ -2692,6 +2786,22 @@ SETUP CHECK:
     )
     async def ios_app_state() -> str:
         result = handle_app_state({})
+        return json.dumps(result)
+
+    # ── Tool: ios_dismiss_keyboard ────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_dismiss_keyboard",
+        description=(
+            "Dismiss the software keyboard. "
+            "Call before tapping buttons or switching tabs that are covered by an open keyboard. "
+            "Returns {dismissed: true} if a keyboard was visible and dismissed, "
+            "{dismissed: false} if no keyboard was present. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_dismiss_keyboard() -> str:
+        result = handle_dismiss_keyboard({})
         return json.dumps(result)
 
     # ── Tool: ios_dismiss_sheet ────────────────────────────────────────────
@@ -2842,6 +2952,73 @@ SETUP CHECK:
     )
     async def ios_perf_compare() -> str:
         result = handle_perf_compare({})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_dismiss_springboard_alert ────────────────────────────────
+    #  Example Reader dogfood Issue 3 / Task #17
+
+    @mcp.tool(
+        name="ios_dismiss_springboard_alert",
+        description=(
+            "Dismiss a SpringBoard-level iOS system permission alert by tapping a named button. "
+            "Use when a permission prompt (Notifications, Location, Camera, Bluetooth, etc.) "
+            "appears on screen and ios_elements() doesn't show its buttons. "
+            "Pass label='Allow' (default), \"Don't Allow\", 'While Using App', or 'Only This Time'. "
+            "The tool walks all Simulator AX windows — including the SpringBoard alert window "
+            "that sits above the app — and presses the matching button via AX action or CGEvent tap. "
+            "IMPORTANT: On iOS 18.4, SpringBoard 'notifications' alerts cannot be dismissed "
+            "programmatically via simctl. Call ios_pre_grant_permissions() BEFORE launching the "
+            "app as a workaround (works on iOS 17.x; iOS 18.4 notifications are OS-restricted). "
+            "Requires an active session with backend='ax'."
+        ),
+    )
+    async def ios_dismiss_springboard_alert(label: str = "Allow") -> str:
+        global _backend
+        if _backend is None:
+            return json.dumps({"error": "No active session. Call ios_start_session first."})
+        from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
+
+        if not isinstance(_backend, AXBackend):
+            return json.dumps({
+                "error": (
+                    "ios_dismiss_springboard_alert requires backend='ax'. "
+                    "Restart session with ios_start_session(backend='ax')."
+                )
+            })
+        result = _backend.dismiss_springboard_alert(label=label)
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_pre_grant_permissions ────────────────────────────────────
+    #  Example Reader dogfood Issue 3 / Task #17 (workaround helper)
+
+    @mcp.tool(
+        name="ios_pre_grant_permissions",
+        description=(
+            "Pre-grant iOS app permissions via xcrun simctl BEFORE the app launches, "
+            "preventing permission alerts from appearing at runtime. "
+            "Call this BEFORE ios_start_session or before reinstalling the app. "
+            "bundle_id: app bundle id (e.g. 'com.example.reader'). "
+            "permissions: list of service names — 'notifications', 'location', 'camera', "
+            "'microphone', 'contacts', 'photos', 'calendars', 'reminders', 'motion', "
+            "'bluetooth', 'health'. "
+            "device_id: simulator UDID (default 'booted'). "
+            "Returns which permissions were granted and which failed. "
+            "iOS 18.4 note: 'notifications' returns Operation not permitted — "
+            "OS-level restriction; all other services typically succeed."
+        ),
+    )
+    async def ios_pre_grant_permissions(
+        bundle_id: str,
+        permissions: list[str],
+        device_id: str = "booted",
+    ) -> str:
+        from specterqa.ios.backends.ax_backend import AXBackend  # noqa: PLC0415
+
+        result = AXBackend.pre_grant_permissions(
+            device_udid=device_id,
+            bundle_id=bundle_id,
+            permissions=permissions,
+        )
         return json.dumps(result, default=str)
 
     return mcp
