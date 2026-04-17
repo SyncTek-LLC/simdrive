@@ -386,6 +386,58 @@ class XCTestBackend:
         return self._post("/shutdown", {})
 
     # ------------------------------------------------------------------
+    # IOSBackend Protocol shims
+    # (thin wrappers so XCTestBackend satisfies the Protocol structurally)
+    # ------------------------------------------------------------------
+
+    def start(self, device_udid: str = "booted", bundle_id: str = "", **kwargs: Any) -> None:
+        """No-op for XCTestBackend — the runner is started externally via TestSession."""
+        self.udid = device_udid
+
+    def stop(self) -> None:
+        """Shut down the XCTest runner."""
+        try:
+            self.shutdown()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+
+    def get_elements(self, max_elements: int = 0) -> dict[str, Any]:
+        """Fetch the element tree from the runner's /source endpoint.
+
+        Returns a normalised dict compatible with the IOSBackend Protocol:
+        ``{"elements": list, "count": int, "xml": str}``.
+        """
+        result = self.source()
+        # The runner returns {"xml": "<AppElement …>"} — callers use the xml
+        # key to build the element list via SoMAnnotator; this shim exposes
+        # both so Protocol consumers that expect "elements" still work.
+        elements: list = result.get("elements", [])
+        return {
+            "elements": elements,
+            "count": len(elements),
+            "xml": result.get("xml", ""),
+        }
+
+    def find_element(self, **criteria: Any) -> dict[str, Any] | None:
+        """Search for an element by label or identifier via the runner.
+
+        Returns the first match from the accessibility tree, or ``None``.
+        """
+        label = criteria.get("label")
+        identifier = criteria.get("identifier")
+        if not label and not identifier:
+            return None
+        payload: dict[str, Any] = {}
+        if label:
+            payload["label"] = label
+        if identifier:
+            payload["identifier"] = identifier
+        result = self._post("/find", payload)
+        if result.get("success") and result.get("element"):
+            return result["element"]
+        return None
+
+    # ------------------------------------------------------------------
     # Dunder helpers
     # ------------------------------------------------------------------
 
