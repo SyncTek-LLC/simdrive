@@ -10,12 +10,34 @@
 		AA000001 /* SpecterQARunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000001 /* SpecterQARunner.swift */; };
 		AA000002 /* HTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000002 /* HTTPServer.swift */; };
 		AA000003 /* TouchInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000003 /* TouchInjector.swift */; };
-		AA000004 /* RequestParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000004 /* RequestParser.swift */; };
 		AA000005 /* AccessibilityTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000005 /* AccessibilityTree.swift */; };
 		AA000006 /* SpecterQAElementQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000006 /* SpecterQAElementQuery.swift */; };
 		AA000007 /* SpecterQAScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000007 /* SpecterQAScreenshot.swift */; };
 		AA000008 /* SpecterQASwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = BB000008 /* SpecterQASwizzler.m */; };
 		AA100002 /* HostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB100001 /* HostApp.swift */; };
+		AR000001 /* Route.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000001 /* Route.swift */; };
+		AR000002 /* HealthRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000002 /* HealthRoute.swift */; };
+		AR000003 /* ShutdownRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000003 /* ShutdownRoute.swift */; };
+		AR000004 /* TapRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000004 /* TapRoute.swift */; };
+		AR000005 /* SwipeRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000005 /* SwipeRoute.swift */; };
+		AR000006 /* TypeRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000006 /* TypeRoute.swift */; };
+		AR000007 /* DismissKeyboardRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000007 /* DismissKeyboardRoute.swift */; };
+		AR000008 /* KeyRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000008 /* KeyRoute.swift */; };
+		AR000009 /* ScreenshotRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000009 /* ScreenshotRoute.swift */; };
+		AR000010 /* SourceRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000010 /* SourceRoute.swift */; };
+		AR000011 /* WebviewElementsRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000011 /* WebviewElementsRoute.swift */; };
+		AR000012 /* ElementsRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000012 /* ElementsRoute.swift */; };
+		AR000013 /* WaitRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000013 /* WaitRoute.swift */; };
+		AR000014 /* ScrollRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000014 /* ScrollRoute.swift */; };
+		AR000015 /* LaunchRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000015 /* LaunchRoute.swift */; };
+		AR000016 /* DismissAlertRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000016 /* DismissAlertRoute.swift */; };
+		AR000017 /* AppearanceRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000017 /* AppearanceRoute.swift */; };
+		AR000018 /* AppStateRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000018 /* AppStateRoute.swift */; };
+		AR000019 /* IdleRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000019 /* IdleRoute.swift */; };
+		AR000020 /* LogsRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000020 /* LogsRoute.swift */; };
+		AR000021 /* PerfRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000021 /* PerfRoute.swift */; };
+		AR000022 /* NetworkRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000022 /* NetworkRoute.swift */; };
+		AR000023 /* CrashesRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = BR000023 /* CrashesRoute.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,7 +54,6 @@
 		BB000001 /* SpecterQARunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQARunner.swift; sourceTree = "<group>"; };
 		BB000002 /* HTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPServer.swift; sourceTree = "<group>"; };
 		BB000003 /* TouchInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchInjector.swift; sourceTree = "<group>"; };
-		BB000004 /* RequestParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestParser.swift; sourceTree = "<group>"; };
 		BB000005 /* AccessibilityTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTree.swift; sourceTree = "<group>"; };
 		BB000006 /* SpecterQAElementQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQAElementQuery.swift; sourceTree = "<group>"; };
 		BB000007 /* SpecterQAScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQAScreenshot.swift; sourceTree = "<group>"; };
@@ -42,6 +63,29 @@
 		BB100001 /* HostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostApp.swift; sourceTree = "<group>"; };
 		CC000001 /* SpecterQARunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpecterQARunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC100001 /* SpecterQAHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpecterQAHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BR000001 /* Route.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Route.swift; sourceTree = "<group>"; };
+		BR000002 /* HealthRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthRoute.swift; sourceTree = "<group>"; };
+		BR000003 /* ShutdownRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutdownRoute.swift; sourceTree = "<group>"; };
+		BR000004 /* TapRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapRoute.swift; sourceTree = "<group>"; };
+		BR000005 /* SwipeRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeRoute.swift; sourceTree = "<group>"; };
+		BR000006 /* TypeRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypeRoute.swift; sourceTree = "<group>"; };
+		BR000007 /* DismissKeyboardRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DismissKeyboardRoute.swift; sourceTree = "<group>"; };
+		BR000008 /* KeyRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRoute.swift; sourceTree = "<group>"; };
+		BR000009 /* ScreenshotRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotRoute.swift; sourceTree = "<group>"; };
+		BR000010 /* SourceRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceRoute.swift; sourceTree = "<group>"; };
+		BR000011 /* WebviewElementsRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebviewElementsRoute.swift; sourceTree = "<group>"; };
+		BR000012 /* ElementsRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElementsRoute.swift; sourceTree = "<group>"; };
+		BR000013 /* WaitRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitRoute.swift; sourceTree = "<group>"; };
+		BR000014 /* ScrollRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScrollRoute.swift; sourceTree = "<group>"; };
+		BR000015 /* LaunchRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchRoute.swift; sourceTree = "<group>"; };
+		BR000016 /* DismissAlertRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DismissAlertRoute.swift; sourceTree = "<group>"; };
+		BR000017 /* AppearanceRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceRoute.swift; sourceTree = "<group>"; };
+		BR000018 /* AppStateRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateRoute.swift; sourceTree = "<group>"; };
+		BR000019 /* IdleRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IdleRoute.swift; sourceTree = "<group>"; };
+		BR000020 /* LogsRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsRoute.swift; sourceTree = "<group>"; };
+		BR000021 /* PerfRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfRoute.swift; sourceTree = "<group>"; };
+		BR000022 /* NetworkRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkRoute.swift; sourceTree = "<group>"; };
+		BR000023 /* CrashesRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrashesRoute.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,16 +121,47 @@
 				BB000001 /* SpecterQARunner.swift */,
 				BB000002 /* HTTPServer.swift */,
 				BB000003 /* TouchInjector.swift */,
-				BB000004 /* RequestParser.swift */,
 				BB000005 /* AccessibilityTree.swift */,
 				BB000006 /* SpecterQAElementQuery.swift */,
 				BB000007 /* SpecterQAScreenshot.swift */,
 				BB000008 /* SpecterQASwizzler.m */,
 				BB000009 /* SpecterQASwizzler.h */,
 				BB000010 /* SpecterQARunner-Bridging-Header.h */,
+				EE000004 /* Routes */,
 			);
 			name = Sources;
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		EE000004 /* Routes */ = {
+			isa = PBXGroup;
+			children = (
+				BR000001 /* Route.swift */,
+				BR000002 /* HealthRoute.swift */,
+				BR000003 /* ShutdownRoute.swift */,
+				BR000004 /* TapRoute.swift */,
+				BR000005 /* SwipeRoute.swift */,
+				BR000006 /* TypeRoute.swift */,
+				BR000007 /* DismissKeyboardRoute.swift */,
+				BR000008 /* KeyRoute.swift */,
+				BR000009 /* ScreenshotRoute.swift */,
+				BR000010 /* SourceRoute.swift */,
+				BR000011 /* WebviewElementsRoute.swift */,
+				BR000012 /* ElementsRoute.swift */,
+				BR000013 /* WaitRoute.swift */,
+				BR000014 /* ScrollRoute.swift */,
+				BR000015 /* LaunchRoute.swift */,
+				BR000016 /* DismissAlertRoute.swift */,
+				BR000017 /* AppearanceRoute.swift */,
+				BR000018 /* AppStateRoute.swift */,
+				BR000019 /* IdleRoute.swift */,
+				BR000020 /* LogsRoute.swift */,
+				BR000021 /* PerfRoute.swift */,
+				BR000022 /* NetworkRoute.swift */,
+				BR000023 /* CrashesRoute.swift */,
+			);
+			name = Routes;
+			path = Routes;
 			sourceTree = "<group>";
 		};
 		EE100001 /* HostApp */ = {
@@ -197,11 +272,33 @@
 				AA000001 /* SpecterQARunner.swift in Sources */,
 				AA000002 /* HTTPServer.swift in Sources */,
 				AA000003 /* TouchInjector.swift in Sources */,
-				AA000004 /* RequestParser.swift in Sources */,
 				AA000005 /* AccessibilityTree.swift in Sources */,
 				AA000006 /* SpecterQAElementQuery.swift in Sources */,
 				AA000007 /* SpecterQAScreenshot.swift in Sources */,
 				AA000008 /* SpecterQASwizzler.m in Sources */,
+				AR000001 /* Route.swift in Sources */,
+				AR000002 /* HealthRoute.swift in Sources */,
+				AR000003 /* ShutdownRoute.swift in Sources */,
+				AR000004 /* TapRoute.swift in Sources */,
+				AR000005 /* SwipeRoute.swift in Sources */,
+				AR000006 /* TypeRoute.swift in Sources */,
+				AR000007 /* DismissKeyboardRoute.swift in Sources */,
+				AR000008 /* KeyRoute.swift in Sources */,
+				AR000009 /* ScreenshotRoute.swift in Sources */,
+				AR000010 /* SourceRoute.swift in Sources */,
+				AR000011 /* WebviewElementsRoute.swift in Sources */,
+				AR000012 /* ElementsRoute.swift in Sources */,
+				AR000013 /* WaitRoute.swift in Sources */,
+				AR000014 /* ScrollRoute.swift in Sources */,
+				AR000015 /* LaunchRoute.swift in Sources */,
+				AR000016 /* DismissAlertRoute.swift in Sources */,
+				AR000017 /* AppearanceRoute.swift in Sources */,
+				AR000018 /* AppStateRoute.swift in Sources */,
+				AR000019 /* IdleRoute.swift in Sources */,
+				AR000020 /* LogsRoute.swift in Sources */,
+				AR000021 /* PerfRoute.swift in Sources */,
+				AR000022 /* NetworkRoute.swift in Sources */,
+				AR000023 /* CrashesRoute.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
