@@ -7,6 +7,20 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v13.1.1 (2026-04-16)
+
+### Fix AXHTTPServer port 8222 socket leak
+
+#### Fixed
+
+- `AXHTTPServer.stop()` now calls `server_close()` after `shutdown()` — port 8222 is released cleanly so subsequent `ios_start_session` calls can re-bind. Without this fix, a second session with `backend="ax"` would fail with `[Errno 48] Address already in use`. Reported from Palace dogfood report 2026-04-17.
+
+#### Regression test added
+
+- `tests/regression/test_ax_server_restart.py` — three tests covering port release after stop, three consecutive restart cycles, and a static source guard asserting `server_close()` is called.
+
+---
+
 ## v13.1.0 (2026-04-16)
 
 ### Fix Xcode 26 XCTest runner crash — 40/40 smoke tests passing
