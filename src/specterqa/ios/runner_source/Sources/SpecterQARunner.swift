@@ -57,6 +57,14 @@ class SpecterQARunnerTests: XCTestCase {
         NSLog("[SpecterQA] PID file: \(pidFilePath)  Sentinel: \(stopSentinelPath)")
         NSLog("[SpecterQA] ============================================")
 
+        // Step 0: Apply WDA-proven XCTest crash mitigations.
+        // Without these, the runner crashes (SIGABRT) when the app fires
+        // rapid NotificationCenter posts during borrow/download/sheet
+        // presentations. The crash is in XCTRunnerIDESession.logDebugMessage:
+        // → NSKeyedArchiver trying to serialize a message with a deallocated
+        // AX element pointer. Three mitigations eliminate all known crash vectors.
+        applyCrashMitigations()
+
         // Step 1: Clean up any orphaned previous runner
         cleanupOrphanProcess()
 
@@ -140,6 +148,55 @@ class SpecterQARunnerTests: XCTestCase {
         server.stop()
         cleanupPIDFile()
         NSLog("[SpecterQA] Clean shutdown complete.")
+    }
+
+    // MARK: - WDA-Proven Crash Mitigations
+
+    /// Apply three mitigations that prevent XCTest runner SIGABRT crashes.
+    ///
+    /// These are proven in production by WebDriverAgent (Appium) which ships
+    /// them in `UITestingUITests +setUp`. The crash mechanism:
+    ///   1. App fires rapid NotificationCenter posts (borrow, download, sheet)
+    ///   2. XCTest alert monitor fires, tries to log a debug message
+    ///   3. `XCTRunnerIDESession.logDebugMessage:` serializes via NSKeyedArchiver
+    ///   4. Archiver hits a deallocated AX element pointer → SIGABRT
+    ///
+    /// Mitigation 1: Replace XCTest's debug logger to bypass NSKeyedArchiver
+    /// Mitigation 2: Disable remote query evaluation (secondary hang vector)
+    /// Mitigation 3: Disable automatic screenshot/recording (race condition)
+    private func applyCrashMitigations() {
+        NSLog("[SpecterQA] Applying XCTest crash mitigations...")
+
+        // Mitigation 1: Replace the XCTest debug logger.
+        // XCSetDebugLogger is a private symbol in XCTest.framework.
+        // We load it via dlsym and replace the default logger with our safe one.
+        if let xcTestBundle = Bundle(identifier: "com.apple.dt.XCTest") ?? Bundle(for: XCTestCase.self) as Bundle?,
+           let execPath = xcTestBundle.executablePath {
+            if let handle = dlopen(execPath, RTLD_NOW | RTLD_NOLOAD) {
+                defer { dlclose(handle) }
+                typealias SetLoggerFn = @convention(c) (AnyObject?) -> Void
+                if let sym = dlsym(handle, "XCSetDebugLogger") {
+                    let setLogger = unsafeBitCast(sym, to: SetLoggerFn.self)
+                    setLogger(SpecterQASafeDebugLogger())
+                    NSLog("[SpecterQA] ✓ Debug logger replaced (NSKeyedArchiver crash prevented)")
+                } else {
+                    NSLog("[SpecterQA] ⚠ XCSetDebugLogger symbol not found — crash mitigation partial")
+                }
+            }
+        }
+
+        // Mitigation 2: Disable remote query evaluation.
+        // Prevents XCTest from sending element queries back to the IDE
+        // for additional filtering — a secondary crash/hang vector.
+        UserDefaults.standard.set(true, forKey: "XCTDisableRemoteQueryEvaluation")
+        NSLog("[SpecterQA] ✓ Remote query evaluation disabled")
+
+        // Mitigation 3: Disable automatic diagnostic recordings.
+        // XCTest captures screenshots on assertion failures. During
+        // notification cascades, this races with the debug logger → SIGABRT.
+        UserDefaults.standard.set(true, forKey: "DisableDiagnosticScreenRecordings")
+        UserDefaults.standard.set(true, forKey: "DisableScreenshots")
+        NSLog("[SpecterQA] ✓ Diagnostic recordings disabled")
     }
 
     // MARK: - Orphan cleanup
@@ -254,5 +311,23 @@ class SpecterQARunnerTests: XCTestCase {
         }
 
         NSLog("[SpecterQA] Registered 7 interruption monitors.")
+    }
+}
+
+// MARK: - Safe Debug Logger
+
+/// Replaces XCTest's default debug logger to prevent NSKeyedArchiver SIGABRT.
+///
+/// The default XCTest logger (`XCTDefaultDebugLogHandler`) serializes debug
+/// messages via NSKeyedArchiver. When the message contains a reference to
+/// a deallocated AX element (common during notification cascades), the
+/// archiver hits a bad pointer and crashes with SIGABRT.
+///
+/// This logger routes messages to NSLog instead — no archival, no crash.
+/// This is the same approach used by WebDriverAgent in production.
+@objc class SpecterQASafeDebugLogger: NSObject {
+    @objc func logDebugMessage(_ message: String) {
+        // Route to NSLog (safe) instead of NSKeyedArchiver (crashes)
+        NSLog("[SpecterQA-XCTDebug] %@", message)
     }
 }
