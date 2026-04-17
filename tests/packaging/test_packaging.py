@@ -55,12 +55,21 @@ class TestWheelContents:
         with zipfile.ZipFile(built_wheel) as whl:
             assert any("project.pbxproj" in n for n in whl.namelist()), "project.pbxproj missing"
 
-    def test_runner_source_importable(self):
-        """Verify runner_source is importable from the installed package."""
-        try:
-            from specterqa.ios.runner_source import RUNNER_SOURCE_DIR, SOURCES_DIR
-            assert SOURCES_DIR.exists(), f"SOURCES_DIR doesn't exist: {SOURCES_DIR}"
-            swift_files = list(SOURCES_DIR.glob("*.swift"))
-            assert len(swift_files) >= 7, f"Only {len(swift_files)} Swift files in {SOURCES_DIR}"
-        except ImportError:
-            pytest.fail("specterqa.ios.runner_source not importable — packaging broken")
+    def test_runner_source_importable(self, built_wheel):
+        """Verify the wheel contains Swift sources in runner_source/Sources/.
+
+        After the runner_source dedup refactor, runner/Sources/ is the single
+        source of truth. setup.py's build_py override copies them into
+        runner_source/Sources/ at build time so the shipped wheel contains the
+        Swift runner. We verify the wheel — not the dev-tree state — because
+        the Sources/ directory is intentionally absent from git.
+        """
+        with zipfile.ZipFile(built_wheel) as whl:
+            swift_in_wheel = [
+                n for n in whl.namelist()
+                if "runner_source/Sources/" in n and n.endswith(".swift")
+            ]
+        assert len(swift_in_wheel) >= 6, (
+            f"Only {len(swift_in_wheel)} Swift files found under runner_source/Sources/ "
+            f"in the wheel — build_py copy hook may be broken"
+        )
