@@ -720,3 +720,89 @@ class TestExample ReaderNotificationCascade:
         time.sleep(0.3)
         _tap_tab("Form")
         time.sleep(0.5)
+
+
+# ---------------------------------------------------------------------------
+# XCTest Crash Fix Verification: sheet + notification cascade
+# ---------------------------------------------------------------------------
+
+@requires_live
+class TestXCTestCrashMitigation:
+    """Verify the WDA-proven crash mitigations prevent SIGABRT.
+    
+    These tests trigger the exact crash vectors that killed the runner
+    in Example Reader dogfood: sheet presentation + notification cascade +
+    rapid element queries during state transitions.
+    """
+
+    def test_sheet_presentation_during_typing_survives(self):
+        """Type into a field, open a sheet, query elements — runner must survive.
+        This is the Example Reader search-catalog crash: typing triggers keyboard,
+        then sheet presentation fires notifications that crash the logger."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("Form")
+        time.sleep(0.5)
+
+        # Type to activate keyboard
+        _type("CRASH_TEST", identifier="field_first_name")
+        time.sleep(0.3)
+
+        # Navigate to Nav tab and open sheet (keyboard + sheet = crash trigger)
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("Nav")
+        time.sleep(0.5)
+        _tap(identifier="btn_open_sheet")
+        time.sleep(1.0)
+
+        # Query elements DURING sheet presentation (the crash trigger)
+        _elements()
+        _assert_runner_alive("sheet presentation during typing")
+
+        # Close sheet
+        _tap(identifier="btn_close_sheet")
+        time.sleep(0.5)
+        _tap_tab("Form")
+        time.sleep(0.5)
+
+    def test_rapid_navigation_with_element_queries_survives(self):
+        """Navigate 5 tabs with element queries between each — stress the
+        XCTest observation system that crashes on notification cascades."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+
+        for tab in ["Form", "List", "Nav", "Stress", "Form"]:
+            _tap_tab(tab)
+            time.sleep(0.3)
+            _elements()  # query during transition
+
+        _assert_runner_alive("rapid navigation with interleaved queries")
+
+    def test_borrow_download_return_cycle_survives(self):
+        """Full Example Reader state machine cycle with element queries between steps."""
+        _dismiss_keyboard()
+        time.sleep(0.3)
+        _tap_tab("More")
+        time.sleep(0.5)
+        _tap(label="Example Reader")
+        time.sleep(1.0)
+
+        # Borrow → query → download → query → return → query
+        _tap(identifier="Example Reader_btn_borrow")
+        time.sleep(1.0)
+        _elements()
+        _assert_runner_alive("after borrow")
+
+        _tap(identifier="Example Reader_btn_download")
+        time.sleep(3.0)
+        _elements()
+        _assert_runner_alive("after download")
+
+        _tap(identifier="Example Reader_btn_return")
+        time.sleep(1.0)
+        _elements()
+        _assert_runner_alive("after return")
+
+        _tap_tab("Form")
+        time.sleep(0.5)
