@@ -14,6 +14,7 @@
 		AA000005 /* AccessibilityTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000005 /* AccessibilityTree.swift */; };
 		AA000006 /* SpecterQAElementQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000006 /* SpecterQAElementQuery.swift */; };
 		AA000007 /* SpecterQAScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000007 /* SpecterQAScreenshot.swift */; };
+		AA000008 /* SpecterQASwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = BB000008 /* SpecterQASwizzler.m */; };
 		AA100002 /* HostApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB100001 /* HostApp.swift */; };
 /* End PBXBuildFile section */
 
@@ -35,6 +36,9 @@
 		BB000005 /* AccessibilityTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTree.swift; sourceTree = "<group>"; };
 		BB000006 /* SpecterQAElementQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQAElementQuery.swift; sourceTree = "<group>"; };
 		BB000007 /* SpecterQAScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpecterQAScreenshot.swift; sourceTree = "<group>"; };
+		BB000008 /* SpecterQASwizzler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SpecterQASwizzler.m; sourceTree = "<group>"; };
+		BB000009 /* SpecterQASwizzler.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SpecterQASwizzler.h; sourceTree = "<group>"; };
+		BB000010 /* SpecterQARunner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SpecterQARunner-Bridging-Header.h"; sourceTree = "<group>"; };
 		BB100001 /* HostApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostApp.swift; sourceTree = "<group>"; };
 		CC000001 /* SpecterQARunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpecterQARunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CC100001 /* SpecterQAHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpecterQAHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -77,6 +81,9 @@
 				BB000005 /* AccessibilityTree.swift */,
 				BB000006 /* SpecterQAElementQuery.swift */,
 				BB000007 /* SpecterQAScreenshot.swift */,
+				BB000008 /* SpecterQASwizzler.m */,
+				BB000009 /* SpecterQASwizzler.h */,
+				BB000010 /* SpecterQARunner-Bridging-Header.h */,
 			);
 			name = Sources;
 			path = Sources;
@@ -194,6 +201,7 @@
 				AA000005 /* AccessibilityTree.swift in Sources */,
 				AA000006 /* SpecterQAElementQuery.swift in Sources */,
 				AA000007 /* SpecterQAScreenshot.swift in Sources */,
+				AA000008 /* SpecterQASwizzler.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -298,6 +306,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.specterqa.runner.uitests;
 				PRODUCT_NAME = SpecterQARunnerTests;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/SpecterQARunner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = SpecterQAHost;
@@ -313,6 +322,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.specterqa.runner.uitests;
 				PRODUCT_NAME = SpecterQARunnerTests;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/SpecterQARunner-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = SpecterQAHost;
