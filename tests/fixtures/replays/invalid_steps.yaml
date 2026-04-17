@@ -1,0 +1,9 @@
+replay:
+  name: invalid_steps
+  bundle_id: ''
+  device_id: booted
+  recorded_at: '2026-04-01T10:00:00'
+  steps:
+  - action: unknown_action
+    element_label: Something
+  - element_label: No action field here
