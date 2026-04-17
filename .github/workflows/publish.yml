@@ -1,4 +1,4 @@
-name: Build and Publish to GitHub Packages
+name: Build and Publish to PyPI
 
 on:
   push:
@@ -13,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write  # for trusted publishing (PyPI OIDC)
 
 jobs:
   build:
@@ -50,45 +48,11 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  publish-github-packages:
-    name: Publish to GitHub Packages (PyPI index)
-    needs: build
-    runs-on: ubuntu-latest
-    if: ${{ !inputs.dry_run }}
-    environment:
-      name: github-packages
-      url: https://github.com/${{ github.repository_owner }}/${{ github.event.repository.name }}/packages
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: dist-${{ needs.build.outputs.version }}
-          path: dist/
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install twine
-        run: pip install twine
-
-      - name: Publish to GitHub Packages
-        env:
-          TWINE_USERNAME: ${{ github.actor }}
-          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TWINE_REPOSITORY_URL: https://maven.pkg.github.com/${{ github.repository_owner }}/${{ github.event.repository.name }}
-        run: twine upload --skip-existing dist/*
-
   publish-pypi:
-    name: Publish to PyPI (trusted publishing)
+    name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.dry_run }}
-    environment:
-      name: pypi
-      url: https://pypi.org/project/specterqa-ios/
 
     steps:
       - name: Download build artifacts
@@ -100,4 +64,5 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
