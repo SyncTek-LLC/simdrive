@@ -48,8 +48,16 @@ mcp = [
     "mcp>=1.0",
 ]
 orchestration = [
+    # Required by som_runner.py (computer-use / SoM pipeline) and wda_driver.py (CLI only).
+    # Not needed for the MCP product path — install only for CLI orchestration commands.
     "anthropic>=0.39.0",
     "numpy>=1.24",
+]
+browserstack = [
+    # Required by BrowserStackBackend — remote real-device cloud.
+    # Not needed for local simulator testing.
+    # No additional PyPI deps — backend uses stdlib urllib only.
+    # Set BROWSERSTACK_USERNAME + BROWSERSTACK_ACCESS_KEY env vars to enable.
 ]
 license = [
     "httpx>=0.27.0",
