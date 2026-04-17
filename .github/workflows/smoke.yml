@@ -52,7 +52,7 @@ jobs:
             --device-id "$SIM_UDID" &
           sleep 15
       - name: Run live smoke tests
-        run: pytest tests/smoke/ -v -m live --tb=short
+        run: pytest tests/smoke/ -v --tb=short
       - name: Stop session
         if: always()
         run: specterqa-ios session stop 2>/dev/null || true
