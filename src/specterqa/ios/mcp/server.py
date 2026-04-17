@@ -2210,6 +2210,432 @@ def handle_network(arguments: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Task A — Replay MCP handlers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_REPLAY_DIR = ".specterqa/replays"
+
+
+def handle_list_replays(arguments: dict) -> list:
+    """List saved replay YAML files with name, step count, and last-modified time.
+
+    Args:
+        replay_dir: Directory to scan (default .specterqa/replays).
+
+    Returns:
+        List of {"name": str, "path": str, "steps": int, "modified": str}
+        Sorted by last-modified descending (newest first).
+    """
+    import datetime
+
+    replay_dir = Path(arguments.get("replay_dir", _DEFAULT_REPLAY_DIR))
+    if not replay_dir.exists():
+        return []
+
+    results = []
+    for p in sorted(replay_dir.glob("*.yaml"), key=lambda f: f.stat().st_mtime, reverse=True):
+        try:
+            import yaml as _yaml
+            data = _yaml.safe_load(p.read_text(encoding="utf-8"))
+            r = data.get("replay", {})
+            step_count = len(r.get("steps", []))
+            mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%dT%H:%M:%S")
+            results.append({
+                "name": r.get("name", p.stem),
+                "path": str(p.resolve()),
+                "steps": step_count,
+                "modified": mtime,
+            })
+        except Exception as exc:  # noqa: BLE001 — skip unreadable files
+            logger.debug("handle_list_replays: skipping %s (%s)", p, exc)
+    return results
+
+
+def handle_replay(arguments: dict) -> dict:
+    """Run a saved replay YAML end-to-end against the active session.
+
+    Args:
+        name: Replay name (from ios_list_replays) or a file path.
+        replay_dir: Directory to look in (default .specterqa/replays).
+
+    Returns:
+        {"status": "passed"|"failed"|"error", "steps_executed": int,
+         "failed_step_index": int|None, "failures": [...]}
+    """
+    if _backend is None:
+        return {
+            "error": "No active session. Call ios_start_session first.",
+            "hint": "ios_replay requires an active session — the XCTest runner must be running.",
+        }
+
+    name = arguments.get("name", "")
+    if not name:
+        return {"error": "'name' is required — see ios_list_replays for available replays"}
+
+    # Resolve path: check if name is already a path
+    candidate = Path(name)
+    if not candidate.exists():
+        replay_dir = Path(arguments.get("replay_dir", _DEFAULT_REPLAY_DIR))
+        # Try exact match first
+        candidate = replay_dir / name
+        if not candidate.exists():
+            # Try adding .yaml extension
+            candidate = replay_dir / f"{name}.yaml"
+        if not candidate.exists():
+            return {
+                "error": f"Replay '{name}' not found. Call ios_list_replays to see available replays.",
+            }
+
+    try:
+        from specterqa.ios.replay import ReplayPlayer
+        player = ReplayPlayer(str(candidate))
+    except Exception as exc:
+        return {"error": f"Failed to load replay '{candidate}': {exc}"}
+
+    # Execute using the active session's backend
+    try:
+        result: dict = {
+            "name": player.name,
+            "bundle_id": player.bundle_id,
+            "steps": [],
+            "passed": True,
+            "exit_code": 0,
+        }
+
+        from specterqa.ios.som_annotator import SoMAnnotator
+
+        # Determine runner URL from the active backend
+        runner_url = getattr(_backend, "_runner_url", None) or getattr(_backend, "runner_url", None)
+        if runner_url is None:
+            # Try constructing from port
+            port = getattr(_backend, "_port", None) or getattr(_backend, "port", 8100)
+            runner_url = f"http://localhost:{port}"
+
+        annotator = SoMAnnotator(runner_url=runner_url)
+
+        i = 0
+        while i < len(player.steps):
+            step = player.steps[i]
+            step_result = player._execute_step(step, _backend, annotator, result)
+            result["steps"].append(step_result)
+            if not step_result.get("passed", True):
+                result["passed"] = False
+            i += 1
+
+        failed_indices = [j for j, s in enumerate(result["steps"]) if not s.get("passed", True)]
+        return {
+            "status": "passed" if result["passed"] else "failed",
+            "steps_executed": len(result["steps"]),
+            "failed_step_index": failed_indices[0] if failed_indices else None,
+            "failures": [result["steps"][j] for j in failed_indices],
+            "exit_code": result["exit_code"],
+        }
+    except Exception as exc:
+        logger.exception("handle_replay: unexpected error")
+        return {"status": "error", "error": str(exc), "steps_executed": 0, "failed_step_index": None, "failures": []}
+
+
+def handle_validate_replay(arguments: dict) -> dict:
+    """Parse a replay YAML and validate structure without executing it.
+
+    Args:
+        name: Replay name or file path.
+        replay_dir: Directory to look in (default .specterqa/replays).
+
+    Returns:
+        {"valid": bool, "step_count": int, "issues": [...], "name": str, "bundle_id": str}
+    """
+    name = arguments.get("name", "")
+    if not name:
+        return {"valid": False, "issues": ["'name' is required"]}
+
+    candidate = Path(name)
+    if not candidate.exists():
+        replay_dir = Path(arguments.get("replay_dir", _DEFAULT_REPLAY_DIR))
+        candidate = replay_dir / name
+        if not candidate.exists():
+            candidate = replay_dir / f"{name}.yaml"
+        if not candidate.exists():
+            return {
+                "valid": False,
+                "issues": [f"Replay '{name}' not found. Call ios_list_replays to see available replays."],
+            }
+
+    issues = []
+    try:
+        import yaml as _yaml
+        raw = _yaml.safe_load(candidate.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"valid": False, "issues": [f"YAML parse error: {exc}"]}
+
+    if not isinstance(raw, dict) or "replay" not in raw:
+        return {"valid": False, "issues": ["Missing top-level 'replay' key"]}
+
+    r = raw["replay"]
+    bundle_id = r.get("bundle_id", "")
+    replay_name = r.get("name", candidate.stem)
+
+    if not bundle_id:
+        issues.append("Missing 'bundle_id' — replay may not launch the correct app")
+
+    steps = r.get("steps", [])
+    if not steps:
+        issues.append("No steps defined — replay will do nothing")
+
+    known_actions = {"tap", "swipe", "swipe_back", "type", "press_key", "long_press",
+                     "wait_for_element", "assert", "skip_to"}
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            issues.append(f"Step {i}: expected dict, got {type(step).__name__}")
+            continue
+        action = step.get("action")
+        if not action:
+            # Check Maestro aliases
+            maestro_aliases = {"tapOn", "assertVisible", "assertNotVisible", "inputText", "waitFor", "tapOnIdentifier"}
+            if not any(k in step for k in maestro_aliases):
+                issues.append(f"Step {i}: missing 'action' field and no recognized Maestro alias")
+        elif action not in known_actions:
+            issues.append(f"Step {i}: unknown action '{action}'")
+
+        if step.get("action") == "tap" or step.get("tapOn"):
+            label = step.get("element_label") or step.get("tapOn")
+            x = step.get("x")
+            y = step.get("y")
+            identifier = step.get("element_identifier")
+            if not label and not identifier and (x is None or y is None):
+                issues.append(f"Step {i}: tap step has no label, identifier, or coordinates")
+
+    return {
+        "valid": len(issues) == 0,
+        "step_count": len(steps),
+        "issues": issues,
+        "name": replay_name,
+        "bundle_id": bundle_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task B — Discovery MCP handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_doctor(arguments: dict) -> dict:
+    """Check environment readiness for SpecterQA iOS.
+
+    Returns:
+        {"checks": {"xcode_present": {...}, "simulators_available": {...},
+                    "runner_built": {...}}, "overall": "ok"|"degraded"|"fail"}
+    """
+    import shutil
+
+    checks = {}
+
+    # 1. Xcode check
+    try:
+        xcode_path = subprocess.check_output(
+            ["xcode-select", "-p"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        checks["xcode_present"] = {
+            "pass": bool(xcode_path),
+            "detail": xcode_path,
+            "fix": None,
+        }
+    except Exception:
+        checks["xcode_present"] = {
+            "pass": False,
+            "detail": "xcode-select -p failed",
+            "fix": "Install Xcode from the App Store and run: sudo xcode-select --switch /Applications/Xcode.app",
+        }
+
+    # 2. xcrun available
+    xcrun_available = shutil.which("xcrun") is not None
+    checks["xcrun_available"] = {
+        "pass": xcrun_available,
+        "detail": "xcrun found" if xcrun_available else "xcrun not in PATH",
+        "fix": None if xcrun_available else "Install Xcode Command Line Tools: xcode-select --install",
+    }
+
+    # 3. Booted simulators
+    try:
+        raw = subprocess.check_output(
+            ["xcrun", "simctl", "list", "devices", "booted", "--json"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        import json as _json
+        sim_data = _json.loads(raw)
+        booted = []
+        for runtime, devices in sim_data.get("devices", {}).items():
+            for d in devices:
+                if d.get("state", "").lower() == "booted":
+                    booted.append(d.get("udid", ""))
+        checks["simulators_available"] = {
+            "pass": len(booted) > 0,
+            "detail": f"{len(booted)} booted simulator(s): {booted}",
+            "fix": None if booted else "Boot a simulator: open Simulator.app or xcrun simctl boot <udid>",
+        }
+    except Exception as exc:
+        checks["simulators_available"] = {
+            "pass": False,
+            "detail": f"simctl query failed: {exc}",
+            "fix": "Check Xcode installation",
+        }
+
+    # 4. Runner built check
+    try:
+        from specterqa.ios.session_manager import _DEFAULT_RUNNER_BUILD_DIR
+        runner_build = Path(_DEFAULT_RUNNER_BUILD_DIR)
+        runner_exists = runner_build.exists() and any(runner_build.rglob("*.xctestrun"))
+        checks["runner_built"] = {
+            "pass": runner_exists,
+            "detail": str(runner_build) if runner_exists else f"No .xctestrun in {runner_build}",
+            "fix": None if runner_exists else "Build runner: specterqa-ios runner build",
+        }
+    except Exception as exc:
+        checks["runner_built"] = {
+            "pass": False,
+            "detail": f"Could not check runner: {exc}",
+            "fix": "Build runner: specterqa-ios runner build",
+        }
+
+    # 5. Active session status
+    checks["session_active"] = {
+        "pass": _backend is not None,
+        "detail": "Session active" if _backend is not None else "No session running",
+        "fix": None if _backend is not None else "Start a session: ios_start_session(bundle_id=...)",
+    }
+
+    all_pass = all(c["pass"] for c in checks.values())
+    critical_fail = not checks.get("xcode_present", {}).get("pass", True)
+    overall = "ok" if all_pass else ("fail" if critical_fail else "degraded")
+
+    return {"checks": checks, "overall": overall}
+
+
+def handle_devices(arguments: dict) -> list:
+    """List booted iOS simulators.
+
+    Returns:
+        List of {"udid": str, "name": str, "runtime": str, "state": str}
+        Empty list if no simulators are booted.
+    """
+    try:
+        raw = subprocess.check_output(
+            ["xcrun", "simctl", "list", "devices", "booted", "--json"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+        import json as _json
+        sim_data = _json.loads(raw)
+        results = []
+        for runtime, devices in sim_data.get("devices", {}).items():
+            for d in devices:
+                if d.get("state", "").lower() == "booted":
+                    results.append({
+                        "udid": d.get("udid", ""),
+                        "name": d.get("name", ""),
+                        "runtime": runtime,
+                        "state": d.get("state", ""),
+                    })
+        return results
+    except Exception as exc:
+        logger.debug("handle_devices failed: %s", exc)
+        return []
+
+
+def handle_apps(arguments: dict) -> list:
+    """List apps installed on a booted simulator.
+
+    Args:
+        device_udid: Simulator UDID (required).
+
+    Returns:
+        List of {"bundle_id": str, "display_name": str, "version": str, "install_path": str}
+        Returns [{"warning": "<message>"}] on parse failure.
+    """
+    import plistlib
+
+    device_udid = arguments.get("device_udid", "").strip()
+    if not device_udid:
+        raise ValueError("device_udid is required — call ios_devices to list booted simulators")
+
+    try:
+        raw = subprocess.check_output(
+            ["xcrun", "simctl", "listapps", device_udid],
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+        if "invalid device" in stderr.lower() or "unable to lookup" in stderr.lower():
+            raise ValueError(
+                f"No simulator with UDID '{device_udid}'. "
+                "Call ios_devices to see booted simulators."
+            ) from exc
+        raise ValueError(f"simctl listapps failed: {stderr}") from exc
+    except Exception as exc:
+        raise ValueError(f"simctl listapps failed: {exc}") from exc
+
+    try:
+        plist_data = plistlib.loads(raw)
+    except Exception as exc:
+        return [{"warning": f"Failed to parse app list: {exc}", "bundle_id": "", "display_name": "", "version": "", "install_path": ""}]
+
+    results = []
+    for bundle_id, info in plist_data.items():
+        results.append({
+            "bundle_id": bundle_id,
+            "display_name": info.get("CFBundleDisplayName") or info.get("CFBundleName", ""),
+            "version": info.get("CFBundleShortVersionString") or info.get("CFBundleVersion", ""),
+            "install_path": info.get("Path", ""),
+        })
+
+    results.sort(key=lambda a: a["display_name"].lower())
+    return results
+
+
+def handle_license_status(arguments: dict) -> dict:
+    """Report SpecterQA license tier and feature entitlements.
+
+    Returns:
+        {"tier": str, "entitlements": dict, "expiry": str|None, "valid": bool}
+    """
+    try:
+        from specterqa.ios.license.validator import LicenseValidator, _DOGFOOD_RESULT, _TRIAL_RESULT
+
+        env_key = os.environ.get("SPECTERQA_IOS_LICENSE", "").strip()
+        license_key = os.environ.get("SPECTERQA_LICENSE_KEY", "").strip()
+
+        validator = LicenseValidator(license_key=license_key)
+        result = validator.validate()
+
+        tier = result.get("tier", "trial")
+        expires_at = result.get("expires_at")
+        valid = result.get("valid", False)
+
+        # Map tier to entitlements
+        entitlements = {
+            "browserstack": tier in ("pro", "team", "enterprise", "founder"),
+            "indigo_hid": tier in ("pro", "team", "enterprise", "founder"),
+            "multi_sim": tier in ("indie", "pro", "team", "enterprise", "founder"),
+            "ci_replay": tier != "trial",
+            "max_concurrent_sims": result.get("max_concurrent_sims", 1),
+        }
+
+        return {
+            "tier": tier,
+            "valid": valid,
+            "entitlements": entitlements,
+            "expiry": expires_at,
+        }
+    except Exception as exc:
+        return {
+            "tier": "unknown",
+            "valid": False,
+            "entitlements": {},
+            "expiry": None,
+            "error": str(exc),
+        }
+
+
+# ---------------------------------------------------------------------------
 # MCP server factory
 # ---------------------------------------------------------------------------
 
@@ -2236,7 +2662,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (32 total):
+AVAILABLE TOOLS (39 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -2266,6 +2692,15 @@ AVAILABLE TOOLS (32 total):
     ios_start_recording  — Clear step buffer; begin clean recording
     ios_stop_recording   — Save replay YAML + clear buffer (end of flow); preferred save path
     ios_save_replay      — [deprecated in v12 — use ios_stop_recording] Save YAML without clearing buffer
+    ios_list_replays     — List saved replay YAML files (name, steps, modified). Call before ios_replay.
+    ios_replay           — Run a saved replay end-to-end against the active session.
+    ios_validate_replay  — Validate replay structure without executing it.
+
+  Environment Discovery:
+    ios_doctor           — Check environment readiness: Xcode, sims, runner build. Call when sessions fail.
+    ios_devices          — List booted simulators (UDID, name, runtime). Use to pick device_udid.
+    ios_apps             — List apps installed on a simulator. Use to find bundle_id.
+    ios_license_status   — Report license tier and feature entitlements.
 
   Quality & Diagnostics:
     ios_accessibility_audit        — Audit for missing labels, small targets, duplicate labels
@@ -3009,6 +3444,116 @@ SETUP CHECK:
             permissions=permissions,
         )
         return json.dumps(result, default=str)
+
+    # ── Tool: ios_list_replays ─────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_list_replays",
+        description=(
+            "List saved replay YAML files with their names, step counts, and last-modified timestamps. "
+            "Use before ios_replay to discover available replays. "
+            "Returns a list of {name, path, steps, modified} dicts, newest first. "
+            "replay_dir overrides the default scan directory (.specterqa/replays)."
+        ),
+    )
+    async def ios_list_replays(replay_dir: str = ".specterqa/replays") -> str:
+        result = handle_list_replays({"replay_dir": replay_dir})
+        return json.dumps(result)
+
+    # ── Tool: ios_replay ───────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_replay",
+        description=(
+            "Run a saved replay YAML end-to-end against the booted simulator. "
+            "name: the replay name from ios_list_replays (or an absolute file path). "
+            "An active session is required — call ios_start_session first. "
+            "Returns {status: 'passed'|'failed'|'error', steps_executed, failed_step_index, failures}. "
+            "Use ios_validate_replay first to catch bad replays before running."
+        ),
+    )
+    async def ios_replay(name: str, replay_dir: str = ".specterqa/replays") -> str:
+        result = handle_replay({"name": name, "replay_dir": replay_dir})
+        return json.dumps(result)
+
+    # ── Tool: ios_validate_replay ──────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_validate_replay",
+        description=(
+            "Parse a replay YAML and validate structure + referenced element identifiers "
+            "without executing it. Use to catch bad replays before running. "
+            "name: the replay name from ios_list_replays (or an absolute file path). "
+            "Returns {valid: bool, step_count, issues: [...], name, bundle_id}. "
+            "No active session required."
+        ),
+    )
+    async def ios_validate_replay(name: str, replay_dir: str = ".specterqa/replays") -> str:
+        result = handle_validate_replay({"name": name, "replay_dir": replay_dir})
+        return json.dumps(result)
+
+    # ── Tool: ios_doctor ───────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_doctor",
+        description=(
+            "Check environment readiness: Xcode path, simulator runtimes, booted devices, "
+            "SpecterQA runner build status. Returns a structured health summary with pass/fail "
+            "per check and suggested-fix strings. Call first when a session fails unexpectedly."
+        ),
+    )
+    async def ios_doctor() -> str:
+        result = handle_doctor({})
+        return json.dumps(result)
+
+    # ── Tool: ios_devices ──────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_devices",
+        description=(
+            "List booted iOS simulators: UDID, name, runtime, state. "
+            "Use to pick device_udid when starting a session or calling ios_apps. "
+            "Returns an empty list if no simulators are booted — does not crash."
+        ),
+    )
+    async def ios_devices() -> str:
+        result = handle_devices({})
+        return json.dumps(result)
+
+    # ── Tool: ios_apps ─────────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_apps",
+        description=(
+            "List apps installed on a booted simulator. "
+            "device_udid: simulator UDID from ios_devices (required). "
+            "Returns bundle_id, display_name, version, install_path for each app. "
+            "Use to find bundle_id for ios_start_session. "
+            "Raises ValueError with a clear message if the UDID is invalid."
+        ),
+    )
+    async def ios_apps(device_udid: str) -> str:
+        try:
+            result = handle_apps({"device_udid": device_udid})
+            return json.dumps(result)
+        except ValueError as exc:
+            return json.dumps({"error": str(exc)})
+
+    # ── Tool: ios_license_status ───────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_license_status",
+        description=(
+            "Report SpecterQA license tier and feature entitlements. "
+            "Returns {tier: 'free'|'trial'|'indie'|'founder'|'pro'|'team', "
+            "entitlements: {browserstack, indigo_hid, multi_sim, ci_replay, max_concurrent_sims}, "
+            "expiry: str|None, valid: bool}. "
+            "No active session required."
+        ),
+    )
+    async def ios_license_status() -> str:
+        result = handle_license_status({})
+        return json.dumps(result)
 
     return mcp
 
