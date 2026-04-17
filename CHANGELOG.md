@@ -7,6 +7,16 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v13.0.1 (2026-04-16)
+
+### Hotfix
+- fix: Default backend reverted to XCTest — AX backend sees only ~15 elements on SwiftUI views vs XCTest's 58+
+- iOS 26 Simulator AX bridge doesn't fully expose SwiftUI's deep element tree
+- AX backend still available via `backend="ax"` for simple apps, but XCTest is the production default
+- The XCTest sheet/modal crash is a known XCTest framework limitation, not a SpecterQA regression
+
+---
+
 ## v13.0.0 (2026-04-16)
 
 ### BREAKING: AXUIElement Backend — No XCTest Runner
