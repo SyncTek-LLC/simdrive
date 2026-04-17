@@ -108,6 +108,35 @@ class SpecterQARunnerTests: XCTestCase {
         server.screenshotCapture = SpecterQAScreenshot()
         server.elementQuery      = SpecterQAElementQuery(app: injector.app)
 
+        // Register all route handlers (one file per route, Routes/*.swift)
+        server.registerRoutes([
+            HealthRoute(),
+            ShutdownRoute(),
+            StopRoute(),
+            TapRoute(),
+            SwipeRoute(),
+            TypeRoute(),
+            DismissKeyboardRoute(),
+            KeyRoute(),
+            PressButtonRoute(),
+            ScreenshotRoute(),
+            SourceRoute(),
+            WebviewElementsRoute(),
+            ElementsRoute(),
+            WaitRoute(),
+            ScrollRoute(),
+            LaunchRoute(),
+            TerminateRoute(),
+            DismissAlertRoute(),
+            AppearanceRoute(),
+            AppStateRoute(),
+            IdleRoute(),
+            LogsRoute(),
+            PerfRoute(),
+            NetworkRoute(),
+            CrashesRoute(),
+        ])
+
         try server.start()
 
         // Step 5: Write PID file
