@@ -7,6 +7,54 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [13.2.0] — 2026-04-17
+
+### Added
+- 7 new MCP tools: `ios_list_replays`, `ios_replay`, `ios_validate_replay` (record-once, replay-free workflow reachable from MCP); `ios_doctor`, `ios_devices`, `ios_apps`, `ios_license_status` (zero-arg environment observation — first tool to call when a session fails unexpectedly).
+- `IOSBackend` Protocol (`backends/protocol.py`) — every backend now conforms to one interface.
+- `RetryPolicy` (`backends/retry_policy.py`) with FAST/ACTION/IDLE route classes + circuit breaker that replaces the per-call health probe.
+- `ios_dismiss_springboard_alert` + `ios_pre_grant_permissions` tools for SpringBoard-level permission prompts (reported from Example Reader dogfood).
+- `docs/troubleshooting.md` — compatibility matrix for simctl privacy grants and known iOS 18.4 limitations.
+- `scripts/generate_llms_txt.py` + `make llms` target + instructions-sync regression test to prevent tool-surface drift.
+
+### Changed
+- `HTTPServer.swift` refactored from a 1,196-LOC god class into `HTTPServer.swift` (socket + dispatch only, ~470 LOC) + 23 per-route files under `runner/Sources/Routes/` implementing a `Route` protocol.
+- Backend selection consolidated behind `BackendSelector.choose()` — the previous parallel selection path in `mcp/server.py::handle_start_session` is gone (~150 LOC deleted from server.py).
+- AX backend now walks sibling AXWindows so SwiftUI `.sheet`-presented UIKit content (e.g. Example Reader Add Library flow) enumerates correctly (reported from Example Reader dogfood).
+- Agent instructions rewritten: first-session 5-call loop, failure recovery decision tree, AX-vs-XCTest guidance, consolidated wait-tool decision tree, removed stale coordinate-fallback typing advice.
+- `ios_dismiss_keyboard` is now a real registered MCP tool (runner's `/dismiss_keyboard` endpoint was already implemented; the Python wiring was missing).
+- Runner Swift sources dedup: `runner/Sources/` is the authoritative source; `src/specterqa/ios/runner_source/Sources/` is populated at build time via `setup.py` `build_py` override.
+- `.github/workflows/publish.yml` uses `PYPI_API_TOKEN` token auth instead of broken trusted-publishing / GitHub Packages paths.
+
+### Fixed
+- AX hydration race: first `ios_elements()` right after `ios_start_session` no longer returns empty under race (warmup poll added to session start).
+- Tool-count mismatches in README/llms.txt/landing-page (was "19 tools"; actual count now surfaced; regression test enforces sync going forward).
+
+### Removed
+- ~3,600 LOC of unreachable code (`engine/`, `exploratory/`, `parallel/`, `webhooks/`, dead backend modules).
+- `runner/Sources/RequestParser.swift` and dead `RouterV2` stub (unused).
+- `HANDOFF.md` moved out of repo root (now `.specterqa/internal/HANDOFF.md`).
+
+### Deprecated
+- `ios_save_replay` — prefer `ios_stop_recording(name, keep_buffer=False)` or `ios_replay(name)`. Will be removed in v14.0.0.
+
+### Package extras
+- `pip install specterqa-ios[browserstack]` — BrowserStack device provider (optional).
+- `pip install specterqa-ios[orchestration]` — WebDriverAgent + Set-of-Marks CLI commands (optional).
+- Default install no longer eager-loads these heavy modules.
+
+### Tests
+- +107 regression tests covering: MCP tool layer arg validation + return shape, runner HTTP endpoint edge cases, AX/XCTest Protocol behavioral contracts, replay MCP tools, and discovery tools.
+- 40/40 live smoke on CI (`iPhone 16 Pro` sim, macos-14).
+
+### Known limitation
+- iOS 18.4 SpringBoard notification alerts remain unreachable from the AX tree — `ios_pre_grant_permissions` covers location/camera/etc. but NOT notifications on 18.4. Documented in `docs/troubleshooting.md`.
+
+### Credits
+- Example Reader dogfood report (Maurice Carrier, 2026-04-17) surfaced the AX sheet-enumeration gap, SpringBoard alert limitation, and the AXHTTPServer port leak that shipped in v13.1.1.
+
+---
+
 ## v13.1.1 (2026-04-16)
 
 ### Fix AXHTTPServer port 8222 socket leak
