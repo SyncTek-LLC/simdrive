@@ -7,6 +7,31 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## v13.1.0 (2026-04-16)
+
+### Fix Xcode 26 XCTest runner crash — 40/40 smoke tests passing
+
+#### Fixed
+
+- **XCTest runner crash on Xcode 26 during UI transitions** (sheets, modals, keyboard+tab switches, notification cascades, `app.snapshot()` during transitions). Root cause: `XCSetDebugLogger` symbol lives in `XCTestCore.framework`, re-exported by `XCTest.framework`; `dlsym` on the shim handle does not walk re-exports. Fixed by resolving via `RTLD_DEFAULT`.
+- Added WDA-proven `XCUIApplication.doesNotHandleUIInterruptions` method swizzle via new `SpecterQASwizzler.{h,m}` ObjC bridge.
+- Added `XCTDisableAttributeKeyPathAnalysis = true`.
+- Hoisted `applyCrashMitigations()` to `class func setUp()` so mitigations fire before XCTest initializes loggers.
+- Smoke test isolation: `_tap_tab()` y-coordinate corrected (822 → 840); added `_ensure_tab()` helper with sentinel-element verification and retry; per-class `_restart_app()` cleanup for tests that leave the app in a dirty state.
+
+#### Impact
+
+- Was 22/40 live smoke tests passing. Now 40/40.
+- 5/5 new `SpecterQACrashMitigationTests` Swift unit tests pass.
+- Runner survives previously-crashing scenarios: `TestKeyboardDuringTabSwitch`, `TestSheetOverTextField`, `TestPalaceNotificationCascade`, `TestNotificationFloodResilience`, `TestXCTestCrashMitigation`.
+
+#### Verified on
+
+- Xcode 26.2, iOS 26.3 Simulator, iPhone 17 Pro
+- Runner PID stable across all 40 tests (no crashes)
+
+---
+
 ## v13.0.1 (2026-04-16)
 
 ### Hotfix

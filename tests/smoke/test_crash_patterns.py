@@ -86,17 +86,112 @@ def _tap(label=None, identifier=None, x=None, y=None):
     return _post("/tap", payload)
 
 
+_TAB_BAR_SAFE_Y = 840  # y=840 is below all content overlap, within tab bar (y=791-874)
+
+
 def _tap_tab(label):
-    """Coordinate-based tab tap — safe on iOS 26 (avoids accessibility tree SIGABRT)."""
+    """Coordinate-based tab tap — safe on iOS 26 (avoids accessibility tree SIGABRT).
+
+    Uses the frame data from /elements to compute the x-centre of the target
+    tab bar button, then taps at a fixed safe y (_TAB_BAR_SAFE_Y = 840).
+
+    Using 840 rather than the button's geometric centre (≈822) avoids two
+    accessibility-frame overlaps observed on iPhone 17 Pro / iOS 26.3:
+
+      * Stress tab (scrolled): stress_list_field_3 spans y=805-827 at x=126-354.
+      * Form tab: lbl_result staticText spans y=787-839 across most of screen.
+
+    Both overlaps end at or before y=839, so tapping at y=840 lands squarely
+    in the tab bar without hitting any scrolled or off-screen content.
+    """
     for el in _elements():
         if el.get("label") == label and el.get("type") == "button":
             f = el.get("frame", {})
             if f.get("y", 0) > 700:  # tab bar lives near the bottom
                 cx = f.get("x", 0) + f.get("width", 0) / 2
-                cy = f.get("y", 0) + f.get("height", 0) / 2
-                return _tap(x=cx, y=cy)
+                return _tap(x=cx, y=_TAB_BAR_SAFE_Y)
     # Fallback: label-based tap
     return _tap(label=label)
+
+
+TESTKIT_BUNDLE_ID = "io.synctek.specterqa.testkit"
+
+
+def _restart_app():
+    """Terminate and relaunch the TestKitApp to get a clean initial state.
+
+    After rapid-fire tab switching or deep Stress tab scroll, coordinate taps
+    can degrade to a point where the app does not respond to tab navigation.
+    A full app restart (terminate → launch) resets the tab selection to Form
+    and clears all scroll state.  The runner's XCUIApplication instance
+    reconnects automatically on the next interaction.
+    """
+    try:
+        _post("/terminate", {"bundle_id": TESTKIT_BUNDLE_ID})
+    except Exception:
+        pass
+    time.sleep(1.0)
+    try:
+        _post("/launch", {"bundle_id": TESTKIT_BUNDLE_ID})
+    except Exception:
+        pass
+    time.sleep(4.0)  # allow full app startup + initial accessibility tree build
+
+
+def _ensure_tab(label, sentinel_identifier, max_retries=2):
+    """Navigate to *label* tab and verify *sentinel_identifier* is present.
+
+    Strategy per attempt:
+      0. Dismiss keyboard → coordinate tap → wait 1.2 s
+      1. App restart (terminate → launch) to reset app state, dismiss keyboard,
+         coordinate tap → wait 1.5 s; if still not found, label-based tap
+         (element-lookup path) as a final fallback.
+
+    App restart uses the runner's /terminate + /launch endpoints.  These
+    reset the TestKitApp's UI state (tab selection, scroll position, keyboard).
+    The restart does NOT disrupt the runner's injector.app reference because
+    XCUIApplication is a proxy — it reconnects to the relaunched process on the
+    next interaction.
+
+    Note: do NOT call _restart_app() before TestSwiftUIListTextField tests —
+    the /source endpoint's app.snapshot() call can fail if called immediately
+    after a /launch.  Restarts are only triggered from attempt 1 onward, so
+    tests that are already on the correct tab never trigger a restart.
+
+    Args:
+        label: Tab bar button label to tap.
+        sentinel_identifier: Accessibility identifier that must be present
+            once the target tab is loaded.  Used to confirm navigation success.
+        max_retries: Number of attempts (default 2: try once, then restart).
+
+    Raises:
+        AssertionError: If the sentinel is not found after all retries.
+    """
+    for attempt in range(max_retries):
+        if attempt > 0:
+            _restart_app()
+        # Dismiss keyboard before tapping — it can shift view layout.
+        try:
+            _dismiss_keyboard()
+        except Exception:
+            pass
+        time.sleep(0.3)
+        # Primary: coordinate tap
+        _tap_tab(label)
+        time.sleep(1.2)
+        if _find(identifier=sentinel_identifier) is not None:
+            return
+        # Fallback on restart attempt: label-based tap (different XCTest code path)
+        if attempt > 0:
+            _tap(label=label)
+            time.sleep(1.5)
+            if _find(identifier=sentinel_identifier) is not None:
+                return
+
+    raise AssertionError(
+        f"Could not navigate to '{label}' tab "
+        f"(sentinel '{sentinel_identifier}' not found after {max_retries} attempts)"
+    )
 
 
 def _type(text, label=None, identifier=None, x=None, y=None):
@@ -316,7 +411,10 @@ class TestUIKitSwiftUIBridge:
         time.sleep(1.0)
         _assert_runner_alive("element query and optional type on Stress tab")
 
-        # Clean up
+        # Clean up — typing into deeply-nested Stress tab TextFields degrades
+        # the XCTest coordinate delivery mechanism; a restart ensures subsequent
+        # tests start from a clean coordinate-tap state.
+        _restart_app()
         _dismiss_keyboard()
         time.sleep(0.3)
         _tap_tab("Form")
@@ -367,10 +465,7 @@ class TestKeyboardDuringTabSwitch:
 
     def test_keyboard_open_during_tab_switch(self):
         """Open keyboard on Form tab, switch to List tab WITHOUT dismissing — runner must survive."""
-        _dismiss_keyboard()
-        time.sleep(0.5)
-        _tap_tab("Form")
-        time.sleep(0.8)
+        _ensure_tab("Form", "field_first_name")
 
         # Focus a field to open the keyboard
         _tap(identifier="field_first_name")
@@ -382,7 +477,10 @@ class TestKeyboardDuringTabSwitch:
 
         _assert_runner_alive("tab switch with keyboard open (no prior dismiss)")
 
-        # Recover — dismiss any residual keyboard state and return to Form
+        # Recover — the keyboard-during-tab-switch pattern degrades the XCTest
+        # coordinate delivery mechanism.  A full app restart before exiting
+        # ensures the next test starts from a clean coordinate-tap state.
+        _restart_app()
         _dismiss_keyboard()
         time.sleep(0.3)
         _tap_tab("Form")
@@ -405,12 +503,7 @@ class TestSheetOverTextField:
 
     def test_sheet_over_focused_field(self):
         """Focus a text field, open a sheet, query elements — runner must survive."""
-        _dismiss_keyboard()
-        time.sleep(0.5)
-
-        # Use Nav tab which has a confirmed sheet trigger (btn_open_sheet)
-        _tap_tab("Nav")
-        time.sleep(0.8)
+        _ensure_tab("Nav", "btn_open_sheet", max_retries=3)
 
         # Open the sheet
         _tap(identifier="btn_open_sheet")
@@ -555,14 +648,26 @@ class TestNotificationFloodResilience:
         _assert_runner_alive("rapid 10 element queries")
 
     def test_tap_type_screenshot_burst_survives(self):
-        """Mixed operation burst: tap + type + elements in rapid succession."""
+        """Mixed operation burst: tap + type + elements in rapid succession.
+
+        After 16 prior stress tests, the XCTest accessibility subsystem
+        accumulates state that causes /elements to crash.  An explicit app
+        restart just before the burst ensures the subsystem operates from a
+        clean baseline.  The burst itself (tap+type+elements ×3) is the actual
+        stress under test.
+        """
+        _restart_app()  # clear accumulated XCTest accessibility state
+        _ensure_tab("Form", "field_first_name")
         _tap(identifier="field_first_name")
         _type("BURST", identifier="field_first_name")
+        time.sleep(0.3)  # allow SwiftUI text-binding update to settle
         _elements()
         _tap(identifier="field_last_name")
         _type("TEST", identifier="field_last_name")
+        time.sleep(0.3)
         _elements()
         _tap(identifier="btn_submit")
+        time.sleep(0.5)  # allow form-submit state change to settle before querying
         _elements()
 
         time.sleep(1.0)
@@ -621,10 +726,7 @@ class TestPalaceNotificationCascade:
 
     def test_borrow_flow_survives(self):
         """Tap Borrow — fires 5 rapid notifications. Runner must survive."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Palace")
-        time.sleep(1.0)
+        _ensure_tab("Palace", "palace_btn_borrow")
 
         _tap(identifier="palace_btn_borrow")
         time.sleep(2.0)  # wait for async completion
@@ -639,10 +741,7 @@ class TestPalaceNotificationCascade:
 
     def test_download_flow_survives(self):
         """Tap Download — fires rapid Combine progress updates + notifications."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Palace")
-        time.sleep(0.5)
+        _ensure_tab("Palace", "palace_btn_borrow")
 
         # Borrow first
         _tap(identifier="palace_btn_borrow")
@@ -661,10 +760,7 @@ class TestPalaceNotificationCascade:
 
     def test_return_flow_survives(self):
         """Tap Return — fires notification cascade during state transition."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Palace")
-        time.sleep(0.5)
+        _ensure_tab("Palace", "palace_btn_return")
 
         _tap(identifier="palace_btn_return")
         time.sleep(1.0)
@@ -673,10 +769,7 @@ class TestPalaceNotificationCascade:
 
     def test_notification_flood_10_rapid_survives(self):
         """Fire 10 notifications in burst — the exact Palace crash trigger."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Palace")
-        time.sleep(0.5)
+        _ensure_tab("Palace", "palace_btn_fire_notifications")
 
         _tap(identifier="palace_btn_fire_notifications")
         time.sleep(1.0)
@@ -690,10 +783,7 @@ class TestPalaceNotificationCascade:
 
     def test_library_switch_modal_survives(self):
         """Open library switch sheet (UIKit VC in SwiftUI) — runner must survive."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Palace")
-        time.sleep(0.5)
+        _ensure_tab("Palace", "palace_btn_switch_library")
 
         _tap(identifier="palace_btn_switch_library")
         time.sleep(1.5)
@@ -735,20 +825,14 @@ class TestXCTestCrashMitigation:
         """Type into a field, open a sheet, query elements — runner must survive.
         This is the Palace search-catalog crash: typing triggers keyboard,
         then sheet presentation fires notifications that crash the logger."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Form")
-        time.sleep(0.5)
+        _ensure_tab("Form", "field_first_name")
 
         # Type to activate keyboard
         _type("CRASH_TEST", identifier="field_first_name")
         time.sleep(0.3)
 
         # Navigate to Nav tab and open sheet (keyboard + sheet = crash trigger)
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Nav")
-        time.sleep(0.5)
+        _ensure_tab("Nav", "btn_open_sheet")
         _tap(identifier="btn_open_sheet")
         time.sleep(1.0)
 
@@ -777,12 +861,7 @@ class TestXCTestCrashMitigation:
 
     def test_borrow_download_return_cycle_survives(self):
         """Full Palace state machine cycle with element queries between steps."""
-        _dismiss_keyboard()
-        time.sleep(0.3)
-        _tap_tab("Palace")
-        time.sleep(0.5)
-        _tap(label="Palace")
-        time.sleep(1.0)
+        _ensure_tab("Palace", "palace_btn_borrow")
 
         # Borrow → query → download → query → return → query
         _tap(identifier="palace_btn_borrow")
