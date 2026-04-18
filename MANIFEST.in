@@ -13,3 +13,4 @@ recursive-include examples *.yaml *.yml *.md
 recursive-include tests *.py
 include README.md
 include LICENSE
+include CHANGELOG.md
