@@ -1,10 +1,15 @@
-recursive-include runner/Sources *.swift
+recursive-include runner/Sources *.swift *.h *.m
+recursive-include runner/HostApp *.swift *.plist
 include runner/SpecterQARunner.xcodeproj/project.pbxproj
 include runner/Package.swift
 include runner/build.sh
 include runner/launch.sh
-# runner_source/Sources is populated at build time from runner/Sources via setup.py.
-# The following non-Swift runner_source files are still shipped verbatim.
+# runner_source/ is populated at build time from runner/ via setup.py (sync at import time).
+# The recursive-include patterns below ensure both sdist AND wheel pick up every file the
+# runner needs to build (Routes/*.swift, ObjC bridge, HostApp), regardless of how
+# package-data globs interact with build_py timing.
+recursive-include src/specterqa/ios/runner_source/Sources *.swift *.h *.m
+recursive-include src/specterqa/ios/runner_source/HostApp *.swift *.plist
 include src/specterqa/ios/runner_source/SpecterQARunner.xcodeproj/project.pbxproj
 include src/specterqa/ios/runner_source/Package.swift
 include src/specterqa/ios/runner_source/build.sh
