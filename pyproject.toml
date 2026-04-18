@@ -98,10 +98,13 @@ include = ["specterqa*"]
 ]
 "specterqa.ios.runner_source" = [
     "Sources/*.swift",
-    "Sources/*.h",
-    "Sources/*.m",
+    "Sources/SpecterQARunner-Bridging-Header.h",
+    "Sources/SpecterQASwizzler.h",
+    "Sources/SpecterQASwizzler.m",
     "Sources/Routes/*.swift",
+    "HostApp/HostApp.swift",
     "HostApp/*.swift",
+    "HostApp/*.plist",
     "SpecterQARunner.xcodeproj/project.pbxproj",
     "build.sh",
     "launch.sh",
