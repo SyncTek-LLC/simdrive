@@ -7,6 +7,15 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [13.2.2] — 2026-04-18
+
+Republish-only release. v13.2.1's wheel was built by the auto-publish workflow against the tag's original commit, which preceded PR #59's wheel-completeness fixes (HostApp + ObjC bridge). PyPI rejects re-uploads of the same version. v13.2.2 ships the actual complete wheel — no other code changes vs v13.2.1.
+
+### Process change
+- Pre-publish gate now runs in the publish.yml workflow itself: build wheel → fresh-venv install → `runner build` smoke test → only then upload to PyPI. If the runner build fails, the workflow fails and PyPI is not touched. This catches package-data drift before users see it.
+
+---
+
 ## [13.2.1] — 2026-04-18
 
 Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Example Reader dogfood (Maurice Carrier, 2026-04-18).
