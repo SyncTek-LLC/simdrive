@@ -2214,6 +2214,12 @@ def validate_replay(replay_file: str) -> None:
         "if_not_element_visible",
         "step_timeout",
         "baseline_dir",
+        # Element identifier fields (written by MCP recorder, read by engine)
+        # B3/B4 fix (v13.2.1): these were missing, causing CLI validate-replay to
+        # reject recorder-emitted steps even though the engine and MCP validator
+        # both accepted them.
+        "element_identifier",
+        "tapOnIdentifier",
         # Maestro aliases
         "tapOn",
         "assertVisible",
