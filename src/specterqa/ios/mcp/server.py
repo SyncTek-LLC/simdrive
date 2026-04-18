@@ -363,6 +363,88 @@ def handle_start_session(arguments: dict) -> dict:
         elif env_provider == "local" and backend_arg == "browserstack":
             backend_arg = None  # type: ignore[assignment]
 
+        # B9 fix (v13.2.1): Deploy the XCTest runner before calling
+        # BackendSelector.choose() when xctest is explicitly requested or when
+        # auto-select might pick it.  In 13.2.0 the MCP path only called build.sh
+        # (compile only), so XCTestBackend.is_available() always returned False and
+        # the runner was never started.  The CLI path already deployed correctly via
+        # TestSession._deploy_runner() → xcodebuild test-without-building.
+        #
+        # We deploy here (not in the XCTest branch below) so that BackendSelector
+        # can probe :8222/health and select XCTestBackend when backend="auto".
+        _should_deploy_xctest = backend_arg in ("xctest", None)
+        if _should_deploy_xctest:
+            _xctestrun = _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR)
+            if _xctestrun is not None:
+                # Deploy the pre-built runner to the simulator.
+                # Mirrors TestSession._deploy_runner() but without the clone/session
+                # machinery — MCP uses the user's booted simulator directly.
+                try:
+                    from specterqa.ios.session_manager import TestSession  # noqa: PLC0415
+
+                    _deploy_port = 8222
+                    _deploy_xctestrun = Path(_xctestrun)
+
+                    # Inject environment variables the runner needs.
+                    TestSession._inject_xctestrun_env(
+                        _deploy_xctestrun,
+                        {
+                            "SPECTERQA_PORT": str(_deploy_port),
+                            "SPECTERQA_BUNDLE_ID": bundle_id or "",
+                        },
+                    )
+
+                    _mcp_runner_proc = subprocess.Popen(
+                        [
+                            "xcodebuild",
+                            "test-without-building",
+                            "-xctestrun",
+                            str(_deploy_xctestrun),
+                            "-destination",
+                            f"id={device_id}",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+
+                    # Store the process on _session (will be cleaned up on stop)
+                    # We set _session as a lightweight holder so handle_stop_session
+                    # can terminate the runner process.
+                    class _MCPRunnerSession:  # noqa: N801
+                        """Minimal session wrapper for MCP-deployed XCTest runner."""
+
+                        def __init__(self, proc: subprocess.Popen) -> None:
+                            self._runner_process = proc
+                            self._target_udid = device_id
+                            self._clone_udid = None
+
+                        def stop(self) -> None:
+                            if self._runner_process and self._runner_process.poll() is None:
+                                self._runner_process.terminate()
+                                try:
+                                    self._runner_process.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    self._runner_process.kill()
+
+                    _session = _MCPRunnerSession(_mcp_runner_proc)
+
+                    # Wait for the runner to become healthy (bounded 30s).
+                    from specterqa.ios.session_manager import _wait_for_health  # noqa: PLC0415
+
+                    try:
+                        _wait_for_health(
+                            f"http://localhost:{_deploy_port}/health",
+                            timeout_s=30.0,
+                        )
+                        logger.info("B9: MCP runner deployed and healthy on :%d", _deploy_port)
+                    except Exception as health_exc:
+                        logger.warning(
+                            "B9: MCP runner did not become healthy within 30s: %s", health_exc
+                        )
+
+                except Exception as deploy_exc:
+                    logger.warning("B9: MCP runner deploy failed: %s", deploy_exc)
+
         from specterqa.ios.backends.selector import BackendSelector
         from specterqa.ios.som_annotator import SoMAnnotator
 
