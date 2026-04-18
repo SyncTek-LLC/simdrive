@@ -7,6 +7,22 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [13.2.1] — 2026-04-18
+
+Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Example Reader dogfood (Maurice Carrier, 2026-04-18).
+
+### Fixed
+- **B1**: Removed stale `RequestParser.swift` references from `src/specterqa/ios/runner_source/SpecterQARunner.xcodeproj/project.pbxproj` — fresh `pip install` users no longer hit "Build input file cannot be found" on first `runner build`.
+- **B2**: `_needs_rebuild()` now uses a SHA-256 content-hash of `Sources/` + `project.pbxproj` instead of the version-string match. Patch releases that don't change Swift sources skip the rebuild.
+- **B3+B4**: CLI `validate-replay` now accepts `element_identifier` and `tapOnIdentifier` (the recorder already writes them; the engine already reads them; MCP `ios_validate_replay` already accepted them — only CLI was out of sync).
+- **B9**: MCP `ios_start_session(backend="xctest")` now deploys the runner via `xcodebuild test-without-building` before probing `:8222/health`. Restores 13.1.0 behavior. Without this fix, MCP recording was offline in 13.2.0.
+
+### Added
+- `CHANGELOG.md` now ships in the wheel (was missing in 13.2.0).
+- 5 new gap tests that would have caught these blockers pre-release: `test_wheel_buildable.py` (fresh-venv wheel install + runner build), `test_rebuild_trigger.py` (hash-based rebuild gate), `test_recorder_validator_roundtrip.py` (recorder→validator schema sync), `test_mcp_xctest_session.py` (end-to-end MCP backend deploy), `test_packaging.py::test_changelog_in_wheel` + `test_pbxproj_no_requestparser_reference`.
+
+---
+
 ## [13.2.0] — 2026-04-17
 
 ### Added
