@@ -31,31 +31,51 @@ SYNCED_SUBPATHS = ["Sources", "SpecterQARunner.xcodeproj", "HostApp",
                    "Package.swift", "build.sh", "launch.sh"]
 
 
+def _sync_runner_tree():
+    """Copy runner/ → runner_source/ so wheel + sdist package-data can include it.
+
+    Runs at setup.py IMPORT TIME (not just build_py.run) so the files exist
+    before setuptools enumerates package-data globs. Without this the wheel
+    ships incomplete sources and end-user `runner build` fails.
+    """
+    for sub in SYNCED_SUBPATHS:
+        src = os.path.join(RUNNER_SRC, sub)
+        dest = os.path.join(RUNNER_DEST, sub)
+        if not os.path.exists(src):
+            continue
+        if os.path.isdir(src):
+            if os.path.exists(dest):
+                shutil.rmtree(dest)
+            shutil.copytree(src, dest)
+        else:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(src, dest)
+
+
+def _copy_changelog_module_level():
+    if os.path.exists(CHANGELOG_SRC):
+        shutil.copy2(CHANGELOG_SRC, CHANGELOG_DEST)
+
+
+# Sync at import time so package-data scanning sees the files.
+if os.path.isdir(RUNNER_SRC):
+    _sync_runner_tree()
+    _copy_changelog_module_level()
+
+
 class build_py(_build_py):
-    """Sync runner/ → runner_source/ and copy CHANGELOG.md before packaging."""
+    """Re-sync runner/ → runner_source/ and CHANGELOG.md at build time.
+
+    The import-time sync above ensures package-data globs work; this re-runs
+    at build_py time as a belt-and-suspenders against any stale state and
+    keeps the CHANGELOG copy fresh on rebuild.
+    """
 
     def run(self):
-        self._sync_runner_tree()
-        self._copy_changelog()
+        if os.path.isdir(RUNNER_SRC):
+            _sync_runner_tree()
+            self._copy_changelog()
         super().run()
-
-    def _sync_runner_tree(self):
-        for sub in SYNCED_SUBPATHS:
-            src = os.path.join(RUNNER_SRC, sub)
-            dest = os.path.join(RUNNER_DEST, sub)
-            if not os.path.exists(src):
-                continue
-            if os.path.isdir(src):
-                if os.path.exists(dest):
-                    shutil.rmtree(dest)
-                shutil.copytree(src, dest)
-            else:
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                shutil.copy2(src, dest)
-        print(
-            f"[specterqa-ios] synced runner/ → runner_source/ "
-            f"({', '.join(SYNCED_SUBPATHS)})"
-        )
 
     def _copy_changelog(self):
         if os.path.exists(CHANGELOG_SRC):
