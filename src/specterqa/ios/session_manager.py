@@ -12,6 +12,7 @@ INIT-2026-506 — SpecterQA iOS v3 session manager.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -36,8 +37,14 @@ _HEALTH_TIMEOUT_S = 60.0
 _DEFAULT_RUNNER_BUILD_DIR = Path.home() / ".specterqa" / "runner-build"
 
 # Filename written into the build dir after a successful build.  Contains the
-# installed package version so we can detect stale builds on session start.
+# installed package version for logging/diagnostic purposes.
 _VERSION_MARKER_FILENAME = ".specterqa-version"
+
+# Filename storing a SHA-256 content-hash of runner Sources/ + project.pbxproj.
+# _needs_rebuild() gates on this hash rather than the version string.
+# Introduced in v13.2.1 to fix B2: patch releases that don't change Swift sources
+# no longer trigger an unnecessary rebuild.
+_RUNNER_HASH_FILENAME = ".runner-hash"
 
 
 def _current_package_version() -> str:
@@ -55,14 +62,67 @@ def _current_package_version() -> str:
         return "unknown"
 
 
+def _compute_runner_source_hash() -> str:
+    """Compute a SHA-256 digest over the runner Swift sources + project.pbxproj.
+
+    Uses the *runner/* tree (single source of truth) so the hash reflects what
+    will actually be compiled, not the wheel-copy in runner_source/.
+
+    The hash covers:
+    - Each ``*.swift`` file in ``runner/Sources/``, sorted by filename
+    - ``runner/SpecterQARunner.xcodeproj/project.pbxproj``
+
+    Returns:
+        Hex-encoded SHA-256 digest string.
+    """
+    # Locate runner/Sources/ relative to this file.
+    # Installed wheel layout: …/site-packages/specterqa/ios/session_manager.py
+    # Dev layout:             src/specterqa/ios/session_manager.py
+    # runner/ is always at REPO_ROOT/runner or at runner_source/ in the wheel.
+    this_file = Path(__file__)
+    # Try runner_source/ first (wheel install path)
+    runner_source_dir = this_file.parent / "runner_source" / "Sources"
+    runner_pbxproj = this_file.parent / "runner_source" / "SpecterQARunner.xcodeproj" / "project.pbxproj"
+
+    if not runner_source_dir.exists():
+        # Dev tree: go up to repo root
+        # Path: src/specterqa/ios/session_manager.py
+        # parents[0] = src/specterqa/ios
+        # parents[1] = src/specterqa
+        # parents[2] = src
+        # parents[3] = repo root
+        repo_root = this_file.parents[3]
+        runner_source_dir = repo_root / "runner" / "Sources"
+        runner_pbxproj = repo_root / "runner" / "SpecterQARunner.xcodeproj" / "project.pbxproj"
+
+    hasher = hashlib.sha256()
+    swift_paths = sorted(runner_source_dir.glob("*.swift"), key=lambda p: p.name)
+    for p in swift_paths:
+        hasher.update(p.name.encode())
+        hasher.update(p.read_bytes())
+
+    if runner_pbxproj.exists():
+        hasher.update(runner_pbxproj.read_bytes())
+
+    return hasher.hexdigest()
+
+
 def _needs_rebuild(build_dir: Path) -> bool:
     """Check whether the cached runner build is stale.
 
-    The build is considered stale when:
-    - The version marker file does not exist in *build_dir*, or
-    - The marker's content does not match the currently installed package
-      version, or
-    - The package version cannot be determined (fail-safe → rebuild).
+    v13.2.1+ uses a content-hash of ``runner/Sources/*.swift`` + ``project.pbxproj``
+    rather than the installed version string.  This ensures that patch releases
+    that don't change Swift sources do NOT trigger an unnecessary rebuild (B2 fix).
+
+    The build is considered stale when ANY of the following are true:
+    - No ``.runner-hash`` file exists in *build_dir* (fresh install or migration
+      from the old version-marker scheme — treated as first run, hash written on
+      next successful build)
+    - The stored hash does not match the current computed hash
+    - No ``.xctestrun`` file exists in *build_dir*
+
+    The ``.specterqa-version`` file is still written after builds for diagnostic
+    purposes but is no longer used to gate rebuilds.
 
     Args:
         build_dir: The runner derived-data directory (e.g. ``~/.specterqa/runner-build``).
@@ -70,23 +130,44 @@ def _needs_rebuild(build_dir: Path) -> bool:
     Returns:
         True if a rebuild is required, False if the cached build is current.
     """
-    current = _current_package_version()
-    if current == "unknown":
+    # 1. xctestrun presence check — no binary → always rebuild
+    if _find_xctestrun(build_dir) is None:
+        logger.debug("_needs_rebuild: no .xctestrun in %s → rebuild", build_dir)
         return True
 
-    marker = build_dir / _VERSION_MARKER_FILENAME
-    if not marker.exists():
+    # 2. Hash file presence check — missing means fresh install or migration
+    hash_marker = build_dir / _RUNNER_HASH_FILENAME
+    if not hash_marker.exists():
+        logger.debug("_needs_rebuild: no %s → rebuild (first run / migration)", _RUNNER_HASH_FILENAME)
         return True
 
-    cached = marker.read_text(encoding="utf-8").strip()
-    return cached != current
+    # 3. Hash comparison — rebuild only if sources actually changed
+    try:
+        stored = hash_marker.read_text(encoding="utf-8").strip()
+        current = _compute_runner_source_hash()
+        if stored != current:
+            logger.debug(
+                "_needs_rebuild: runner-hash mismatch (stored=%s…, current=%s…) → rebuild",
+                stored[:12], current[:12],
+            )
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_needs_rebuild: could not compute runner hash (%s) → rebuild", exc)
+        return True
+
+    logger.debug("_needs_rebuild: hash matches → no rebuild needed")
+    return False
 
 
 def write_version_marker(build_dir: Path) -> None:
-    """Write (or overwrite) the version marker file after a successful build.
+    """Write (or overwrite) the version marker and runner hash after a successful build.
+
+    Writes two files:
+    - ``.specterqa-version`` — human-readable installed version (diagnostic only)
+    - ``.runner-hash``       — SHA-256 of Sources/ + pbxproj (gates rebuild check)
 
     Args:
-        build_dir: The runner derived-data directory where the marker is stored.
+        build_dir: The runner derived-data directory where the markers are stored.
     """
     version = _current_package_version()
     marker = build_dir / _VERSION_MARKER_FILENAME
@@ -95,6 +176,15 @@ def write_version_marker(build_dir: Path) -> None:
         logger.debug("Wrote version marker %s → %s", marker, version)
     except OSError as exc:
         logger.warning("Could not write version marker %s: %s", marker, exc)
+
+    # Write the content-hash so subsequent sessions skip unnecessary rebuilds.
+    hash_marker = build_dir / _RUNNER_HASH_FILENAME
+    try:
+        current_hash = _compute_runner_source_hash()
+        hash_marker.write_text(current_hash + "\n", encoding="utf-8")
+        logger.debug("Wrote runner hash %s → %s…", hash_marker, current_hash[:12])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not write runner hash %s: %s", hash_marker, exc)
 
 
 class SessionError(Exception):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "13.2.0"
+version = "13.2.1"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -93,8 +93,15 @@ where = ["src"]
 include = ["specterqa*"]
 
 [tool.setuptools.package-data]
+"specterqa.ios" = [
+    "CHANGELOG.md",
+]
 "specterqa.ios.runner_source" = [
     "Sources/*.swift",
+    "Sources/*.h",
+    "Sources/*.m",
+    "Sources/Routes/*.swift",
+    "HostApp/*.swift",
     "SpecterQARunner.xcodeproj/project.pbxproj",
     "build.sh",
     "launch.sh",
@@ -106,6 +113,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 markers = [
     "integration: real-device integration tests (require a booted iOS Simulator)",
+    "live: tests that require a live macOS/Xcode environment (Xcode, simulator, etc.)",
 ]
 
 [tool.ruff]
