@@ -1,14 +1,21 @@
-"""Gap test — B1: fresh-venv wheel install must produce a buildable runner.
+"""Gap tests — B1/B1.5: fresh-venv wheel install must produce a buildable runner.
 
 The 13.2.0 wheel shipped runner_source/SpecterQARunner.xcodeproj/project.pbxproj
 with a reference to Sources/RequestParser.swift which no longer exists. This
 caused 'Build input file cannot be found' for every fresh installer.
 
-This test:
+B1.5 (13.2.1): _runner_source_dir() only checked the dev-tree path
+(pkg_root/runner/); installed wheel users always got None and the CLI fell back
+to CWD, causing "xcodebuild: error: '<cwd>/SpecterQARunner.xcodeproj' does not
+exist" for every fresh pip install.
+
+Tests:
 1. Builds the wheel from the current source tree.
 2. Creates a fresh venv and pip-installs the wheel.
-3. Runs `specterqa-ios runner build` from that venv.
-4. Asserts exit code 0 AND a .xctestrun file is produced.
+3. Asserts _runner_source_dir() returns the bundled path (not None) [B1.5].
+4. Asserts the returned path contains both build.sh AND SpecterQARunner.xcodeproj [B1.5].
+5. Runs `specterqa-ios runner build` from that venv [requires Xcode].
+6. Asserts exit code 0 AND a .xctestrun file is produced [requires Xcode].
 
 Marked @pytest.mark.live because it requires Xcode / xcodebuild. Skipped in
 pure-Python CI without Xcode.
@@ -169,4 +176,101 @@ def test_fresh_venv_runner_build(tmp_path):
 
     assert xctestrun_files, (
         "B1: runner build exited 0 but no .xctestrun file was produced"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 3 (B1.5): _runner_source_dir() must find bundled runner in fresh-venv
+#                installs (NOT return None, NOT fall back to CWD)
+# ---------------------------------------------------------------------------
+
+
+def test_runner_source_dir_finds_bundled_path(tmp_path):
+    """_runner_source_dir() must return the wheel's runner_source dir, not None.
+
+    B1.5 bug: the function only checked pkg_root/runner/ (dev-tree layout).
+    In an installed wheel, pkg_root is site-packages, which has no runner/
+    subdirectory, so the function always returned None. The CLI then fell back
+    to Path.cwd(), and xcodebuild failed immediately with
+    "SpecterQARunner.xcodeproj does not exist".
+
+    This test:
+    1. Builds a wheel from the current source tree.
+    2. pip-installs it into a fresh venv.
+    3. Invokes _runner_source_dir() via a subprocess inside that venv.
+    4. Asserts the result is NOT None.
+    5. Asserts the returned path contains build.sh AND SpecterQARunner.xcodeproj.
+
+    Fails on PR HEAD before the B1.5 fix; passes after.
+    """
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    # Build wheel
+    build_result = subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(dist)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if build_result.returncode != 0:
+        pytest.skip(f"Wheel build failed: {build_result.stderr[-300:]}")
+
+    wheels = list(dist.glob("*.whl"))
+    assert len(wheels) == 1, f"Expected 1 wheel, found {len(wheels)}"
+    whl = wheels[0]
+
+    # Create fresh venv
+    venv_dir = tmp_path / "test-venv"
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+
+    if sys.platform != "darwin":
+        pytest.skip("macOS only test")
+
+    venv_python = venv_dir / "bin" / "python"
+
+    # Install wheel into fresh venv
+    install_result = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", str(whl), "--quiet",
+         "--ignore-requires-python"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if install_result.returncode != 0:
+        pytest.skip(f"pip install failed: {install_result.stderr[-200:]}")
+
+    # Invoke _runner_source_dir() inside the fresh venv via a one-liner
+    probe = (
+        "from specterqa.ios.cli.commands import _runner_source_dir; "
+        "p = _runner_source_dir(); "
+        "print(p if p else '__NONE__')"
+    )
+    probe_result = subprocess.run(
+        [str(venv_python), "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert probe_result.returncode == 0, (
+        f"B1.5: probe script crashed in fresh venv.\n"
+        f"stdout: {probe_result.stdout}\nstderr: {probe_result.stderr}"
+    )
+
+    reported = probe_result.stdout.strip()
+    assert reported != "__NONE__", (
+        "B1.5: _runner_source_dir() returned None in a fresh-venv install. "
+        "The function must find the bundled runner_source/ inside the wheel's "
+        "site-packages, not only the dev-tree pkg_root/runner/ path."
+    )
+
+    bundled_path = Path(reported)
+
+    assert (bundled_path / "build.sh").exists(), (
+        f"B1.5: bundled runner path {bundled_path} does not contain build.sh"
+    )
+    assert (bundled_path / "SpecterQARunner.xcodeproj").exists(), (
+        f"B1.5: bundled runner path {bundled_path} does not contain "
+        "SpecterQARunner.xcodeproj"
     )

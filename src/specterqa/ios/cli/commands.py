@@ -609,22 +609,32 @@ def _runner_build_dir() -> Path:
 
 
 def _runner_source_dir() -> Path | None:
-    """Locate the Swift runner source directory relative to the installed package.
+    """Locate the Swift runner source directory.
 
-    Searches for ``runner/build.sh`` relative to the specterqa-ios package
-    root.  Returns None if it cannot be determined.
+    Searches:
+    1. Installed wheel: pkg/runner_source/ (populated by setup.py build_py)
+    2. Dev tree:        pkg_root/runner/   (source of truth in repo)
 
     Returns:
-        Path to the runner directory, or None.
+        Path to a directory containing build.sh and SpecterQARunner.xcodeproj,
+        or None if neither exists.
     """
     try:
         import specterqa.ios as _pkg
 
-        pkg_root = Path(_pkg.__file__).parent.parent.parent  # src/specterqa/ios → repo root
-        candidate = pkg_root / "runner"
-        if (candidate / "build.sh").exists():
-            return candidate
-    except OSError:
+        pkg_dir = Path(_pkg.__file__).parent  # site-packages/specterqa/ios/
+
+        # 1. Installed wheel layout
+        bundled = pkg_dir / "runner_source"
+        if (bundled / "build.sh").exists() and (bundled / "SpecterQARunner.xcodeproj").exists():
+            return bundled
+
+        # 2. Dev tree layout (editable install or source checkout)
+        pkg_root = pkg_dir.parent.parent.parent  # → repo root
+        dev = pkg_root / "runner"
+        if (dev / "build.sh").exists() and (dev / "SpecterQARunner.xcodeproj").exists():
+            return dev
+    except (OSError, ImportError):
         pass
     return None
 

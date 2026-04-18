@@ -16,6 +16,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Example Read
 - **B2**: `_needs_rebuild()` now uses a SHA-256 content-hash of `Sources/` + `project.pbxproj` instead of the version-string match. Patch releases that don't change Swift sources skip the rebuild.
 - **B3+B4**: CLI `validate-replay` now accepts `element_identifier` and `tapOnIdentifier` (the recorder already writes them; the engine already reads them; MCP `ios_validate_replay` already accepted them — only CLI was out of sync).
 - **B9**: MCP `ios_start_session(backend="xctest")` now deploys the runner via `xcodebuild test-without-building` before probing `:8222/health`. Restores 13.1.0 behavior. Without this fix, MCP recording was offline in 13.2.0.
+- **B1.5**: `_runner_source_dir()` now finds the runner inside installed wheels (`pkg/runner_source/`), not just the dev-tree layout (`pkg_root/runner/`). Without this, every fresh `pip install` user's `specterqa-ios runner build` failed with "xcodebuild: error: '<cwd>/SpecterQARunner.xcodeproj' does not exist".
 
 ### Added
 - `CHANGELOG.md` now ships in the wheel (was missing in 13.2.0).
