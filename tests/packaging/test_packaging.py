@@ -21,7 +21,8 @@ REQUIRED_SWIFT_FILES = [
     "AccessibilityTree.swift",
     "SpecterQAElementQuery.swift",
     "SpecterQAScreenshot.swift",
-    "RequestParser.swift",
+    # RequestParser.swift was deleted in v13.2.0 — DO NOT add it back here.
+    # The pbxproj reference was also removed (B1 fix).
 ]
 
 
@@ -54,6 +55,35 @@ class TestWheelContents:
     def test_xcodeproj_present(self, built_wheel):
         with zipfile.ZipFile(built_wheel) as whl:
             assert any("project.pbxproj" in n for n in whl.namelist()), "project.pbxproj missing"
+
+    def test_changelog_in_wheel(self, built_wheel):
+        """Gap test — B5/CHANGELOG: CHANGELOG.md must be present in the wheel.
+
+        Fails on 13.2.0 main: CHANGELOG.md not included in wheel (missing from MANIFEST.in).
+        Passes after fix: MANIFEST.in + pyproject.toml updated to include it.
+        """
+        with zipfile.ZipFile(built_wheel) as whl:
+            names = whl.namelist()
+        assert any("CHANGELOG.md" in n for n in names), (
+            "CHANGELOG.md is missing from the wheel. "
+            "Add it to MANIFEST.in and pyproject.toml [tool.setuptools.package-data]."
+        )
+
+    def test_pbxproj_no_requestparser_reference(self, built_wheel):
+        """Gap test — B1: project.pbxproj in wheel must not reference RequestParser.swift.
+
+        Fails on 13.2.0 main: pbxproj has 4 stale refs to deleted file.
+        Passes after B1 fix: references surgically removed.
+        """
+        with zipfile.ZipFile(built_wheel) as whl:
+            pbxproj_entries = [n for n in whl.namelist() if n.endswith("project.pbxproj")]
+            assert pbxproj_entries, "project.pbxproj not found in wheel"
+            for entry in pbxproj_entries:
+                content = whl.read(entry).decode("utf-8", errors="replace")
+                assert "RequestParser.swift" not in content, (
+                    f"B1: {entry} in wheel still references RequestParser.swift — "
+                    "causes 'Build input file cannot be found' on fresh installs"
+                )
 
     def test_runner_source_importable(self, built_wheel):
         """Verify the wheel contains Swift sources in runner_source/Sources/.
