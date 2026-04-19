@@ -684,27 +684,43 @@ def _runner_build_dir() -> Path:
 def _runner_source_dir() -> Path | None:
     """Locate the Swift runner source directory.
 
-    Searches:
-    1. Installed wheel: pkg/runner_source/ (populated by setup.py build_py)
-    2. Dev tree:        pkg_root/runner/   (source of truth in repo)
+    Search order (v14.0.0+ wheel restructure):
+    1. ``runner`` top-level package via importlib.resources — works in both
+       installed wheels and editable installs because ``runner/`` is now a
+       proper Python package discovered by setuptools.packages.find.
+    2. Legacy ``runner_source`` sub-package (pre-v14 wheel layout) — kept for
+       backward-compat with any wheels still in flight.
+    3. Dev-tree fallback: repo-root ``runner/`` resolved via the specterqa.ios
+       package file path (only reached on unusual editable install layouts).
 
     Returns:
         Path to a directory containing build.sh and SpecterQARunner.xcodeproj,
-        or None if neither exists.
+        or None if none of the above exist.
     """
     try:
+        import importlib.resources
+
+        # 1. v14+ layout: runner/ is a top-level Python package in the wheel
+        try:
+            runner_pkg = importlib.resources.files("runner")
+            runner_path = Path(str(runner_pkg))
+            if (runner_path / "build.sh").exists() and (runner_path / "SpecterQARunner.xcodeproj").exists():
+                return runner_path
+        except (ModuleNotFoundError, TypeError, AttributeError):
+            pass
+
+        # 2. Legacy wheel layout: specterqa/ios/runner_source/
         import specterqa.ios as _pkg
-
         pkg_dir = Path(_pkg.__file__).parent  # site-packages/specterqa/ios/
-
-        # 1. Installed wheel layout
         bundled = pkg_dir / "runner_source"
         if (bundled / "build.sh").exists() and (bundled / "SpecterQARunner.xcodeproj").exists():
             return bundled
 
-        # 2. Dev tree layout (editable install or source checkout)
-        pkg_root = pkg_dir.parent.parent.parent  # → repo root
-        dev = pkg_root / "runner"
+        # 3. Dev-tree fallback (src/ editable install layout)
+        # commands.py lives at src/specterqa/ios/cli/commands.py
+        # go up 4 levels: cli → ios → specterqa → src → repo_root
+        repo_root = Path(__file__).parents[4]
+        dev = repo_root / "runner"
         if (dev / "build.sh").exists() and (dev / "SpecterQARunner.xcodeproj").exists():
             return dev
     except (OSError, ImportError):

@@ -113,11 +113,11 @@ def test_pyproject_no_runner_source_package_data():
     )
 
 
-def test_pyproject_version_is_b1():
-    """pyproject.toml version must be 14.0.0b1 (not a1)."""
+def test_pyproject_version_is_final():
+    """pyproject.toml version must be 14.0.0 (Phase 3 final release)."""
     pyproject = REPO_ROOT / "pyproject.toml"
     content = pyproject.read_text(encoding="utf-8")
-    assert '14.0.0b1' in content, (
-        "pyproject.toml version is not 14.0.0b1. "
-        "Phase 2 requires bumping version from 14.0.0a1 to 14.0.0b1."
+    assert 'version = "14.0.0"' in content, (
+        "pyproject.toml version is not 14.0.0. "
+        "Phase 3 requires bumping version from 14.0.0b1 to 14.0.0."
     )

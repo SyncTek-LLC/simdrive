@@ -163,7 +163,7 @@ def test_fresh_venv_runner_build(tmp_path):
     )
 
     assert run_result.returncode == 0, (
-        f"B1: runner build failed in fresh venv install.\n"
+        f"Runner build failed in fresh venv install.\n"
         f"stdout: {run_result.stdout[-500:]}\n"
         f"stderr: {run_result.stderr[-500:]}"
     )
@@ -186,13 +186,16 @@ def test_fresh_venv_runner_build(tmp_path):
 
 
 def test_runner_source_dir_finds_bundled_path(tmp_path):
-    """_runner_source_dir() must return the wheel's runner_source dir, not None.
+    """_runner_source_dir() must return a valid runner path from a fresh-wheel install.
 
-    B1.5 bug: the function only checked pkg_root/runner/ (dev-tree layout).
-    In an installed wheel, pkg_root is site-packages, which has no runner/
-    subdirectory, so the function always returned None. The CLI then fell back
-    to Path.cwd(), and xcodebuild failed immediately with
-    "SpecterQARunner.xcodeproj does not exist".
+    v14.0.0 fix: _runner_source_dir() now uses importlib.resources.files('runner')
+    as its primary resolution path. This works in both installed wheels (where
+    runner/ is a top-level Python package) and editable installs.
+
+    Previously (B1.5): the function only checked pkg_root/runner/ (dev-tree layout).
+    In an installed wheel, pkg_root was the site-packages parent, which has no
+    runner/ subdirectory, so the function returned None. The CLI then fell back to
+    Path.cwd(), and xcodebuild failed with "SpecterQARunner.xcodeproj does not exist".
 
     This test:
     1. Builds a wheel from the current source tree.
@@ -201,7 +204,7 @@ def test_runner_source_dir_finds_bundled_path(tmp_path):
     4. Asserts the result is NOT None.
     5. Asserts the returned path contains build.sh AND SpecterQARunner.xcodeproj.
 
-    Fails on PR HEAD before the B1.5 fix; passes after.
+    Fails if importlib.resources resolution is broken; passes after v14 fix.
     """
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -260,17 +263,16 @@ def test_runner_source_dir_finds_bundled_path(tmp_path):
 
     reported = probe_result.stdout.strip()
     assert reported != "__NONE__", (
-        "B1.5: _runner_source_dir() returned None in a fresh-venv install. "
-        "The function must find the bundled runner_source/ inside the wheel's "
-        "site-packages, not only the dev-tree pkg_root/runner/ path."
+        "v14 fix: _runner_source_dir() returned None in a fresh-venv install. "
+        "importlib.resources.files('runner') must resolve the bundled runner/ "
+        "package in the installed wheel."
     )
 
     bundled_path = Path(reported)
 
     assert (bundled_path / "build.sh").exists(), (
-        f"B1.5: bundled runner path {bundled_path} does not contain build.sh"
+        f"Bundled runner path {bundled_path} does not contain build.sh"
     )
     assert (bundled_path / "SpecterQARunner.xcodeproj").exists(), (
-        f"B1.5: bundled runner path {bundled_path} does not contain "
-        "SpecterQARunner.xcodeproj"
+        f"Bundled runner path {bundled_path} does not contain SpecterQARunner.xcodeproj"
     )
