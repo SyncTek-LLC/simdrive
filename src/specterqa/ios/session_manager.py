@@ -369,6 +369,7 @@ class TestSession:
         self._clone_udid: Optional[str] = None
         self._clone_name: Optional[str] = None
         self._runner_process: Optional[subprocess.Popen] = None
+        self._runner = None  # RunnerProcess instance (v14 lifecycle owner)
         self._port: int = 8222
         self._target_udid: Optional[str] = None  # the sim or device we actually deploy to
         self._device_host: Optional[str] = None  # IP/hostname for physical device runner
@@ -881,63 +882,29 @@ class TestSession:
         write_version_marker(build_dir)
 
     def _deploy_runner(self) -> None:
-        """Launch the XCTest runner via ``xcodebuild test-without-building``.
+        """Launch the XCTest runner via RunnerProcess (v14 unified lifecycle owner).
 
-        Finds the .xctestrun file in the runner build directory and starts
-        xcodebuild as a background process.  The port is passed via the
-        SPECTERQA_PORT environment variable so the Swift runner can bind to it.
-
-        If the cached build is stale (version marker mismatch) the runner is
-        rebuilt automatically before deployment.
+        Delegates all xcodebuild management to RunnerProcess.acquire().
+        The port has already been set on self._port by the caller.
 
         Raises:
-            SessionError: If no .xctestrun is found or the process fails to start.
+            SessionError: Wraps RunnerDeployError for callers that expect SessionError.
         """
-        # ── Cache invalidation ───────────────────────────────────────────────
-        # Rebuild automatically when the installed package version has changed
-        # since the last build.  This prevents stale runners (compiled from an
-        # older source tree) from missing newly-added HTTP endpoints.
-        if _needs_rebuild(self._runner_build_dir):
-            logger.info(
-                "Runner build is stale or missing version marker — triggering rebuild "
-                "(installed=%s, marker=%s)",
-                _current_package_version(),
-                self._runner_build_dir / _VERSION_MARKER_FILENAME,
-            )
-            self._rebuild_runner()
+        from specterqa.ios.runner_process import RunnerProcess, RunnerDeployError  # noqa: PLC0415
 
-        xctestrun = _find_xctestrun(self._runner_build_dir)
-        if xctestrun is None:
-            raise SessionError(
-                f"No .xctestrun found in {self._runner_build_dir}.\nBuild the runner first: specterqa-ios runner build"
-            )
+        target_udid = self._target_udid or self._clone_udid or ""
+        runner = RunnerProcess.acquire(target_udid, self._port)
 
-        # Inject SPECTERQA_BUNDLE_ID and SPECTERQA_PORT into the xctestrun
-        # plist. Shell env vars don't propagate through xcodebuild to the
-        # test process — they must be in the plist's EnvironmentVariables.
-        self._inject_xctestrun_env(
-            xctestrun,
-            {
-                "SPECTERQA_PORT": str(self._port),
-                "SPECTERQA_BUNDLE_ID": self.bundle_id or "",
-            },
-        )
+        try:
+            runner.deploy(self.bundle_id or "")
+        except RunnerDeployError as exc:
+            raise SessionError(str(exc)) from exc
 
-        cmd = [
-            "xcodebuild",
-            "test-without-building",
-            "-xctestrun",
-            str(xctestrun),
-            "-destination",
-            f"id={self._target_udid or self._clone_udid}",
-        ]
-
-        logger.info("Deploying runner: %s", " ".join(cmd))
-        self._runner_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Keep a reference so _teardown() can call runner.stop()
+        self._runner = runner
+        # Maintain backward compat: self._runner_process still holds the Popen
+        # so anything that reads it directly still works in this phase.
+        self._runner_process = runner._process
 
     @staticmethod
     def _inject_xctestrun_env(xctestrun_path: Path, env_vars: dict[str, str]) -> None:
@@ -1008,10 +975,20 @@ class TestSession:
                 pass
             self._iproxy_process = None
 
-        # Kill xcodebuild.
-        # Physical/direct: SIGKILL — don't let xcodebuild tear down the device/sim.
-        # Clone: SIGTERM — let xcodebuild clean up the clone.
-        if self._runner_process is not None:
+        # Kill xcodebuild via RunnerProcess if available (v14 path).
+        # Fall back to direct process kill for sessions created without RunnerProcess.
+        runner = getattr(self, "_runner", None)
+        if runner is not None:
+            try:
+                # Clone: shutdown_sim=True → SIGTERM lets xcodebuild clean up the clone.
+                # Physical/direct: shutdown_sim=False → SIGKILL, don't tear down the sim.
+                runner.stop(shutdown_sim=(not is_physical and not is_direct))
+            except Exception as exc:
+                logger.warning("Could not stop RunnerProcess: %s", exc)
+            self._runner = None
+            self._runner_process = None
+        elif self._runner_process is not None:
+            # Legacy path — direct Popen management (no RunnerProcess).
             try:
                 if is_physical or is_direct:
                     self._runner_process.kill()  # SIGKILL — no cleanup
