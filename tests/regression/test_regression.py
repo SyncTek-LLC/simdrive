@@ -42,21 +42,24 @@ class TestReg002NoRawElementTap:
 
 
 class TestReg003RunnerSourceBundled:
-    """v11.9.0 bug: Swift source not in wheel."""
+    """v14.0.0b1 wheel structure: runner/ ships via packages.find, no build_py override.
+
+    Phase 2 replaced the runner_source/ mirror + build_py override with a simpler
+    approach: runner/__init__.py makes runner/ a proper Python package, and
+    pyproject.toml's packages.find auto-discovers it. No build-time copy needed.
+    """
 
     def test_runner_source_package_exists(self):
-        """Verify the runner_source dedup mechanism is intact.
+        """Verify the Phase 2 runner packaging mechanism is intact.
 
-        After the runner_source dedup refactor, runner/Sources/ is the single
-        source of truth. runner_source/Sources/ is populated at BUILD TIME by
-        the build_py override in setup.py — it is NOT tracked in git.
-
-        We assert two invariants that together guarantee Swift source ships in
-        the wheel:
-          1. The authoritative Swift files exist in runner/Sources/.
-          2. setup.py contains the build_py override that copies them at build time.
+        Invariants (v14.0.0b1+):
+          1. runner/Sources/SpecterQARunner.swift exists (authoritative source).
+          2. runner/__init__.py exists (makes runner/ a Python package for auto-discovery).
+          3. runner_source/ directory is GONE (dead code, removed in Phase 2).
+          4. setup.py has NO build_py override (removed in Phase 2).
+          5. pyproject.toml uses packages.find for auto-discovery.
         """
-        # Invariant 1: authoritative source exists
+        # Invariant 1: authoritative Swift source exists
         runner_swift = REPO_ROOT / "runner" / "Sources" / "SpecterQARunner.swift"
         assert runner_swift.exists(), \
             "runner/Sources/SpecterQARunner.swift missing — authoritative Swift source gone"
@@ -65,19 +68,28 @@ class TestReg003RunnerSourceBundled:
         assert len(swift_files) >= 7, \
             f"Only {len(swift_files)} Swift files in runner/Sources/ — source incomplete"
 
-        # Invariant 2: setup.py build_py override copies sources into the wheel
+        # Invariant 2: runner/__init__.py makes it a proper Python package
+        runner_init = REPO_ROOT / "runner" / "__init__.py"
+        assert runner_init.exists(), \
+            "runner/__init__.py missing — runner/ is not a Python package (Phase 2 requirement)"
+
+        # Invariant 3: runner_source/ is gone
+        runner_source = REPO_ROOT / "src" / "specterqa" / "ios" / "runner_source"
+        assert not runner_source.exists(), \
+            "runner_source/ still exists — Phase 2 requires deleting this directory"
+
+        # Invariant 4: setup.py has no build_py override
         setup_py = REPO_ROOT / "setup.py"
         assert setup_py.exists(), "setup.py missing"
         setup_content = setup_py.read_text()
-        assert "build_py" in setup_content, \
-            "setup.py has no build_py override — runner_source/Sources won't be populated in wheel"
-        assert "runner_source" in setup_content, \
-            "setup.py build_py override doesn't reference runner_source — dedup mechanism broken"
+        assert "class build_py" not in setup_content, \
+            "setup.py still has build_py override — Phase 2 requires removing it"
 
-        # Invariant 3: runner_source package scaffold is in place
-        pkg = REPO_ROOT / "src" / "specterqa" / "ios" / "runner_source"
-        assert pkg.exists(), "runner_source package directory missing"
-        assert (pkg / "__init__.py").exists(), "runner_source __init__.py missing"
+        # Invariant 5: pyproject.toml uses packages.find
+        pyproject = REPO_ROOT / "pyproject.toml"
+        pyproject_content = pyproject.read_text()
+        assert "[tool.setuptools.packages.find]" in pyproject_content, \
+            "pyproject.toml missing packages.find section — Phase 2 requires auto-discovery"
 
 
 class TestReg004GreedyLabelMatch:
