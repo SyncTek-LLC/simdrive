@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "14.0.0b1"
+version = "14.0.0"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -103,6 +103,7 @@ pythonpath = ["src"]
 markers = [
     "integration: real-device integration tests (require a booted iOS Simulator)",
     "live: tests that require a live macOS/Xcode environment (Xcode, simulator, etc.)",
+    "dogfood: end-to-end CI dogfood tests that exercise the full install + use loop",
 ]
 
 [tool.ruff]
