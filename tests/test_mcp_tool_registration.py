@@ -84,11 +84,11 @@ def test_required_session_tool_present(tool_names: set[str], tool_name: str):
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_TOOL_COUNT = 38
+_EXPECTED_TOOL_COUNT = 43
 
 
 def test_total_tool_count(tool_names: set[str]):
-    """Registered tool count must equal the documented 38.
+    """Registered tool count must equal the documented 43 (v14.0.0b1 adds 5 AI debugging tools).
 
     If you add or remove a tool, update _EXPECTED_TOOL_COUNT AND the
     create_server() docstring AND the CLAUDE.md instructions header.
@@ -97,4 +97,26 @@ def test_total_tool_count(tool_names: set[str]):
     assert count == _EXPECTED_TOOL_COUNT, (
         f"Expected {_EXPECTED_TOOL_COUNT} registered tools, found {count}.\n"
         f"Tools found: {sorted(tool_names)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. Phase 2 tools must be present
+# ---------------------------------------------------------------------------
+
+
+PHASE2_TOOLS = [
+    "ios_app_relaunch",
+    "ios_logs_tail",
+    "ios_capture_state",
+    "ios_action_with_logs",
+    "ios_promote_session_to_test",
+]
+
+
+@pytest.mark.parametrize("tool_name", PHASE2_TOOLS)
+def test_phase2_tool_present(tool_names: set[str], tool_name: str):
+    """v14.0.0b1 Phase 2 adds 5 AI debugging tools — all must be registered."""
+    assert tool_name in tool_names, (
+        f"Phase 2 tool '{tool_name}' is missing from the MCP tool registry."
     )

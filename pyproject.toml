@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "14.0.0a1"
+version = "14.0.0b1"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -89,26 +89,12 @@ ios = "specterqa.ios.cli:ios_command_group"
 include-package-data = true
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["specterqa*"]
+where = ["src", "."]
+include = ["specterqa*", "runner", "runner.*"]
 
 [tool.setuptools.package-data]
 "specterqa.ios" = [
     "CHANGELOG.md",
-]
-"specterqa.ios.runner_source" = [
-    "Sources/*.swift",
-    "Sources/SpecterQARunner-Bridging-Header.h",
-    "Sources/SpecterQASwizzler.h",
-    "Sources/SpecterQASwizzler.m",
-    "Sources/Routes/*.swift",
-    "HostApp/HostApp.swift",
-    "HostApp/*.swift",
-    "HostApp/*.plist",
-    "SpecterQARunner.xcodeproj/project.pbxproj",
-    "build.sh",
-    "launch.sh",
-    "Package.swift",
 ]
 
 [tool.pytest.ini_options]

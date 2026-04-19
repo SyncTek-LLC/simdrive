@@ -10,7 +10,7 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (38 total):
+Tools (43 total):
     ios_start_session       Start session on the iOS Simulator (AX or XCTest backend)
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
@@ -2792,6 +2792,417 @@ def handle_stop_runner(arguments: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 — AI debugging primitives (v14.0.0b1)
+# ---------------------------------------------------------------------------
+
+# Per-call log tail cursor: maps session_id (or "default") → ISO timestamp str
+_log_tail_cursors: dict[str, str] = {}
+
+
+def handle_app_relaunch(arguments: dict) -> dict:
+    """Terminate and relaunch the app under test.
+
+    Without app_path: xcrun simctl terminate + launch (<2s).
+    With app_path: xcrun simctl install + terminate + launch (~15s).
+    The RunnerProcess is NOT torn down — only the user app restarts.
+
+    Args:
+        bundle_id: App bundle ID (required).
+        app_path:  Path to .app bundle; triggers reinstall when provided.
+        udid:      Simulator UDID (defaults to "booted").
+        session_id: Ignored (single-session design) — reserved for future multi-session.
+
+    Returns:
+        {bundle_id, udid, elapsed_ms, foreground_verified, mode}
+        or {"error": "<message>"} on failure.
+    """
+    if _backend is None:
+        return {"error": "No active session. Call ios_start_session first."}
+
+    bundle_id = str(arguments.get("bundle_id", "")).strip()
+    if not bundle_id:
+        return {"error": "'bundle_id' is required"}
+
+    app_path = str(arguments.get("app_path", "")).strip() or None
+    udid = str(arguments.get("udid", "booted")).strip() or "booted"
+    mode = "reinstall-launch" if app_path else "terminate-launch"
+
+    t0 = time.monotonic()
+    try:
+        if app_path:
+            r = subprocess.run(
+                ["xcrun", "simctl", "install", udid, app_path],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.returncode != 0:
+                return {"error": f"simctl install failed: {r.stderr.strip()}"}
+
+        # terminate (ignore errors — app may not be running)
+        subprocess.run(
+            ["xcrun", "simctl", "terminate", udid, bundle_id],
+            capture_output=True, text=True, timeout=10,
+        )
+
+        r = subprocess.run(
+            ["xcrun", "simctl", "launch", udid, bundle_id],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return {"error": f"simctl launch failed: {r.stderr.strip()}"}
+
+        elapsed_ms = (time.monotonic() - t0) * 1000
+
+        # Verify foreground — try backend.app_state(), do not hang
+        foreground_verified = False
+        try:
+            state_result = _backend.app_state()
+            foreground_verified = str(state_result.get("state", "")).lower() == "foreground"
+        except Exception:
+            foreground_verified = False
+
+        result: dict = {
+            "bundle_id": bundle_id,
+            "udid": udid,
+            "elapsed_ms": int(elapsed_ms),
+            "foreground_verified": foreground_verified,
+            "mode": mode,
+        }
+        if mode == "reinstall-launch" and elapsed_ms > 20000:
+            result["slow_warning"] = True
+            result["warn"] = f"Reinstall took {elapsed_ms:.0f}ms (>20s) — check .app bundle size"
+        return result
+
+    except subprocess.TimeoutExpired as exc:
+        return {"error": f"Command timed out: {exc}"}
+    except Exception as exc:
+        return {"error": f"app_relaunch failed: {exc}"}
+
+
+def handle_logs_tail(arguments: dict) -> dict:
+    """Return incremental logs since the last call for this session.
+
+    Maintains a per-session cursor (ISO timestamp). First call returns
+    the last 2 seconds of logs as the initial boundary.
+
+    Args:
+        since_last_call: If True (default), return only logs after the cursor.
+                         If False, return recent logs ignoring the cursor.
+        level:    Optional log level filter (e.g. "error", "fault").
+        category: Optional category filter.
+        regex:    Optional regex pattern applied to message field.
+        session_id: Cursor namespace (default "default" — single-session design).
+
+    Returns:
+        {logs: [...], cursor: "<ISO timestamp>", since_ms: <int>}
+        or {"error": "<message>"} on failure.
+    """
+    if _console_monitor is None:
+        return {"error": "No active session or console monitor not started. Call ios_start_session first."}
+
+    session_id = str(arguments.get("session_id", "default") or "default")
+    since_last_call = arguments.get("since_last_call", True)
+    level = arguments.get("level")
+    category = arguments.get("category")
+    regex = arguments.get("regex")
+
+    t0 = time.monotonic()
+
+    try:
+        # Fetch raw entries
+        if regex:
+            entries = _console_monitor.search(regex)
+        elif level and str(level).lower() in ("error", "fault"):
+            entries = _console_monitor.errors(seconds=30)
+        else:
+            seconds = 30.0
+            entries = _console_monitor.recent(seconds=seconds, level=level, category=category)
+
+        # Cursor filtering
+        cursor = _log_tail_cursors.get(session_id)
+        if since_last_call and cursor:
+            # Keep only entries strictly after the cursor timestamp
+            filtered = []
+            for e in entries:
+                ts = str(getattr(e, "timestamp", ""))
+                if ts > cursor:
+                    filtered.append(e)
+            entries = filtered
+        elif since_last_call and cursor is None:
+            # First call — apply a 2s window
+            entries = entries[-50:]  # Last 50 entries as a reasonable first-call boundary
+
+        # Build log list
+        logs = []
+        latest_ts = cursor or ""
+        for e in entries[-100:]:
+            ts = str(getattr(e, "timestamp", ""))
+            logs.append({
+                "timestamp": ts,
+                "level": getattr(e, "level", ""),
+                "subsystem": getattr(e, "subsystem", ""),
+                "category": getattr(e, "category", ""),
+                "message": getattr(e, "message", ""),
+                "process": getattr(e, "process", ""),
+            })
+            if ts > latest_ts:
+                latest_ts = ts
+
+        # Update cursor to latest observed timestamp (or now)
+        import datetime
+        now_iso = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        new_cursor = latest_ts if latest_ts else now_iso
+        _log_tail_cursors[session_id] = new_cursor
+
+        since_ms = int((time.monotonic() - t0) * 1000)
+
+        return {
+            "logs": logs,
+            "cursor": new_cursor,
+            "since_ms": since_ms,
+            "count": len(logs),
+        }
+    except Exception as exc:
+        return {"error": f"logs_tail failed: {exc}"}
+
+
+def handle_capture_state(arguments: dict) -> dict:
+    """Bundle screenshot + elements + logs + app_state + perf in one call.
+
+    Args:
+        include: List of keys to include. Default None = all.
+                 Supported: "screenshot", "elements", "logs", "app_state", "perf".
+        session_id: Ignored (reserved for future multi-session).
+
+    Returns:
+        {screenshot?, elements?, logs?, app_state?, perf?, captured_at}
+        or {"error": "<message>"} on failure.
+    """
+    if _backend is None:
+        return {"error": "No active session. Call ios_start_session first."}
+
+    include_filter = arguments.get("include")  # None or list[str]
+    if include_filter is not None:
+        include_set = set(include_filter)
+    else:
+        include_set = {"screenshot", "elements", "logs", "app_state", "perf"}
+
+    import datetime
+    captured_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+    result: dict = {"captured_at": captured_at}
+
+    # Screenshot
+    if "screenshot" in include_set:
+        try:
+            annotated_b64, elements = _get_annotated_screenshot()
+            result["screenshot"] = annotated_b64
+        except Exception as exc:
+            result["screenshot"] = None
+            result["screenshot_error"] = str(exc)
+
+    # Elements
+    if "elements" in include_set:
+        try:
+            if _annotator is not None:
+                elems = _annotator.get_elements_from_runner()
+            else:
+                elems = _last_elements
+            result["elements"] = [
+                {
+                    "index": e.index,
+                    "label": e.label,
+                    "type": e.element_type,
+                    "x": e.x,
+                    "y": e.y,
+                    "width": e.width,
+                    "height": e.height,
+                }
+                for e in elems
+            ]
+        except Exception as exc:
+            result["elements"] = []
+            result["elements_error"] = str(exc)
+
+    # Logs (last 2s)
+    if "logs" in include_set:
+        try:
+            log_result = handle_logs({"seconds": 2.0})
+            result["logs"] = log_result.get("logs", [])
+        except Exception as exc:
+            result["logs"] = []
+            result["logs_error"] = str(exc)
+
+    # App state
+    if "app_state" in include_set:
+        try:
+            state_result = handle_app_state({})
+            result["app_state"] = state_result.get("state", str(state_result))
+        except Exception as exc:
+            result["app_state"] = None
+            result["app_state_error"] = str(exc)
+
+    # Perf
+    if "perf" in include_set:
+        try:
+            perf = handle_perf({})
+            if "error" not in perf:
+                result["perf"] = {
+                    "cpu_pct": perf.get("cpu_percent"),
+                    "mem_mb": perf.get("memory_mb") or perf.get("memory_rss_mb"),
+                }
+            else:
+                result["perf"] = None
+        except Exception:
+            result["perf"] = None
+
+    return result
+
+
+def handle_action_with_logs(arguments: dict) -> dict:
+    """Execute an action and return logs that fired during the action window.
+
+    Atomic semantics: snapshot cursor → execute action → wait log_window_ms → return logs.
+
+    Args:
+        action: Dict with 'type' key. Supported types: tap, long_press, type, swipe, press_key.
+                Additional keys forwarded to the underlying handler.
+        log_window_ms: How long to wait after action for logs to accumulate (default 2000).
+        session_id: Ignored (reserved for future multi-session).
+
+    Returns:
+        {action_result, logs, log_window_ms, action_elapsed_ms}
+        or {"error": "<message>"} on failure.
+    """
+    if _backend is None:
+        return {"error": "No active session. Call ios_start_session first."}
+
+    action = arguments.get("action")
+    if not action or not isinstance(action, dict):
+        return {"error": "'action' dict is required (e.g. {'type': 'tap', 'label': 'Submit'})"}
+
+    action_type = str(action.get("type", "")).lower()
+    log_window_ms = int(arguments.get("log_window_ms", 2000))
+
+    _ACTION_HANDLERS = {
+        "tap": handle_tap,
+        "long_press": handle_long_press,
+        "type": handle_type,
+        "swipe": handle_swipe,
+        "press_key": handle_press_key,
+    }
+
+    handler = _ACTION_HANDLERS.get(action_type)
+    if handler is None:
+        return {
+            "error": (
+                f"Unknown action type '{action_type}'. "
+                f"Supported: {', '.join(_ACTION_HANDLERS)}"
+            )
+        }
+
+    # Snapshot log cursor BEFORE action
+    session_id = str(arguments.get("session_id", "default") or "default")
+    # Prime the cursor if not set
+    if session_id not in _log_tail_cursors and _console_monitor is not None:
+        handle_logs_tail({"since_last_call": False, "session_id": session_id})
+
+    # Execute action
+    t_action_start = time.monotonic()
+    try:
+        action_result = handler(dict(action))
+    except Exception as exc:
+        action_result = {"error": str(exc)}
+    action_elapsed_ms = int((time.monotonic() - t_action_start) * 1000)
+
+    # Wait for log window
+    if log_window_ms > 0:
+        time.sleep(log_window_ms / 1000.0)
+
+    # Collect logs that fired during the window
+    logs = []
+    if _console_monitor is not None:
+        tail_result = handle_logs_tail({"since_last_call": True, "session_id": session_id})
+        logs = tail_result.get("logs", [])
+
+    return {
+        "action_result": action_result,
+        "logs": logs,
+        "log_window_ms": log_window_ms,
+        "action_elapsed_ms": action_elapsed_ms,
+    }
+
+
+def handle_promote_session_to_test(arguments: dict) -> dict:
+    """Promote the current recording buffer to a named test replay YAML.
+
+    Writes the replay, auto-validates it, and returns validation status.
+    On validation failure the file is kept (not deleted) so the agent can iterate.
+
+    Args:
+        name:      Test name used as the filename stem (required).
+        path:      Override save path; defaults to ./replays/<name>.yaml (per OQ-3).
+        session_id: Ignored (reserved for future multi-session).
+
+    Returns:
+        {saved_to, validation: "passed"|"failed", steps, can_replay, errors?}
+        or {"error": "<message>"} on failure.
+    """
+    if _recorder is None:
+        return {"error": "No active recording. Call ios_start_session first."}
+
+    name = str(arguments.get("name", "")).strip()
+    if not name:
+        return {"error": "'name' is required"}
+
+    import re as _re
+    _SAFE_NAME_RE = _re.compile(r'^[a-zA-Z0-9._-]+$')
+    if not _SAFE_NAME_RE.match(name):
+        return {"error": "name must match [a-zA-Z0-9._-]+"}
+    if name.startswith("."):
+        return {"error": "name must match [a-zA-Z0-9._-]+"}
+
+    path_override = str(arguments.get("path", "")).strip() or None
+
+    if path_override is not None:
+        # Resolve against cwd and reject if it escapes
+        try:
+            resolved = Path(path_override).resolve()
+            cwd = Path.cwd().resolve()
+            resolved.relative_to(cwd)
+        except ValueError:
+            return {"error": "resolved path escapes the working directory"}
+
+    save_path = path_override or f"./replays/{name}.yaml"
+
+    try:
+        # Ensure parent directory exists
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        saved = _recorder.save(save_path, name=name)
+        saved_str = str(saved)
+    except Exception as exc:
+        return {"error": f"Failed to save replay: {exc}"}
+
+    # Auto-validate the written file
+    validation_result = handle_validate_replay({"name": saved_str})
+
+    if validation_result.get("valid"):
+        return {
+            "saved_to": saved_str,
+            "validation": "passed",
+            "steps": validation_result.get("step_count", len(_recorder.session.steps)),
+            "can_replay": True,
+        }
+    else:
+        return {
+            "saved_to": saved_str,
+            "validation": "failed",
+            "steps": validation_result.get("step_count", len(_recorder.session.steps)),
+            "can_replay": False,
+            "errors": validation_result.get("issues", []),
+        }
+
+
+# ---------------------------------------------------------------------------
 # MCP server factory
 # ---------------------------------------------------------------------------
 
@@ -2818,7 +3229,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (38 total):
+AVAILABLE TOOLS (43 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -2873,6 +3284,13 @@ AVAILABLE TOOLS (38 total):
     ios_network             — Network activity: recent HTTP URLs, bytes in/out, throughput
     ios_perf_baseline       — Capture a perf snapshot as a reference baseline for comparison
     ios_perf_compare        — Compare current perf to the stored baseline (deltas + severity)
+
+  AI Debugging Primitives (v14.0.0b1):
+    ios_app_relaunch        — Restart the app without tearing down the runner (fast debug cycle)
+    ios_logs_tail           — Incremental logs since last call (cursor-based, use in debug loops)
+    ios_capture_state       — Bundle screenshot + elements + logs + app_state + perf in one call
+    ios_action_with_logs    — Execute action + return logs that fired during the window (atomic)
+    ios_promote_session_to_test — Promote recording buffer to a named replay YAML + auto-validate
 
 FIRST SESSION — minimum viable loop:
   ios_start_session(bundle_id="com.example.app")
@@ -3708,6 +4126,143 @@ SETUP CHECK:
 
     # ios_start_runner REMOVED in v14.0.0a1 — ios_start_session handles runner lifecycle automatically.
     # ios_stop_runner REMOVED in v14.0.0a1 — ios_stop_session handles cleanup.
+
+    # ── Phase 2 tools: AI debugging primitives (v14.0.0b1) ────────────────
+
+    # ── Tool: ios_app_relaunch ─────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_app_relaunch",
+        description=(
+            "Restart the app under test without tearing down the XCTest runner. "
+            "No app_path: xcrun simctl terminate + launch (<2s, mode='terminate-launch'). "
+            "With app_path: simctl install + terminate + launch (~15s, mode='reinstall-launch'). "
+            "Returns {bundle_id, udid, elapsed_ms, foreground_verified, mode}. "
+            "foreground_verified=True means the app is confirmed in the foreground within 5s. "
+            "Use after reproducing a crash or to start a clean app state without stopping the session. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_app_relaunch(
+        bundle_id: str,
+        app_path: str | None = None,
+        udid: str = "booted",
+        session_id: str | None = None,
+    ) -> str:
+        result = handle_app_relaunch({
+            "bundle_id": bundle_id,
+            "app_path": app_path,
+            "udid": udid,
+            "session_id": session_id,
+        })
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_logs_tail ────────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_logs_tail",
+        description=(
+            "Return only the logs that have arrived since the last call (incremental). "
+            "Maintains a per-session cursor so each call returns new entries only. "
+            "First call returns the last ~2s of logs as the initial boundary. "
+            "since_last_call=False returns all recent logs (ignores cursor). "
+            "Filters: level ('error', 'fault'), category (exact), regex (message pattern). "
+            "Returns {logs: [...], cursor: '<ISO timestamp>', since_ms, count}. "
+            "Use in a debugging loop: call after each action to see what the app logged. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_logs_tail(
+        since_last_call: bool = True,
+        level: str | None = None,
+        category: str | None = None,
+        regex: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        result = handle_logs_tail({
+            "since_last_call": since_last_call,
+            "level": level,
+            "category": category,
+            "regex": regex,
+            "session_id": session_id,
+        })
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_capture_state ────────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_capture_state",
+        description=(
+            "Bundle screenshot + elements + logs + app_state + perf in ONE call. "
+            "Default include=None returns all fields. "
+            "Pass include=['screenshot','elements','logs'] to slim the payload. "
+            "Supported include values: 'screenshot', 'elements', 'logs', 'app_state', 'perf'. "
+            "Returns {screenshot?, elements?, logs?, app_state?, perf?, captured_at}. "
+            "Use at the start of a debugging loop or after a state change to orient quickly. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_capture_state(
+        include: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        result = handle_capture_state({"include": include, "session_id": session_id})
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_action_with_logs ─────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_action_with_logs",
+        description=(
+            "Execute an action and return the logs that fired during the action window. "
+            "Atomic: snapshot cursor → run action → wait log_window_ms → return new logs. "
+            "action dict: {'type': 'tap', 'label': 'Submit'} or "
+            "{'type': 'type', 'text': 'hello'} or {'type': 'swipe', 'direction': 'up'} etc. "
+            "Supported types: tap, long_press, type, swipe, press_key. "
+            "log_window_ms: how long to wait after action (default 2000ms). "
+            "Returns {action_result, logs, log_window_ms, action_elapsed_ms}. "
+            "Use instead of ios_tap + ios_logs_tail when you want atomic action+log correlation. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_action_with_logs(
+        action: dict,
+        log_window_ms: int = 2000,
+        session_id: str | None = None,
+    ) -> str:
+        result = handle_action_with_logs({
+            "action": action,
+            "log_window_ms": log_window_ms,
+            "session_id": session_id,
+        })
+        return json.dumps(result, default=str)
+
+    # ── Tool: ios_promote_session_to_test ──────────────────────────────────
+
+    @mcp.tool(
+        name="ios_promote_session_to_test",
+        description=(
+            "Promote the current recording buffer to a named replay YAML test. "
+            "Writes the replay to ./replays/<name>.yaml (default, CI-friendly) or path= override. "
+            "Auto-validates the file with specterqa-ios validate-replay before returning. "
+            "validation='passed' + can_replay=True means the replay is ready for CI. "
+            "validation='failed' means the file WAS saved but has issues — errors[] explains why. "
+            "The file is NEVER deleted on validation failure — iterate and fix. "
+            "Returns {saved_to, validation, steps, can_replay, errors?}. "
+            "Requires ios_start_recording to have been called first."
+        ),
+    )
+    async def ios_promote_session_to_test(
+        name: str,
+        path: str | None = None,
+        session_id: str | None = None,
+    ) -> str:
+        result = handle_promote_session_to_test({
+            "name": name,
+            "path": path,
+            "session_id": session_id,
+        })
+        return json.dumps(result, default=str)
 
     return mcp
 
