@@ -1,0 +1,78 @@
+name: BA Merge Check (Governance Memo Format)
+
+on:
+  pull_request:
+    types: [ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  governance-memo-check:
+    name: Check governance memo sections
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate INIT reference (required)
+        # No ba CLI dependency — governance check is inline Python only
+        id: init_check
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.head_ref }}
+        run: |
+          python3 - <<'PYEOF'
+          import re, os, sys
+
+          INIT_PATTERN = re.compile(r'INIT-\d{4}-\d{3,}', re.IGNORECASE)
+
+          title  = os.environ.get("PR_TITLE", "")
+          body   = os.environ.get("PR_BODY", "")
+          branch = os.environ.get("PR_BRANCH", "")
+
+          sources = {"title": title, "body": body, "branch": branch}
+          found = None
+
+          for src, text in sources.items():
+              m = INIT_PATTERN.search(text)
+              if m:
+                  found = m.group(0).upper()
+                  break
+
+          if found:
+              print(f"PASS: Initiative reference found: {found}")
+          else:
+              print("FAIL: No INIT-YYYY-NNN reference found.")
+              sys.exit(1)
+          PYEOF
+
+      - name: Check governance memo sections (warning only)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys
+
+          body = os.environ.get("PR_BODY", "")
+
+          MEMO_SECTIONS = ["Gate:", "DoD:", "Evidence:"]
+          found_sections = [s for s in MEMO_SECTIONS if s in body]
+
+          if found_sections:
+              print(f"Governance memo sections present: {', '.join(found_sections)}")
+          else:
+              # Warning annotation — not a hard fail
+              print("::warning title=Governance Memo Missing::PR body does not contain any of: Gate:, DoD:, Evidence:. "
+                    "Consider adding a governance memo section before merge. "
+                    "See BusinessAtlas prompts/CEO_GOVERNANCE.md for expected format.")
+              print("Governance memo check: no sections found — warning issued, not blocking.")
+
+          sys.exit(0)
+          PYEOF

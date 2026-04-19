@@ -1,0 +1,61 @@
+name: BA PR Validate (Initiative Reference)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-initiative-ref:
+    name: Require INIT reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Extract and validate INIT reference
+        # No ba CLI dependency — governance check is inline Python only
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.head_ref }}
+        run: |
+          python3 - <<'PYEOF'
+          import re, os, sys
+
+          INIT_PATTERN = re.compile(r'INIT-\d{4}-\d{3,}', re.IGNORECASE)
+
+          title  = os.environ.get("PR_TITLE", "")
+          body   = os.environ.get("PR_BODY", "")
+          branch = os.environ.get("PR_BRANCH", "")
+
+          sources = {"title": title, "body": body, "branch": branch}
+          found = None
+          found_in = None
+
+          for src, text in sources.items():
+              m = INIT_PATTERN.search(text)
+              if m:
+                  found = m.group(0).upper()
+                  found_in = src
+                  break
+
+          if found:
+              print(f"PASS: Found initiative reference {found} in PR {found_in}")
+              print(f"Every specterqa-ios PR must be bound to a BusinessAtlas initiative.")
+              sys.exit(0)
+          else:
+              print("FAIL: No INIT-YYYY-NNN reference found in PR title, body, or branch name.")
+              print("Every specterqa-ios PR must reference a BusinessAtlas initiative.")
+              print("  - Add 'INIT-YYYY-NNN' to the PR title, OR")
+              print("  - Include it in the PR body, OR")
+              print("  - Use a branch name like feat/INIT-2026-NNN-description")
+              sys.exit(1)
+          PYEOF

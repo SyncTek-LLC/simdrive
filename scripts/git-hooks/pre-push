@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# pre-push hook — governance guard before pushing.
+#
+# Behavior is repo-aware:
+#   * In BusinessAtlas: run `ba branch-check` and block if it flags issues.
+#     This binds the current branch to the classified initiative in BA.
+#   * In sister repos (specterqa-ios, etc.): skip ba branch-check (it is
+#     BA-centric and expects the BA branch slug), but still guard against
+#     direct pushes to main/master.
+#
+# Part of INIT-2026-535 Governance Hook Hardening.
+
+BA="/Users/atlas/BusinessAtlas/v2/ba"
+BA_REPO_ROOT="/Users/atlas/BusinessAtlas"
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+
+# Never allow direct push to protection branches from any repo.
+# Check the remote refs being pushed (git supplies them on stdin).
+while read -r local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/main|refs/heads/master)
+            cat >&2 <<EOF
+
+[GOVERNANCE] Direct push to ${remote_ref} blocked.
+Open a PR from a feature branch instead.
+
+EOF
+            exit 1
+            ;;
+    esac
+done
+
+# Sister repo: skip ba branch-check.
+if [ "$REPO_ROOT" != "$BA_REPO_ROOT" ]; then
+    exit 0
+fi
+
+# Inside BA: run full branch-check.
+if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
+    exit 0
+fi
+
+if [ ! -x "$BA" ]; then
+    echo "[pre-push] WARNING: ba not found at $BA — skipping branch-check" >&2
+    exit 0
+fi
+
+COMBINED_OUTPUT=$("$BA" branch-check 2>&1)
+EXIT_CODE=$?
+
+if [ "$EXIT_CODE" -ne 0 ]; then
+    cat >&2 <<EOF
+
+[GOVERNANCE] Push blocked by ba branch-check (exit $EXIT_CODE):
+
+$COMBINED_OUTPUT
+
+To resolve:
+  - Ensure you are on the correct feature branch
+  - Run: ba gate-check --initiative-id INIT-XXXX-NNN --work-type code
+  - Address any open gate requirements before pushing
+
+EOF
+    exit 1
+fi
+
+if echo "$COMBINED_OUTPUT" | grep -qiE '(blocked|unresolved|gate)'; then
+    cat >&2 <<EOF
+
+[GOVERNANCE] Push blocked — ba branch-check output contains gate/block keywords:
+
+$COMBINED_OUTPUT
+
+Address the above before pushing.
+
+EOF
+    exit 1
+fi
+
+exit 0
