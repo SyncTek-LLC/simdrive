@@ -10,7 +10,7 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (41 total):
+Tools (38 total):
     ios_start_session       Start session on the iOS Simulator (AX or XCTest backend)
     ios_stop_session        Stop the XCTest runner and clean up
     ios_screenshot          Annotated screenshot with numbered elements
@@ -31,7 +31,6 @@ Tools (41 total):
     ios_webview_elements    Get elements inside WKWebView content (EPUB readers, PDF viewers)
     ios_start_recording     Clear step buffer; begin clean recording
     ios_stop_recording      Save replay YAML + clear buffer (marks end of flow)
-    ios_save_replay         Save replay YAML without clearing the step buffer
     ios_accessibility_audit Audit current screen for accessibility issues
     ios_logs                Get recent app console logs from the iOS Simulator
     ios_crashes             Check for app crashes since session start
@@ -363,89 +362,35 @@ def handle_start_session(arguments: dict) -> dict:
         elif env_provider == "local" and backend_arg == "browserstack":
             backend_arg = None  # type: ignore[assignment]
 
-        # B9 fix (v13.2.1): Deploy the XCTest runner before calling
-        # BackendSelector.choose() when xctest is explicitly requested or when
-        # auto-select might pick it.  In 13.2.0 the MCP path only called build.sh
-        # (compile only), so XCTestBackend.is_available() always returned False and
-        # the runner was never started.  The CLI path already deployed correctly via
-        # TestSession._deploy_runner() → xcodebuild test-without-building.
-        #
-        # We deploy here (not in the XCTest branch below) so that BackendSelector
+        # v14: Deploy the XCTest runner via RunnerProcess (single owner of runner lifecycle).
+        # Replaces the B9 inline deploy path — all xcodebuild management is now in RunnerProcess.
+        # We deploy here (before BackendSelector.choose()) so that BackendSelector
         # can probe :8222/health and select XCTestBackend when backend="auto".
         _should_deploy_xctest = backend_arg in ("xctest", None)
         if _should_deploy_xctest:
-            _xctestrun = _find_xctestrun(_DEFAULT_RUNNER_BUILD_DIR)
-            if _xctestrun is not None:
-                # Deploy the pre-built runner to the simulator.
-                # Mirrors TestSession._deploy_runner() but without the clone/session
-                # machinery — MCP uses the user's booted simulator directly.
+            try:
+                from specterqa.ios.runner_process import RunnerProcess, RunnerDeployError  # noqa: PLC0415
+
+                _deploy_port = 8222
+                _mcp_runner = RunnerProcess.acquire(device_id, _deploy_port)
+                _mcp_runner.deploy(bundle_id or "")
+
+                # Wait for the runner to become healthy (up to 90s).
+                # Cold runner boot on an idle simulator takes 35–50s.
                 try:
-                    from specterqa.ios.session_manager import TestSession  # noqa: PLC0415
+                    _mcp_runner.healthcheck(timeout_s=90.0)
+                    logger.info("v14: MCP runner deployed and healthy on :%d", _deploy_port)
+                    # Store for cleanup on stop
+                    global _session  # noqa: PLW0603
+                    _session = _mcp_runner  # type: ignore[assignment]
+                except RunnerDeployError as health_exc:
+                    logger.warning("v14: MCP runner did not become healthy: %s", health_exc)
 
-                    _deploy_port = 8222
-                    _deploy_xctestrun = Path(_xctestrun)
-
-                    # Inject environment variables the runner needs.
-                    TestSession._inject_xctestrun_env(
-                        _deploy_xctestrun,
-                        {
-                            "SPECTERQA_PORT": str(_deploy_port),
-                            "SPECTERQA_BUNDLE_ID": bundle_id or "",
-                        },
-                    )
-
-                    _mcp_runner_proc = subprocess.Popen(
-                        [
-                            "xcodebuild",
-                            "test-without-building",
-                            "-xctestrun",
-                            str(_deploy_xctestrun),
-                            "-destination",
-                            f"id={device_id}",
-                        ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-
-                    # Store the process on _session (will be cleaned up on stop)
-                    # We set _session as a lightweight holder so handle_stop_session
-                    # can terminate the runner process.
-                    class _MCPRunnerSession:  # noqa: N801
-                        """Minimal session wrapper for MCP-deployed XCTest runner."""
-
-                        def __init__(self, proc: subprocess.Popen) -> None:
-                            self._runner_process = proc
-                            self._target_udid = device_id
-                            self._clone_udid = None
-
-                        def stop(self) -> None:
-                            if self._runner_process and self._runner_process.poll() is None:
-                                self._runner_process.terminate()
-                                try:
-                                    self._runner_process.wait(timeout=5)
-                                except subprocess.TimeoutExpired:
-                                    self._runner_process.kill()
-
-                    _session = _MCPRunnerSession(_mcp_runner_proc)
-
-                    # Wait for the runner to become healthy.
-                    # Cold runner boot on an idle simulator takes 35–50s (Maurice, dogfood 2026-04-18).
-                    # Bumped from 30s → 90s (W4 fix, v13.3.0) to avoid first-call errors.
-                    from specterqa.ios.session_manager import _wait_for_health  # noqa: PLC0415
-
-                    try:
-                        _wait_for_health(
-                            f"http://localhost:{_deploy_port}/health",
-                            timeout_s=90.0,
-                        )
-                        logger.info("B9: MCP runner deployed and healthy on :%d", _deploy_port)
-                    except Exception as health_exc:
-                        logger.warning(
-                            "B9: MCP runner did not become healthy within 90s: %s", health_exc
-                        )
-
-                except Exception as deploy_exc:
-                    logger.warning("B9: MCP runner deploy failed: %s", deploy_exc)
+            except RunnerDeployError as deploy_exc:
+                # Loud error — no silent fallback to AX
+                return {"error": str(deploy_exc)}
+            except Exception as deploy_exc:
+                logger.warning("v14: MCP runner deploy failed: %s", deploy_exc)
 
         from specterqa.ios.backends.selector import BackendSelector
         from specterqa.ios.som_annotator import SoMAnnotator
@@ -1319,7 +1264,7 @@ def handle_start_recording(arguments: dict) -> dict:
 def handle_stop_recording(arguments: dict) -> dict:
     """Save the replay AND clear the recorder (marks end-of-recording).
 
-    Equivalent to ios_save_replay followed by clearing the step buffer.
+    Saves the replay and clears the step buffer.
     The session remains active — you can keep testing; a new ios_start_recording
     will start fresh for the next flow.
 
@@ -2873,13 +2818,11 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (41 total):
+AVAILABLE TOOLS (38 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
     ios_stop_session     — Stop runner and clean up (always call when done)
-    ios_start_runner     — Build (if needed) and deploy the XCTest runner. Use for explicit runner lifecycle control.
-    ios_stop_runner      — Terminate the XCTest runner. Idempotent. Use after all sessions are done.
 
   Observation:
     ios_screenshot       — Annotated screenshot with numbered bounding boxes + element list
@@ -2904,7 +2847,6 @@ AVAILABLE TOOLS (41 total):
   Recording & Replay:
     ios_start_recording  — Clear step buffer; begin clean recording
     ios_stop_recording   — Save replay YAML + clear buffer (end of flow); preferred save path
-    ios_save_replay      — [deprecated in v12 — use ios_stop_recording] Save YAML without clearing buffer
     ios_list_replays     — List saved replay YAML files (name, steps, modified). Call before ios_replay.
     ios_replay           — Run a saved replay end-to-end against the active session.
     ios_validate_replay  — Validate replay structure without executing it.
@@ -2998,9 +2940,8 @@ RECORDING WORKFLOW (best practice):
   4. ios_stop_recording(name="feature-name") → saves YAML + clears buffer
   5. Next flow: ios_start_recording() → repeat
 
-  Recording trio — when to use which:
+  Recording — when to use which:
   - ios_stop_recording(name=...) — end of flow, save + clear buffer (most common)
-  - ios_save_replay(name=...) — checkpoint mid-flow without clearing; continue recording after
   - ios_start_recording() — discard exploratory steps, start a clean buffer
 
 LIMITATIONS:
@@ -3183,10 +3124,8 @@ SETUP CHECK:
         name="ios_stop_recording",
         description=(
             "Save the current recording as a replay YAML file AND clear the step buffer. "
-            "Equivalent to ios_save_replay followed by clearing steps. "
             "name is the test name / filename stem (default 'replay'). "
             "path overrides the output location (default: .specterqa/replays/<name>.yaml). "
-            "Use ios_save_replay if you want to keep recording after saving. "
             "Internally awaits checkpoint completion before saving (prevents stale expect_elements)."
         ),
     )
@@ -3347,26 +3286,8 @@ SETUP CHECK:
         result = handle_long_press({"element_index": element_index, "duration": duration})
         return json.dumps(result)
 
-    # ── Tool: ios_save_replay ──────────────────────────────────────────────
 
-    @mcp.tool(
-        name="ios_save_replay",
-        description=(
-            "[DEPRECATED in v12 — prefer ios_stop_recording which saves and clears the buffer.] "
-            "Save the current session as a deterministic replay YAML file WITHOUT clearing the step buffer. "
-            "Use this only when you want to checkpoint mid-flow and continue recording after saving. "
-            "For end-of-flow saves, use ios_stop_recording(name=...) instead. "
-            "The replay can be run in CI without AI: "
-            "  specterqa-ios replay <file.yaml>. "
-            "name is the human-readable test name used as the filename stem "
-            "(default: 'replay'). "
-            "path overrides the output location "
-            "(default: .specterqa/replays/<name>.yaml)."
-        ),
-    )
-    async def ios_save_replay(name: str = "replay", path: str = "") -> str:
-        result = handle_save_replay({"name": name, "path": path or ""})
-        return json.dumps(result)
+    # ios_save_replay REMOVED in v14.0.0a1 (OQ-4). Use ios_stop_recording(name=...) instead.
 
     # ── Tool: ios_simctl ───────────────────────────────────────────────────
 
@@ -3784,43 +3705,9 @@ SETUP CHECK:
         result = handle_license_status({})
         return json.dumps(result)
 
-    # ── Tool: ios_start_runner ─────────────────────────────────────────────
 
-    @mcp.tool(
-        name="ios_start_runner",
-        description=(
-            "Build (if needed) and deploy the SpecterQA XCTest runner against a booted simulator. "
-            "Returns when /health is responsive. Idempotent — safe to call if a runner is already running. "
-            "Use this before ios_start_session(backend='xctest') if you want explicit control over runner lifecycle. "
-            "This enables long-lived runner sharing across many sessions without re-deploying. "
-            "Args: device_udid (required — simulator UDID from ios_devices), "
-            "bundle_id (optional, for runner build env), timeout_s (default 90)."
-        ),
-    )
-    async def ios_start_runner(
-        device_udid: str,
-        bundle_id: str | None = None,
-        timeout_s: float = 90.0,
-    ) -> str:
-        result = handle_start_runner(
-            {"device_udid": device_udid, "bundle_id": bundle_id or "", "timeout_s": timeout_s}
-        )
-        return json.dumps(result)
-
-    # ── Tool: ios_stop_runner ──────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_stop_runner",
-        description=(
-            "Terminate the SpecterQA XCTest runner subprocess on the given port. "
-            "Idempotent — does not error if no runner is running. "
-            "Use after your test session is complete to free simulator resources. "
-            "Args: port (default 8222)."
-        ),
-    )
-    async def ios_stop_runner(port: int = 8222) -> str:
-        result = handle_stop_runner({"port": port})
-        return json.dumps(result)
+    # ios_start_runner REMOVED in v14.0.0a1 — ios_start_session handles runner lifecycle automatically.
+    # ios_stop_runner REMOVED in v14.0.0a1 — ios_stop_session handles cleanup.
 
     return mcp
 
