@@ -7,6 +7,15 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [13.2.2] — 2026-04-18
+
+Republish-only release. v13.2.1's wheel was built by the auto-publish workflow against the tag's original commit, which preceded PR #59's wheel-completeness fixes (HostApp + ObjC bridge). PyPI rejects re-uploads of the same version. v13.2.2 ships the actual complete wheel — no other code changes vs v13.2.1.
+
+### Process change
+- Pre-publish gate now runs in the publish.yml workflow itself: build wheel → fresh-venv install → `runner build` smoke test → only then upload to PyPI. If the runner build fails, the workflow fails and PyPI is not touched. This catches package-data drift before users see it.
+
+---
+
 ## [13.2.1] — 2026-04-18
 
 Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Example Reader dogfood (Maurice Carrier, 2026-04-18).
@@ -16,6 +25,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Example Read
 - **B2**: `_needs_rebuild()` now uses a SHA-256 content-hash of `Sources/` + `project.pbxproj` instead of the version-string match. Patch releases that don't change Swift sources skip the rebuild.
 - **B3+B4**: CLI `validate-replay` now accepts `element_identifier` and `tapOnIdentifier` (the recorder already writes them; the engine already reads them; MCP `ios_validate_replay` already accepted them — only CLI was out of sync).
 - **B9**: MCP `ios_start_session(backend="xctest")` now deploys the runner via `xcodebuild test-without-building` before probing `:8222/health`. Restores 13.1.0 behavior. Without this fix, MCP recording was offline in 13.2.0.
+- **B1.5**: `_runner_source_dir()` now finds the runner inside installed wheels (`pkg/runner_source/`), not just the dev-tree layout (`pkg_root/runner/`). Without this, every fresh `pip install` user's `specterqa-ios runner build` failed with "xcodebuild: error: '<cwd>/SpecterQARunner.xcodeproj' does not exist".
 
 ### Added
 - `CHANGELOG.md` now ships in the wheel (was missing in 13.2.0).

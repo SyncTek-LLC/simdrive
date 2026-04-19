@@ -64,6 +64,24 @@ _DEFAULT_DEVICE_W = 390.0
 _DEFAULT_DEVICE_H = 844.0
 
 
+# ---------------------------------------------------------------------------
+# Custom exceptions
+# ---------------------------------------------------------------------------
+
+
+class AXContentGroupNotFoundError(RuntimeError):
+    """Raised when neither the aspect-ratio heuristic nor the position-probe
+    can locate the iOS content group in the Simulator AX tree.
+
+    This is raised instead of silently returning hardware chrome elements,
+    which would be a misleading / unusable result for callers.
+
+    Actionable message is always included; callers should surface it to the
+    user or MCP caller so they can diagnose the root cause (e.g. missing
+    Accessibility permission, no booted simulator, iOS 26 compatibility gap).
+    """
+
+
 class AXBackend:
     """Host-side iOS Simulator automation via macOS AXUIElement APIs.
 
@@ -123,12 +141,14 @@ class AXBackend:
         self._device_w = device_w if device_w > 0 else _DEFAULT_DEVICE_W
         self._device_h = device_h if device_h > 0 else _DEFAULT_DEVICE_H
 
+        # Flag set when BOTH heuristic and position-probe fail — causes
+        # get_elements() to raise AXContentGroupNotFoundError instead of
+        # silently returning hardware chrome.
+        self._content_group_failed = False
+
         # Eagerly find the iOS content group and calibrate dimensions.
-        try:
-            self._ios_content_group = self._find_ios_content_group()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not locate iOS content group at init: %s", exc)
-            self._ios_content_group = None
+        self._ios_content_group = None
+        self._init_content_group()
 
     # ------------------------------------------------------------------
     # Static / class helpers
@@ -254,6 +274,133 @@ class AXBackend:
         except Exception as exc:  # noqa: BLE001
             logger.debug("_ax_frame failed: %s", exc)
         return None
+
+    def _init_content_group(self) -> None:
+        """Locate the iOS content group using heuristic then position-probe fallback.
+
+        Strategy (iOS 26 compatible):
+        1. Try the aspect-ratio heuristic (_find_ios_content_group).
+        2. If heuristic returns None / raises, try position-probe
+           (_position_probe_content_group) — uses AXUIElementCopyElementAtPosition
+           at the screen centre.
+        3. If both fail, set _content_group_failed = True so get_elements()
+           can raise AXContentGroupNotFoundError instead of silently returning
+           hardware chrome.
+        """
+        # Step 1: aspect-ratio heuristic
+        try:
+            result = self._find_ios_content_group()
+            if result is not None:
+                self._ios_content_group = result
+                self._content_group_failed = False
+                return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Content-group heuristic failed: %s — trying position-probe", exc)
+
+        # Step 2: position-probe fallback (iOS 26 / macOS 25 compat)
+        logger.debug("Falling back to position-probe for iOS content group")
+        probe_result = self._position_probe_content_group()
+        if probe_result is not None:
+            element, frame = probe_result
+            self._ios_content_group = element
+            self._ios_content_frame = frame
+            self._content_group_failed = False
+            logger.info("iOS content group found via position-probe: frame=%s", frame)
+            return
+
+        # Step 3: both strategies failed
+        logger.warning(
+            "Could not locate iOS content group via heuristic or position-probe. "
+            "On iOS 26 / macOS 25 this is a known compatibility gap. "
+            "Check that Accessibility permission is granted and a simulator is booted."
+        )
+        self._ios_content_group = None
+        self._content_group_failed = True
+
+    def _position_probe_content_group(self) -> tuple[Any, dict] | None:
+        """Fallback: probe AX element at simulator screen centre.
+
+        Uses AXUIElementCopyElementAtPosition (the same API used by
+        _get_tab_bar_buttons) at the computed screen centre of the first
+        booted simulator window, then walks up the parent chain to find
+        a window-level container that can serve as the iOS content group.
+
+        Returns:
+            (element, frame) tuple on success, or None if unavailable.
+        """
+        try:
+            from ApplicationServices import (  # type: ignore[import]
+                AXUIElementCopyElementAtPosition,
+            )
+        except ImportError:
+            logger.debug("position-probe unavailable: ApplicationServices not importable")
+            return None
+
+        # Locate the simulator window to find its screen position.
+        windows = self._ax_attr(self._root, "AXWindows")
+        if not windows:
+            logger.debug("position-probe: no AX windows found")
+            return None
+
+        # Find the largest window by area (most likely the sim screen window).
+        best_window = None
+        best_window_frame: dict | None = None
+        best_area = 0.0
+        for win in windows:
+            frame = self._ax_frame(win)
+            if frame is None:
+                continue
+            area = frame["width"] * frame["height"]
+            if area > best_area:
+                best_area = area
+                best_window = win
+                best_window_frame = frame
+
+        if best_window_frame is None:
+            logger.debug("position-probe: could not determine simulator window frame")
+            return None
+
+        # Compute screen-space centre of the simulator window.
+        centre_x = best_window_frame["x"] + best_window_frame["width"] / 2.0
+        centre_y = best_window_frame["y"] + best_window_frame["height"] / 2.0
+
+        # Hit-test at the centre.
+        with _ax_lock:
+            err, hit_element = AXUIElementCopyElementAtPosition(
+                self._root, centre_x, centre_y, None
+            )
+
+        if err != 0 or hit_element is None:
+            logger.debug("position-probe: AXUIElementCopyElementAtPosition returned err=%d", err)
+            return None
+
+        # Walk up the parent chain to find a window-level container.
+        # We stop at the first AXWindow parent or at depth 10 to avoid
+        # infinite loops on malformed trees.
+        candidate = hit_element
+        for _ in range(10):
+            role = self._ax_attr(candidate, "AXRole") or ""
+            if role == "AXWindow":
+                break
+            parent = self._ax_attr(candidate, "AXParent")
+            if parent is None:
+                break
+            candidate = parent
+
+        # Use the hit element's window as the content group root (or the hit
+        # element itself if it's a large group).
+        frame = self._ax_frame(candidate)
+        if frame is None:
+            frame = best_window_frame
+
+        # Update device dimensions from the probe frame.
+        if frame["width"] > 0:
+            self._device_w = frame["width"]
+        if frame["height"] > 0:
+            self._device_h = frame["height"]
+
+        logger.debug("position-probe found content group: role=%s frame=%s", role, frame)
+        return candidate, frame
 
     def _find_ios_content_group(self) -> Any:
         """Walk AXWindow → AXChildren to locate the iOS screen group.
@@ -597,7 +744,25 @@ class AXBackend:
 
         Returns:
             List of element dicts.
+
+        Raises:
+            AXContentGroupNotFoundError: When both the aspect-ratio heuristic
+                and the position-probe fallback failed to locate the iOS content
+                group.  This prevents silently returning only hardware chrome
+                elements (Mute, Volume, Sleep/Wake) which would be misleading.
         """
+        if getattr(self, "_content_group_failed", False):
+            raise AXContentGroupNotFoundError(
+                "AX backend could not locate the iOS content group in the Simulator AX tree. "
+                "Neither the aspect-ratio heuristic nor the position-probe fallback succeeded. "
+                "Possible causes:\n"
+                "  1. iOS 26 / macOS 25 compatibility gap — the Simulator AX tree layout "
+                "has changed. Report this to SpecterQA.\n"
+                "  2. Accessibility permission not granted — check System Settings → "
+                "Privacy & Security → Accessibility.\n"
+                "  3. No simulator is booted or the app is not foreground.\n"
+                "Workaround: use backend='xctest' which does not depend on the AX tree."
+            )
         root = self._ios_content_group or self._root
         results: list[dict] = []
         with _ax_lock:

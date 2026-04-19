@@ -455,7 +455,11 @@ class TestSession:
                     pid = int(pid_str)
                     os.kill(pid, signal.SIGKILL)
                     logger.info("Killed stale xcodebuild process: %d", pid)
-                except (ValueError, ProcessLookupError, PermissionError) as exc:
+                except ValueError as exc:
+                    logger.warning("Could not parse stale runner PID %r: %s", pid_str, exc)
+                except ProcessLookupError:
+                    pass  # PID already exited — expected, not an error
+                except PermissionError as exc:
                     logger.warning("Could not kill stale runner PID %s: %s", pid_str, exc)
 
     def _cleanup_stale_clones(self) -> None:

@@ -94,6 +94,79 @@ def _load_product(project_dir: Path, slug: str) -> dict[str, Any]:
     return data.get("product", data)  # support both wrapped and flat schemas
 
 
+def _safe_kill_pid(pid: int | None) -> None:
+    """Send SIGKILL to *pid*, silently swallowing ProcessLookupError.
+
+    An already-dead PID is an expected condition during parallel cleanup —
+    do NOT log an error for it.
+
+    Args:
+        pid: Process ID to kill, or None (no-op).
+    """
+    if pid is None:
+        return
+    import signal as _signal  # noqa: PLC0415
+
+    try:
+        os.kill(pid, _signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # PID already exited — expected, not an error
+
+
+def _check_parallel_license(parallel: int, license_result: dict) -> None:
+    """Validate that the license entitlements allow parallel > 1.
+
+    Tier A — same sim, per-worker port: allowed for all tiers.
+    Tier B — simctl clone per worker: requires multi_sim + ci_replay.
+
+    For this implementation (Tier A + B), we gate on multi_sim + ci_replay
+    for any parallel > 1 request.
+
+    Args:
+        parallel:       Number of parallel workers requested.
+        license_result: Dict from LicenseValidator.validate() containing
+                        'tier', 'valid', and 'max_concurrent_sims'.
+
+    Raises:
+        SystemExit: With a clear message when the license tier does not
+                    permit parallel > 1.
+    """
+    if parallel <= 1:
+        return
+
+    tier = license_result.get("tier", "trial")
+    max_concurrent = license_result.get("max_concurrent_sims", 1)
+
+    # Map tier to entitlements (mirrors mcp/server.py handle_license_status).
+    multi_sim = tier in ("indie", "pro", "team", "enterprise", "founder")
+    ci_replay = tier != "trial"
+
+    if not multi_sim or not ci_replay:
+        msg = (
+            f"--parallel {parallel} requires multi_sim + ci_replay entitlements. "
+            f"Your tier ({tier!r}) supports max_concurrent_sims={max_concurrent}. "
+            f"Pass --parallel 1 or upgrade your SpecterQA license at https://synctek.io/specterqa#pricing"
+        )
+        raise SystemExit(f"License gate: {msg}")
+
+
+def _allocate_worker_port() -> int:
+    """Allocate a unique port for a parallel replay worker.
+
+    Wraps session_manager._find_free_port so parallel workers each get
+    an isolated port and don't collide on the default :8222.
+
+    Returns:
+        An unused TCP port in the 8222–8231 range.
+
+    Raises:
+        SessionError: If all ports in the range are occupied.
+    """
+    from specterqa.ios.session_manager import _find_free_port  # noqa: PLC0415
+
+    return _find_free_port(8222, 8231)
+
+
 def _load_journey(project_dir: Path, journey_id: str) -> dict[str, Any]:
     """Load .specterqa/journeys/<journey_id>.yaml."""
     path = project_dir / "journeys" / f"{journey_id}.yaml"
@@ -1999,15 +2072,48 @@ def ci(
 
     # ── Parallel mode ─────────────────────────────────────────────────────
     if parallel > 1:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+
+        # License gate: trial tier must not silently run broken parallel mode.
+        try:
+            from specterqa.ios.license.validator import LicenseValidator  # noqa: PLC0415
+
+            _license_key = os.environ.get("SPECTERQA_LICENSE_KEY", "").strip()
+            _license_result = LicenseValidator(license_key=_license_key).validate()
+        except Exception:  # noqa: BLE001
+            _license_result = {"tier": "trial", "max_concurrent_sims": 1, "valid": True}
+
+        _check_parallel_license(parallel=parallel, license_result=_license_result)
 
         click.echo(f"[parallel] Running {len(files)} replays across {parallel} workers")
         t_start = time.time()
 
         def run_one(replay_file: Path):
+            # Allocate a unique port for this worker so multiple workers don't
+            # collide on the default :8222.  All workers share the same simulator
+            # (Tier A behaviour — no simctl clone).
+            try:
+                worker_port = _allocate_worker_port()
+            except Exception:  # noqa: BLE001
+                worker_port = 8222  # fallback: best-effort
+
+            env = {**os.environ, "SPECTERQA_PORT": str(worker_port)}
+
             try:
                 player = ReplayPlayer(str(replay_file))
-                return replay_file, player.run(verbose=False)
+                # Pass the per-worker port via env so the runner HTTP client
+                # connects to the right port without cloning the session.
+                old_environ = os.environ.copy()
+                os.environ["SPECTERQA_PORT"] = str(worker_port)
+                try:
+                    result = player.run(verbose=False)
+                finally:
+                    # Restore env — other threads may still be running.
+                    if "SPECTERQA_PORT" in old_environ:
+                        os.environ["SPECTERQA_PORT"] = old_environ["SPECTERQA_PORT"]
+                    else:
+                        os.environ.pop("SPECTERQA_PORT", None)
+                return replay_file, result
             except Exception as exc:
                 return replay_file, {
                     "name": replay_file.stem,
