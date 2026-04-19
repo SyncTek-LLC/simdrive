@@ -7,6 +7,14 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [14.0.1] — 2026-04-19
+
+### Fixed
+
+- **P0 deploy conflict in MCP xctest path (v14.0.0 regression):** `ios_start_session(backend="xctest")` was broken end-to-end. The MCP layer pre-deployed a `RunnerProcess` on `:8222` (healthy, logged `v14: MCP runner deployed and healthy`), but `session_manager._kill_stale_runners()` immediately killed it (treating the owned process as an orphan). The session then waited 60 s for health and timed out. Fix (Option A): `_kill_stale_runners` now calls `RunnerProcess.owned_pids()` and skips any xcodebuild PID that belongs to a live registry entry. The new `owned_pids()` classmethod is the only addition to `RunnerProcess`.
+
+---
+
 ## [14.0.0] — 2026-04-19
 
 **Major release — MCP-first consolidation.** Consolidates three parallel XCTest-runner deployment paths into a single `RunnerProcess` lifecycle class, introduces 5 AI-debugging MCP primitives, restructures the wheel mechanics to eliminate the B1.x regression surface, and adds 2 end-to-end CI dogfood tests.
