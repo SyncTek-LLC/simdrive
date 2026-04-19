@@ -7,36 +7,59 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [14.0.0b1] — 2026-04-19
+## [14.0.0] — 2026-04-19
+
+**Major release — MCP-first consolidation.** Consolidates three parallel XCTest-runner deployment paths into a single `RunnerProcess` lifecycle class, introduces 5 AI-debugging MCP primitives, restructures the wheel mechanics to eliminate the B1.x regression surface, and adds 2 end-to-end CI dogfood tests.
 
 ### Added
 
-- **`ios_app_relaunch`** — Restart the app under test without tearing down the XCTest runner. No `app_path`: terminate+launch (<2s, `mode="terminate-launch"`). With `app_path`: simctl install+terminate+launch (~15s, `mode="reinstall-launch"`). Returns `{bundle_id, udid, elapsed_ms, foreground_verified, mode}`. Slow-warning emitted when reinstall takes >20s.
-- **`ios_logs_tail`** — Incremental log stream since last call. Maintains a per-session ISO timestamp cursor so each call returns only new entries. First call returns the last ~50 entries as the initial boundary. Supports `level`, `category`, and `regex` filters. Returns `{logs, cursor, since_ms, count}`.
-- **`ios_capture_state`** — Bundles screenshot + elements + recent logs + app_state + perf in one MCP call. `include=["screenshot","elements","logs"]` slims the payload. Returns `{screenshot?, elements?, logs?, app_state?, perf?, captured_at}`.
-- **`ios_action_with_logs`** — Atomic action + log correlation. Snapshots log cursor → executes action → waits `log_window_ms` → returns logs that fired during the window. Supports `tap`, `long_press`, `type`, `swipe`, `press_key`. Returns `{action_result, logs, log_window_ms, action_elapsed_ms}`.
-- **`ios_promote_session_to_test`** — Promotes the current recording buffer to a named replay YAML. Default save path `./replays/<name>.yaml` (CI picks it up for free). Auto-validates with `specterqa-ios validate-replay` before returning. `validation="passed"` + `can_replay=true` = ready for CI. On validation failure the file is kept (not deleted) so the agent can iterate.
+- `RunnerProcess` class — single owner of build/deploy/start/stop/healthcheck/port-alloc. Thread-safe (state machine + lock). Shared per `(udid, port)` via class-level registry.
+- `RunnerDeployError` exception — loud XCTest failure with actionable `suggested_fix`. No silent fallback to AX.
+- 5 new MCP tools for the AI debugging loop:
+  - `ios_app_relaunch(bundle_id, app_path?)` — reinstall/relaunch user app without tearing down runner. No `app_path`: terminate+launch (<2s, `mode="terminate-launch"`). With `app_path`: simctl install+terminate+launch (~15s, `mode="reinstall-launch"`). Returns `{bundle_id, udid, elapsed_ms, foreground_verified, mode}`.
+  - `ios_logs_tail(since_last_call, filters…)` — incremental log stream with per-session ISO timestamp cursor. First call returns the last ~50 entries as the initial boundary. Returns `{logs, cursor, since_ms, count}`.
+  - `ios_capture_state(include?)` — bundles screenshot + elements + logs + app_state + perf in one MCP call. `include=["screenshot","elements","logs"]` slims the payload. Returns `{screenshot?, elements?, logs?, app_state?, perf?, captured_at}`.
+  - `ios_action_with_logs(action, log_window_ms)` — atomic: action + logs fired during it. Supports `tap`, `long_press`, `type`, `swipe`, `press_key`. Returns `{action_result, logs, log_window_ms, action_elapsed_ms}`.
+  - `ios_promote_session_to_test(name, path?)` — saves session as replay YAML + auto-validates; in-repo `./replays/` default. `validation="passed"` + `can_replay=true` = ready for CI.
+- `runner/__init__.py` — `runner/` is now a proper Python package discovered by setuptools. Eliminates the B1.x class of wheel-packaging bugs.
+- Two E2E CI dogfood tests (`tests/dogfood/`):
+  - `test_ci_replay_dogfood.py` — CI replay workflow: fresh install + `runner build` (CI-always); record/save/validate/replay against TestKitApp (live-sim only).
+  - `test_ai_debug_dogfood.py` — AI debugging workflow: tool registration + count >= 43 (CI-always); full 5-tool exercise against TestKitApp (live-sim only).
+- `dogfood-ci.yml` GitHub Actions workflow — `dogfood-ci-always` job runs on every PR and push to main.
+- `rm -rf build dist` step in publish workflow.
 
 ### Changed
 
-- Wheel structure simplified: `runner/__init__.py` added so `runner/` is a proper Python package discovered by `[tool.setuptools.packages.find]` — no build-time copy or `build_py` override needed.
-- `pyproject.toml`: removed `runner_source` package-data globs; `packages.find` now auto-discovers both `specterqa*` and `runner` packages.
-- `MANIFEST.in`: removed duplicate `src/specterqa/ios/runner_source/` mirror patterns.
-- MCP tool count: 38 → 43.
+- `session_manager._deploy_runner` delegates to `RunnerProcess`.
+- `_runner_source_dir()` in `cli/commands.py` now uses `importlib.resources.files('runner')` as primary resolution — works in both installed wheels and editable installs. Eliminates B1.5 regression class.
+- `_compute_runner_source_hash()` in `session_manager.py` updated to use `importlib.resources` for runner source discovery.
+- MCP tool count: 41 → 43 (net; removed 3 and added 5).
+- `pyproject.toml` uses `packages.find` (replaces long package-data glob list). Version bumped to `14.0.0`.
+- `MANIFEST.in` simplified (no more `runner_source` mirror).
+- `setup.py` slimmed to a minimal shim (build_py override removed).
 
-### Removed
+### Removed — BREAKING
 
-- `src/specterqa/ios/runner_source/` directory deleted (`git rm -rf`). It was a build-time mirror of `runner/`; the `build_py` override wrote into it. With the override gone it was dead code causing B1.x bugs.
-- `setup.py` `build_py` override removed. The override was the root cause of B1.x "Build input file cannot be found" bugs. Replaced by `runner/__init__.py` + `packages.find` auto-discovery.
+- `ios_start_runner` — shut down target simulator 100% of the time. No replacement: use `ios_start_session(backend="xctest")` which auto-deploys runner.
+- `ios_stop_runner` — same sim-kill defect. No replacement: runner teardown is handled by session lifecycle.
+- `ios_save_replay` — deprecated since v13.2.0. Use `ios_stop_recording(name=...)`.
+- `src/specterqa/ios/runner_source/` (build-artifact mirror — source of B1.x bugs).
+- `setup.py build_py` override.
+
+### Security
+
+- `ios_promote_session_to_test` sanitizes `name` (whitelist `[a-zA-Z0-9._-]+`; rejects slashes, `..`, leading dot) and resolves `path=` against `Path.cwd()` (rejects escapes).
+
+### Migration
+
+Users on v13.x upgrading to v14.0.0:
+
+- Replace any `ios_start_runner` call with `ios_start_session(backend="xctest")`. The session manager handles runner deploy correctly.
+- Replace any `ios_stop_runner` call with `ios_stop_session()`.
+- Replace any `ios_save_replay(name)` with `ios_stop_recording(name=name)`.
+- Internal imports of `specterqa.ios.runner_source.*` will break. These were never public API — use the top-level `runner/` package.
 
 ---
-
-## [14.0.0a1] — 2026-04-18
-
-Republish-only release. v13.2.1's wheel was built by the auto-publish workflow against the tag's original commit, which preceded PR #59's wheel-completeness fixes (HostApp + ObjC bridge). PyPI rejects re-uploads of the same version. v13.2.2 ships the actual complete wheel — no other code changes vs v13.2.1.
-
-### Process change
-- Pre-publish gate now runs in the publish.yml workflow itself: build wheel → fresh-venv install → `runner build` smoke test → only then upload to PyPI. If the runner build fails, the workflow fails and PyPI is not touched. This catches package-data drift before users see it.
 
 ---
 

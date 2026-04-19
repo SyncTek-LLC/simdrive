@@ -86,20 +86,19 @@ class TestWheelContents:
                 )
 
     def test_runner_source_importable(self, built_wheel):
-        """Verify the wheel contains Swift sources in runner_source/Sources/.
+        """Verify the wheel contains Swift sources in runner/Sources/.
 
-        After the runner_source dedup refactor, runner/Sources/ is the single
-        source of truth. setup.py's build_py override copies them into
-        runner_source/Sources/ at build time so the shipped wheel contains the
-        Swift runner. We verify the wheel — not the dev-tree state — because
-        the Sources/ directory is intentionally absent from git.
+        v14.0.0+ wheel restructure: runner/ is a top-level Python package
+        discovered by setuptools.packages.find — no build_py copy override.
+        Swift sources live at runner/Sources/ in both the dev tree and the
+        installed wheel.
         """
         with zipfile.ZipFile(built_wheel) as whl:
             swift_in_wheel = [
                 n for n in whl.namelist()
-                if "runner_source/Sources/" in n and n.endswith(".swift")
+                if "runner/Sources/" in n and n.endswith(".swift")
             ]
         assert len(swift_in_wheel) >= 6, (
-            f"Only {len(swift_in_wheel)} Swift files found under runner_source/Sources/ "
-            f"in the wheel — build_py copy hook may be broken"
+            f"Only {len(swift_in_wheel)} Swift files found under runner/Sources/ "
+            f"in the wheel — v14 wheel restructure may be broken"
         )

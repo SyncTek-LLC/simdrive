@@ -75,25 +75,42 @@ def _compute_runner_source_hash() -> str:
     Returns:
         Hex-encoded SHA-256 digest string.
     """
-    # Locate runner/Sources/ relative to this file.
-    # Installed wheel layout: …/site-packages/specterqa/ios/session_manager.py
-    # Dev layout:             src/specterqa/ios/session_manager.py
-    # runner/ is always at REPO_ROOT/runner or at runner_source/ in the wheel.
-    this_file = Path(__file__)
-    # Try runner_source/ first (wheel install path)
-    runner_source_dir = this_file.parent / "runner_source" / "Sources"
-    runner_pbxproj = this_file.parent / "runner_source" / "SpecterQARunner.xcodeproj" / "project.pbxproj"
+    # Locate runner/Sources/ — v14.0.0+ uses importlib.resources against the
+    # top-level ``runner`` package. Falls back to legacy runner_source/ layout
+    # and then to dev-tree repo root for backward compat.
+    import importlib.resources as _irl
 
-    if not runner_source_dir.exists():
-        # Dev tree: go up to repo root
-        # Path: src/specterqa/ios/session_manager.py
-        # parents[0] = src/specterqa/ios
-        # parents[1] = src/specterqa
-        # parents[2] = src
-        # parents[3] = repo root
+    runner_source_dir: Path | None = None
+    runner_pbxproj: Path | None = None
+
+    # 1. v14+ runner top-level package
+    try:
+        _rp = Path(str(_irl.files("runner")))
+        if (_rp / "Sources").exists():
+            runner_source_dir = _rp / "Sources"
+            runner_pbxproj = _rp / "SpecterQARunner.xcodeproj" / "project.pbxproj"
+    except (ModuleNotFoundError, TypeError, AttributeError):
+        pass
+
+    if runner_source_dir is None or not runner_source_dir.exists():
+        # 2. Legacy wheel layout: specterqa/ios/runner_source/
+        this_file = Path(__file__)
+        _legacy = this_file.parent / "runner_source" / "Sources"
+        if _legacy.exists():
+            runner_source_dir = _legacy
+            runner_pbxproj = this_file.parent / "runner_source" / "SpecterQARunner.xcodeproj" / "project.pbxproj"
+
+    if runner_source_dir is None or not runner_source_dir.exists():
+        # 3. Dev-tree fallback
+        this_file = Path(__file__)
         repo_root = this_file.parents[3]
         runner_source_dir = repo_root / "runner" / "Sources"
         runner_pbxproj = repo_root / "runner" / "SpecterQARunner.xcodeproj" / "project.pbxproj"
+
+    if runner_source_dir is None:
+        runner_source_dir = Path("/nonexistent")
+    if runner_pbxproj is None:
+        runner_pbxproj = Path("/nonexistent")
 
     hasher = hashlib.sha256()
     swift_paths = sorted(runner_source_dir.glob("*.swift"), key=lambda p: p.name)
@@ -799,25 +816,53 @@ class TestSession:
         """
         build_dir = self._runner_build_dir
 
-        # Resolve Swift source: prefer bundled runner_source (wheel), fall back to repo root runner/
-        try:
-            # Primary: bundled inside the installed wheel at specterqa.ios.runner_source
-            from specterqa.ios.runner_source import RUNNER_SOURCE_DIR
+        # Resolve Swift source (v14.0.0+ wheel restructure).
+        # Search order:
+        #   1. runner top-level package via importlib.resources (installed wheel + editable)
+        #   2. Legacy specterqa.ios.runner_source sub-package (pre-v14 wheels)
+        #   3. Dev-tree fallback: repo root / runner/
+        import importlib.resources as _irl
 
-            runner_dir = RUNNER_SOURCE_DIR
-        except ImportError:
-            # Development/editable install fallback: runner/ at repo root
+        runner_dir: Path | None = None
+
+        # 1. v14+ layout: runner/ is a top-level Python package
+        try:
+            _runner_pkg = _irl.files("runner")
+            _candidate = Path(str(_runner_pkg))
+            if (_candidate / "SpecterQARunner.xcodeproj").exists():
+                runner_dir = _candidate
+        except (ModuleNotFoundError, TypeError, AttributeError):
+            pass
+
+        if runner_dir is None:
+            # 2. Legacy wheel layout
             try:
-                import specterqa.ios as _pkg
+                from specterqa.ios.runner_source import RUNNER_SOURCE_DIR  # noqa: PLC0415
+
+                runner_dir = RUNNER_SOURCE_DIR
+            except ImportError:
+                pass
+
+        if runner_dir is None:
+            # 3. Dev-tree fallback
+            try:
+                import specterqa.ios as _pkg  # noqa: PLC0415
 
                 pkg_ios_dir = Path(_pkg.__file__).parent
-                pkg_root = pkg_ios_dir.parent.parent  # specterqa/ios → src → repo root
-                runner_dir = pkg_root / "runner"
-                if not (runner_dir / "SpecterQARunner.xcodeproj").exists():
-                    # Last-resort: sibling of the top-level package dir
-                    runner_dir = pkg_ios_dir.parent / "runner"
+                # session_manager.py lives at src/specterqa/ios/session_manager.py
+                # go up: ios → specterqa → src → repo_root
+                pkg_root = pkg_ios_dir.parents[2]
+                _dev = pkg_root / "runner"
+                if (_dev / "SpecterQARunner.xcodeproj").exists():
+                    runner_dir = _dev
             except (ImportError, OSError) as exc:
                 raise SessionError(f"Cannot locate runner source directory: {exc}") from exc
+
+        if runner_dir is None:
+            raise SessionError(
+                "Cannot locate runner source directory. "
+                "Ensure specterqa-ios is installed from PyPI or run from the repo root."
+            )
 
         xcodeproj = runner_dir / "SpecterQARunner.xcodeproj"
         if not xcodeproj.exists():
