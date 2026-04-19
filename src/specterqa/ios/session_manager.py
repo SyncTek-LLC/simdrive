@@ -458,8 +458,18 @@ class TestSession:
         When MCP connections drop or ios_stop_session isn't called, the old
         xcodebuild process keeps running. Starting a new one on the same sim
         causes resource contention and crashes.
+
+        Processes that are already owned by a RunnerProcess registry entry are
+        NOT killed — they were deployed intentionally (e.g. by the MCP layer's
+        pre-deploy block) and are still healthy.
         """
         import signal
+
+        try:
+            from specterqa.ios.runner_process import RunnerProcess  # noqa: PLC0415
+            _owned = RunnerProcess.owned_pids()
+        except Exception:
+            _owned = set()
 
         result = subprocess.run(
             ["pgrep", "-f", "xcodebuild.*test-without-building"],
@@ -471,6 +481,11 @@ class TestSession:
             if pid_str:
                 try:
                     pid = int(pid_str)
+                    if pid in _owned:
+                        logger.debug(
+                            "Skipping xcodebuild PID %d — owned by RunnerProcess registry", pid
+                        )
+                        continue
                     os.kill(pid, signal.SIGKILL)
                     logger.info("Killed stale xcodebuild process: %d", pid)
                 except ValueError as exc:

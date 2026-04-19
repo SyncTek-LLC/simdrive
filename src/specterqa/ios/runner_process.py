@@ -158,6 +158,21 @@ class RunnerProcess:
         with _registry_lock:
             _registry.clear()
 
+    @classmethod
+    def owned_pids(cls) -> set:
+        """Return the set of PIDs currently owned by registry entries.
+
+        Used by session_manager._kill_stale_runners() to avoid killing a
+        RunnerProcess that was already deployed by the MCP layer.
+        """
+        pids: set = set()
+        with _registry_lock:
+            for instance in _registry.values():
+                proc = getattr(instance, "_process", None)
+                if proc is not None and proc.pid is not None:
+                    pids.add(proc.pid)
+        return pids
+
     # ── Public constructor guard ──────────────────────────────────────────────
 
     def __init__(self) -> None:
