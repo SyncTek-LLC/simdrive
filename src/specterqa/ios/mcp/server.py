@@ -3154,7 +3154,24 @@ def handle_promote_session_to_test(arguments: dict) -> dict:
     if not name:
         return {"error": "'name' is required"}
 
+    import re as _re
+    _SAFE_NAME_RE = _re.compile(r'^[a-zA-Z0-9._-]+$')
+    if not _SAFE_NAME_RE.match(name):
+        return {"error": "name must match [a-zA-Z0-9._-]+"}
+    if name.startswith("."):
+        return {"error": "name must match [a-zA-Z0-9._-]+"}
+
     path_override = str(arguments.get("path", "")).strip() or None
+
+    if path_override is not None:
+        # Resolve against cwd and reject if it escapes
+        try:
+            resolved = Path(path_override).resolve()
+            cwd = Path.cwd().resolve()
+            resolved.relative_to(cwd)
+        except ValueError:
+            return {"error": "resolved path escapes the working directory"}
+
     save_path = path_override or f"./replays/{name}.yaml"
 
     try:

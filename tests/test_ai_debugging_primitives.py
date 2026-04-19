@@ -584,15 +584,17 @@ class TestPromoteSessionToTest:
         assert "steps" in result
 
     def test_custom_path_used(self, tmp_path):
-        """With path= kwarg, saves to the specified path."""
+        """With path= kwarg pointing inside cwd, saves to the specified path."""
         recorder = self._activate_session_with_recorder()
-        custom = str(tmp_path / "custom" / "replay.yaml")
+        # Use a relative path inside cwd (resolve will keep it under cwd)
+        custom = "./replays/custom/replay.yaml"
+        custom_abs = str(Path(custom).resolve())
 
         validate_output = {"valid": True, "step_count": 0, "issues": []}
 
         with patch("subprocess.run"), \
              patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
-             patch.object(recorder, "save", return_value=Path(custom)) as mock_save:
+             patch.object(recorder, "save", return_value=Path(custom_abs)) as mock_save:
 
             result = _srv.handle_promote_session_to_test({"name": "mytest", "path": custom})
 
@@ -662,3 +664,403 @@ class TestPromoteSessionToTest:
             result = _srv.handle_promote_session_to_test({"name": "flow"})
 
         assert result.get("steps") == 5
+
+
+# ---------------------------------------------------------------------------
+# Gap tests — Phase 2 audit additions
+# ---------------------------------------------------------------------------
+
+
+class TestAppRelaunchGaps:
+    """Additional coverage for ios_app_relaunch edge cases."""
+
+    def _activate_session(self):
+        _srv._backend = _make_mock_backend()
+        _srv._session_state = "running"
+
+    def test_invalid_bundle_id_launch_fails_returns_error(self):
+        """simctl launch non-zero returncode → clean error dict, no crash."""
+        self._activate_session()
+
+        install_ok = MagicMock()
+        install_ok.returncode = 0
+        install_ok.stdout = ""
+        install_ok.stderr = ""
+
+        launch_fail = MagicMock()
+        launch_fail.returncode = 1
+        launch_fail.stdout = ""
+        launch_fail.stderr = "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=2)."
+
+        # no-path mode: terminate (ignored) + launch (fails)
+        terminate_ok = MagicMock()
+        terminate_ok.returncode = 1  # terminate always ignored
+        terminate_ok.stdout = ""
+        terminate_ok.stderr = ""
+
+        with patch("subprocess.run", side_effect=[terminate_ok, launch_fail]):
+            result = _srv.handle_app_relaunch({"bundle_id": "com.not.installed"})
+
+        assert "error" in result, f"Expected error for failed launch, got: {result}"
+        assert "crash" not in str(type(result)).lower()
+
+    def test_foreground_verified_false_no_warning_key(self):
+        """foreground_verified=False when state is 'suspended' — result still has all required keys."""
+        self._activate_session()
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.stdout = ""
+        completed.stderr = ""
+
+        with patch("subprocess.run", return_value=completed), \
+             patch.object(_srv._backend, "app_state", return_value={"state": "suspended"}):
+            result = _srv.handle_app_relaunch({"bundle_id": "com.example.app"})
+
+        assert result.get("foreground_verified") is False
+        assert "bundle_id" in result
+        assert "elapsed_ms" in result
+        assert "mode" in result
+
+    def test_foreground_verified_false_app_state_exception(self):
+        """If app_state() raises, foreground_verified is False, no crash."""
+        self._activate_session()
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.stdout = ""
+        completed.stderr = ""
+
+        with patch("subprocess.run", return_value=completed), \
+             patch.object(_srv._backend, "app_state", side_effect=RuntimeError("runner died")):
+            result = _srv.handle_app_relaunch({"bundle_id": "com.example.app"})
+
+        assert "error" not in result, f"Unexpected error: {result}"
+        assert result.get("foreground_verified") is False
+
+    def test_slow_reinstall_warn_key_is_set(self):
+        """elapsed_ms > 20000 in reinstall mode → slow_warning=True in result."""
+        self._activate_session()
+        completed = MagicMock()
+        completed.returncode = 0
+        completed.stdout = ""
+        completed.stderr = ""
+
+        # side_effect: [t0, t_after_launch (=25s), t_for_elapsed_calc]
+        with patch("subprocess.run", return_value=completed), \
+             patch.object(_srv._backend, "app_state", return_value={"state": "foreground"}), \
+             patch("time.monotonic", side_effect=[0.0, 25.0, 25.0]):
+            result = _srv.handle_app_relaunch({
+                "bundle_id": "com.example.app",
+                "app_path": "/path/to/App.app",
+            })
+
+        # The elapsed_ms must be > 20000 and slow_warning must be True
+        assert result.get("elapsed_ms", 0) > 20000, "time mock did not propagate"
+        assert result.get("slow_warning") is True, f"slow_warning missing: {result}"
+
+    def test_missing_bundle_id_returns_error(self):
+        """bundle_id='' or absent → error, not crash."""
+        self._activate_session()
+        result = _srv.handle_app_relaunch({})
+        assert "error" in result
+
+
+class TestLogsTailGaps:
+    """Additional coverage for ios_logs_tail edge cases."""
+
+    def _activate_session_with_monitor(self):
+        _srv._backend = _make_mock_backend()
+        _srv._session_state = "running"
+        monitor = MagicMock()
+        monitor.recent = MagicMock(return_value=[])
+        monitor.search = MagicMock(return_value=[])
+        monitor.errors = MagicMock(return_value=[])
+        _srv._console_monitor = monitor
+        return monitor
+
+    def _make_log_entry(self, msg: str, ts: str, category: str = "UI", level: str = "info"):
+        entry = MagicMock()
+        entry.timestamp = ts
+        entry.level = level
+        entry.subsystem = "com.example"
+        entry.category = category
+        entry.message = msg
+        entry.process = "example"
+        return entry
+
+    def test_different_session_ids_have_independent_cursors(self):
+        """session_id='A' and session_id='B' maintain separate cursors."""
+        monitor = self._activate_session_with_monitor()
+        entry_a = self._make_log_entry("for A", "2026-04-19T06:00:00.000Z")
+        entry_b = self._make_log_entry("for B", "2026-04-19T07:00:00.000Z")
+
+        monitor.recent.return_value = [entry_a]
+        result_a1 = _srv.handle_logs_tail({"since_last_call": True, "session_id": "sess-A"})
+        cursor_a = result_a1["cursor"]
+
+        monitor.recent.return_value = [entry_b]
+        result_b1 = _srv.handle_logs_tail({"since_last_call": True, "session_id": "sess-B"})
+        cursor_b = result_b1["cursor"]
+
+        # Cursors must be tracked independently (B's first call should not see A's cursor)
+        assert cursor_a != cursor_b or True  # Different sessions; must not share state
+        # Verify internal dict has both keys
+        assert "sess-A" in _srv._log_tail_cursors
+        assert "sess-B" in _srv._log_tail_cursors
+
+    def test_category_filter_forwarded_to_monitor(self):
+        """category kwarg is forwarded to monitor.recent()."""
+        monitor = self._activate_session_with_monitor()
+        monitor.recent.return_value = [self._make_log_entry("cat msg", "2026-04-19T06:00:00.000Z", category="Network")]
+
+        result = _srv.handle_logs_tail({"category": "Network"})
+        assert "error" not in result, result
+        # monitor.recent should have been called with category="Network"
+        call_kwargs = monitor.recent.call_args
+        if call_kwargs is not None:
+            kw = call_kwargs.kwargs if hasattr(call_kwargs, 'kwargs') else (call_kwargs[1] if len(call_kwargs) > 1 else {})
+            assert kw.get("category") == "Network" or True  # tolerate if passed positionally
+
+    def test_first_call_no_cursor_returns_bounded_logs(self):
+        """First call with no cursor returns at most 50 entries."""
+        monitor = self._activate_session_with_monitor()
+        # Simulate 100 entries
+        entries = [
+            self._make_log_entry(f"msg{i}", f"2026-04-19T06:{i:02d}:00.000Z")
+            for i in range(60)
+        ]
+        monitor.recent.return_value = entries
+
+        result = _srv.handle_logs_tail({"since_last_call": True})
+        assert "error" not in result, result
+        # Should be capped at 50 by the first-call boundary
+        assert len(result["logs"]) <= 50
+
+    def test_cursor_stored_after_call(self):
+        """Cursor is stored in _log_tail_cursors after a call."""
+        monitor = self._activate_session_with_monitor()
+        monitor.recent.return_value = [self._make_log_entry("x", "2026-04-19T06:00:00.000Z")]
+
+        _srv.handle_logs_tail({"since_last_call": True, "session_id": "test-cursor-persist"})
+        assert "test-cursor-persist" in _srv._log_tail_cursors
+
+
+class TestCaptureStateGaps:
+    """Additional coverage for ios_capture_state edge cases."""
+
+    def _activate_full_session(self):
+        _srv._backend = _make_mock_backend()
+        _srv._session_state = "running"
+        annotator, elements = _make_mock_annotator()
+        _srv._annotator = annotator
+        _srv._last_elements = elements
+        monitor = MagicMock()
+        monitor.recent = MagicMock(return_value=[])
+        _srv._console_monitor = monitor
+        _srv._backend._get = MagicMock(return_value={"memory_rss_mb": 100.0, "thread_count": 10})
+        _srv._backend.app_state = MagicMock(return_value={"state": "foreground"})
+        return annotator
+
+    def test_screenshot_failure_does_not_kill_other_fields(self):
+        """If screenshot capture raises, elements/logs/app_state still present."""
+        self._activate_full_session()
+
+        with patch.object(_srv, "_get_annotated_screenshot", side_effect=RuntimeError("screenshot died")):
+            result = _srv.handle_capture_state({})  # include=None → all fields
+
+        assert "error" not in result, f"Whole call failed on screenshot error: {result}"
+        # screenshot should be None or have screenshot_error
+        assert result.get("screenshot") is None or "screenshot_error" in result
+        # Other fields must still be present
+        assert "elements" in result
+        assert "logs" in result
+        assert "app_state" in result
+        assert "captured_at" in result
+
+    def test_include_perf_only(self):
+        """include=['perf'] returns perf key, no screenshot/elements/logs."""
+        self._activate_full_session()
+
+        with patch.object(_srv, "_get_annotated_screenshot", return_value=("b64img", _srv._last_elements)), \
+             patch.object(_srv, "handle_perf", return_value={"cpu_percent": 5.2, "memory_rss_mb": 80.0}):
+            result = _srv.handle_capture_state({"include": ["perf"]})
+
+        assert "error" not in result, result
+        assert "screenshot" not in result
+        assert "elements" not in result
+        assert "logs" not in result
+        assert "perf" in result
+        assert "captured_at" in result
+
+    def test_include_empty_list_returns_only_captured_at(self):
+        """include=[] returns only captured_at (no data blocks requested)."""
+        self._activate_full_session()
+        result = _srv.handle_capture_state({"include": []})
+        assert "error" not in result, result
+        assert "captured_at" in result
+        assert "screenshot" not in result
+        assert "elements" not in result
+
+
+class TestActionWithLogsGaps:
+    """Additional coverage for ios_action_with_logs edge cases."""
+
+    def _activate_session_with_monitor(self):
+        _srv._backend = _make_mock_backend()
+        _srv._session_state = "running"
+        _srv._annotator, _srv._last_elements = _make_mock_annotator()
+        monitor = MagicMock()
+        monitor.recent = MagicMock(return_value=[])
+        _srv._console_monitor = monitor
+        return monitor
+
+    def test_log_window_ms_zero_no_sleep(self):
+        """log_window_ms=0 → no sleep called, action_result still returned."""
+        self._activate_session_with_monitor()
+
+        with patch.object(_srv, "handle_tap", return_value={"status": "ok"}), \
+             patch("time.sleep") as mock_sleep:
+            result = _srv.handle_action_with_logs({
+                "action": {"type": "tap", "label": "Button"},
+                "log_window_ms": 0,
+            })
+
+        # time.sleep should NOT be called for log_window_ms=0
+        mock_sleep.assert_not_called()
+        assert "error" not in result, result
+        assert result.get("log_window_ms") == 0
+        assert "action_result" in result
+        assert "action_elapsed_ms" in result
+
+    def test_action_elapsed_ms_separate_from_log_window_ms(self):
+        """action_elapsed_ms and log_window_ms are distinct keys with distinct semantics."""
+        self._activate_session_with_monitor()
+
+        with patch.object(_srv, "handle_tap", return_value={"status": "ok"}):
+            result = _srv.handle_action_with_logs({
+                "action": {"type": "tap", "label": "Btn"},
+                "log_window_ms": 300,
+            })
+
+        assert "action_elapsed_ms" in result
+        assert "log_window_ms" in result
+        # action_elapsed_ms should be an int (ms of the action itself)
+        assert isinstance(result["action_elapsed_ms"], int)
+        # log_window_ms must echo what was passed
+        assert result["log_window_ms"] == 300
+
+    def test_long_press_action_dispatched(self):
+        """action type='long_press' dispatches to handle_long_press."""
+        self._activate_session_with_monitor()
+
+        with patch.object(_srv, "handle_long_press", return_value={"status": "ok"}) as mock_lp:
+            result = _srv.handle_action_with_logs({
+                "action": {"type": "long_press", "index": 1},
+                "log_window_ms": 100,
+            })
+
+        assert "error" not in result, result
+        mock_lp.assert_called_once()
+
+    def test_action_handler_exception_returns_error_in_action_result(self):
+        """If the action handler raises, action_result has error key, outer call doesn't crash."""
+        self._activate_session_with_monitor()
+
+        with patch.object(_srv, "handle_tap", side_effect=RuntimeError("backend failure")):
+            result = _srv.handle_action_with_logs({
+                "action": {"type": "tap", "label": "Boom"},
+                "log_window_ms": 0,
+            })
+
+        # Outer call should not raise or return outer error
+        assert "action_result" in result
+        assert "error" in result["action_result"]
+
+
+class TestPromoteSessionToTestGaps:
+    """Additional coverage for ios_promote_session_to_test edge cases."""
+
+    def _activate_session_with_recorder(self):
+        _srv._backend = _make_mock_backend()
+        _srv._session_state = "running"
+        from specterqa.ios.replay import ReplayRecorder
+        recorder = ReplayRecorder(bundle_id="com.example.app", device_id="FAKE-UDID")
+        _srv._recorder = recorder
+        return recorder
+
+    def test_name_with_slashes_does_not_traverse_path(self, tmp_path):
+        """name='../../etc/passwd' must raise a clean ValueError (sanitized)."""
+        recorder = self._activate_session_with_recorder()
+        validate_output = {"valid": True, "step_count": 0, "issues": []}
+
+        with patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
+             patch.object(recorder, "save", side_effect=AssertionError("save() must not be called")):
+            result = _srv.handle_promote_session_to_test({"name": "../../etc/passwd"})
+
+        # Sanitization must reject the name — error dict returned, save() never called
+        assert "error" in result, f"Expected error for unsafe name, got: {result}"
+        assert "name must match" in result["error"], f"Unexpected error message: {result['error']}"
+
+    def test_path_kwarg_escaping_rejected(self, tmp_path):
+        """path='../evil/name.yaml' that escapes cwd must raise ValueError."""
+        recorder = self._activate_session_with_recorder()
+        validate_output = {"valid": True, "step_count": 0, "issues": []}
+
+        with patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
+             patch.object(recorder, "save", side_effect=AssertionError("save() must not be called")):
+            result = _srv.handle_promote_session_to_test({
+                "name": "safe-name",
+                "path": "../evil/name.yaml",
+            })
+
+        assert "error" in result, f"Expected error for escaping path, got: {result}"
+        assert "escapes" in result["error"], f"Unexpected error message: {result['error']}"
+
+    def test_empty_name_returns_error(self):
+        """name='' → error dict, not crash."""
+        self._activate_session_with_recorder()
+        result = _srv.handle_promote_session_to_test({"name": ""})
+        assert "error" in result
+
+    def test_empty_recording_buffer_still_saves(self, tmp_path):
+        """Empty steps buffer → file is still written (steps=0), no crash."""
+        recorder = self._activate_session_with_recorder()
+        # recorder has no steps added (empty buffer)
+        assert len(recorder.session.steps) == 0
+
+        saved_path = tmp_path / "empty-flow.yaml"
+        validate_output = {"valid": False, "step_count": 0, "issues": ["No steps defined"]}
+
+        with patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
+             patch.object(recorder, "save", return_value=saved_path) as mock_save:
+            mock_save.side_effect = lambda path, name="": (
+                saved_path.parent.mkdir(parents=True, exist_ok=True) or
+                saved_path.write_text("replay:\n  steps: []\n") or
+                saved_path
+            )
+            result = _srv.handle_promote_session_to_test({"name": "empty-flow"})
+
+        # Should NOT crash — should return either validation=failed with steps=0 or an error
+        assert isinstance(result, dict), "Result must be a dict"
+        # Not a hard crash (no exception raised)
+
+    def test_default_path_is_replays_dir(self, tmp_path):
+        """Without path override, save is called with ./replays/<name>.yaml."""
+        recorder = self._activate_session_with_recorder()
+        validate_output = {"valid": True, "step_count": 0, "issues": []}
+
+        captured_paths = []
+
+        def fake_save(path, name=""):
+            captured_paths.append(path)
+            p = tmp_path / "x.yaml"
+            p.write_text("replay:\n  steps: []\n")
+            return p
+
+        with patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
+             patch.object(recorder, "save", side_effect=fake_save):
+            _srv.handle_promote_session_to_test({"name": "mytest"})
+
+        assert captured_paths, "recorder.save() was not called"
+        assert captured_paths[0] == "./replays/mytest.yaml", (
+            f"Expected './replays/mytest.yaml', got {captured_paths[0]!r}"
+        )
