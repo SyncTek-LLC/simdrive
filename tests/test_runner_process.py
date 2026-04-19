@@ -468,3 +468,264 @@ class TestImportableHelpers:
     def test_find_xctestrun_importable(self):
         import specterqa.ios.runner_process as rp_mod
         assert hasattr(rp_mod, "_find_xctestrun") or True  # lazy import is fine
+
+
+# ---------------------------------------------------------------------------
+# 8. Additional state machine coverage (gaps)
+# ---------------------------------------------------------------------------
+
+
+class TestStateMachineGaps:
+    """Covers transitions and edge cases not in the original 30-test suite."""
+
+    def setup_method(self):
+        RunnerProcess._clear_registry()
+
+    def test_deploy_from_stopped_state_launches_process(self):
+        """STOPPED → DEPLOYED: deploy() on a stopped instance should re-launch."""
+        rp = RunnerProcess.acquire("UDID-GAP-001", 8299)
+        rp._state = RunnerState.STOPPED
+
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = None
+
+        with (
+            patch("specterqa.ios.runner_process._needs_rebuild", return_value=False),
+            patch("specterqa.ios.runner_process._find_xctestrun", return_value=Path("/fake/runner.xctestrun")),
+            patch("specterqa.ios.runner_process.TestSession._inject_xctestrun_env"),
+            patch("specterqa.ios.runner_process.subprocess.Popen", return_value=fake_proc),
+        ):
+            rp.deploy("com.example.App")
+
+        assert rp.state == RunnerState.DEPLOYED
+
+    def test_build_failure_transitions_to_failed(self):
+        """build() transitions IDLE → BUILDING → FAILED when xcodebuild errors."""
+        rp = RunnerProcess.acquire("UDID-GAP-002", 8299)
+
+        with (
+            patch("specterqa.ios.runner_process._needs_rebuild", return_value=True),
+            patch(
+                "specterqa.ios.runner_process.TestSession._rebuild_runner",
+                side_effect=RuntimeError("xcodebuild scheme not found"),
+            ),
+        ):
+            with pytest.raises(RunnerBuildError):
+                rp.build(Path("/fake/build"))
+
+        assert rp.state == RunnerState.FAILED
+        assert rp.last_error is not None
+
+    def test_relaunch_app_requires_running_state(self):
+        """relaunch_app() must raise RuntimeError if state is not RUNNING."""
+        rp = RunnerProcess.acquire("UDID-GAP-003", 8299)
+        assert rp.state == RunnerState.IDLE
+
+        with pytest.raises(RuntimeError, match="RUNNING"):
+            rp.relaunch_app("com.example.App")
+
+    def test_relaunch_app_from_deployed_raises(self):
+        """relaunch_app() must raise if state is DEPLOYED (not yet confirmed healthy)."""
+        rp = RunnerProcess.acquire("UDID-GAP-004", 8299)
+        rp._state = RunnerState.DEPLOYED
+
+        with pytest.raises(RuntimeError, match="RUNNING"):
+            rp.relaunch_app("com.example.App")
+
+    def test_deploy_error_suggested_fix_nonempty(self):
+        """RunnerDeployError for missing xctestrun must include a non-empty suggested_fix."""
+        rp = RunnerProcess.acquire("UDID-GAP-005", 8299)
+
+        with (
+            patch("specterqa.ios.runner_process._needs_rebuild", return_value=False),
+            patch("specterqa.ios.runner_process._find_xctestrun", return_value=None),
+        ):
+            with pytest.raises(RunnerDeployError) as exc_info:
+                rp.deploy("com.example.App")
+
+        assert exc_info.value.suggested_fix, (
+            "RunnerDeployError must carry a non-empty suggested_fix for actionable guidance"
+        )
+
+    def test_deploy_error_xcodebuild_not_found_suggested_fix_nonempty(self):
+        """RunnerDeployError for xcodebuild FileNotFoundError must include a non-empty suggested_fix."""
+        rp = RunnerProcess.acquire("UDID-GAP-006", 8299)
+
+        with (
+            patch("specterqa.ios.runner_process._needs_rebuild", return_value=False),
+            patch("specterqa.ios.runner_process._find_xctestrun", return_value=Path("/fake/runner.xctestrun")),
+            patch("specterqa.ios.runner_process.TestSession._inject_xctestrun_env"),
+            patch("specterqa.ios.runner_process.subprocess.Popen", side_effect=FileNotFoundError("xcodebuild")),
+        ):
+            with pytest.raises(RunnerDeployError) as exc_info:
+                rp.deploy("com.example.App")
+
+        assert exc_info.value.suggested_fix, (
+            "RunnerDeployError for missing xcodebuild must carry a non-empty suggested_fix"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 9. Shutdown edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestShutdownEdgeCases:
+    """Double-stop, stop from FAILED, stop with no process."""
+
+    def setup_method(self):
+        RunnerProcess._clear_registry()
+
+    def test_double_stop_is_idempotent(self):
+        """Calling stop() twice must not raise. Second call is a noop."""
+        rp = RunnerProcess.acquire("UDID-SHD-001", 8299)
+        rp._state = RunnerState.RUNNING
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = None
+        rp._process = fake_proc
+
+        rp.stop()  # First stop — should work
+        assert rp.state == RunnerState.STOPPED
+
+        # Second stop — must not raise even though registry entry is gone
+        rp.stop()
+        assert rp.state == RunnerState.STOPPED
+
+    def test_stop_on_failed_state_does_not_raise(self):
+        """stop() on a FAILED instance must not raise — it should clean up gracefully."""
+        rp = RunnerProcess.acquire("UDID-SHD-002", 8299)
+        rp._state = RunnerState.FAILED
+        rp._last_error = "something went wrong"
+        rp._process = None
+
+        rp.stop()  # Must not raise
+        assert rp.state == RunnerState.STOPPED
+
+    def test_stop_on_idle_no_process_does_not_raise(self):
+        """stop() on IDLE with no subprocess must not raise."""
+        rp = RunnerProcess.acquire("UDID-SHD-003", 8299)
+        assert rp.state == RunnerState.IDLE
+        assert rp._process is None
+
+        rp.stop()
+        assert rp.state == RunnerState.STOPPED
+
+    def test_stop_process_timeout_falls_back_to_kill(self):
+        """If process.wait() times out, stop() must call kill() as fallback."""
+        rp = RunnerProcess.acquire("UDID-SHD-004", 8299)
+        rp._state = RunnerState.RUNNING
+        fake_proc = MagicMock()
+        fake_proc.wait.side_effect = [
+            __import__("subprocess").TimeoutExpired(cmd="xcodebuild", timeout=5),
+            None,  # second kill().wait() succeeds
+        ]
+        rp._process = fake_proc
+
+        rp.stop()  # Must not raise
+
+        # kill() must have been called at least once (initial SIGKILL + timeout fallback)
+        assert fake_proc.kill.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# 10. Registry — FAILED state re-acquisition
+# ---------------------------------------------------------------------------
+
+
+class TestRegistryFailedReacquisition:
+    """OQ-1 Chairman decision: get_or_create on FAILED returns the SAME failed instance
+    (callers must explicitly stop() to recycle). Validate this semantic."""
+
+    def setup_method(self):
+        RunnerProcess._clear_registry()
+
+    def test_acquire_on_failed_returns_same_failed_instance(self):
+        """acquire() returns the SAME instance even if it is in FAILED state.
+
+        Callers must call stop() then acquire() to get a fresh IDLE instance.
+        """
+        rp = RunnerProcess.acquire("UDID-FAIL-REG", 8299)
+        rp._state = RunnerState.FAILED
+        rp._last_error = "injected failure"
+
+        rp2 = RunnerProcess.acquire("UDID-FAIL-REG", 8299)
+
+        assert rp2 is rp, (
+            "acquire() must return the SAME failed instance — "
+            "callers must stop() first to get a fresh IDLE instance"
+        )
+        assert rp2.state == RunnerState.FAILED
+
+    def test_stop_then_reacquire_on_failed_gives_fresh_idle(self):
+        """After stop() on a FAILED instance, acquire() must return a fresh IDLE instance."""
+        rp = RunnerProcess.acquire("UDID-FAIL-RECYCLE", 8299)
+        rp._state = RunnerState.FAILED
+        rp._last_error = "injected failure"
+        rp._process = None
+
+        rp.stop()
+        rp_fresh = RunnerProcess.acquire("UDID-FAIL-RECYCLE", 8299)
+
+        assert rp_fresh is not rp
+        assert rp_fresh.state == RunnerState.IDLE
+
+
+# ---------------------------------------------------------------------------
+# 11. session_manager delegation coverage
+# ---------------------------------------------------------------------------
+
+
+class TestSessionManagerDelegation:
+    """Verify that session_manager._deploy_runner() delegates to RunnerProcess.acquire(),
+    not to a raw Popen call — regression guard for the v14 consolidation."""
+
+    def setup_method(self):
+        RunnerProcess._clear_registry()
+
+    def test_deploy_runner_calls_runner_process_acquire(self):
+        """session_manager._deploy_runner() must call RunnerProcess.acquire() exactly once."""
+        from specterqa.ios.session_manager import TestSession
+
+        session = object.__new__(TestSession)
+        session._target_udid = "UDID-SM-DELEG"
+        session._clone_udid = None
+        session._port = 8299
+        session.bundle_id = "com.example.App"
+
+        mock_runner = MagicMock()
+        mock_runner.deploy = MagicMock()
+        mock_runner._process = None
+
+        with patch(
+            "specterqa.ios.runner_process.RunnerProcess.acquire",
+            return_value=mock_runner,
+        ) as mock_acquire:
+            session._deploy_runner()
+
+        mock_acquire.assert_called_once_with("UDID-SM-DELEG", 8299)
+        mock_runner.deploy.assert_called_once_with("com.example.App")
+
+    def test_deploy_runner_wraps_runner_deploy_error_as_session_error(self):
+        """_deploy_runner() must re-raise RunnerDeployError as SessionError — no AX fallback."""
+        from specterqa.ios.session_manager import TestSession, SessionError
+        from specterqa.ios.runner_process import RunnerDeployError
+
+        session = object.__new__(TestSession)
+        session._target_udid = "UDID-SM-WRAP"
+        session._clone_udid = None
+        session._port = 8299
+        session.bundle_id = "com.example.App"
+
+        mock_runner = MagicMock()
+        mock_runner.deploy.side_effect = RunnerDeployError(
+            "forced deploy failure",
+            udid="UDID-SM-WRAP",
+            port=8299,
+        )
+
+        with patch(
+            "specterqa.ios.runner_process.RunnerProcess.acquire",
+            return_value=mock_runner,
+        ):
+            with pytest.raises(SessionError):
+                session._deploy_runner()
