@@ -1,0 +1,36 @@
+name: Dogfood CI (always-on)
+
+# Exercises the full install → import → validate loop on every PR and push to main.
+# Live-sim tests (SPECTERQA_LIVE_SIM=1) are excluded — they require Xcode + Simulator
+# and run locally as part of Maurice's pre-publish dogfood.
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  dogfood-ci-always:
+    name: dogfood-ci-always
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Run dogfood CI-always tests
+        run: |
+          pytest tests/dogfood/ -m "dogfood and not live" -xvs
