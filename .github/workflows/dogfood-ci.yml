@@ -16,7 +16,7 @@ permissions:
 jobs:
   dogfood-ci-always:
     name: dogfood-ci-always
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 15
 
     steps:
