@@ -33,7 +33,11 @@ _ensure_namespace()
 try:
     from specterqa import __version__  # noqa: E402
 except ImportError:
-    __version__ = "11.3.0"
+    try:
+        from importlib.metadata import version as _pkg_version
+        __version__ = _pkg_version("specterqa-ios")
+    except Exception:
+        __version__ = "15.0.0"
 
 try:
     from specterqa.ios.drivers.simulator.driver import SimulatorDriver  # noqa: E402
