@@ -184,6 +184,52 @@ class TestPhysicalDeviceOptIn:
         if "error" in result:
             assert "SPECTERQA_ALLOW_PHYSICAL_DEVICE" not in result["error"]
 
+    def test_physical_env_var_with_leading_trailing_whitespace_is_allowed(self):
+        """SPECTERQA_ALLOW_PHYSICAL_DEVICE=' 1 ' (whitespace-padded) must pass after strip()."""
+        result = _call_handle_start_session(
+            {"bundle_id": "com.example.app", "device_type": "physical"},
+            env_override={"SPECTERQA_ALLOW_PHYSICAL_DEVICE": "  1  "},
+        )
+        if "error" in result:
+            assert "SPECTERQA_ALLOW_PHYSICAL_DEVICE" not in result["error"], (
+                "Whitespace-padded '  1  ' should be stripped and accepted: " + result["error"]
+            )
+
+    def test_physical_env_var_case_insensitive_TRUE(self):
+        """SPECTERQA_ALLOW_PHYSICAL_DEVICE=TRUE (uppercase) must pass (lowercased before compare)."""
+        result = _call_handle_start_session(
+            {"bundle_id": "com.example.app", "device_type": "physical"},
+            env_override={"SPECTERQA_ALLOW_PHYSICAL_DEVICE": "TRUE"},
+        )
+        if "error" in result:
+            assert "SPECTERQA_ALLOW_PHYSICAL_DEVICE" not in result["error"], (
+                "Uppercase 'TRUE' should be accepted: " + result["error"]
+            )
+
+    def test_physical_device_type_uppercase_is_blocked(self):
+        """device_type='PHYSICAL' (uppercase) must be blocked — device_type is normalized with .lower()."""
+        result = _call_handle_start_session(
+            {"bundle_id": "com.example.app", "device_type": "PHYSICAL"},
+            env_override={"SPECTERQA_ALLOW_PHYSICAL_DEVICE": None},
+        )
+        assert "error" in result, f"Expected opt-in error for 'PHYSICAL', got: {result}"
+        assert "SPECTERQA_ALLOW_PHYSICAL_DEVICE" in result["error"], (
+            "Uppercase 'PHYSICAL' should hit the opt-in gate after .lower() normalization: "
+            + result["error"]
+        )
+
+    def test_physical_device_type_with_whitespace_is_blocked(self):
+        """device_type=' physical' (leading space) must be blocked — device_type is normalized with .strip()."""
+        result = _call_handle_start_session(
+            {"bundle_id": "com.example.app", "device_type": " physical"},
+            env_override={"SPECTERQA_ALLOW_PHYSICAL_DEVICE": None},
+        )
+        assert "error" in result, f"Expected opt-in error for ' physical', got: {result}"
+        assert "SPECTERQA_ALLOW_PHYSICAL_DEVICE" in result["error"], (
+            "Whitespace-padded ' physical' should hit the opt-in gate after .strip() normalization: "
+            + result["error"]
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: ios_get_capabilities discovery tool
@@ -255,3 +301,48 @@ class TestIosGetCapabilities:
         caps_on = self._call_capabilities(env_override={"SPECTERQA_ALLOW_PHYSICAL_DEVICE": "1"})
         device_types_on = {d["type"]: d for d in caps_on.get("device_types", [])}
         assert device_types_on["physical"].get("opt_in_active") is True
+
+    def test_tool_count_matches_registered_count(self):
+        """ios_get_capabilities.tool_count must equal the actual @mcp.tool registration count."""
+        import re
+        import specterqa.ios.mcp.server as srv_mod
+        from pathlib import Path
+
+        server_src = Path(srv_mod.__file__).read_text(encoding="utf-8")
+        actual_count = len(set(re.findall(r'@mcp\.tool\(\s*\n?\s*name="([^"]+)"', server_src)))
+        caps = self._call_capabilities()
+        reported_count = caps.get("tool_count")
+        assert reported_count == actual_count, (
+            f"ios_get_capabilities reports tool_count={reported_count} "
+            f"but actual registered count is {actual_count}"
+        )
+
+    def test_safe_to_call_without_active_session(self):
+        """ios_get_capabilities must succeed without a running session (no session state needed)."""
+        import specterqa.ios.mcp.server as srv
+        # Ensure no session is active
+        srv._session = None
+        srv._mcp_runner_ref = None
+        srv._backend = None
+        srv._session_state = "idle"
+
+        try:
+            caps = self._call_capabilities(env_override={"SPECTERQA_ALLOW_PHYSICAL_DEVICE": None})
+            assert "version" in caps, "Must return version without an active session"
+            assert "backends" in caps
+            assert "device_types" in caps
+        finally:
+            srv._session = None
+            srv._mcp_runner_ref = None
+            srv._backend = None
+            srv._session_state = "idle"
+
+    def test_returns_valid_json_dict(self):
+        """ios_get_capabilities must return a dict with required top-level keys."""
+        caps = self._call_capabilities()
+        assert isinstance(caps, dict), f"Expected dict, got {type(caps)}"
+        for key in ("version", "backends", "device_types", "tool_count"):
+            assert key in caps, f"Missing required key: {key}"
+        assert isinstance(caps["backends"], list)
+        assert isinstance(caps["device_types"], list)
+        assert len(caps["device_types"]) >= 2, "Must list at least simulator and physical"

@@ -315,6 +315,8 @@ def handle_start_session(arguments: dict) -> dict:
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
         device_type = arguments.get("device_type", "simulator")
+        if isinstance(device_type, str):
+            device_type = device_type.strip().lower()
 
         # Physical device opt-in gate.
         if device_type == "physical":
@@ -3716,7 +3718,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (43 total):
+AVAILABLE TOOLS (44 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
