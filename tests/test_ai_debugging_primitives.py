@@ -1064,3 +1064,53 @@ class TestPromoteSessionToTestGaps:
         assert captured_paths[0] == "./replays/mytest.yaml", (
             f"Expected './replays/mytest.yaml', got {captured_paths[0]!r}"
         )
+
+    def test_promote_session_path_none_saves_to_default_replays_dir(self, tmp_path):
+        """path=None must save to ./replays/<name>.yaml, NOT ./None (F1 regression)."""
+        recorder = self._activate_session_with_recorder()
+        validate_output = {"valid": True, "step_count": 1, "issues": []}
+        captured_paths: list[str] = []
+
+        def fake_save(path, name=""):
+            captured_paths.append(path)
+            p = tmp_path / "v15-fix-test.yaml"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("replay:\n  steps: []\n")
+            return p
+
+        with patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
+             patch.object(recorder, "save", side_effect=fake_save):
+            result = _srv.handle_promote_session_to_test({"name": "v15-fix-test", "path": None})
+
+        assert "error" not in result, f"Unexpected error: {result}"
+        assert captured_paths, "recorder.save() was not called"
+        assert captured_paths[0] == "./replays/v15-fix-test.yaml", (
+            f"Expected './replays/v15-fix-test.yaml', got {captured_paths[0]!r}. "
+            "This is the F1 regression — str(None) must NOT be used as path."
+        )
+        # The literal string 'None' must never appear as a path
+        assert captured_paths[0] != "./None", "path=None was converted to './None' — F1 bug not fixed"
+
+    def test_promote_session_path_missing_key_saves_to_default(self, tmp_path):
+        """Missing 'path' key (key absent entirely) must save to ./replays/<name>.yaml (F1 regression)."""
+        recorder = self._activate_session_with_recorder()
+        validate_output = {"valid": True, "step_count": 1, "issues": []}
+        captured_paths: list[str] = []
+
+        def fake_save(path, name=""):
+            captured_paths.append(path)
+            p = tmp_path / "v15-path-absent.yaml"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("replay:\n  steps: []\n")
+            return p
+
+        # Do NOT include 'path' key at all
+        with patch.object(_srv, "handle_validate_replay", return_value=validate_output), \
+             patch.object(recorder, "save", side_effect=fake_save):
+            result = _srv.handle_promote_session_to_test({"name": "v15-path-absent"})
+
+        assert "error" not in result, f"Unexpected error: {result}"
+        assert captured_paths, "recorder.save() was not called"
+        assert captured_paths[0] == "./replays/v15-path-absent.yaml", (
+            f"Expected './replays/v15-path-absent.yaml', got {captured_paths[0]!r}"
+        )

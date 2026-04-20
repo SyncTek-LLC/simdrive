@@ -1079,15 +1079,18 @@ class TestSession:
             self._clone_udid = None
             self._clone_name = None
 
-        # Direct mode: re-boot the sim if xcodebuild's death killed it.
+        # Direct mode: keep the sim in its pre-session Booted state.
+        # SIGKILL on xcodebuild triggers CoreSimulator cleanup which shuts the
+        # sim down even on SIGKILL. Wait briefly for the shutdown to settle,
+        # then boot back up so the sim is ready for the next session without
+        # the cold-boot penalty that would otherwise occur on ios_start_session.
         if is_direct and target:
-            time.sleep(1)
-            if not self._is_sim_booted(target):
-                logger.info("Re-booting simulator %s after runner teardown...", target)
-                try:
-                    _simctl("boot", target, check=False)
-                except Exception as exc:
-                    logger.warning("Re-boot failed: %s", exc)
+            time.sleep(2)  # Let CoreSimulator finish shutdown sequence
+            try:
+                _simctl("boot", target, check=False)
+                logger.info("Rebooted simulator %s after runner teardown (keeping sim Booted)", target)
+            except Exception as exc:
+                logger.debug("simctl boot after teardown: %s", exc)
 
         self._target_udid = None
 

@@ -8,11 +8,30 @@ fixture instead so CI does not depend on external manual setup.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Auto-skip @pytest.mark.live tests unless opted in
+# ---------------------------------------------------------------------------
+#
+# Tests marked `live` require a booted macOS simulator / Xcode / network and
+# cannot run hermetically. Skip them in normal runs; opt in by setting
+# SPECTERQA_LIVE_SIM=1 when a sim is booted and Xcode is available.
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get("SPECTERQA_LIVE_SIM", "").strip().lower() in ("1", "true", "yes"):
+        return
+    skip_live = pytest.mark.skip(reason="needs SPECTERQA_LIVE_SIM=1 + booted sim/Xcode")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
 
 
 # ---------------------------------------------------------------------------
@@ -51,24 +70,67 @@ def _restore_runner_process_module():
     tests that temporarily replace the module with a MagicMock. If the mock
     leaks into sys.modules the real module's attribute patches stop working,
     causing downstream test failures.
+
+    Also restores the `subprocess` attribute on the specterqa.ios.mcp.server
+    module in case a test patches it as a whole-module mock (which can leak
+    if the test's with-block exits via exception or thread interleave).
     """
     # Capture (or import) the real module before the test runs.
     import importlib
-    real_module = sys.modules.get("specterqa.ios.runner_process")
-    if real_module is None:
+    import subprocess as _real_subprocess
+
+    real_runner_module = sys.modules.get("specterqa.ios.runner_process")
+    if real_runner_module is None:
         try:
-            real_module = importlib.import_module("specterqa.ios.runner_process")
+            real_runner_module = importlib.import_module("specterqa.ios.runner_process")
         except ImportError:
-            real_module = None
+            real_runner_module = None
+
+    # Capture the real subprocess reference on server module (if loaded)
+    server_module = sys.modules.get("specterqa.ios.mcp.server")
+    real_server_subprocess = getattr(server_module, "subprocess", None) if server_module else None
 
     yield
 
-    # After the test: if the entry was replaced by something other than the
-    # real module, put the real one back.
-    if real_module is not None:
+    # After the test: restore runner_process if leaked
+    if real_runner_module is not None:
         current = sys.modules.get("specterqa.ios.runner_process")
-        if current is not real_module:
-            sys.modules["specterqa.ios.runner_process"] = real_module
+        if current is not real_runner_module:
+            sys.modules["specterqa.ios.runner_process"] = real_runner_module
+
+    # After the test: restore server.subprocess if it was replaced by a Mock
+    server_module = sys.modules.get("specterqa.ios.mcp.server")
+    if server_module is not None and real_server_subprocess is not None:
+        current_subprocess = getattr(server_module, "subprocess", None)
+        if current_subprocess is not _real_subprocess and current_subprocess is not real_server_subprocess:
+            try:
+                server_module.subprocess = _real_subprocess
+            except Exception:  # noqa: BLE001
+                pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_event_loop():
+    """Ensure a current event loop exists after every test.
+
+    asyncio.run() closes the running event loop. In Python 3.10+,
+    asyncio.get_event_loop() raises RuntimeError when there's no current loop.
+    Fixtures that call get_event_loop() will fail if a prior test used asyncio.run().
+
+    This fixture restores a fresh event loop as a current loop after each test
+    so that subsequent tests (and fixtures) that call get_event_loop() work.
+    """
+    import asyncio as _asyncio
+    yield
+    try:
+        loop = _asyncio.get_event_loop_policy().get_event_loop()
+        if loop.is_closed():
+            new_loop = _asyncio.new_event_loop()
+            _asyncio.set_event_loop(new_loop)
+    except RuntimeError:
+        # No current event loop — create one
+        new_loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(new_loop)
 
 
 @pytest.fixture
