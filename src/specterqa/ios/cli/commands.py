@@ -2421,6 +2421,137 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# specterqa ios mcp  — MCP server config helpers (Issue 1 / v15.0.0)
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.group("mcp")
+def mcp_group() -> None:
+    """Manage MCP server configuration.
+
+    \b
+    Commands:
+      enable-physical     Enable physical device support via config file.
+    """
+
+
+@mcp_group.command("enable-physical")
+@click.option("--disable", is_flag=True, default=False, help="Disable physical device support.")
+def mcp_enable_physical(disable: bool) -> None:
+    """Enable (or disable) physical device support via ~/.specterqa/config.toml.
+
+    This is the recommended alternative when the MCP server's env: block in
+    ~/.claude.json is not propagated to the child process (a known Claude Code
+    limitation). The config file is read by the MCP server on every call to
+    ios_get_capabilities and the physical device gate in ios_start_session.
+
+    \b
+    Examples:
+      specterqa-ios mcp enable-physical          # enable
+      specterqa-ios mcp enable-physical --disable # disable
+    """
+    from specterqa.ios.config import write_physical_opt_in, _specterqa_config_dir  # noqa: PLC0415
+
+    enabled = not disable
+    write_physical_opt_in(enabled)
+
+    config_dir = _specterqa_config_dir()
+    toml_path = config_dir / "config.toml"
+    action = "Enabled" if enabled else "Disabled"
+    click.echo(f"{action} physical device support.")
+    click.echo(f"Config file: {toml_path}")
+    if enabled:
+        click.echo("Run 'ios_get_capabilities' in your MCP session to verify opt_in_active: true.")
+
+
+# ---------------------------------------------------------------------------
+# specterqa ios install-clean  — Install app without XCTest artifacts (Issue 9 helper 2)
+# ---------------------------------------------------------------------------
+
+
+@ios_command_group.command("install-clean")
+@click.argument("app_path")
+@click.option("--udid", "device_udid", default=None, help="Simulator UDID (defaults to 'booted').")
+def install_clean(app_path: str, device_udid: str | None) -> None:
+    """Install a .app bundle after stripping XCTest artifacts.
+
+    Removes PlugIns/*.xctest, Frameworks/XCTest*.framework,
+    Frameworks/Testing.framework, and Frameworks/libXCTest*.dylib from a
+    temporary copy of the app before calling simctl install. The original
+    .app bundle is NOT modified.
+
+    This prevents iOS's libXCTestBundleInject.dylib from loading bundled
+    unit tests into the host process during a SpecterQA session.
+
+    \b
+    Examples:
+      specterqa-ios install-clean MyApp.app
+      specterqa-ios install-clean MyApp.app --udid 3525144D-03E6-4FC5-82E5-7396B9F1DA85
+    """
+    import shutil
+    import tempfile
+    import glob as _glob
+
+    app_path_obj = Path(app_path).expanduser().resolve()
+    if not app_path_obj.exists():
+        raise click.BadParameter(f"App bundle not found: {app_path_obj}", param_hint="app_path")
+    if not app_path_obj.name.endswith(".app"):
+        click.echo(f"Warning: {app_path_obj.name} does not end with .app", err=True)
+
+    udid = device_udid or "booted"
+
+    with tempfile.TemporaryDirectory(prefix="specterqa-install-") as tmp_dir:
+        clean_app = Path(tmp_dir) / app_path_obj.name
+        click.echo(f"Copying {app_path_obj.name} to temp dir...")
+        shutil.copytree(str(app_path_obj), str(clean_app), symlinks=True)
+
+        removed = []
+
+        # Strip PlugIns/*.xctest
+        plugins_dir = clean_app / "PlugIns"
+        if plugins_dir.exists():
+            for xctest in plugins_dir.glob("*.xctest"):
+                shutil.rmtree(str(xctest), ignore_errors=True)
+                removed.append(f"PlugIns/{xctest.name}")
+
+        # Strip Frameworks/XCTest*.framework and Frameworks/Testing.framework
+        frameworks_dir = clean_app / "Frameworks"
+        if frameworks_dir.exists():
+            for pattern in ("XCTest*.framework", "Testing.framework"):
+                for fw in frameworks_dir.glob(pattern):
+                    if fw.is_dir():
+                        shutil.rmtree(str(fw), ignore_errors=True)
+                    else:
+                        fw.unlink(missing_ok=True)
+                    removed.append(f"Frameworks/{fw.name}")
+
+            # Strip libXCTest*.dylib
+            for dylib in frameworks_dir.glob("libXCTest*.dylib"):
+                dylib.unlink(missing_ok=True)
+                removed.append(f"Frameworks/{dylib.name}")
+
+        if removed:
+            click.echo(f"Stripped {len(removed)} test artifact(s):")
+            for item in removed:
+                click.echo(f"  - {item}")
+        else:
+            click.echo("No XCTest artifacts found to strip.")
+
+        # Install the cleaned app
+        click.echo(f"Installing clean app on simulator {udid}...")
+        result = subprocess.run(
+            ["xcrun", "simctl", "install", udid, str(clean_app)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise click.ClickException(
+                f"simctl install failed (exit {result.returncode}):\n{result.stderr}"
+            )
+
+        click.echo(f"Installed {app_path_obj.name} on {udid} (clean, no XCTest artifacts).")
+
+
+# ---------------------------------------------------------------------------
 # Standalone entry point
 # ---------------------------------------------------------------------------
 

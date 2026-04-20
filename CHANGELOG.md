@@ -7,6 +7,92 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [15.0.0] — 2026-04-20
+
+### BREAKING CHANGES
+
+- **`ios_start_session` gains `wait: bool = True` param.** Default behavior (synchronous, blocks
+  until runner is healthy) is unchanged. Async callers should adopt `wait=False` +
+  `ios_wait_for_session` for sub-2s response. (Maurice Issue 3)
+
+### Added
+
+- **Env propagation fallback via `~/.specterqa/config.toml` (Maurice Issue 1):**
+  New CLI command `specterqa-ios mcp enable-physical` writes `[mcp] allow_physical_device = true`
+  to `~/.specterqa/config.toml`. The MCP server reads this config on every gate check, so physical
+  device support works even when Claude Code doesn't propagate the MCP server's `env:` block.
+  New Python module `specterqa.ios.config` with `_check_physical_opt_in()` (env OR config OR
+  keychain), `write_physical_opt_in()`, and `_read_physical_opt_in()`.
+
+- **Diagnostics block in `ios_get_capabilities` (Maurice Issue 1):**
+  The `physical` device entry now includes `"diagnostics": {"env_var_seen_by_process": bool,
+  "config_file_value": bool, "keychain_value": bool}` so users can see exactly where the gate
+  is blocking when `opt_in_active` is false.
+
+- **Async session start: `wait=False` + `ios_wait_for_session` + `ios_session_status`
+  (Maurice Issue 3):**
+  `ios_start_session(wait=False)` returns immediately with `{status: "deploying", deploy_id,
+  health_url, estimated_ready_in_s: 45}`. Call `ios_wait_for_session(deploy_id, timeout_s=120)`
+  to block until healthy. `ios_session_status()` returns `{status, elapsed_ms, udid}` without
+  blocking — useful for progress polling.
+
+- **`auto_recover: bool = False` session option (Maurice Issue 9):**
+  When True on `ios_start_session`, a detected mid-session simulator shutdown triggers automatic
+  re-boot + runner re-deploy. Documented in tool description.
+
+- **Sim shutdown detection (Maurice Issue 9):**
+  Every MCP tool that hits a `ConnectionError` from the runner now checks simulator state via
+  `_check_sim_state_for_udid()`. When Shutdown is detected, returns structured
+  `{error: "sim_shutdown_during_session", action_needed: "boot_and_reauth", sim_state,
+  recovery_hint}` instead of a generic timeout error.
+
+- **`ios_dismiss_first_launch_alerts` MCP tool (Maurice methodology section 4):**
+  Coordinate-taps the "Don't Allow" or "Allow" button on iOS permission alerts.
+  `decline=True` (default) taps "Don't Allow" at `(120, 500)` scaled to actual screen size.
+  `permissions=["notifications", ...]` iterates through multiple alerts.
+
+- **`specterqa-ios install-clean <app-path> [--udid <udid>]` CLI command
+  (Maurice methodology section 3):**
+  Copies the app to a temp dir, strips `PlugIns/*.xctest`, `Frameworks/XCTest*.framework`,
+  `Frameworks/Testing.framework`, and `Frameworks/libXCTest*.dylib`, then calls `simctl install`.
+  Prevents `libXCTestBundleInject` from loading bundled unit tests into the host process.
+
+- **Orphan xcodebuild reaper (Maurice Issue 6):**
+  `_reap_orphan_xcodebuild(port=8222)` scans for xcodebuild processes holding port 8222 via
+  `lsof -i :8222 -t`, sends SIGTERM then SIGKILL with 5s grace. Called on `ios_start_session`
+  entry before deploying a new runner.
+
+- **`_kill_runner_graceful(process, grace_s=5)` helper (Maurice Issue 6):**
+  Used in `ios_stop_session` and all deploy-error paths to ensure TERM → KILL cleanup.
+
+### Fixed
+
+- **Issue 3 / Maurice Issue 4 — runner_source/ rebuild path:** `_rebuild_runner` now uses
+  `importlib.resources.files('runner')` (v14+ wheel layout) with correct fallback chain. No more
+  `SessionError: Runner Xcode project not found` on version bump.
+
+- **Issue 4 / Maurice Issue 5 — AX backend iOS 26 content-group heuristic:** `_init_content_group`
+  already had the position-probe fallback from a prior fix; this release ensures
+  `_content_group_failed = True` is set when both heuristic and probe fail, so `get_elements()`
+  raises `AXContentGroupNotFoundError` instead of silently returning hardware chrome (mute/volume
+  buttons).
+
+- **Issue 5 / Maurice Issue 6 — Stale xcodebuild processes on session failure:** Added
+  `_reap_orphan_xcodebuild` call on `ios_start_session` entry. `_kill_runner_graceful` used on
+  stop/error paths.
+
+- **Issue 6 / Maurice Issue 7 — `ios_app_relaunch` Shutdown handling:** Already present from
+  14.0.3; `auto_recover` option added for session-level automatic recovery.
+
+- **Issue 7 / Maurice Issue 8 — `ios_apps` plist parser:** Changed default to
+  `simctl listapps -j <udid>` (JSON); plist fallback retained for older Xcode.
+
+### Removed
+
+- Nothing. All v14.x MCP tool surface preserved.
+
+---
+
 ## [14.0.3] — 2026-04-20
 
 ### Added
