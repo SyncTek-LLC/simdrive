@@ -23,7 +23,9 @@ class TestReapOrphanXcodebuild:
 
     def test_reap_kills_pids_from_lsof(self):
         """When lsof finds a PID, os.kill(TERM) should be called."""
-        from specterqa.ios.mcp import server
+        # Import fresh to avoid module-level state pollution in full-suite runs
+        import importlib
+        import specterqa.ios.mcp.server as server_mod
         import os
 
         # lsof -i :8222 -t returns one PID per line (no header)
@@ -32,25 +34,32 @@ class TestReapOrphanXcodebuild:
         def fake_run(cmd, **kwargs):
             r = MagicMock()
             r.returncode = 0
-            if "lsof" in cmd:
+            cmd_list = list(cmd)
+            if any("lsof" in str(c) for c in cmd_list):
                 r.stdout = fake_lsof_output
-            elif "ps" in cmd:
+            elif any("ps" in str(c) for c in cmd_list):
                 # ps -p 12345 -o comm=  → "xcodebuild"
                 r.stdout = "xcodebuild"
             else:
                 r.stdout = ""
             return r
 
+        kill_calls_recorded = []
+
+        def fake_kill(pid, sig):
+            kill_calls_recorded.append((pid, sig))
+            if sig == 0:
+                # Simulate: process still alive
+                pass  # don't raise ProcessLookupError → KILL will follow
+
         with patch("subprocess.run", side_effect=fake_run):
-            with patch("os.kill") as mock_kill:
-                # Make poll() return None (process alive) then 0 (dead after KILL)
+            with patch("os.kill", side_effect=fake_kill):
                 with patch("time.sleep"):
-                    server._reap_orphan_xcodebuild(port=8222)
+                    server_mod._reap_orphan_xcodebuild(port=8222)
 
         # os.kill should have been called at least once with SIGTERM
-        kill_calls = mock_kill.call_args_list
-        pids_killed = [c[0][0] for c in kill_calls]
-        sigs_sent = [c[0][1] for c in kill_calls]
+        pids_killed = [c[0] for c in kill_calls_recorded]
+        sigs_sent = [c[1] for c in kill_calls_recorded]
 
         assert 12345 in pids_killed, f"Expected pid 12345 in {pids_killed}"
         assert signal.SIGTERM in sigs_sent or 15 in sigs_sent
