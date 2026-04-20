@@ -7,6 +7,53 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [14.0.3] — 2026-04-20
+
+### Added
+
+- **Physical device opt-in via `device_type="physical"` + `SPECTERQA_ALLOW_PHYSICAL_DEVICE=1`:**
+  `ios_start_session` now accepts `device_type` as an explicit parameter (default `"simulator"`).
+  When `device_type="physical"` is passed without the env var set, the tool returns an opt-in
+  error with instructions rather than silently failing or proceeding. When the env var is set to
+  a truthy value (`1`, `true`, or `yes`), the call proceeds to the existing physical device path
+  in `session_manager`. Simulator path is unchanged.
+
+- **`ios_get_capabilities()` discovery tool:** New MCP tool that returns the SpecterQA version,
+  supported backends (`xctest`, `ax`), and a `device_types` array. The `physical` entry includes
+  `available: true`, `default: false`, `opt_in_env: "SPECTERQA_ALLOW_PHYSICAL_DEVICE"`, and
+  `opt_in_active` reflecting the current env state. Agents should call this before starting a
+  session to discover what device targets are available.
+
+### Changed
+
+- **`_restart_runner_for_relaunch` has a 120s outer timeout:** A `time.monotonic()` ceiling is
+  checked at each recovery phase. If the total recovery time exceeds 120s, the function returns
+  an error string with recovery instructions and stops the runner in a `finally` block. Previously
+  worst-case stalls (simctl/xcodebuild hang) could consume 370s+ with no ceiling.
+
+### Fixed
+
+- **Concurrent MCP call race during recovery:** `_restart_runner_for_relaunch` now acquires
+  `_session_lock` on entry, so only one recovery runs at a time per MCP server. The three-global
+  update sequence (`_mcp_runner_ref`, `_session`, `_backend`) happens inside the lock, preventing
+  concurrent callers from observing partial state.
+
+- **`import json as _json_w` moved out of Shutdown poll loop:** The import was inside the
+  per-iteration loop body; it is now at function top, colocated with the other module-level
+  imports in `_restart_runner_for_relaunch`.
+
+### Docs
+
+- **`recovery` field documented in `handle_app_relaunch` docstring:** Callers now know to expect
+  `recovery: "runner-restart"` on the recovery path (~30-45s) vs absence of the key on the happy
+  path (<2s).
+
+- **README `Physical device support (experimental)` section:** Covers what it does, how to opt in
+  (env var + `device_type="physical"`), and known limitations (xcodebuild rough edges, no
+  stability guarantee, simulator is the supported path).
+
+---
+
 ## [14.0.2] — 2026-04-19
 
 ### Fixed

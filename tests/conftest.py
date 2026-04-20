@@ -22,6 +22,55 @@ import pytest
 _REPO_ROOT = Path(__file__).parent.parent
 
 
+# ---------------------------------------------------------------------------
+# sys.modules integrity guard — autouse, function scope
+# ---------------------------------------------------------------------------
+#
+# Root cause of test_runner_process.py flake in full-suite runs:
+#
+# TestConcurrentMCPCallRaceGuard::test_recovery_serialised_under_session_lock
+# patches sys.modules["specterqa.ios.runner_process"] with a MagicMock from
+# TWO threads simultaneously. Python's patch.dict is NOT thread-safe — the
+# concurrent save/restore race leaves the MagicMock permanently in sys.modules
+# after both threads exit. Subsequent tests that do
+#   patch("specterqa.ios.runner_process._needs_rebuild", return_value=False)
+# then patch the mock's attribute (a no-op) instead of the real module's, so
+# _needs_rebuild returns MagicMock() (truthy) → build() skips the cache-hit
+# branch → tries to mkdir /fake → Read-only file system error → FAILED state.
+#
+# Fix: after every test, if sys.modules["specterqa.ios.runner_process"] no
+# longer points to the real module object (i.e. a thread-unsafe patch.dict
+# leaked a mock), restore it from the reference we captured at fixture
+# creation time.
+
+@pytest.fixture(autouse=True)
+def _restore_runner_process_module():
+    """Restore sys.modules["specterqa.ios.runner_process"] after each test.
+
+    Guards against the thread-unsafe patch.dict race in concurrent-recovery
+    tests that temporarily replace the module with a MagicMock. If the mock
+    leaks into sys.modules the real module's attribute patches stop working,
+    causing downstream test failures.
+    """
+    # Capture (or import) the real module before the test runs.
+    import importlib
+    real_module = sys.modules.get("specterqa.ios.runner_process")
+    if real_module is None:
+        try:
+            real_module = importlib.import_module("specterqa.ios.runner_process")
+        except ImportError:
+            real_module = None
+
+    yield
+
+    # After the test: if the entry was replaced by something other than the
+    # real module, put the real one back.
+    if real_module is not None:
+        current = sys.modules.get("specterqa.ios.runner_process")
+        if current is not real_module:
+            sys.modules["specterqa.ios.runner_process"] = real_module
+
+
 @pytest.fixture
 def repo_root() -> Path:
     """Return the repository root as a Path. Available to all test tiers."""
