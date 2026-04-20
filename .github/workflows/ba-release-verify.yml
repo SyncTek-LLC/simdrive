@@ -1,0 +1,110 @@
+name: BA Release Verify (CHANGELOG Check)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release-verify:
+    name: Verify CHANGELOG entry for release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Extract version and INIT reference
+        id: extract
+        run: |
+          python3 - <<'PYEOF'
+          import re, os, subprocess
+
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          version = tag.lstrip("v")
+          print(f"Tag: {tag}  Version: {version}")
+
+          # Try to get INIT ref from tag annotation or recent commits
+          init_ref = None
+          try:
+              annotation = subprocess.check_output(
+                  ["git", "tag", "-l", "--format=%(contents)", tag],
+                  text=True
+              ).strip()
+              m = re.search(r'INIT-\d{4}-\d{3,}', annotation, re.IGNORECASE)
+              if m:
+                  init_ref = m.group(0).upper()
+          except Exception:
+              pass
+
+          if not init_ref:
+              try:
+                  log = subprocess.check_output(
+                      ["git", "log", "-10", "--format=%B"],
+                      text=True
+                  )
+                  m = re.search(r'INIT-\d{4}-\d{3,}', log, re.IGNORECASE)
+                  if m:
+                      init_ref = m.group(0).upper()
+              except Exception:
+                  pass
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={version}\n")
+              f.write(f"tag={tag}\n")
+              if init_ref:
+                  f.write(f"init_ref={init_ref}\n")
+                  print(f"INIT reference: {init_ref}")
+              else:
+                  f.write("init_ref=\n")
+                  print("No INIT reference found — CHANGELOG check will still run.")
+          PYEOF
+
+      - name: Verify CHANGELOG.md entry exists
+        # Addresses feedback_pypi_changelog.md: never ship without a CHANGELOG entry
+        env:
+          VERSION: ${{ steps.extract.outputs.version }}
+          TAG: ${{ steps.extract.outputs.tag }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys, pathlib
+
+          version = os.environ["VERSION"]
+          tag     = os.environ["TAG"]
+
+          changelog = pathlib.Path("CHANGELOG.md")
+          if not changelog.exists():
+              print(f"FAIL: CHANGELOG.md not found.")
+              print(f"Every SpecterQA release requires a changelog entry (see feedback_pypi_changelog.md).")
+              print(f"Create CHANGELOG.md and add an entry for {tag}")
+              sys.exit(1)
+
+          content = changelog.read_text(encoding="utf-8")
+
+          # Accept both 'v1.2.3' and '1.2.3' style headings, with or without brackets
+          patterns = [f"## {tag}", f"## {version}", f"## [{tag}]", f"## [{version}]",
+                      f"### {tag}", f"### {version}"]
+
+          for pat in patterns:
+              if pat in content:
+                  print(f"PASS: CHANGELOG.md contains entry matching '{pat}'")
+                  sys.exit(0)
+
+          print(f"FAIL: CHANGELOG.md has no entry for {tag} (version {version}).")
+          print("This check prevents shipping undocumented releases.")
+          print("Add a section like:")
+          print(f"  ## {tag}")
+          print("  - Description of changes")
+          sys.exit(1)
+          PYEOF
