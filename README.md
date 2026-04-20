@@ -117,6 +117,23 @@ specterqa-ios validate-replay .specterqa/replays/smoke.yaml
 | Zero config | Yes | Yes | No | No |
 | Claude Code native | Yes (MCP) | No | No | No |
 
+## Physical device support (experimental)
+
+SpecterQA can drive a connected iOS device (iPhone or iPad) in addition to the simulator. Physical device support uses `devicectl`-based deployment and communicates with the XCTest runner over the device's IP address, exactly as in the simulator path.
+
+To opt in, set the environment variable `SPECTERQA_ALLOW_PHYSICAL_DEVICE=1` and pass `device_type="physical"` when calling `ios_start_session`:
+
+```bash
+export SPECTERQA_ALLOW_PHYSICAL_DEVICE=1
+```
+
+```python
+# In your MCP tool call:
+ios_start_session(bundle_id="com.example.app", device_id="<device-udid>", device_type="physical")
+```
+
+Call `ios_get_capabilities()` first to confirm the physical device type is advertised and check whether `opt_in_active` is `true`. Known limitations: xcodebuild integration has rough edges on iOS 26 that can cause intermittent failures; the install/deploy step is slower than the simulator path; and there is no guarantee of stability on non-GM OS builds. The simulator (`device_type="simulator"`, the default) remains the fully supported path.
+
 ## Requirements
 
 - macOS + Xcode 15+
