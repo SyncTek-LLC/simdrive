@@ -507,3 +507,95 @@ class TestRunnerRestartRecovery:
             srv._backend = None
             srv._session_state = "idle"
             srv._session_udid = None
+
+
+# ---------------------------------------------------------------------------
+# v14.0.3 concurrent-MCP-call race guard tests
+# ---------------------------------------------------------------------------
+
+class TestConcurrentMCPCallRaceGuard:
+    """_restart_runner_for_relaunch must serialise recovery via _session_lock.
+
+    Two threads attempting recovery simultaneously must not produce interleaved
+    global state: one must complete (or fail) before the other runs.
+    """
+
+    def test_recovery_serialised_under_session_lock(self):
+        """When two threads both attempt _restart_runner_for_relaunch, only one
+        runs at a time — the second waits, not interleaves."""
+        import specterqa.ios.mcp.server as srv
+
+        order: list[str] = []
+        lock_used = threading.Event()
+
+        from specterqa.ios.runner_process import RunnerState
+        runner_process_module = MagicMock()
+        runner_process_module.RunnerDeployError = type("RunnerDeployError", (Exception,), {})
+        runner_process_module.RunnerState = RunnerState
+
+        def _make_new_runner():
+            nr = MagicMock()
+            nr._port = 8222
+            nr._udid = "NEW-UDID"
+            nr.state = RunnerState.RUNNING
+            nr.stop = MagicMock()
+            nr.deploy = MagicMock()
+            nr.healthcheck = MagicMock(return_value=True)
+            return nr
+
+        runner_process_module.RunnerProcess.acquire.side_effect = _make_new_runner
+        xctest_module = MagicMock()
+
+        _booted_json = '{"devices": {"rt": [{"udid": "CONCURRENT-UDID", "state": "Booted"}]}}'
+
+        def _mock_run(args, **kwargs):
+            m = MagicMock()
+            m.returncode = 0
+            m.stdout = _booted_json
+            m.stderr = ""
+            return m
+
+        results: list[str | None] = []
+        errors: list[Exception] = []
+
+        def _run_recovery():
+            old = _make_runner_mock(udid="CONCURRENT-UDID")
+            srv._mcp_runner_ref = old
+            srv._session = old
+            srv._backend = MagicMock()
+            try:
+                with (
+                    patch.dict("sys.modules", {
+                        "specterqa.ios.runner_process": runner_process_module,
+                        "specterqa.ios.backends.xctest_client": xctest_module,
+                    }),
+                    patch("specterqa.ios.mcp.server.subprocess") as mock_sp,
+                    patch("specterqa.ios.mcp.server.time") as mock_time,
+                ):
+                    mock_sp.run.side_effect = _mock_run
+                    mock_time.monotonic.return_value = 1000.0
+                    mock_time.sleep = MagicMock()
+                    r = srv._restart_runner_for_relaunch("CONCURRENT-UDID", "com.example.app")
+                results.append(r)
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=_run_recovery)
+        t2 = threading.Thread(target=_run_recovery)
+
+        try:
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+
+            assert not errors, f"Threads raised exceptions: {errors}"
+            # Both should have completed (no deadlock)
+            assert not t1.is_alive(), "Thread 1 did not complete within 10s"
+            assert not t2.is_alive(), "Thread 2 did not complete within 10s"
+        finally:
+            srv._session = None
+            srv._mcp_runner_ref = None
+            srv._backend = None
+            srv._session_state = "idle"
+            srv._session_udid = None

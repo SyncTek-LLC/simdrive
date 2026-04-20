@@ -284,7 +284,9 @@ def handle_start_session(arguments: dict) -> dict:
         app_path:    Path to a .app bundle to install before starting (optional).
         license_key: SpecterQA license key (optional — falls back to
                      ``SPECTERQA_IOS_LICENSE`` env var; omit for trial mode).
-        device_type: Internal use only — reserved for future physical device support.
+        device_type: "simulator" (default) | "physical" (experimental opt-in).
+                     When "physical", SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 env var must be
+                     set or the call returns an opt-in error immediately.
         backend:     Backend name override: "auto" (default), "ax", "xctest",
                      or "browserstack".  "auto" lets BackendSelector decide.
 
@@ -313,6 +315,20 @@ def handle_start_session(arguments: dict) -> dict:
         device_id = arguments.get("device_id", "booted")
         app_path = arguments.get("app_path")
         device_type = arguments.get("device_type", "simulator")
+        if isinstance(device_type, str):
+            device_type = device_type.strip().lower()
+
+        # Physical device opt-in gate.
+        if device_type == "physical":
+            _allow = os.environ.get("SPECTERQA_ALLOW_PHYSICAL_DEVICE", "").strip().lower()
+            if _allow not in ("1", "true", "yes"):
+                return {
+                    "error": (
+                        "Physical device support is experimental and requires opt-in. "
+                        "Set SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 to enable. "
+                        "Known xcodebuild issues on iOS 26 may cause instability — see RELEASES.md."
+                    )
+                }
 
         # Auto-build runner if not built or stale (version marker mismatch).
         from specterqa.ios.session_manager import (
@@ -2938,6 +2954,11 @@ def _restart_runner_for_relaunch(udid: str, bundle_id: str) -> str | None:
 
     Returns None on success, or an error string on failure.
     Mutates globals: _mcp_runner_ref, _session, _backend.
+
+    A 120s outer timeout caps the entire recovery. If exceeded the runner is
+    stopped (via finally) and an error string is returned.
+    Only one recovery runs at a time per MCP server — entry is serialised under
+    _session_lock.
     """
     global _mcp_runner_ref, _session, _backend  # noqa: PLW0603
 
@@ -2945,6 +2966,10 @@ def _restart_runner_for_relaunch(udid: str, bundle_id: str) -> str | None:
     from specterqa.ios.backends.xctest_client import XCTestBackend  # noqa: PLC0415
 
     import json as _json_restart  # noqa: PLC0415
+    import json as _json_w  # noqa: PLC0415  (used in shutdown poll loop below)
+
+    _RECOVERY_TIMEOUT_S = 120
+    _t0_recovery = time.monotonic()
 
     def _wait_for_sim_state(target: str, timeout_s: int = 20) -> bool:
         """Poll until the sim reaches target state. Returns True on success."""
@@ -2965,104 +2990,146 @@ def _restart_runner_for_relaunch(udid: str, bundle_id: str) -> str | None:
                 pass
         return False
 
-    try:
-        # Step 1: Kill the existing runner (frees the sim from xcodebuild's lifecycle)
-        old_runner = _mcp_runner_ref
-        if old_runner is not None:
-            logger.info("_restart_runner_for_relaunch: stopping old runner on port %d", old_runner._port)
-            old_runner.stop(shutdown_sim=False)
-            # Give xcodebuild a moment to fully exit and release the sim
-            time.sleep(2)
-
-        # Step 2: Re-deploy the runner (xcodebuild will boot sim, install runner, then shut sim down)
-        # IMPORTANT: Do NOT boot the sim here — let xcodebuild manage it during its test lifecycle.
-        # The sim will be Booted briefly during xcodebuild's test setup, then Shutdown after.
-        # We boot AFTER healthcheck when the sim is stably Shutdown and xcodebuild has settled.
-        logger.info("_restart_runner_for_relaunch: re-deploying runner for %s on :8222", udid)
-        from specterqa.ios.runner_process import RunnerDeployError  # noqa: PLC0415
-        new_runner = RunnerProcess.acquire(udid=udid, port=8222)
-        new_runner.deploy(bundle_id=bundle_id)
-        # Wait for runner to become healthy (mirrors handle_start_session: up to 90s)
-        try:
-            new_runner.healthcheck(timeout_s=90.0)
-            logger.info("_restart_runner_for_relaunch: runner healthy on :8222 (sim will be Shutdown)")
-        except RunnerDeployError as he:
-            return f"Runner did not become healthy after restart: {he}"
-
-        # Update globals so subsequent MCP tool calls work with the new runner
-        _mcp_runner_ref = new_runner
-        _session = new_runner  # type: ignore[assignment]
-        _backend = XCTestBackend(host="localhost", port=8222)
-
-        # Step 3: Wait for sim to reach stable Shutdown AFTER the new xcodebuild's
-        # test lifecycle. xcodebuild boots the sim during test setup, then shuts it
-        # down after. We must wait for that shutdown to complete before booting
-        # the sim ourselves — otherwise our launch races against xcodebuild's teardown.
-        logger.info(
-            "_restart_runner_for_relaunch: waiting for sim %s to reach stable Shutdown "
-            "after xcodebuild test lifecycle (iOS 26.3)",
-            udid,
-        )
-        # First: wait for any "Booted" or "Shutting Down" to complete → sim reaches Shutdown.
-        # Poll for up to 30s.
-        for _w in range(30):
-            time.sleep(1)
-            try:
-                rp = subprocess.run(
-                    ["xcrun", "simctl", "list", "devices", "--json"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                if rp.returncode == 0:
-                    import json as _json_w
-                    data = _json_w.loads(rp.stdout)
-                    for _rt in data.get("devices", {}).values():
-                        for _d in _rt:
-                            if _d.get("udid") == udid and _d.get("state") == "Shutdown":
-                                break
-                        else:
-                            continue
-                        break
-                    else:
-                        continue
-                    # sim is Shutdown — give it an extra 2s for xcodebuild teardown to stabilize
-                    time.sleep(2)
-                    break
-            except Exception:  # noqa: BLE001
-                pass
-
-        # Now boot the sim — xcodebuild has completed its test lifecycle, sim is Shutdown.
-        logger.info("_restart_runner_for_relaunch: booting sim %s (post-xcodebuild-lifecycle)", udid)
-        boot_r = subprocess.run(
-            ["xcrun", "simctl", "boot", udid],
-            capture_output=True, text=True, timeout=30,
-        )
-        if boot_r.returncode != 0 and "Unable to boot device in current state: Booted" not in boot_r.stderr:
-            return f"simctl boot failed during relaunch recovery: {boot_r.stderr.strip()}"
-
-        if not _wait_for_sim_state("Booted", timeout_s=30):
-            return f"Simulator {udid} did not reach Booted within 30s after runner re-deploy"
-
-        logger.info("_restart_runner_for_relaunch: sim Booted — launching app %s", bundle_id)
-
-        # Step 4: Launch the app
-        time.sleep(1)  # brief settle before simctl commands
-        subprocess.run(
-            ["xcrun", "simctl", "terminate", udid, bundle_id],
-            capture_output=True, text=True, timeout=10,
-        )
-        r = subprocess.run(
-            ["xcrun", "simctl", "launch", udid, bundle_id],
-            capture_output=True, text=True, timeout=30,
-        )
-        if r.returncode != 0:
-            return f"simctl launch failed after runner restart: {r.stderr.strip()}"
-
-        logger.info("_restart_runner_for_relaunch: app %s launched successfully", bundle_id)
+    def _check_outer_timeout() -> str | None:
+        """Return an error string if the 120s recovery ceiling has been exceeded."""
+        if time.monotonic() - _t0_recovery > _RECOVERY_TIMEOUT_S:
+            return (
+                "runner-restart recovery exceeded 120s — simulator may be stuck. "
+                "Try: xcrun simctl shutdown all && xcrun simctl erase all"
+            )
         return None
 
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("_restart_runner_for_relaunch failed: %s", exc)
-        return f"Runner restart failed: {exc}"
+    new_runner = None
+    with _session_lock:
+        try:
+            # Step 1: Kill the existing runner (frees the sim from xcodebuild's lifecycle)
+            old_runner = _mcp_runner_ref
+            if old_runner is not None:
+                logger.info("_restart_runner_for_relaunch: stopping old runner on port %d", old_runner._port)
+                old_runner.stop(shutdown_sim=False)
+                # Give xcodebuild a moment to fully exit and release the sim
+                time.sleep(2)
+
+            _tout = _check_outer_timeout()
+            if _tout:
+                logger.error("_restart_runner_for_relaunch: %s", _tout)
+                return _tout
+
+            # Step 2: Re-deploy the runner (xcodebuild will boot sim, install runner, then shut sim down)
+            # IMPORTANT: Do NOT boot the sim here — let xcodebuild manage it during its test lifecycle.
+            # The sim will be Booted briefly during xcodebuild's test setup, then Shutdown after.
+            # We boot AFTER healthcheck when the sim is stably Shutdown and xcodebuild has settled.
+            logger.info("_restart_runner_for_relaunch: re-deploying runner for %s on :8222", udid)
+            from specterqa.ios.runner_process import RunnerDeployError  # noqa: PLC0415
+            new_runner = RunnerProcess.acquire(udid=udid, port=8222)
+            new_runner.deploy(bundle_id=bundle_id)
+            # Wait for runner to become healthy (mirrors handle_start_session: up to 90s)
+            try:
+                new_runner.healthcheck(timeout_s=90.0)
+                logger.info("_restart_runner_for_relaunch: runner healthy on :8222 (sim will be Shutdown)")
+            except RunnerDeployError as he:
+                return f"Runner did not become healthy after restart: {he}"
+
+            _tout = _check_outer_timeout()
+            if _tout:
+                logger.error("_restart_runner_for_relaunch: %s", _tout)
+                return _tout
+
+            # Update globals atomically under _session_lock so concurrent MCP calls
+            # never observe partial state (e.g. new _backend but old _mcp_runner_ref).
+            _mcp_runner_ref = new_runner
+            _session = new_runner  # type: ignore[assignment]
+            _backend = XCTestBackend(host="localhost", port=8222)
+
+            # Step 3: Wait for sim to reach stable Shutdown AFTER the new xcodebuild's
+            # test lifecycle. xcodebuild boots the sim during test setup, then shuts it
+            # down after. We must wait for that shutdown to complete before booting
+            # the sim ourselves — otherwise our launch races against xcodebuild's teardown.
+            logger.info(
+                "_restart_runner_for_relaunch: waiting for sim %s to reach stable Shutdown "
+                "after xcodebuild test lifecycle (iOS 26.3)",
+                udid,
+            )
+            # First: wait for any "Booted" or "Shutting Down" to complete → sim reaches Shutdown.
+            # Poll for up to 30s.
+            for _w in range(30):
+                time.sleep(1)
+                _tout = _check_outer_timeout()
+                if _tout:
+                    logger.error("_restart_runner_for_relaunch: %s", _tout)
+                    return _tout
+                try:
+                    rp = subprocess.run(
+                        ["xcrun", "simctl", "list", "devices", "--json"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if rp.returncode == 0:
+                        data = _json_w.loads(rp.stdout)
+                        for _rt in data.get("devices", {}).values():
+                            for _d in _rt:
+                                if _d.get("udid") == udid and _d.get("state") == "Shutdown":
+                                    break
+                            else:
+                                continue
+                            break
+                        else:
+                            continue
+                        # sim is Shutdown — give it an extra 2s for xcodebuild teardown to stabilize
+                        time.sleep(2)
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+
+            _tout = _check_outer_timeout()
+            if _tout:
+                logger.error("_restart_runner_for_relaunch: %s", _tout)
+                return _tout
+
+            # Now boot the sim — xcodebuild has completed its test lifecycle, sim is Shutdown.
+            logger.info("_restart_runner_for_relaunch: booting sim %s (post-xcodebuild-lifecycle)", udid)
+            boot_r = subprocess.run(
+                ["xcrun", "simctl", "boot", udid],
+                capture_output=True, text=True, timeout=30,
+            )
+            if boot_r.returncode != 0 and "Unable to boot device in current state: Booted" not in boot_r.stderr:
+                return f"simctl boot failed during relaunch recovery: {boot_r.stderr.strip()}"
+
+            if not _wait_for_sim_state("Booted", timeout_s=30):
+                return f"Simulator {udid} did not reach Booted within 30s after runner re-deploy"
+
+            _tout = _check_outer_timeout()
+            if _tout:
+                logger.error("_restart_runner_for_relaunch: %s", _tout)
+                return _tout
+
+            logger.info("_restart_runner_for_relaunch: sim Booted — launching app %s", bundle_id)
+
+            # Step 4: Launch the app
+            time.sleep(1)  # brief settle before simctl commands
+            subprocess.run(
+                ["xcrun", "simctl", "terminate", udid, bundle_id],
+                capture_output=True, text=True, timeout=10,
+            )
+            r = subprocess.run(
+                ["xcrun", "simctl", "launch", udid, bundle_id],
+                capture_output=True, text=True, timeout=30,
+            )
+            if r.returncode != 0:
+                return f"simctl launch failed after runner restart: {r.stderr.strip()}"
+
+            logger.info("_restart_runner_for_relaunch: app %s launched successfully", bundle_id)
+            return None
+
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("_restart_runner_for_relaunch failed: %s", exc)
+            return f"Runner restart failed: {exc}"
+        finally:
+            # If the recovery overran or raised, ensure the runner registry is clean.
+            if time.monotonic() - _t0_recovery > _RECOVERY_TIMEOUT_S and new_runner is not None:
+                try:
+                    new_runner.stop()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 def handle_app_relaunch(arguments: dict) -> dict:
@@ -3081,6 +3148,10 @@ def handle_app_relaunch(arguments: dict) -> dict:
     Returns:
         {bundle_id, udid, elapsed_ms, foreground_verified, mode}
         or {"error": "<message>"} on failure.
+
+        recovery: "runner-restart" when Shutdown-mid-session was detected and full
+        runner recreation was needed; absent on happy path. Callers should expect
+        ~30-45s on the recovery path vs <2s on the happy path.
     """
     if _backend is None:
         return {"error": "No active session. Call ios_start_session first."}
@@ -3647,7 +3718,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (43 total):
+AVAILABLE TOOLS (44 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -3804,7 +3875,7 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_start_session",
         description=(
-            "Start a SpecterQA session on the booted iOS Simulator. "
+            "Start a SpecterQA session on an iOS Simulator or physical device. "
             "bundle_id is the app's CFBundleIdentifier (required). "
             "device_id defaults to 'booted' (uses the currently booted simulator). "
             "app_path is an optional path to a .app bundle to install before starting. "
@@ -3815,7 +3886,12 @@ SETUP CHECK:
             "'xctest' (recommended for most flows) — comprehensive element trees, reliable typing, "
             "and .sheet-presented UIKit content; "
             "'ax' — instant start, no runner deployment, tap-by-label on root-level elements only; "
-            "note AX does not enumerate .sheet-presented UIKit content — use xctest for those flows."
+            "note AX does not enumerate .sheet-presented UIKit content — use xctest for those flows. "
+            "device_type: 'simulator' (default, fully supported) | 'physical' (experimental opt-in). "
+            "To enable physical device support set SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 in your environment "
+            "and pass device_type='physical'. Known xcodebuild rough edges on iOS 26 may cause "
+            "instability — simulator is the supported path. Use ios_get_capabilities() to introspect "
+            "available device types before starting a session."
         ),
     )
     async def ios_start_session(
@@ -3825,6 +3901,7 @@ SETUP CHECK:
         license_key: str | None = None,
         clone: bool = False,
         backend: str = "auto",
+        device_type: str = "simulator",
     ) -> str:
         result = handle_start_session(
             {
@@ -3833,7 +3910,7 @@ SETUP CHECK:
                 "app_path": app_path,
                 "license_key": license_key or "",
                 "clone": clone,
-                "device_type": "simulator",  # physical device support hidden until Xcode 26 GM
+                "device_type": device_type,
                 "backend": backend,
             }
         )
@@ -3848,6 +3925,48 @@ SETUP CHECK:
     async def ios_stop_session() -> str:
         result = handle_stop_session({})
         return json.dumps(result)
+
+    # ── Tool: ios_get_capabilities ─────────────────────────────────────────
+
+    @mcp.tool(
+        name="ios_get_capabilities",
+        description=(
+            "Introspect SpecterQA capabilities: version, supported backends, and available "
+            "device types. Use this before ios_start_session to discover what device targets "
+            "are available. Physical device support is experimental and requires opting in via "
+            "SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 — this tool shows whether that gate is open."
+        ),
+    )
+    async def ios_get_capabilities() -> str:
+        import specterqa.ios as _pkg
+        _version = getattr(_pkg, "__version__", "14.0.3")
+        _physical_enabled = os.environ.get("SPECTERQA_ALLOW_PHYSICAL_DEVICE", "").strip().lower() in ("1", "true", "yes")
+        caps = {
+            "version": _version,
+            "backends": ["xctest", "ax"],
+            "device_types": [
+                {
+                    "type": "simulator",
+                    "available": True,
+                    "default": True,
+                    "experimental": False,
+                },
+                {
+                    "type": "physical",
+                    "available": True,
+                    "default": False,
+                    "experimental": True,
+                    "opt_in_env": "SPECTERQA_ALLOW_PHYSICAL_DEVICE",
+                    "opt_in_active": _physical_enabled,
+                    "notes": (
+                        "Requires SPECTERQA_ALLOW_PHYSICAL_DEVICE=1. "
+                        "Known xcodebuild issues on iOS 26 may cause flakiness."
+                    ),
+                },
+            ],
+            "tool_count": 44,
+        }
+        return json.dumps(caps)
 
     # ── Tool: ios_screenshot ───────────────────────────────────────────────
 
