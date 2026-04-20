@@ -84,7 +84,7 @@ def test_required_session_tool_present(tool_names: set[str], tool_name: str):
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_TOOL_COUNT = 43
+_EXPECTED_TOOL_COUNT = 44  # +1 ios_get_capabilities added in v14.0.3
 
 
 def test_total_tool_count(tool_names: set[str]):
