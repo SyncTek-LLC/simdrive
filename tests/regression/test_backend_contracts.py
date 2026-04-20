@@ -205,12 +205,28 @@ class TestBackendBehavioralContract:
     """Live behavioral assertions — skip without a booted simulator."""
 
     def test_is_available_returns_bool(self, backend_cls):
-        result = backend_cls.is_available()
+        import inspect
+        fn = getattr(backend_cls, "is_available")
+        # AXBackend exposes is_available as a classmethod; XCTestBackend exposes
+        # it as an instance method (requires self).  Call accordingly.
+        if isinstance(inspect.getattr_static(backend_cls, "is_available"), classmethod):
+            result = backend_cls.is_available()
+        else:
+            try:
+                instance = backend_cls()
+            except (ImportError, RuntimeError) as exc:
+                pytest.skip(f"{backend_cls.__name__} cannot be instantiated in this environment: {exc}")
+                return
+            result = instance.is_available()
         assert isinstance(result, bool)
 
     def test_health_before_start_returns_dict(self, backend_cls):
         """health() on an unstarted instance should return a dict (not raise)."""
-        instance = backend_cls()
+        try:
+            instance = backend_cls()
+        except (ImportError, RuntimeError) as exc:
+            pytest.skip(f"{backend_cls.__name__} cannot be instantiated in this environment: {exc}")
+            return
         try:
             result = instance.health()
             assert isinstance(result, dict), "health() must return dict"
@@ -222,7 +238,11 @@ class TestBackendBehavioralContract:
 
     def test_get_elements_shape_after_noop(self, backend_cls):
         """get_elements() on unstarted backend returns dict (not raise) or raises clearly."""
-        instance = backend_cls()
+        try:
+            instance = backend_cls()
+        except (ImportError, RuntimeError) as exc:
+            pytest.skip(f"{backend_cls.__name__} cannot be instantiated in this environment: {exc}")
+            return
         try:
             result = instance.get_elements(max_elements=10)
             if isinstance(result, dict):

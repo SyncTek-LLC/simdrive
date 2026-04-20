@@ -20,7 +20,12 @@ def _ensure_namespace() -> None:
 
     _our_root = os.path.dirname(os.path.dirname(__file__))  # .../src/specterqa
     if _our_root not in specterqa.__path__:
-        specterqa.__path__.insert(0, _our_root)
+        try:
+            specterqa.__path__.insert(0, _our_root)
+        except AttributeError:
+            # _NamespacePath (Python 3.11+) supports append but not insert.
+            # Append is sufficient — we just need our path on the search list.
+            specterqa.__path__.append(_our_root)  # type: ignore[attr-defined]
 
 
 _ensure_namespace()

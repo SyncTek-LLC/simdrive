@@ -294,6 +294,7 @@ def _install_app(device_id: str, app_path: str) -> None:
 
 
 @click.group(name="ios", help="iOS Simulator testing commands.")
+@click.version_option(package_name="specterqa-ios")
 def ios_command_group() -> None:
     """SpecterQA iOS Simulator commands.
 

@@ -7,6 +7,47 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [14.0.2] — 2026-04-19
+
+### Fixed
+
+- **app_relaunch fails with "No devices are booted" after capture_state (P1):**
+  `ios_start_session(backend="xctest")` deployed a `RunnerProcess` on `:8222`
+  (stored in `_mcp_runner_ref`), then created a `TestSession` which called
+  `_find_free_port()` — returning `:8223` because `:8222` was occupied — and
+  launched a *second* xcodebuild process. Two xcodebuild instances targeting the
+  same simulator caused the first to die; its teardown shut down the simulator;
+  subsequent `simctl` calls (app_relaunch, capture_state) failed with
+  `"No devices are booted."` Fix: when `_mcp_runner_ref` is RUNNING and `clone=False`,
+  the xctest path reuses it directly as `_session` (skips `TestSession._deploy_runner`).
+  `_mcp_runner_ref` is cleared on `ios_stop_session`. New regression tests in
+  `tests/test_mcp_session_persistence.py` assert no teardown fires between calls.
+
+- **4 pre-existing live-state test failures gated properly:**
+  `TestBackendBehavioralContract` tests now handle `XCTestBackend.is_available()`
+  as an instance method (not classmethod) and gracefully skip when `AXBackend`
+  cannot be instantiated (missing `pyobjc-framework-ApplicationServices`). Discovery
+  tools tests already had `pytest.skip` guards; they now skip correctly when no
+  booted simulator is present.
+
+- **`_NamespacePath.insert` error on Python 3.11+ namespace packages:**
+  `specterqa.ios.__init__._ensure_namespace()` now falls back to `.append()` when
+  `_NamespacePath` doesn't support `.insert()`, fixing isolated imports of
+  `specterqa.ios.cli.commands` (e.g. in standalone test runs, `specterqa-ios --version`).
+
+### Added
+
+- **`specterqa-ios --version` flag:** `ios_command_group` now has
+  `@click.version_option(package_name="specterqa-ios")`. Output: `specterqa-ios, version X.Y.Z`.
+  Unit tests in `tests/test_cli_version.py` (CliRunner, hermetic).
+
+### Docs
+
+- **`RELEASES.md`:** Release sequence table for v14.x including the `v14.0.0b1` tag
+  gap (publish workflow correctly failed; fix folded into v14.0.0).
+
+---
+
 ## [14.0.1] — 2026-04-19
 
 ### Fixed
