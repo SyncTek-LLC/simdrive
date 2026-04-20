@@ -80,6 +80,21 @@ _network_inspector = None  # NetworkInspector instance (None when session is not
 _perf_baseline: dict | None = None  # Stored perf baseline for ios_perf_compare
 _ax_http_server = None  # AXHTTPServer instance (None when AX backend is not active)
 
+# ---------------------------------------------------------------------------
+# Async deploy state — used by wait=False path (Issue 2)
+# ---------------------------------------------------------------------------
+
+import uuid as _uuid  # noqa: E402
+
+_async_deploy_state: dict = {
+    "status": "idle",      # idle | deploying | healthy | failed
+    "deploy_id": None,
+    "started_at": None,
+    "udid": None,
+    "error": None,
+}
+_async_deploy_lock = threading.Lock()
+
 # Circuit-breaker for session health — replaces the per-call health() probe.
 # After 3 consecutive ConnectionError failures the breaker opens and
 # _require_session() raises RuntimeError immediately without hitting the runner.
@@ -90,6 +105,221 @@ _circuit_breaker = RetryPolicy(
     base_backoff_s=0.3,
     circuit_breaker_threshold=3,
 ).stateful()
+
+
+# ---------------------------------------------------------------------------
+# Issue 2: Async deploy helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_deploy_state() -> dict:
+    """Return current async deploy state snapshot (thread-safe copy)."""
+    with _async_deploy_lock:
+        state = dict(_async_deploy_state)
+        started = state.get("started_at")
+        state["elapsed_ms"] = int((time.monotonic() - started) * 1000) if started else 0
+        state["udid"] = state.get("udid")
+    return state
+
+
+def _set_deploy_state(status: str, deploy_id: str | None = None, udid: str | None = None, error: str | None = None) -> None:
+    """Update async deploy state (thread-safe)."""
+    with _async_deploy_lock:
+        _async_deploy_state["status"] = status
+        if deploy_id is not None:
+            _async_deploy_state["deploy_id"] = deploy_id
+        if udid is not None:
+            _async_deploy_state["udid"] = udid
+        if error is not None:
+            _async_deploy_state["error"] = error
+        if status == "deploying":
+            _async_deploy_state["started_at"] = time.monotonic()
+            _async_deploy_state["error"] = None
+        elif status == "idle":
+            _async_deploy_state["started_at"] = None
+            _async_deploy_state["deploy_id"] = None
+            _async_deploy_state["udid"] = None
+            _async_deploy_state["error"] = None
+
+
+def _background_deploy(arguments: dict) -> None:
+    """Thread target: run handle_start_session and update deploy state."""
+    deploy_id = arguments.get("_deploy_id", "")
+    try:
+        # Run with wait=True to do the real blocking deploy
+        args_copy = {k: v for k, v in arguments.items() if k not in ("wait", "_deploy_id")}
+        result = handle_start_session(args_copy)
+        if "error" in result:
+            _set_deploy_state("failed", error=result["error"])
+        else:
+            _set_deploy_state("healthy")
+    except Exception as exc:  # noqa: BLE001
+        _set_deploy_state("failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# Issue 5: Stale xcodebuild reaper helpers
+# ---------------------------------------------------------------------------
+
+
+def _reap_orphan_xcodebuild(port: int = 8222) -> None:
+    """Kill any xcodebuild processes holding the specified port.
+
+    Uses `lsof -i :<port>` to find PIDs. Sends SIGTERM then (after 5s) SIGKILL.
+    Silently ignores errors (lsof absent, permissions, process already gone).
+    """
+    import os
+    import signal as _signal
+
+    try:
+        result = subprocess.run(
+            ["lsof", "-i", f":{port}", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return
+
+        pids = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.isdigit():
+                pids.append(int(line))
+
+        for pid in pids:
+            try:
+                # Check it's actually xcodebuild (don't kill arbitrary processes)
+                try:
+                    proc_check = subprocess.run(
+                        ["ps", "-p", str(pid), "-o", "comm="],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    comm = proc_check.stdout.strip()
+                    if "xcodebuild" not in comm and "xctest" not in comm.lower():
+                        logger.debug("_reap_orphan: pid %d (%s) not xcodebuild — skipping", pid, comm)
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass  # If we can't check, proceed cautiously
+
+                logger.info("_reap_orphan: sending SIGTERM to pid %d on port %d", pid, port)
+                os.kill(pid, _signal.SIGTERM)
+                time.sleep(5)
+                try:
+                    os.kill(pid, 0)  # check still alive
+                    os.kill(pid, _signal.SIGKILL)
+                    logger.info("_reap_orphan: sent SIGKILL to pid %d (still alive after TERM)", pid)
+                except ProcessLookupError:
+                    pass  # already gone — good
+            except (ProcessLookupError, PermissionError):
+                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("_reap_orphan: error killing pid %d: %s", pid, exc)
+    except FileNotFoundError:
+        logger.debug("_reap_orphan: lsof not found, skipping orphan check")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_reap_orphan: unexpected error: %s", exc)
+
+
+def _kill_runner_graceful(process: Any, grace_s: float = 5.0) -> None:
+    """Send SIGTERM to a process, wait grace_s, then SIGKILL if still alive.
+
+    Args:
+        process: subprocess.Popen instance (must have .pid and .poll()).
+        grace_s: Seconds to wait between TERM and KILL.
+    """
+    import os
+    import signal as _signal
+
+    if process is None:
+        return
+    pid = getattr(process, "pid", None)
+    if not pid:
+        return
+    try:
+        os.kill(pid, _signal.SIGTERM)
+        time.sleep(grace_s)
+        if process.poll() is None:
+            # Still alive after TERM — escalate to KILL
+            try:
+                os.kill(pid, _signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except ProcessLookupError:
+        pass  # already gone
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_kill_runner_graceful: error for pid %d: %s", pid, exc)
+
+
+# ---------------------------------------------------------------------------
+# Issue 8: Sim state detection helper
+# ---------------------------------------------------------------------------
+
+
+def _check_sim_state_for_udid(udid: str) -> str:
+    """Return the current state of a simulator ('Booted', 'Shutdown', etc.).
+
+    Uses `xcrun simctl list devices --json`. Returns 'Unknown' if the UDID
+    is not found or the command fails.
+    """
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "--json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            import json as _json
+            data = _json.loads(result.stdout)
+            for _rt_devices in data.get("devices", {}).values():
+                for _d in _rt_devices:
+                    if _d.get("udid") == udid:
+                        return _d.get("state", "Unknown")
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_check_sim_state_for_udid(%s) failed: %s", udid, exc)
+    return "Unknown"
+
+
+def _verify_sim_alive(udid: str) -> tuple[bool, str]:
+    """Check if the XCTest runner / simulator is alive mid-session.
+
+    Strategy: probe the runner HTTP health endpoint rather than simctl list.
+    When xcodebuild test-without-building owns the sim, simctl list incorrectly
+    reports "Shutdown" even while tests are running — so simctl is NOT used here.
+
+    If the runner is reachable → (True, "Booted").
+    If the runner is unreachable → fall back to simctl list to distinguish
+    "runner not deployed" (unknown) from "sim explicitly Shutdown".
+
+    Returns:
+        (True, state)  — sim/runner alive; proceed normally.
+        (False, state) — runner unreachable AND simctl confirms Shutdown.
+    """
+    # First try the runner health endpoint (fastest, most accurate).
+    if _backend is not None:
+        try:
+            result = _backend.health()
+            if isinstance(result, dict) and result.get("status") == "ok":
+                return (True, "Booted")
+        except Exception:
+            pass  # Runner unreachable — fall through to simctl check
+
+    # Runner is unreachable. Use simctl to distinguish explicit Shutdown from transient.
+    state = _check_sim_state_for_udid(udid)
+    _dead_states = {"Shutdown", "ShuttingDown"}
+    if state in _dead_states:
+        return (False, state)
+    # Unknown / Booting / other transient states → treat as alive (don't block).
+    return (True, state)
+
+
+_SIM_SHUTDOWN_RESPONSE = {
+    "error": "sim_shutdown_during_session",
+    "action_needed": "boot_and_reauth",
+}
+
+
+def _sim_shutdown_error(state: str) -> dict:
+    return {**_SIM_SHUTDOWN_RESPONSE, "sim_state": state}
 
 
 def _require_session() -> None:
@@ -320,14 +550,17 @@ def handle_start_session(arguments: dict) -> dict:
 
         # Physical device opt-in gate.
         if device_type == "physical":
-            _allow = os.environ.get("SPECTERQA_ALLOW_PHYSICAL_DEVICE", "").strip().lower()
-            if _allow not in ("1", "true", "yes"):
+            from specterqa.ios.config import _check_physical_opt_in  # noqa: PLC0415
+            _opt_in = _check_physical_opt_in()
+            if not _opt_in["allowed"]:
                 return {
                     "error": (
                         "Physical device support is experimental and requires opt-in. "
-                        "Set SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 to enable. "
+                        "Set SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 OR run "
+                        "'specterqa-ios mcp enable-physical' to enable. "
                         "Known xcodebuild issues on iOS 26 may cause instability — see RELEASES.md."
-                    )
+                    ),
+                    "diagnostics": _opt_in["diagnostics"],
                 }
 
         # Auto-build runner if not built or stale (version marker mismatch).
@@ -750,6 +983,12 @@ def handle_stop_session(arguments: dict) -> dict:
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
 
+        # Capture UDID and session type before stopping so we can reboot the
+        # sim afterward (F3: stop_session must not leave sim in Shutdown state).
+        _stop_udid = _session_udid
+        from specterqa.ios.session_manager import TestSession as _TestSession
+        _session_is_test_session = isinstance(_session, _TestSession)
+
         if isinstance(_backend, BrowserStackBackend):
             try:
                 _backend.stop()
@@ -760,6 +999,21 @@ def handle_stop_session(arguments: dict) -> dict:
                 _session.stop()
             except Exception as exc:
                 logger.warning("Error stopping session: %s", exc)
+
+        # F3: When _session is a RunnerProcess (MCP pre-deploy path, not TestSession),
+        # TestSession._teardown() is NOT called, so we handle sim reboot here.
+        # Wait briefly for CoreSimulator to finish xcodebuild cleanup, then reboot.
+        if _stop_udid and not _session_is_test_session:
+            try:
+                import time as _time
+                _time.sleep(2)
+                subprocess.run(
+                    ["xcrun", "simctl", "boot", _stop_udid],
+                    capture_output=True, text=True, timeout=10,
+                )
+                logger.info("F3: Sent simctl boot to %s after RunnerProcess stop (keep sim Booted)", _stop_udid)
+            except Exception as exc:
+                logger.debug("F3: simctl boot after stop failed: %s", exc)
 
         # Stop console monitor (terminates background log stream process)
         if _console_monitor is not None:
@@ -1163,6 +1417,11 @@ def handle_tap(arguments: dict) -> dict:
     """
     global _last_elements
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     identifier = arguments.get("identifier")
     label = arguments.get("label")
     element_type_filter = arguments.get("type")
@@ -1181,6 +1440,20 @@ def handle_tap(arguments: dict) -> dict:
             try:
                 _backend.tap(float(coord_x), float(coord_y))
             except Exception as exc:
+                # Issue 8: check if sim shut down before returning generic error
+                if _session_udid:
+                    _sim_state = _check_sim_state_for_udid(_session_udid)
+                    if _sim_state == "Shutdown":
+                        return {
+                            "error": "sim_shutdown_during_session",
+                            "action_needed": "boot_and_reauth",
+                            "sim_state": "Shutdown",
+                            "recovery_hint": (
+                                "The simulator shut down mid-session (likely iOS 26 SpringBoard crash). "
+                                "Call ios_stop_session then ios_start_session to recover, or set "
+                                "auto_recover=True on ios_start_session for automatic recovery."
+                            ),
+                        }
                 return {"error": f"Coordinate tap failed: {exc}"}
 
             if _recorder is not None:
@@ -1623,6 +1896,11 @@ def handle_type(arguments: dict) -> dict:
     except RuntimeError as exc:
         return {"error": str(exc)}
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     text = arguments.get("text", "")
     if not text:
         return {"error": "text is required and must be non-empty"}
@@ -1727,6 +2005,11 @@ def handle_elements(arguments: dict) -> dict:
         _require_session()
     except RuntimeError as exc:
         return {"error": str(exc)}
+
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
 
     # BUG V5-2 FIX: honour max_elements cap (default 100; 0 = unlimited).
     max_elements = int(arguments.get("max_elements", 100))
@@ -2088,6 +2371,11 @@ def handle_app_state(arguments: dict) -> dict:
         _require_session()
     except RuntimeError as exc:
         return {"error": str(exc)}
+
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
 
     try:
         result = _backend.app_state()
@@ -2720,18 +3008,38 @@ def handle_apps(arguments: dict) -> list:
     Returns:
         List of {"bundle_id": str, "display_name": str, "version": str, "install_path": str}
         Returns [{"warning": "<message>"}] on parse failure.
+
+    Note:
+        Uses ``simctl listapps -j`` (JSON output) by default; falls back to
+        the plist format for older Xcode versions that don't support -j.
     """
     import plistlib
+    import json as _json
 
     device_udid = arguments.get("device_udid", "").strip()
     if not device_udid:
         raise ValueError("device_udid is required — call ios_devices to list booted simulators")
 
+    def _parse_app_dict(app_dict: dict) -> list:
+        results = []
+        for bundle_id, info in app_dict.items():
+            results.append({
+                "bundle_id": bundle_id,
+                "display_name": info.get("CFBundleDisplayName") or info.get("CFBundleName", ""),
+                "version": info.get("CFBundleShortVersionString") or info.get("CFBundleVersion", ""),
+                "install_path": info.get("Path", ""),
+            })
+        results.sort(key=lambda a: a["display_name"].lower())
+        return results
+
+    # ── Primary path: JSON (Xcode 14+) ──────────────────────────────────────
     try:
-        raw = subprocess.check_output(
-            ["xcrun", "simctl", "listapps", device_udid],
+        raw_json = subprocess.check_output(
+            ["xcrun", "simctl", "listapps", "-j", device_udid],
             stderr=subprocess.PIPE,
         )
+        app_dict = _json.loads(raw_json.decode("utf-8", errors="replace"))
+        return _parse_app_dict(app_dict)
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
         if "invalid device" in stderr.lower() or "unable to lookup" in stderr.lower():
@@ -2739,26 +3047,27 @@ def handle_apps(arguments: dict) -> list:
                 f"No simulator with UDID '{device_udid}'. "
                 "Call ios_devices to see booted simulators."
             ) from exc
-        raise ValueError(f"simctl listapps failed: {stderr}") from exc
+        # Could be old Xcode that doesn't support -j — fall through to plist path
+        logger.debug("simctl listapps -j failed (%s): %s — trying plist fallback", exc.returncode, stderr[:200])
+    except (_json.JSONDecodeError, UnicodeDecodeError):
+        # Output wasn't JSON — Xcode version may not support -j
+        logger.debug("simctl listapps -j did not return JSON — trying plist fallback")
     except Exception as exc:
         raise ValueError(f"simctl listapps failed: {exc}") from exc
 
+    # ── Fallback: plist format (older Xcode) ─────────────────────────────────
     try:
-        plist_data = plistlib.loads(raw)
+        raw_plist = subprocess.check_output(
+            ["xcrun", "simctl", "listapps", device_udid],
+            stderr=subprocess.PIPE,
+        )
+        app_dict = plistlib.loads(raw_plist)
+        return _parse_app_dict(app_dict)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+        raise ValueError(f"simctl listapps failed: {stderr}") from exc
     except Exception as exc:
         return [{"warning": f"Failed to parse app list: {exc}", "bundle_id": "", "display_name": "", "version": "", "install_path": ""}]
-
-    results = []
-    for bundle_id, info in plist_data.items():
-        results.append({
-            "bundle_id": bundle_id,
-            "display_name": info.get("CFBundleDisplayName") or info.get("CFBundleName", ""),
-            "version": info.get("CFBundleShortVersionString") or info.get("CFBundleVersion", ""),
-            "install_path": info.get("Path", ""),
-        })
-
-    results.sort(key=lambda a: a["display_name"].lower())
-    return results
 
 
 def handle_license_status(arguments: dict) -> dict:
@@ -3469,6 +3778,11 @@ def handle_capture_state(arguments: dict) -> dict:
     if _backend is None:
         return {"error": "No active session. Call ios_start_session first."}
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     include_filter = arguments.get("include")  # None or list[str]
     if include_filter is not None:
         include_set = set(include_filter)
@@ -3565,6 +3879,11 @@ def handle_action_with_logs(arguments: dict) -> dict:
     if _backend is None:
         return {"error": "No active session. Call ios_start_session first."}
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     action = arguments.get("action")
     if not action or not isinstance(action, dict):
         return {"error": "'action' dict is required (e.g. {'type': 'tap', 'label': 'Submit'})"}
@@ -3650,7 +3969,8 @@ def handle_promote_session_to_test(arguments: dict) -> dict:
     if name.startswith("."):
         return {"error": "name must match [a-zA-Z0-9._-]+"}
 
-    path_override = str(arguments.get("path", "")).strip() or None
+    _path_arg = arguments.get("path")
+    path_override = _path_arg.strip() if isinstance(_path_arg, str) and _path_arg.strip() else None
 
     if path_override is not None:
         # Resolve against cwd and reject if it escapes
@@ -3718,7 +4038,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (44 total):
+AVAILABLE TOOLS (47 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -3888,10 +4208,13 @@ SETUP CHECK:
             "'ax' — instant start, no runner deployment, tap-by-label on root-level elements only; "
             "note AX does not enumerate .sheet-presented UIKit content — use xctest for those flows. "
             "device_type: 'simulator' (default, fully supported) | 'physical' (experimental opt-in). "
-            "To enable physical device support set SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 in your environment "
-            "and pass device_type='physical'. Known xcodebuild rough edges on iOS 26 may cause "
-            "instability — simulator is the supported path. Use ios_get_capabilities() to introspect "
-            "available device types before starting a session."
+            "To enable physical device support run 'specterqa-ios mcp enable-physical' or set "
+            "SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 and pass device_type='physical'. "
+            "wait: bool = True (default). When False, returns immediately with "
+            "{status: 'deploying', deploy_id, health_url, estimated_ready_in_s} — "
+            "then poll ios_wait_for_session(deploy_id) to wait for healthy status. "
+            "auto_recover: bool = False. When True, automatically boots the sim and "
+            "re-deploys the runner if a simulator shutdown is detected during the session."
         ),
     )
     async def ios_start_session(
@@ -3902,18 +4225,36 @@ SETUP CHECK:
         clone: bool = False,
         backend: str = "auto",
         device_type: str = "simulator",
+        wait: bool = True,
+        auto_recover: bool = False,
     ) -> str:
-        result = handle_start_session(
-            {
-                "bundle_id": bundle_id,
-                "device_id": device_id,
-                "app_path": app_path,
-                "license_key": license_key or "",
-                "clone": clone,
-                "device_type": device_type,
-                "backend": backend,
-            }
-        )
+        arguments = {
+            "bundle_id": bundle_id,
+            "device_id": device_id,
+            "app_path": app_path,
+            "license_key": license_key or "",
+            "clone": clone,
+            "device_type": device_type,
+            "backend": backend,
+            "wait": wait,
+            "auto_recover": auto_recover,
+        }
+
+        if not wait:
+            # Async path: kick off deploy in a background thread.
+            deploy_id = str(_uuid.uuid4())
+            _set_deploy_state("deploying", deploy_id=deploy_id, udid=device_id)
+            arguments["_deploy_id"] = deploy_id
+            t = threading.Thread(target=_background_deploy, args=(arguments,), daemon=True)
+            t.start()
+            return json.dumps({
+                "status": "deploying",
+                "deploy_id": deploy_id,
+                "health_url": "http://localhost:8222/health",
+                "estimated_ready_in_s": 45,
+            })
+
+        result = handle_start_session(arguments)
         return json.dumps(result)
 
     # ── Tool: ios_stop_session ─────────────────────────────────────────────
@@ -3939,8 +4280,10 @@ SETUP CHECK:
     )
     async def ios_get_capabilities() -> str:
         import specterqa.ios as _pkg
-        _version = getattr(_pkg, "__version__", "14.0.3")
-        _physical_enabled = os.environ.get("SPECTERQA_ALLOW_PHYSICAL_DEVICE", "").strip().lower() in ("1", "true", "yes")
+        from specterqa.ios.config import _check_physical_opt_in  # noqa: PLC0415
+        _version = getattr(_pkg, "__version__", "15.0.0")
+        _opt_in = _check_physical_opt_in()
+        _physical_enabled = _opt_in["allowed"]
         caps = {
             "version": _version,
             "backends": ["xctest", "ax"],
@@ -3958,13 +4301,15 @@ SETUP CHECK:
                     "experimental": True,
                     "opt_in_env": "SPECTERQA_ALLOW_PHYSICAL_DEVICE",
                     "opt_in_active": _physical_enabled,
+                    "diagnostics": _opt_in["diagnostics"],
                     "notes": (
-                        "Requires SPECTERQA_ALLOW_PHYSICAL_DEVICE=1. "
+                        "Requires SPECTERQA_ALLOW_PHYSICAL_DEVICE=1 OR run "
+                        "'specterqa-ios mcp enable-physical'. "
                         "Known xcodebuild issues on iOS 26 may cause flakiness."
                     ),
                 },
             ],
-            "tool_count": 44,
+            "tool_count": 47,
         }
         return json.dumps(caps)
 
@@ -4800,6 +5145,136 @@ SETUP CHECK:
             "session_id": session_id,
         })
         return json.dumps(result, default=str)
+
+    # ── Tool: ios_wait_for_session (Issue 2) ──────────────────────────────
+
+    @mcp.tool(
+        name="ios_wait_for_session",
+        description=(
+            "Wait for an async session deploy to become healthy. "
+            "Use after ios_start_session(wait=False) returns {status: 'deploying'}. "
+            "deploy_id: the ID returned by the async start (optional — waits for any deploy). "
+            "timeout_s: maximum seconds to poll (default 120). "
+            "Returns {status: 'healthy', ...} on success or {status: 'failed'|'timeout', error} on failure. "
+            "Also usable without a prior async start — returns {status: 'idle'} when no deploy is in flight."
+        ),
+    )
+    async def ios_wait_for_session(
+        deploy_id: str | None = None,
+        timeout_s: float = 120.0,
+    ) -> str:
+        t0 = time.monotonic()
+        deadline = t0 + timeout_s
+
+        state = _get_deploy_state()
+
+        # If no deploy in flight, return immediately
+        if state["status"] == "idle":
+            return json.dumps({"status": "idle", "elapsed_ms": 0, "udid": None})
+
+        # Poll until healthy, failed, or timeout
+        while time.monotonic() < deadline:
+            state = _get_deploy_state()
+            if state["status"] in ("healthy", "failed"):
+                return json.dumps(state)
+            # Also check if the backend is up (sync path may have set it)
+            if _backend is not None and state["status"] == "idle":
+                return json.dumps({"status": "healthy", "elapsed_ms": state["elapsed_ms"], "udid": _session_udid})
+            time.sleep(1.0)
+
+        return json.dumps({"status": "timeout", "elapsed_ms": int((time.monotonic() - t0) * 1000), "udid": None})
+
+    # ── Tool: ios_session_status (Issue 2) ────────────────────────────────
+
+    @mcp.tool(
+        name="ios_session_status",
+        description=(
+            "Return the current session status without blocking. "
+            "Returns {status: 'idle'|'deploying'|'healthy'|'failed', elapsed_ms, udid}. "
+            "Use between ios_start_session(wait=False) and ios_wait_for_session "
+            "to check progress without blocking. "
+            "status='healthy' means the runner is up and tools can be called."
+        ),
+    )
+    async def ios_session_status() -> str:
+        state = _get_deploy_state()
+        # Override with live backend status
+        if _backend is not None and state["status"] in ("idle", "deploying"):
+            state["status"] = "healthy"
+        return json.dumps(state)
+
+    # ── Tool: ios_dismiss_first_launch_alerts (Issue 9 helper 1) ─────────
+
+    @mcp.tool(
+        name="ios_dismiss_first_launch_alerts",
+        description=(
+            "Dismiss iOS first-launch permission alerts (e.g. 'Allow Notifications?'). "
+            "decline=True (default) taps 'Don't Allow'. decline=False taps 'Allow'. "
+            "permissions: optional list of permission names to dismiss in sequence "
+            "(e.g. ['notifications', 'tracking']). When omitted, attempts to dismiss "
+            "whatever alert is currently visible. "
+            "Coordinates are auto-scaled to the device screen size. "
+            "Returns {dismissed: N, attempts: N, taps: [{x, y, label}]}. "
+            "Requires an active session (ios_start_session)."
+        ),
+    )
+    async def ios_dismiss_first_launch_alerts(
+        decline: bool = True,
+        permissions: list[str] | None = None,
+    ) -> str:
+        if _backend is None:
+            return json.dumps({"error": "No active session. Call ios_start_session first."})
+
+        try:
+            # Get current screen size from the session backend
+            screen_w, screen_h = 390, 844  # iPhone 12 defaults
+            try:
+                if _annotator is not None:
+                    screen_size = _annotator.screen_size
+                    if screen_size and len(screen_size) >= 2:
+                        screen_w, screen_h = screen_size[0], screen_size[1]
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Determine button coordinates based on decline flag.
+            # iPhone 12 (390×844 portrait):
+            #   "Don't Allow" is at approx (120, 500) — left-side button
+            #   "Allow" is at approx (270, 500) — right-side button
+            # Scale proportionally to actual screen size.
+            scale_x = screen_w / 390.0
+            scale_y = screen_h / 844.0
+
+            dont_allow_x = int(120 * scale_x)
+            dont_allow_y = int(500 * scale_y)
+            allow_x = int(270 * scale_x)
+            allow_y = int(500 * scale_y)
+
+            tap_x = dont_allow_x if decline else allow_x
+            tap_y = dont_allow_y if decline else allow_y
+
+            label = "Don't Allow" if decline else "Allow"
+            permission_list = permissions or ["current"]
+            taps = []
+            dismissed = 0
+
+            for _perm in permission_list:
+                try:
+                    tap_result = _backend.tap(tap_x, tap_y)
+                    taps.append({"x": tap_x, "y": tap_y, "label": label, "permission": _perm})
+                    dismissed += 1
+                    time.sleep(0.5)  # let alert dismiss animation complete
+                except Exception:  # noqa: BLE001
+                    taps.append({"x": tap_x, "y": tap_y, "label": label, "permission": _perm, "error": "tap_failed"})
+
+            return json.dumps({
+                "dismissed": dismissed,
+                "attempts": len(permission_list),
+                "taps": taps,
+                "decline": decline,
+            })
+
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"error": f"dismiss_first_launch_alerts failed: {exc}"})
 
     return mcp
 

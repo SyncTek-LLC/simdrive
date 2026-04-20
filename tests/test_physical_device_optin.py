@@ -70,15 +70,26 @@ def _call_handle_start_session(arguments: dict, env_override: dict | None = None
     }
 
     saved = {k: os.environ.get(k) for k in (env_override or {})}
+    # Determine if any env var in env_override explicitly enables physical opt-in.
+    # If not, ensure config file doesn't interfere by patching _read_physical_opt_in.
+    env_enables = any(
+        v in ("1", "true", "yes")
+        for v in (env_override or {}).values()
+        if v is not None
+    )
     try:
         for k, v in (env_override or {}).items():
             if v is None:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+        config_mock = MagicMock(return_value=False)  # isolate from ~/.specterqa/config.toml
         with (
             patch.dict("sys.modules", patches),
             patch("specterqa.ios.mcp.server._circuit_breaker"),
+            patch("specterqa.ios.config._read_physical_opt_in", config_mock),
+            patch("specterqa.ios.config._read_keychain_opt_in", MagicMock(return_value=False)),
         ):
             result = srv.handle_start_session(arguments)
     finally:
@@ -238,10 +249,20 @@ class TestPhysicalDeviceOptIn:
 class TestIosGetCapabilities:
 
     def _call_capabilities(self, env_override: dict | None = None) -> dict:
-        """Call ios_get_capabilities via create_server()."""
+        """Call ios_get_capabilities via create_server().
+
+        Config file and keychain are mocked to isolate from the test environment.
+        Config file returns True only when SPECTERQA_ALLOW_PHYSICAL_DEVICE is set.
+        """
         import specterqa.ios.mcp.server as srv
 
         saved = {k: os.environ.get(k) for k in (env_override or {})}
+        # Config file should NOT interfere — mock it to return False unless env var is set.
+        env_enables = any(
+            v in ("1", "true", "yes")
+            for v in (env_override or {}).values()
+            if v is not None
+        )
         try:
             for k, v in (env_override or {}).items():
                 if v is None:
@@ -252,7 +273,9 @@ class TestIosGetCapabilities:
             server = srv.create_server()
 
             async def _run():
-                result = await server.call_tool("ios_get_capabilities", {})
+                with patch("specterqa.ios.config._read_physical_opt_in", return_value=False):
+                    with patch("specterqa.ios.config._read_keychain_opt_in", return_value=False):
+                        result = await server.call_tool("ios_get_capabilities", {})
                 # result is list of content items
                 raw = result[0][0].text if (result and result[0]) else result[0].text
                 return json.loads(raw)
