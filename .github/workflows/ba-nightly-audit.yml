@@ -1,0 +1,136 @@
+name: BA Nightly Governance Audit (SpecterQA iOS)
+
+on:
+  schedule:
+    # 08:00 UTC = 03:00 CST / 04:00 EDT
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  nightly-pr-release-summary:
+    name: PR and release drift summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: List open PRs
+        id: list_prs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr list --state open --json number,title,headRefName,author,createdAt \
+            --template '{{range .}}PR #{{.number}}: {{.title}} | branch: {{.headRefName}} | author: {{.author.login}} | opened: {{.createdAt}}{{"\n"}}{{end}}' \
+            > /tmp/open_prs.txt 2>&1 || echo "No open PRs or gh error" > /tmp/open_prs.txt
+          cat /tmp/open_prs.txt
+
+      - name: List recent releases
+        id: list_releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 10 \
+            > /tmp/recent_releases.txt 2>&1 || echo "No releases or gh error" > /tmp/recent_releases.txt
+          cat /tmp/recent_releases.txt
+
+      - name: Check PRs for missing INIT references
+        id: init_check
+        run: |
+          python3 - <<'PYEOF'
+          import re, pathlib, os
+
+          INIT_PATTERN = re.compile(r'INIT-\d{4}-\d{3,}', re.IGNORECASE)
+
+          pr_file = pathlib.Path("/tmp/open_prs.txt")
+          content = pr_file.read_text() if pr_file.exists() else ""
+
+          violations = []
+          for line in content.splitlines():
+              line = line.strip()
+              if not line or line.startswith("No open"):
+                  continue
+              if not INIT_PATTERN.search(line):
+                  violations.append(f"  MISSING INIT: {line}")
+
+          has_violations = len(violations) > 0
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"has_violations={'true' if has_violations else 'false'}\n")
+
+          if violations:
+              pathlib.Path("/tmp/pr_violations.txt").write_text(
+                  "PRs missing INIT reference:\n" + "\n".join(violations)
+              )
+              print("Violations found:")
+              for v in violations:
+                  print(v)
+          else:
+              print("All open PRs appear to have INIT references (or no open PRs).")
+          PYEOF
+
+      - name: Build governance drift report
+        id: build_report
+        run: |
+          python3 - <<'PYEOF'
+          import pathlib, datetime, os
+
+          today = datetime.date.today()
+          pr_content = pathlib.Path("/tmp/open_prs.txt").read_text() if pathlib.Path("/tmp/open_prs.txt").exists() else "N/A"
+          rel_content = pathlib.Path("/tmp/recent_releases.txt").read_text() if pathlib.Path("/tmp/recent_releases.txt").exists() else "N/A"
+          viol_content = pathlib.Path("/tmp/pr_violations.txt").read_text() if pathlib.Path("/tmp/pr_violations.txt").exists() else ""
+
+          report = f"""# SpecterQA iOS Nightly Governance Audit — {today}
+
+          ## Open Pull Requests
+          ```
+          {pr_content.strip()}
+          ```
+
+          ## Recent Releases
+          ```
+          {rel_content.strip()}
+          ```
+          """
+
+          if viol_content:
+              report += f"""
+          ## Governance Violations
+          ```
+          {viol_content.strip()}
+          ```
+
+          **Action required:** PRs listed above are missing a `INIT-YYYY-NNN` initiative reference.
+          """
+
+          pathlib.Path("/tmp/nightly_report.md").write_text(report)
+          print(report)
+
+          has_violations = bool(viol_content.strip())
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"has_violations={'true' if has_violations else 'false'}\n")
+          PYEOF
+
+      - name: Create GitHub issue if violations found
+        if: steps.build_report.outputs.has_violations == 'true'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: "SpecterQA Nightly Governance Drift — ${{ github.run_id }}"
+          content-filepath: /tmp/nightly_report.md
+          labels: governance,audit,automated
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summarize (no violations)
+        if: steps.build_report.outputs.has_violations == 'false'
+        run: echo "Nightly governance audit complete — no drift detected."
