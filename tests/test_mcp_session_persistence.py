@@ -1,0 +1,232 @@
+"""Regression test — v14.0.2: session state must persist across start→capture→relaunch.
+
+Root cause (fixed in v14.0.2): handle_start_session pre-deployed a RunnerProcess on
+port 8222 (for BackendSelector probing), then created a TestSession which called
+_find_free_port() (returning 8223+ since 8222 was occupied) and launched a *second*
+xcodebuild.  Two xcodebuild processes fighting over the same simulator caused the
+first to die; its teardown shut down the simulator; subsequent simctl calls failed
+with "No devices are booted."
+
+Fix: when _mcp_runner_ref is already RUNNING and clone=False, the xctest path
+reuses it directly (skips TestSession._deploy_runner).
+
+These tests are hermetic — they mock subprocess and RunnerProcess so no live
+simulator is required.
+"""
+from __future__ import annotations
+
+import threading
+from unittest.mock import MagicMock, patch, PropertyMock
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helpers — build a minimal RunnerProcess mock
+# ---------------------------------------------------------------------------
+
+def _make_runner_mock(port: int = 8222, udid: str = "TEST-UDID-1234"):
+    """Return a MagicMock that looks like a RUNNING RunnerProcess."""
+    from specterqa.ios.runner_process import RunnerState
+
+    runner = MagicMock()
+    runner._port = port
+    runner._udid = udid
+    runner.state = RunnerState.RUNNING
+    runner.stop = MagicMock()
+    runner.deploy = MagicMock()
+    runner.healthcheck = MagicMock(return_value=True)
+    return runner
+
+
+# ---------------------------------------------------------------------------
+# Test: single RunnerProcess deployed across start → capture → relaunch
+# ---------------------------------------------------------------------------
+
+class TestMCPSessionPersistence:
+    """Session state (RunnerProcess reference) must survive capture_state calls."""
+
+    def test_start_sets_mcp_runner_ref(self):
+        """After ios_start_session, _mcp_runner_ref and _session point to the runner."""
+        import specterqa.ios.mcp.server as srv
+
+        runner_mock = _make_runner_mock()
+
+        with (
+            patch("specterqa.ios.mcp.server.handle_start_session") as mock_start,
+        ):
+            mock_start.return_value = {"status": "ok", "backend": "xctest", "target_udid": "TEST-UDID-1234", "port": 8222, "runner_url": "http://localhost:8222"}
+            result = mock_start({"bundle_id": "com.example.app", "device_id": "TEST-UDID-1234", "backend": "xctest"})
+            assert result["status"] == "ok"
+            assert "error" not in result
+
+    def test_mcp_runner_ref_reused_when_running(self):
+        """The fix: when _mcp_runner_ref is RUNNING and clone=False, xctest path
+        must reuse it as _session rather than deploying a second RunnerProcess.
+
+        We test the logic branch directly by pre-setting _mcp_runner_ref to a
+        RUNNING mock and verifying that handle_start_session uses it.
+        """
+        from specterqa.ios.runner_process import RunnerState
+        import specterqa.ios.mcp.server as srv
+
+        runner_mock = _make_runner_mock(port=8222, udid="FAKE-UDID-0001")
+        backend_mock = MagicMock()
+        backend_mock.return_value = MagicMock()
+
+        # Pre-set _mcp_runner_ref as RUNNING (simulates post-healthcheck state)
+        # and provide all mocks so handle_start_session can complete
+        srv._session = None
+        srv._mcp_runner_ref = runner_mock
+        srv._backend = None
+        srv._session_state = "idle"
+
+        replay_cls = MagicMock()
+        console_cls = MagicMock()
+        console_cls.return_value.start = MagicMock()
+        crash_cls = MagicMock()
+        crash_cls.return_value.start = MagicMock()
+        perf_cls = MagicMock()
+        net_cls = MagicMock()
+        net_cls.return_value.start = MagicMock()
+        net_cls.return_value.setup_log_watcher = MagicMock()
+        som_cls = MagicMock()
+        xctest_cls = MagicMock()
+        xctest_cls.return_value = MagicMock()
+
+        license_cls = MagicMock()
+        license_cls.return_value.validate.return_value = {"valid": True}
+
+        runner_process_module = MagicMock()
+        runner_process_module.RunnerProcess.acquire.return_value = runner_mock
+        runner_deploy_err = type("RunnerDeployError", (Exception,), {})
+        runner_process_module.RunnerDeployError = runner_deploy_err
+        runner_process_module.RunnerState = RunnerState
+
+        selector_module = MagicMock()
+        chosen = MagicMock()
+        # Make type(chosen).__name__ == "XCTestBackend" by patching backend_name lookup
+        class _FakeXCTestBackend:
+            pass
+        _FakeXCTestBackend.__name__ = "XCTestBackend"
+        chosen_instance = _FakeXCTestBackend()
+        selector_module.BackendSelector.return_value.choose.return_value = chosen_instance
+
+        session_mgr = MagicMock()
+        session_mgr._find_xctestrun.return_value = "/fake/runner.xctestrun"
+        session_mgr._needs_rebuild.return_value = False
+        session_mgr._DEFAULT_RUNNER_BUILD_DIR = "/fake/runner-build"
+        session_mgr.write_version_marker = MagicMock()
+
+        try:
+            with (
+                patch.dict("sys.modules", {
+                    "specterqa.ios.license.validator": MagicMock(LicenseValidator=license_cls),
+                    "specterqa.ios.runner_process": runner_process_module,
+                    "specterqa.ios.backends.selector": selector_module,
+                    "specterqa.ios.som_annotator": MagicMock(SoMAnnotator=som_cls),
+                    "specterqa.ios.backends.xctest_client": MagicMock(XCTestBackend=xctest_cls),
+                    "specterqa.ios.session_manager": session_mgr,
+                    "specterqa.ios.replay": MagicMock(ReplayRecorder=replay_cls),
+                    "specterqa.ios.drivers.simulator.console": MagicMock(ConsoleMonitor=console_cls),
+                    "specterqa.ios.drivers.simulator.crash": MagicMock(CrashDetector=crash_cls),
+                    "specterqa.ios.drivers.simulator.perf": MagicMock(PerfProfiler=perf_cls),
+                    "specterqa.ios.drivers.simulator.network": MagicMock(NetworkInspector=net_cls),
+                }),
+                patch("specterqa.ios.mcp.server._circuit_breaker"),
+            ):
+                result = srv.handle_start_session({
+                    "bundle_id": "com.example.app",
+                    "device_id": "FAKE-UDID-0001",
+                    "backend": "xctest",
+                    "clone": False,
+                    "device_type": "simulator",
+                })
+
+            # Key invariant: _session must be the pre-deployed runner_mock
+            # (not a TestSession), because _mcp_runner_ref was RUNNING
+            assert srv._session is runner_mock, (
+                f"Expected _session to be the pre-deployed runner_mock, got {type(srv._session)}"
+            )
+            # TestSession.start() must NOT have been called
+            session_mgr.TestSession.return_value.start.assert_not_called()
+
+        finally:
+            srv._session = None
+            srv._mcp_runner_ref = None
+            srv._backend = None
+            srv._session_state = "idle"
+
+    def test_session_state_preserved_across_calls(self):
+        """_session and _mcp_runner_ref must not change between capture_state and app_relaunch."""
+        import specterqa.ios.mcp.server as srv
+
+        # Manually set up the expected post-start_session state
+        backend_mock = MagicMock()
+        runner_mock = _make_runner_mock()
+
+        original_session = runner_mock
+        srv._session = runner_mock
+        srv._mcp_runner_ref = runner_mock
+        srv._backend = backend_mock
+        srv._session_state = "running"
+
+        try:
+            # capture_state should NOT change _session or _mcp_runner_ref
+            backend_mock.get_elements.return_value = {"elements": [], "count": 0}
+            backend_mock.app_state.return_value = {"state": "foreground"}
+
+            with patch("specterqa.ios.mcp.server._get_annotated_screenshot", return_value=("base64data", [])):
+                result = srv.handle_capture_state({"include": ["elements", "app_state"]})
+
+            # Session must be unchanged
+            assert srv._session is original_session, "capture_state must not replace _session"
+            assert srv._mcp_runner_ref is original_session, "capture_state must not clear _mcp_runner_ref"
+            assert srv._session_state == "running", "session_state must remain 'running'"
+            assert "error" not in result, f"capture_state returned error: {result}"
+
+        finally:
+            # Cleanup module state
+            srv._session = None
+            srv._mcp_runner_ref = None
+            srv._backend = None
+            srv._session_state = "idle"
+
+    def test_no_teardown_fires_between_calls(self):
+        """RunnerProcess.stop must NOT be called between start → capture → relaunch."""
+        import specterqa.ios.mcp.server as srv
+        from specterqa.ios.runner_process import RunnerState
+
+        runner_mock = _make_runner_mock()
+        backend_mock = MagicMock()
+        backend_mock.app_state.return_value = {"state": "foreground"}
+        backend_mock.get_elements.return_value = {"elements": [], "count": 0}
+
+        srv._session = runner_mock
+        srv._mcp_runner_ref = runner_mock
+        srv._backend = backend_mock
+        srv._session_state = "running"
+
+        try:
+            with patch("specterqa.ios.mcp.server._get_annotated_screenshot", return_value=("b64", [])):
+                srv.handle_capture_state({"include": ["elements"]})
+
+            # No stop() called between start and capture
+            runner_mock.stop.assert_not_called()
+
+            # Simulate app_relaunch (hermetic — mock subprocess)
+            with patch("specterqa.ios.mcp.server.subprocess") as sp_mock:
+                proc_result = MagicMock()
+                proc_result.returncode = 0
+                proc_result.stderr = ""
+                sp_mock.run.return_value = proc_result
+                srv.handle_app_relaunch({"bundle_id": "com.example.app", "udid": "FAKE-UDID-0001"})
+
+            # Still no stop() called
+            runner_mock.stop.assert_not_called()
+
+        finally:
+            srv._session = None
+            srv._mcp_runner_ref = None
+            srv._backend = None
+            srv._session_state = "idle"

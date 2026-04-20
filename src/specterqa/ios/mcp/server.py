@@ -64,7 +64,9 @@ logger = logging.getLogger("specterqa.ios.mcp")
 # Global session state — one active session at a time
 # ---------------------------------------------------------------------------
 
-_session = None  # TestSession instance
+_session = None  # TestSession or RunnerProcess instance (single active session)
+_mcp_runner_ref = None  # RunnerProcess pre-deployed in handle_start_session (xctest path)
+_session_udid: str | None = None  # Resolved UDID for the active session (not "booted")
 _backend = None  # XCTestBackend instance
 _annotator = None  # SoMAnnotator instance
 _last_elements: list = []  # Element cache from last ios_screenshot / ios_elements call
@@ -290,7 +292,7 @@ def handle_start_session(arguments: dict) -> dict:
         {"status": "ok", "backend": "ax"|"xctest"|"browserstack", ...}
         or {"error": "<message>"} on failure.
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
+    global _session, _mcp_runner_ref, _session_udid, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
 
     with _session_lock:
         # License check — validates key or allows trial/founder bypass.
@@ -371,6 +373,44 @@ def handle_start_session(arguments: dict) -> dict:
             try:
                 from specterqa.ios.runner_process import RunnerProcess, RunnerDeployError  # noqa: PLC0415
 
+                # Kill any orphaned xcodebuild processes from previous sessions
+                # before acquiring a new runner. Mirrors what TestSession._start()
+                # does; required here because we bypass TestSession for the
+                # direct-runner path.
+                try:
+                    from specterqa.ios.session_manager import TestSession as _TS  # noqa: PLC0415
+                    _TS._kill_stale_runners()
+                except Exception as _ks_exc:
+                    logger.debug("_kill_stale_runners skipped: %s", _ks_exc)
+
+                # After killing stale runners, the simulator may have shut down
+                # (xcodebuild's SIGKILL can trigger sim teardown). Re-boot it
+                # if needed so the new runner deploys to a live sim.
+                if device_id not in ("booted", ""):
+                    try:
+                        _sim_list = subprocess.run(
+                            ["xcrun", "simctl", "list", "devices", "booted", "-j"],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if _sim_list.returncode == 0:
+                            import json as _json_boot
+                            _sim_data_boot = _json_boot.loads(_sim_list.stdout)
+                            _booted_udids = [
+                                _d.get("udid", "")
+                                for _rt in _sim_data_boot.get("devices", {}).values()
+                                for _d in _rt
+                                if _d.get("state") == "Booted"
+                            ]
+                            if device_id not in _booted_udids:
+                                logger.info("Simulator %s not booted after stale-runner cleanup — rebooting", device_id)
+                                subprocess.run(
+                                    ["xcrun", "simctl", "boot", device_id],
+                                    capture_output=True, text=True, timeout=30,
+                                )
+                                time.sleep(3)
+                    except Exception as _boot_exc:
+                        logger.debug("Sim boot-check after cleanup failed: %s", _boot_exc)
+
                 _deploy_port = 8222
                 _mcp_runner = RunnerProcess.acquire(device_id, _deploy_port)
                 _mcp_runner.deploy(bundle_id or "")
@@ -380,11 +420,12 @@ def handle_start_session(arguments: dict) -> dict:
                 try:
                     _mcp_runner.healthcheck(timeout_s=90.0)
                     logger.info("v14: MCP runner deployed and healthy on :%d", _deploy_port)
-                    # Store for cleanup on stop
-                    global _session  # noqa: PLW0603
-                    _session = _mcp_runner  # type: ignore[assignment]
+                    # Store for cleanup on stop — but do NOT assign to _session yet.
+                    # _session is set later (xctest path) to avoid a second deploy.
+                    _mcp_runner_ref = _mcp_runner  # noqa: PLW0603
                 except RunnerDeployError as health_exc:
                     logger.warning("v14: MCP runner did not become healthy: %s", health_exc)
+                    _mcp_runner_ref = None
 
             except RunnerDeployError as deploy_exc:
                 # Loud error — no silent fallback to AX
@@ -534,6 +575,87 @@ def handle_start_session(arguments: dict) -> dict:
 
         try:
             clone = arguments.get("clone", False)
+
+            # v14.0.2 fix: When _mcp_runner_ref is already deployed and healthy
+            # (non-clone, simulator path), reuse it directly instead of creating
+            # a new TestSession that would deploy a *second* xcodebuild on a
+            # different port.  Two concurrent xcodebuild processes targeting the
+            # same simulator fight for resources — the first one dies, which kills
+            # the simulator, which causes app_relaunch to fail with
+            # "No devices are booted."
+            from specterqa.ios.runner_process import RunnerState  # noqa: PLC0415
+            _use_mcp_runner_direct = (
+                _mcp_runner_ref is not None
+                and _mcp_runner_ref.state == RunnerState.RUNNING
+                and not bool(clone)
+                and device_type == "simulator"
+            )
+
+            if _use_mcp_runner_direct:
+                # Resolve UDID — "booted" → actual UDID
+                _predeployed = _mcp_runner_ref
+                _resolved_udid = _predeployed._udid
+                if _resolved_udid == "booted":
+                    try:
+                        _simlist2 = subprocess.run(
+                            ["xcrun", "simctl", "list", "devices", "booted", "-j"],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if _simlist2.returncode == 0:
+                            import json as _json2
+                            _sim2 = _json2.loads(_simlist2.stdout)
+                            for _rt in _sim2.get("devices", {}).values():
+                                for _d in _rt:
+                                    if _d.get("state") == "Booted":
+                                        _resolved_udid = _d.get("udid", "booted")
+                                        break
+                                if _resolved_udid != "booted":
+                                    break
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                port = _predeployed._port
+                runner_url = f"http://localhost:{port}"
+                target_udid = _resolved_udid
+                _session_udid = _resolved_udid  # persist for handle_app_relaunch
+
+                _session = _predeployed  # type: ignore[assignment]
+                _backend = XCTestBackend(host="localhost", port=port)
+                _annotator = SoMAnnotator(runner_url=runner_url)
+                _last_elements = []
+
+                from specterqa.ios.replay import ReplayRecorder
+                from specterqa.ios.drivers.simulator.console import ConsoleMonitor
+                from specterqa.ios.drivers.simulator.crash import CrashDetector
+                from specterqa.ios.drivers.simulator.perf import PerfProfiler
+                from specterqa.ios.drivers.simulator.network import NetworkInspector
+
+                _recorder = ReplayRecorder(bundle_id=bundle_id, device_id=device_id)
+                _console_monitor = ConsoleMonitor(device_id=target_udid)
+                _console_monitor.start()
+                _crash_detector = CrashDetector(device_id=target_udid, bundle_id=bundle_id)
+                _crash_detector.start()
+                _perf_profiler = PerfProfiler(device_id=target_udid, bundle_id=bundle_id)
+                _network_inspector = NetworkInspector(device_id=target_udid)
+                _network_inspector.start()
+                _network_inspector.setup_log_watcher(_console_monitor)
+
+                logger.info(
+                    "v14.0.2: reusing pre-deployed RunnerProcess on :%d (skipped TestSession re-deploy)",
+                    port,
+                )
+                _session_state = "running"
+                response: dict = {
+                    "status": "ok",
+                    "device_type": device_type,
+                    "target_udid": target_udid,
+                    "port": port,
+                    "runner_url": runner_url,
+                }
+                response["clone_udid"] = target_udid
+                return response
+
+            # Non-direct path: clone mode, physical device, or no pre-deployed runner.
             _session = TestSession(
                 source_udid=device_id,
                 bundle_id=bundle_id,
@@ -575,7 +697,8 @@ def handle_start_session(arguments: dict) -> dict:
             _network_inspector.setup_log_watcher(_console_monitor)
 
             _session_state = "running"
-            response: dict = {
+            _session_udid = _session._target_udid  # persist for handle_app_relaunch
+            response = {
                 "status": "ok",
                 "device_type": device_type,
                 "target_udid": _session._target_udid,
@@ -606,7 +729,7 @@ def handle_stop_session(arguments: dict) -> dict:
     Returns:
         {"status": "stopped"}
     """
-    global _session, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
+    global _session, _mcp_runner_ref, _session_udid, _backend, _annotator, _last_elements, _recorder, _session_state, _console_monitor, _crash_detector, _perf_profiler, _network_inspector, _ax_http_server
 
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
@@ -652,6 +775,8 @@ def handle_stop_session(arguments: dict) -> dict:
 
         # PerfProfiler has no background thread — just clear the reference
         _session = None
+        _mcp_runner_ref = None
+        _session_udid = None
         _backend = None
         _annotator = None
         _last_elements = []
@@ -2799,6 +2924,147 @@ def handle_stop_runner(arguments: dict) -> dict:
 _log_tail_cursors: dict[str, str] = {}
 
 
+def _restart_runner_for_relaunch(udid: str, bundle_id: str) -> str | None:
+    """iOS 26.3 recovery path for ios_app_relaunch.
+
+    When xcodebuild's test lifecycle has shut down the simulator (a behaviour
+    unique to iOS 26.3's test-without-building mode), the sim cannot be booted
+    while xcodebuild owns it.  The only reliable fix is:
+
+      1. SIGKILL xcodebuild (via _mcp_runner_ref.stop)
+      2. xcrun simctl boot <udid>
+      3. Re-deploy the xcodebuild runner (RunnerProcess.deploy)
+      4. xcrun simctl launch <bundle_id>
+
+    Returns None on success, or an error string on failure.
+    Mutates globals: _mcp_runner_ref, _session, _backend.
+    """
+    global _mcp_runner_ref, _session, _backend  # noqa: PLW0603
+
+    from specterqa.ios.runner_process import RunnerProcess, RunnerState  # noqa: PLC0415
+    from specterqa.ios.backends.xctest_client import XCTestBackend  # noqa: PLC0415
+
+    import json as _json_restart  # noqa: PLC0415
+
+    def _wait_for_sim_state(target: str, timeout_s: int = 20) -> bool:
+        """Poll until the sim reaches target state. Returns True on success."""
+        for _ in range(timeout_s):
+            time.sleep(1)
+            try:
+                rp = subprocess.run(
+                    ["xcrun", "simctl", "list", "devices", "--json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if rp.returncode == 0:
+                    data = _json_restart.loads(rp.stdout)
+                    for _rt in data.get("devices", {}).values():
+                        for _d in _rt:
+                            if _d.get("udid") == udid and _d.get("state") == target:
+                                return True
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
+    try:
+        # Step 1: Kill the existing runner (frees the sim from xcodebuild's lifecycle)
+        old_runner = _mcp_runner_ref
+        if old_runner is not None:
+            logger.info("_restart_runner_for_relaunch: stopping old runner on port %d", old_runner._port)
+            old_runner.stop(shutdown_sim=False)
+            # Give xcodebuild a moment to fully exit and release the sim
+            time.sleep(2)
+
+        # Step 2: Re-deploy the runner (xcodebuild will boot sim, install runner, then shut sim down)
+        # IMPORTANT: Do NOT boot the sim here — let xcodebuild manage it during its test lifecycle.
+        # The sim will be Booted briefly during xcodebuild's test setup, then Shutdown after.
+        # We boot AFTER healthcheck when the sim is stably Shutdown and xcodebuild has settled.
+        logger.info("_restart_runner_for_relaunch: re-deploying runner for %s on :8222", udid)
+        from specterqa.ios.runner_process import RunnerDeployError  # noqa: PLC0415
+        new_runner = RunnerProcess.acquire(udid=udid, port=8222)
+        new_runner.deploy(bundle_id=bundle_id)
+        # Wait for runner to become healthy (mirrors handle_start_session: up to 90s)
+        try:
+            new_runner.healthcheck(timeout_s=90.0)
+            logger.info("_restart_runner_for_relaunch: runner healthy on :8222 (sim will be Shutdown)")
+        except RunnerDeployError as he:
+            return f"Runner did not become healthy after restart: {he}"
+
+        # Update globals so subsequent MCP tool calls work with the new runner
+        _mcp_runner_ref = new_runner
+        _session = new_runner  # type: ignore[assignment]
+        _backend = XCTestBackend(host="localhost", port=8222)
+
+        # Step 3: Wait for sim to reach stable Shutdown AFTER the new xcodebuild's
+        # test lifecycle. xcodebuild boots the sim during test setup, then shuts it
+        # down after. We must wait for that shutdown to complete before booting
+        # the sim ourselves — otherwise our launch races against xcodebuild's teardown.
+        logger.info(
+            "_restart_runner_for_relaunch: waiting for sim %s to reach stable Shutdown "
+            "after xcodebuild test lifecycle (iOS 26.3)",
+            udid,
+        )
+        # First: wait for any "Booted" or "Shutting Down" to complete → sim reaches Shutdown.
+        # Poll for up to 30s.
+        for _w in range(30):
+            time.sleep(1)
+            try:
+                rp = subprocess.run(
+                    ["xcrun", "simctl", "list", "devices", "--json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if rp.returncode == 0:
+                    import json as _json_w
+                    data = _json_w.loads(rp.stdout)
+                    for _rt in data.get("devices", {}).values():
+                        for _d in _rt:
+                            if _d.get("udid") == udid and _d.get("state") == "Shutdown":
+                                break
+                        else:
+                            continue
+                        break
+                    else:
+                        continue
+                    # sim is Shutdown — give it an extra 2s for xcodebuild teardown to stabilize
+                    time.sleep(2)
+                    break
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Now boot the sim — xcodebuild has completed its test lifecycle, sim is Shutdown.
+        logger.info("_restart_runner_for_relaunch: booting sim %s (post-xcodebuild-lifecycle)", udid)
+        boot_r = subprocess.run(
+            ["xcrun", "simctl", "boot", udid],
+            capture_output=True, text=True, timeout=30,
+        )
+        if boot_r.returncode != 0 and "Unable to boot device in current state: Booted" not in boot_r.stderr:
+            return f"simctl boot failed during relaunch recovery: {boot_r.stderr.strip()}"
+
+        if not _wait_for_sim_state("Booted", timeout_s=30):
+            return f"Simulator {udid} did not reach Booted within 30s after runner re-deploy"
+
+        logger.info("_restart_runner_for_relaunch: sim Booted — launching app %s", bundle_id)
+
+        # Step 4: Launch the app
+        time.sleep(1)  # brief settle before simctl commands
+        subprocess.run(
+            ["xcrun", "simctl", "terminate", udid, bundle_id],
+            capture_output=True, text=True, timeout=10,
+        )
+        r = subprocess.run(
+            ["xcrun", "simctl", "launch", udid, bundle_id],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return f"simctl launch failed after runner restart: {r.stderr.strip()}"
+
+        logger.info("_restart_runner_for_relaunch: app %s launched successfully", bundle_id)
+        return None
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("_restart_runner_for_relaunch failed: %s", exc)
+        return f"Runner restart failed: {exc}"
+
+
 def handle_app_relaunch(arguments: dict) -> dict:
     """Terminate and relaunch the app under test.
 
@@ -2823,19 +3089,171 @@ def handle_app_relaunch(arguments: dict) -> dict:
     if not bundle_id:
         return {"error": "'bundle_id' is required"}
 
-    app_path = str(arguments.get("app_path", "")).strip() or None
-    udid = str(arguments.get("udid", "booted")).strip() or "booted"
+    _raw_app_path = arguments.get("app_path")
+    app_path = str(_raw_app_path).strip() if (_raw_app_path is not None and str(_raw_app_path).strip() not in ("", "None")) else None
+    # Use the session-resolved UDID when available (avoids "booted" lookup failure
+    # when iOS 26.3 briefly shuts down the sim during xcodebuild test lifecycle).
+    udid_arg = str(arguments.get("udid", "booted")).strip() or "booted"
+    udid = _session_udid if (_session_udid and udid_arg == "booted") else udid_arg
     mode = "reinstall-launch" if app_path else "terminate-launch"
+
+    def _ensure_sim_booted(target_udid: str) -> bool:
+        """Return True if already booted; attempt xcrun simctl boot and return True on success.
+
+        Handles iOS 26.3 xcodebuild test lifecycle which leaves the simulator in
+        "Shutting Down" or "Shutdown" state between MCP tool calls. We:
+          1. Poll until Shutting Down completes (up to 10s)
+          2. Issue xcrun simctl boot
+          3. Poll until Booted (up to 20s)
+        """
+        import json as _json
+
+        def _get_state() -> str:
+            try:
+                rp = subprocess.run(
+                    ["xcrun", "simctl", "list", "devices", "--json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if rp.returncode == 0:
+                    data = _json.loads(rp.stdout)
+                    for _rt in data.get("devices", {}).values():
+                        for _d in _rt:
+                            if _d.get("udid") == target_udid:
+                                return _d.get("state", "Unknown")
+            except Exception:  # noqa: BLE001
+                pass
+            return "Unknown"
+
+        try:
+            state = _get_state()
+            if state == "Booted":
+                return True
+
+            # Wait for "Shutting Down" to complete before booting
+            if state == "Shutting Down":
+                logger.info("handle_app_relaunch: sim %s is Shutting Down — waiting for completion", target_udid)
+                for _ in range(15):
+                    time.sleep(1)
+                    state = _get_state()
+                    if state == "Shutdown":
+                        break
+                    if state == "Booted":
+                        return True
+
+            logger.info("handle_app_relaunch: sim %s in state %r — attempting xcrun simctl boot", target_udid, state)
+            boot_r = subprocess.run(
+                ["xcrun", "simctl", "boot", target_udid],
+                capture_output=True, text=True, timeout=30,
+            )
+            if boot_r.returncode != 0 and "Unable to boot device in current state: Booted" not in boot_r.stderr:
+                logger.warning("simctl boot failed: %s", boot_r.stderr.strip())
+                return False
+            # Wait up to 20s for Booted state
+            for _ in range(20):
+                time.sleep(1)
+                if _get_state() == "Booted":
+                    logger.info("handle_app_relaunch: sim %s is Booted (recovery complete)", target_udid)
+                    return True
+            logger.warning("handle_app_relaunch: sim %s did not reach Booted within 20s", target_udid)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_ensure_sim_booted error: %s", exc)
+            return False
 
     t0 = time.monotonic()
     try:
         if app_path:
+            # Before install, ensure sim is booted (iOS 26.3 teardown recovery)
+            if udid != "booted":
+                _ensure_sim_booted(udid)
             r = subprocess.run(
                 ["xcrun", "simctl", "install", udid, app_path],
                 capture_output=True, text=True, timeout=60,
             )
             if r.returncode != 0:
-                return {"error": f"simctl install failed: {r.stderr.strip()}"}
+                # Last-chance: maybe sim just needed a moment — reboot and retry once
+                _install_shutdown = any(ind in r.stderr for ind in (
+                    "No devices are booted", "Unable to lookup in current state: Shutdown", "current state: Shutdown",
+                ))
+                if _install_shutdown and udid != "booted":
+                    if _ensure_sim_booted(udid):
+                        r = subprocess.run(
+                            ["xcrun", "simctl", "install", udid, app_path],
+                            capture_output=True, text=True, timeout=60,
+                        )
+                if r.returncode != 0:
+                    return {"error": f"simctl install failed: {r.stderr.strip()}"}
+
+        # iOS 26.3: proactively check if simulator is booted before terminate+launch.
+        # xcodebuild test lifecycle shuts the sim down but keeps the HTTP server alive.
+        # When the sim is shutdown AND xcodebuild is alive, boot will silently fail
+        # (rc=0 but sim never reaches Booted — xcodebuild keeps it down).
+        # The only reliable recovery is: stop xcodebuild → boot sim → re-deploy.
+        _needs_restart = False
+        if udid != "booted":
+            _sim_state_now = "Unknown"
+            try:
+                import json as _json_check
+                _rsc = subprocess.run(
+                    ["xcrun", "simctl", "list", "devices", "--json"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if _rsc.returncode == 0:
+                    _data_check = _json_check.loads(_rsc.stdout)
+                    for _rt in _data_check.get("devices", {}).values():
+                        for _d in _rt:
+                            if _d.get("udid") == udid:
+                                _sim_state_now = _d.get("state", "Unknown")
+            except Exception:  # noqa: BLE001
+                pass
+
+            if _sim_state_now in ("Shutdown", "Shutting Down"):
+                # Check if xcodebuild is alive — if so, we cannot boot via simctl alone
+                _xc_alive = subprocess.run(
+                    ["pgrep", "-f", f"xcodebuild.*{udid}"],
+                    capture_output=True, text=True,
+                ).stdout.strip()
+                if _xc_alive:
+                    logger.info(
+                        "handle_app_relaunch: sim %s is %s and xcodebuild (%s) is alive "
+                        "— using runner-restart recovery",
+                        udid, _sim_state_now, _xc_alive,
+                    )
+                    _needs_restart = True
+                else:
+                    # No xcodebuild — normal _ensure_sim_booted is safe
+                    if not _ensure_sim_booted(udid):
+                        _needs_restart = True
+
+        if _needs_restart:
+            # _ensure_sim_booted returned False — sim is held down by xcodebuild.
+            # Recovery: kill xcodebuild, boot sim, re-deploy runner, then launch.
+            logger.info(
+                "handle_app_relaunch: sim %s is held down by xcodebuild — "
+                "stopping runner, rebooting sim, and re-deploying",
+                udid,
+            )
+            recovery_err = _restart_runner_for_relaunch(udid, bundle_id)
+            if recovery_err:
+                return {"error": recovery_err}
+            # Runner re-deployed and app launched — build the success result
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            foreground_verified = False
+            try:
+                if _backend is not None:
+                    state_result = _backend.app_state()
+                    foreground_verified = str(state_result.get("state", "")).lower() == "foreground"
+            except Exception:
+                foreground_verified = False
+            result: dict = {
+                "bundle_id": bundle_id,
+                "udid": udid,
+                "elapsed_ms": int(elapsed_ms),
+                "foreground_verified": foreground_verified,
+                "mode": mode,
+                "recovery": "runner-restart",
+            }
+            return result
 
         # terminate (ignore errors — app may not be running)
         subprocess.run(
