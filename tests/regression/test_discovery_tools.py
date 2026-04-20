@@ -136,8 +136,15 @@ class TestHandleDevices:
 # ===========================================================================
 
 
+@pytest.mark.live
 class TestHandleApps:
-    """ios_apps handles bad UDIDs gracefully with ValueError."""
+    """ios_apps handles bad UDIDs gracefully with ValueError.
+
+    Marked @pytest.mark.live: these exercise the real `simctl listapps`
+    subprocess against booted simulators. Earlier suite tests may shut down
+    the sim (via session teardown paths), so they can't run hermetically
+    in full-suite mode. Run with `pytest -m live` when a sim is booted.
+    """
 
     def test_missing_device_udid_raises_value_error(self):
         with pytest.raises(ValueError, match="device_udid is required"):

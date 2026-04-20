@@ -279,6 +279,49 @@ def _check_sim_state_for_udid(udid: str) -> str:
     return "Unknown"
 
 
+def _verify_sim_alive(udid: str) -> tuple[bool, str]:
+    """Check if the XCTest runner / simulator is alive mid-session.
+
+    Strategy: probe the runner HTTP health endpoint rather than simctl list.
+    When xcodebuild test-without-building owns the sim, simctl list incorrectly
+    reports "Shutdown" even while tests are running — so simctl is NOT used here.
+
+    If the runner is reachable → (True, "Booted").
+    If the runner is unreachable → fall back to simctl list to distinguish
+    "runner not deployed" (unknown) from "sim explicitly Shutdown".
+
+    Returns:
+        (True, state)  — sim/runner alive; proceed normally.
+        (False, state) — runner unreachable AND simctl confirms Shutdown.
+    """
+    # First try the runner health endpoint (fastest, most accurate).
+    if _backend is not None:
+        try:
+            result = _backend.health()
+            if isinstance(result, dict) and result.get("status") == "ok":
+                return (True, "Booted")
+        except Exception:
+            pass  # Runner unreachable — fall through to simctl check
+
+    # Runner is unreachable. Use simctl to distinguish explicit Shutdown from transient.
+    state = _check_sim_state_for_udid(udid)
+    _dead_states = {"Shutdown", "ShuttingDown"}
+    if state in _dead_states:
+        return (False, state)
+    # Unknown / Booting / other transient states → treat as alive (don't block).
+    return (True, state)
+
+
+_SIM_SHUTDOWN_RESPONSE = {
+    "error": "sim_shutdown_during_session",
+    "action_needed": "boot_and_reauth",
+}
+
+
+def _sim_shutdown_error(state: str) -> dict:
+    return {**_SIM_SHUTDOWN_RESPONSE, "sim_state": state}
+
+
 def _require_session() -> None:
     """Raise RuntimeError if no active session exists or if the circuit breaker is open.
 
@@ -940,6 +983,12 @@ def handle_stop_session(arguments: dict) -> dict:
     with _session_lock:
         from specterqa.ios.backends.browserstack import BrowserStackBackend
 
+        # Capture UDID and session type before stopping so we can reboot the
+        # sim afterward (F3: stop_session must not leave sim in Shutdown state).
+        _stop_udid = _session_udid
+        from specterqa.ios.session_manager import TestSession as _TestSession
+        _session_is_test_session = isinstance(_session, _TestSession)
+
         if isinstance(_backend, BrowserStackBackend):
             try:
                 _backend.stop()
@@ -950,6 +999,21 @@ def handle_stop_session(arguments: dict) -> dict:
                 _session.stop()
             except Exception as exc:
                 logger.warning("Error stopping session: %s", exc)
+
+        # F3: When _session is a RunnerProcess (MCP pre-deploy path, not TestSession),
+        # TestSession._teardown() is NOT called, so we handle sim reboot here.
+        # Wait briefly for CoreSimulator to finish xcodebuild cleanup, then reboot.
+        if _stop_udid and not _session_is_test_session:
+            try:
+                import time as _time
+                _time.sleep(2)
+                subprocess.run(
+                    ["xcrun", "simctl", "boot", _stop_udid],
+                    capture_output=True, text=True, timeout=10,
+                )
+                logger.info("F3: Sent simctl boot to %s after RunnerProcess stop (keep sim Booted)", _stop_udid)
+            except Exception as exc:
+                logger.debug("F3: simctl boot after stop failed: %s", exc)
 
         # Stop console monitor (terminates background log stream process)
         if _console_monitor is not None:
@@ -1352,6 +1416,11 @@ def handle_tap(arguments: dict) -> dict:
         or {"error": "<message>"} on failure.
     """
     global _last_elements
+
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
 
     identifier = arguments.get("identifier")
     label = arguments.get("label")
@@ -1827,6 +1896,11 @@ def handle_type(arguments: dict) -> dict:
     except RuntimeError as exc:
         return {"error": str(exc)}
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     text = arguments.get("text", "")
     if not text:
         return {"error": "text is required and must be non-empty"}
@@ -1931,6 +2005,11 @@ def handle_elements(arguments: dict) -> dict:
         _require_session()
     except RuntimeError as exc:
         return {"error": str(exc)}
+
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
 
     # BUG V5-2 FIX: honour max_elements cap (default 100; 0 = unlimited).
     max_elements = int(arguments.get("max_elements", 100))
@@ -2292,6 +2371,11 @@ def handle_app_state(arguments: dict) -> dict:
         _require_session()
     except RuntimeError as exc:
         return {"error": str(exc)}
+
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
 
     try:
         result = _backend.app_state()
@@ -3694,6 +3778,11 @@ def handle_capture_state(arguments: dict) -> dict:
     if _backend is None:
         return {"error": "No active session. Call ios_start_session first."}
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     include_filter = arguments.get("include")  # None or list[str]
     if include_filter is not None:
         include_set = set(include_filter)
@@ -3790,6 +3879,11 @@ def handle_action_with_logs(arguments: dict) -> dict:
     if _backend is None:
         return {"error": "No active session. Call ios_start_session first."}
 
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
     action = arguments.get("action")
     if not action or not isinstance(action, dict):
         return {"error": "'action' dict is required (e.g. {'type': 'tap', 'label': 'Submit'})"}
@@ -3875,7 +3969,8 @@ def handle_promote_session_to_test(arguments: dict) -> dict:
     if name.startswith("."):
         return {"error": "name must match [a-zA-Z0-9._-]+"}
 
-    path_override = str(arguments.get("path", "")).strip() or None
+    _path_arg = arguments.get("path")
+    path_override = _path_arg.strip() if isinstance(_path_arg, str) and _path_arg.strip() else None
 
     if path_override is not None:
         # Resolve against cwd and reject if it escapes
@@ -3943,7 +4038,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (44 total):
+AVAILABLE TOOLS (47 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)

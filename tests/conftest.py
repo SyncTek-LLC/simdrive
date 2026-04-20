@@ -8,11 +8,30 @@ fixture instead so CI does not depend on external manual setup.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Auto-skip @pytest.mark.live tests unless opted in
+# ---------------------------------------------------------------------------
+#
+# Tests marked `live` require a booted macOS simulator / Xcode / network and
+# cannot run hermetically. Skip them in normal runs; opt in by setting
+# SPECTERQA_LIVE_SIM=1 when a sim is booted and Xcode is available.
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get("SPECTERQA_LIVE_SIM", "").strip().lower() in ("1", "true", "yes"):
+        return
+    skip_live = pytest.mark.skip(reason="needs SPECTERQA_LIVE_SIM=1 + booted sim/Xcode")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip_live)
 
 
 # ---------------------------------------------------------------------------
