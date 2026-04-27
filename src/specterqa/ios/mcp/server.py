@@ -52,6 +52,11 @@ import json
 import logging
 import os
 import subprocess
+
+# INIT-2026-525: Tier-based access control for MCP tools.
+# Import is deferred-safe — tier_gate only imports from the standard library
+# and lazily imports LicenseValidator on first tool call.
+from specterqa.ios.mcp.tier_gate import require_tier  # noqa: E402
 import threading
 import time
 from pathlib import Path
@@ -4642,6 +4647,7 @@ SETUP CHECK:
             "The session continues — no restart needed."
         ),
     )
+    @require_tier("indie")
     async def ios_start_recording() -> str:
         result = handle_start_recording({})
         return json.dumps(result)
@@ -4657,6 +4663,7 @@ SETUP CHECK:
             "Internally awaits checkpoint completion before saving (prevents stale expect_elements)."
         ),
     )
+    @require_tier("indie")
     async def ios_stop_recording(name: str = "replay", path: str = "") -> str:
         # B8 hardening (v13.3.0): await checkpoint-settling before saving.
         # The 300ms _auto_checkpoint window may not have completed if the caller
@@ -4688,6 +4695,7 @@ SETUP CHECK:
             "Run after navigating to each key screen to build an accessibility report."
         ),
     )
+    @require_tier("pro")
     async def ios_accessibility_audit() -> str:
         result = handle_accessibility_audit({})
         return json.dumps(result)
@@ -4778,6 +4786,7 @@ SETUP CHECK:
             "After changing appearance, call ios_screenshot to see the updated screen."
         ),
     )
+    @require_tier("indie")
     async def ios_set_appearance(mode: str = "dark") -> str:
         result = handle_set_appearance({"mode": mode})
         return json.dumps(result)
@@ -4833,6 +4842,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("indie")
     async def ios_simctl(command: str) -> str:
         result = handle_simctl({"command": command})
         return json.dumps(result)
@@ -4853,6 +4863,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("indie")
     async def ios_webview_elements() -> str:
         try:
             result = handle_webview_elements({})
@@ -4980,6 +4991,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("pro")
     async def ios_perf() -> str:
         result = handle_perf({})
         return json.dumps(result, default=str)
@@ -4998,6 +5010,7 @@ SETUP CHECK:
             "Falls back gracefully if footprint is unavailable."
         ),
     )
+    @require_tier("pro")
     async def ios_memory() -> str:
         result = handle_memory({})
         return json.dumps(result, default=str)
@@ -5018,6 +5031,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("pro")
     async def ios_network(seconds: float = 30.0) -> str:
         result = handle_network({"seconds": seconds})
         return json.dumps(result, default=str)
@@ -5033,6 +5047,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("pro")
     async def ios_perf_baseline() -> str:
         result = handle_perf_baseline({})
         return json.dumps(result, default=str)
@@ -5052,6 +5067,7 @@ SETUP CHECK:
             "Requires ios_perf_baseline to have been called first."
         ),
     )
+    @require_tier("pro")
     async def ios_perf_compare() -> str:
         result = handle_perf_compare({})
         return json.dumps(result, default=str)
@@ -5074,6 +5090,7 @@ SETUP CHECK:
             "Requires an active session with backend='ax'."
         ),
     )
+    @require_tier("indie")
     async def ios_dismiss_springboard_alert(label: str = "Allow") -> str:
         global _backend
         if _backend is None:
@@ -5109,6 +5126,7 @@ SETUP CHECK:
             "OS-level restriction; all other services typically succeed."
         ),
     )
+    @require_tier("indie")
     async def ios_pre_grant_permissions(
         bundle_id: str,
         permissions: list[str],
@@ -5134,6 +5152,7 @@ SETUP CHECK:
             "replay_dir overrides the default scan directory (.specterqa/replays)."
         ),
     )
+    @require_tier("indie")
     async def ios_list_replays(replay_dir: str = ".specterqa/replays") -> str:
         result = handle_list_replays({"replay_dir": replay_dir})
         return json.dumps(result)
@@ -5150,6 +5169,7 @@ SETUP CHECK:
             "Use ios_validate_replay first to catch bad replays before running."
         ),
     )
+    @require_tier("indie")
     async def ios_replay(name: str, replay_dir: str = ".specterqa/replays") -> str:
         result = handle_replay({"name": name, "replay_dir": replay_dir})
         return json.dumps(result)
@@ -5166,6 +5186,7 @@ SETUP CHECK:
             "No active session required."
         ),
     )
+    @require_tier("indie")
     async def ios_validate_replay(name: str, replay_dir: str = ".specterqa/replays") -> str:
         result = handle_validate_replay({"name": name, "replay_dir": replay_dir})
         return json.dumps(result)
@@ -5253,6 +5274,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("team")
     async def ios_app_relaunch(
         bundle_id: str,
         app_path: str | None = None,
@@ -5282,6 +5304,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("pro")
     async def ios_logs_tail(
         since_last_call: bool = True,
         level: str | None = None,
@@ -5312,6 +5335,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("pro")
     async def ios_capture_state(
         include: list[str] | None = None,
         session_id: str | None = None,
@@ -5338,6 +5362,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("pro")
     async def ios_action_with_logs(
         action: dict,
         log_window_ms: int = 2000,
@@ -5385,6 +5410,7 @@ SETUP CHECK:
             "Requires ios_start_recording to have been called first."
         ),
     )
+    @require_tier("team")
     async def ios_promote_session_to_test(
         name: str,
         path: str | None = None,
@@ -5469,6 +5495,7 @@ SETUP CHECK:
             "Requires an active session (ios_start_session)."
         ),
     )
+    @require_tier("indie")
     async def ios_dismiss_first_launch_alerts(
         decline: bool = True,
         permissions: list[str] | None = None,

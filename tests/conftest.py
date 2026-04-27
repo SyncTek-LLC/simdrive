@@ -17,6 +17,54 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# INIT-2026-525: Tier-gate bypass for existing tests
+# ---------------------------------------------------------------------------
+#
+# Tier enforcement (tier_gate.py) gates MCP tool functions behind license checks.
+# Existing tests do NOT set up a license; without a bypass they would fail when
+# calling any gated tool because the validator returns "trial" mode and gated
+# tools require higher tiers.
+#
+# Solution: autouse fixture sets SPECTERQA_LICENSE_BYPASS=1 for the entire test
+# suite, which causes require_tier() to skip all tier checks.  This is safe
+# because:
+#   - The bypass is TEST-ONLY (env var is unset by teardown).
+#   - tests/test_tier_enforcement.py overrides / pops the env var per-test
+#     to exercise the actual gate logic.
+#   - Production deployments do not have SPECTERQA_LICENSE_BYPASS set.
+
+
+@pytest.fixture(autouse=True)
+def _tier_bypass_for_tests():
+    """Set SPECTERQA_LICENSE_BYPASS=1 so existing tests pass tier gates.
+
+    Tests in test_tier_enforcement.py manage the env var themselves and are
+    unaffected (they pop it in setup_method/teardown_method).
+    """
+    prev = os.environ.get("SPECTERQA_LICENSE_BYPASS")
+    os.environ["SPECTERQA_LICENSE_BYPASS"] = "1"
+    # Also reset the tier cache so tests that DO test tier enforcement
+    # start with a clean slate.
+    try:
+        from specterqa.ios.mcp.tier_gate import _reset_tier_cache
+        _reset_tier_cache()
+    except Exception:  # noqa: BLE001
+        pass
+    yield
+    # Restore
+    if prev is None:
+        os.environ.pop("SPECTERQA_LICENSE_BYPASS", None)
+    else:
+        os.environ["SPECTERQA_LICENSE_BYPASS"] = prev
+    # Reset cache again after the test
+    try:
+        from specterqa.ios.mcp.tier_gate import _reset_tier_cache
+        _reset_tier_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Auto-skip @pytest.mark.live tests unless opted in
 # ---------------------------------------------------------------------------
 #
