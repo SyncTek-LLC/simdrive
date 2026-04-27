@@ -114,10 +114,10 @@ def test_pyproject_no_runner_source_package_data():
 
 
 def test_pyproject_version_is_final():
-    """pyproject.toml version must be 15.1.1 (v15.1.1 iOS 26.x runner stability hotfix)."""
+    """pyproject.toml version must be 15.2.0 (v15.2.0 iOS 26.x XCTWaiter run-loop cure)."""
     pyproject = REPO_ROOT / "pyproject.toml"
     content = pyproject.read_text(encoding="utf-8")
-    assert 'version = "15.1.1"' in content, (
-        "pyproject.toml version is not 15.1.1. "
-        "Bump version per the v15.1.1 hotfix release."
+    assert 'version = "15.2.0"' in content, (
+        "pyproject.toml version is not 15.2.0. "
+        "Bump version per the v15.2.0 cure release."
     )
