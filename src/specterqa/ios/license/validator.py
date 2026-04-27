@@ -21,6 +21,8 @@ Dogfood bypass (v0.1.0):
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 import re
@@ -312,7 +314,7 @@ class LicenseValidator:
             iat = payload.get("iat")
             if iat is not None:
                 return (float(iat) + _OFFLINE_GRACE_SECONDS) > now
-        except (ValueError, KeyError, AttributeError):
+        except (ValueError, KeyError, AttributeError, TypeError):
             pass
         return False
 
@@ -333,9 +335,6 @@ class LicenseValidator:
             The decoded payload as a plain dict, or ``{}`` when the key is not
             in JWT format or the payload cannot be decoded.
         """
-        import base64  # noqa: PLC0415
-        import json as _json  # noqa: PLC0415
-
         parts = self._license_key.split(".")
         if len(parts) < 2:
             return {}
@@ -343,8 +342,13 @@ class LicenseValidator:
         payload_b64 = parts[1]
         padding_needed = (-len(payload_b64)) % 4
         payload_b64 += "=" * padding_needed
+        # Cap payload at 2KB before decoding — pre-sanitizer-loosen forward guard
+        # against a future malformed/oversized JWT being parsed.  A real Keygen
+        # JWT payload is ~400-600 bytes; 2KB leaves comfortable headroom.
+        if len(payload_b64) > 2048:
+            return {}
         try:
-            return _json.loads(base64.urlsafe_b64decode(payload_b64))
+            return json.loads(base64.urlsafe_b64decode(payload_b64))
         except Exception:  # noqa: BLE001
             return {}
 
