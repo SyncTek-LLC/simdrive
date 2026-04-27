@@ -155,3 +155,42 @@ class TestCheckOfflineGrace:
         """Opaque (non-JWT) key has no payload → _check_offline_grace() is False."""
         validator = LicenseValidator(license_key="LIC-OPAQUE-0000-ABCD")
         assert validator._check_offline_grace() is False
+
+    def test_offline_grace_at_exact_expiry_returns_false(self):
+        """Boundary: offline_exp == now must return False — code uses strict ``>``.
+
+        Pins the strict-greater-than semantics so a future change to ``>=`` is
+        caught by CI. Uses a freeze-clock pattern via patching the ``datetime``
+        symbol the validator imports.
+        """
+        frozen_ts = 1_800_000_000  # arbitrary stable epoch second
+        payload = {"offline_exp": frozen_ts, "iat": frozen_ts - 3600}
+        token = _make_jwt(payload)
+
+        validator = LicenseValidator(license_key=token)
+
+        class _FrozenDatetime:
+            @staticmethod
+            def now(tz=None):  # noqa: ARG004
+                class _Dt:
+                    @staticmethod
+                    def timestamp():
+                        return float(frozen_ts)
+                return _Dt()
+
+        with patch("specterqa.ios.license.validator.datetime", _FrozenDatetime):
+            assert validator._check_offline_grace() is False
+
+    def test_offline_grace_with_decoded_payload_missing_both_fields(self):
+        """Payload with neither offline_exp nor iat: _decode_jwt returns the dict
+        (empty of expiry fields), _check_offline_grace returns False.
+        """
+        payload = {"sub": "lic-abc"}
+        token = _make_jwt(payload)
+
+        validator = LicenseValidator(license_key=token)
+        decoded = validator._decode_jwt()
+        assert decoded.get("sub") == "lic-abc"
+        assert "offline_exp" not in decoded
+        assert "iat" not in decoded
+        assert validator._check_offline_grace() is False
