@@ -114,10 +114,10 @@ def test_pyproject_no_runner_source_package_data():
 
 
 def test_pyproject_version_is_final():
-    """pyproject.toml version must be 15.0.0 (v15.0.0 sim-reliable release)."""
+    """pyproject.toml version must be 15.1.0 (v15.1.0 forgive-transients release)."""
     pyproject = REPO_ROOT / "pyproject.toml"
     content = pyproject.read_text(encoding="utf-8")
-    assert 'version = "15.0.0"' in content, (
-        "pyproject.toml version is not 15.0.0. "
-        "Bump version from 14.0.3 to 15.0.0."
+    assert 'version = "15.1.0"' in content, (
+        "pyproject.toml version is not 15.1.0. "
+        "Bump version from 15.0.0 to 15.1.0."
     )
