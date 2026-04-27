@@ -830,29 +830,50 @@ def handle_start_session(arguments: dict) -> dict:
                     _mcp_runner.healthcheck(timeout_s=90.0)
                     logger.info("v14: MCP runner deployed and healthy on :%d", _deploy_port)
 
-                    # iOS 26.x stability probe: re-check /health 5s after the first
-                    # success. iOS 26 XCTest's runtime issue detector sometimes
-                    # SIGKILLs the test method shortly after CFRunLoopRunInMode
-                    # entry, causing the runner to die between deploy and first
-                    # replay step (v15.1.0 dogfood Issue #2). Catching it here
-                    # gives the caller a structured error instead of silent
-                    # success → downstream "Connection refused" on every step.
-                    time.sleep(5.0)
-                    _stability_health = False
+                    # iOS 26.x stability probe: re-check /health at +5s and +15s
+                    # after the first healthcheck success. iOS 26 XCTest's
+                    # runtime issue detector sometimes SIGKILLs the test method
+                    # shortly after CFRunLoopRunInMode entry, causing the runner
+                    # to die between deploy and first replay step (v15.1.0
+                    # dogfood Issue #2). Two probes catch both the immediate
+                    # (~2-5s) kill and the slightly-delayed (~10-15s) kill that
+                    # Maurice's suggested test pattern targets.
+                    # Override the budget via SPECTERQA_DEPLOY_STABILITY_S
+                    # (comma-separated seconds, e.g. "5,15,30").
+                    _stab_env = os.environ.get(
+                        "SPECTERQA_DEPLOY_STABILITY_S", "5,15"
+                    ).strip()
                     try:
-                        import urllib.request as _urlreq  # noqa: PLC0415
-                        # Hardcoded scheme + localhost target — bandit B310 false positive.
-                        with _urlreq.urlopen(  # nosec B310
-                            f"http://localhost:{_deploy_port}/health", timeout=2.0,
-                        ) as _resp:
-                            _stability_health = _resp.status == 200
-                    except Exception:  # noqa: BLE001
-                        _stability_health = False
+                        _stab_offsets = [
+                            float(x.strip()) for x in _stab_env.split(",")
+                            if x.strip()
+                        ]
+                    except ValueError:
+                        _stab_offsets = [5.0, 15.0]
+                    _stability_health = False
+                    _last_stab_at = 0.0
+                    import urllib.request as _urlreq  # noqa: PLC0415
+                    for _offset in _stab_offsets:
+                        _delta = _offset - _last_stab_at
+                        if _delta > 0:
+                            time.sleep(_delta)
+                            _last_stab_at = _offset
+                        try:
+                            # Hardcoded scheme + localhost — bandit B310 false positive.
+                            with _urlreq.urlopen(  # nosec B310
+                                f"http://localhost:{_deploy_port}/health",
+                                timeout=2.0,
+                            ) as _resp:
+                                _stability_health = _resp.status == 200
+                        except Exception:  # noqa: BLE001
+                            _stability_health = False
+                        if not _stability_health:
+                            logger.error(
+                                "v14: MCP runner failed stability probe at +%.1fs",
+                                _offset,
+                            )
+                            break
                     if not _stability_health:
-                        logger.error(
-                            "v14: MCP runner died within 5s of deploy — "
-                            "iOS 26.x XCTest watchdog suspected"
-                        )
                         # Drain whatever stderr is available without blocking.
                         # xcodebuild often stays alive even after the in-sim test
                         # process dies, so we cannot rely on process-exit to read
