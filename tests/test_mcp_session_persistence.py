@@ -125,14 +125,6 @@ class TestMCPSessionPersistence:
         session_mgr._DEFAULT_RUNNER_BUILD_DIR = "/fake/runner-build"
         session_mgr.write_version_marker = MagicMock()
 
-        # v15.1.1: stability probe makes a urllib.request.urlopen call to
-        # localhost:8222/health 5s after healthcheck succeeds.  Stub it to a
-        # 200 OK so the test exercises the post-probe success branch.
-        _stability_resp = MagicMock()
-        _stability_resp.status = 200
-        _stability_resp.__enter__ = MagicMock(return_value=_stability_resp)
-        _stability_resp.__exit__ = MagicMock(return_value=False)
-
         try:
             with (
                 patch.dict("sys.modules", {
@@ -149,8 +141,6 @@ class TestMCPSessionPersistence:
                     "specterqa.ios.drivers.simulator.network": MagicMock(NetworkInspector=net_cls),
                 }),
                 patch("specterqa.ios.mcp.server._circuit_breaker"),
-                patch("urllib.request.urlopen", return_value=_stability_resp),
-                patch("specterqa.ios.mcp.server.time.sleep"),
             ):
                 result = srv.handle_start_session({
                     "bundle_id": "com.example.app",
@@ -167,87 +157,6 @@ class TestMCPSessionPersistence:
             )
             # TestSession.start() must NOT have been called
             session_mgr.TestSession.return_value.start.assert_not_called()
-
-        finally:
-            srv._session = None
-            srv._mcp_runner_ref = None
-            srv._backend = None
-            srv._session_state = "idle"
-
-    def test_stability_probe_returns_runner_died_post_deploy(self):
-        """v15.1.1 Issue #2: when /health 200 succeeds (healthcheck passes) but
-        the runner dies before the +5s stability re-probe, ios_start_session
-        returns a structured runner_died_post_deploy error rather than silent ok.
-        """
-        from specterqa.ios.runner_process import RunnerState
-        import specterqa.ios.mcp.server as srv
-
-        runner_mock = _make_runner_mock(port=8222, udid="FAKE-UDID-0002")
-        runner_mock._process = None  # no xcodebuild stderr to drain
-
-        # Reset module state
-        srv._session = None
-        srv._mcp_runner_ref = None
-        srv._backend = None
-        srv._session_state = "idle"
-
-        replay_cls = MagicMock()
-        som_cls = MagicMock()
-        xctest_cls = MagicMock()
-
-        license_cls = MagicMock()
-        license_cls.return_value.validate.return_value = {"valid": True}
-
-        runner_process_module = MagicMock()
-        runner_process_module.RunnerProcess.acquire.return_value = runner_mock
-        runner_deploy_err = type("RunnerDeployError", (Exception,), {})
-        runner_process_module.RunnerDeployError = runner_deploy_err
-        runner_process_module.RunnerState = RunnerState
-
-        selector_module = MagicMock()
-        session_mgr = MagicMock()
-        session_mgr._find_xctestrun.return_value = "/fake/runner.xctestrun"
-        session_mgr._needs_rebuild.return_value = False
-
-        # Stability probe must FAIL (raise on urlopen) to exercise the
-        # runner_died_post_deploy error path.
-        def _raising_urlopen(*args, **kwargs):
-            raise ConnectionRefusedError("simulated runner death")
-
-        try:
-            with (
-                patch.dict("sys.modules", {
-                    "specterqa.ios.license.validator": MagicMock(LicenseValidator=license_cls),
-                    "specterqa.ios.runner_process": runner_process_module,
-                    "specterqa.ios.backends.selector": selector_module,
-                    "specterqa.ios.som_annotator": MagicMock(SoMAnnotator=som_cls),
-                    "specterqa.ios.backends.xctest_client": MagicMock(XCTestBackend=xctest_cls),
-                    "specterqa.ios.session_manager": session_mgr,
-                    "specterqa.ios.replay": MagicMock(ReplayRecorder=replay_cls),
-                    "specterqa.ios.drivers.simulator.console": MagicMock(),
-                    "specterqa.ios.drivers.simulator.crash": MagicMock(),
-                    "specterqa.ios.drivers.simulator.perf": MagicMock(),
-                    "specterqa.ios.drivers.simulator.network": MagicMock(),
-                }),
-                patch("specterqa.ios.mcp.server._circuit_breaker"),
-                patch("urllib.request.urlopen", side_effect=_raising_urlopen),
-                patch("specterqa.ios.mcp.server.time.sleep"),
-            ):
-                result = srv.handle_start_session({
-                    "bundle_id": "com.example.app",
-                    "device_id": "FAKE-UDID-0002",
-                    "backend": "xctest",
-                    "clone": False,
-                    "device_type": "simulator",
-                })
-
-            assert result.get("error") == "runner_died_post_deploy", (
-                f"Expected runner_died_post_deploy, got: {result!r}"
-            )
-            assert result.get("retryable") is False
-            assert "suggested_fix" in result
-            # runner.stop() must have been called to clean up the dead runner
-            runner_mock.stop.assert_called_once()
 
         finally:
             srv._session = None

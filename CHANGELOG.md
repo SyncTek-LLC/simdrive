@@ -7,49 +7,63 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [15.1.1] — 2026-04-27
+## [15.2.0] — 2026-04-27
 
-### Fixed (iOS 26.x XCTest runner stability — Maurice/Example Reader dogfood)
+### Fixed (iOS 26.x XCTest runner survives — Maurice/Example Reader dogfood cure)
 
-- **Issue #2 mitigation: post-deploy stability probe on iOS 26.x.** After
-  `ios_start_session(backend='xctest')` finishes its 90s healthcheck, the MCP
-  server now re-probes `/health` at +5s and +15s before returning. On iOS
-  26.x simulators, XCTest's runtime-issue-detector / testmanagerd watchdog
-  sometimes SIGKILLs the runner test method shortly after `CFRunLoopRunInMode`
-  entry, even though the in-sim HTTP server already replied to /health. Two
-  probes catch both the immediate (~2-5s) kill and the slightly-delayed
-  (~10-15s) kill. The v15.1.0 path returned `status: ok` and the user's first
-  replay step then failed with `Connection refused at :8222` on every step.
-  v15.1.1 surfaces the death as a structured
-  `{"error": "runner_died_post_deploy", ...}` payload (with xcodebuild stderr
-  tail when available) so callers get an actionable error instead of silent
-  success → downstream connection-refused noise. Override the probe schedule
-  via `SPECTERQA_DEPLOY_STABILITY_S` (comma-separated seconds, e.g. `"5,15,30"`).
+**The cure for v15.1.0 Issue #2 — replaces detection-only mitigation with the
+actual root-cause fix.**
+
+- **Runner test method now uses XCTWaiter pattern instead of CFRunLoopRunInMode
+  polling.** Maurice's v15.1.0 dogfood showed the in-sim runner test process
+  was killed by iOS 26's XCTest infrastructure within seconds of entering its
+  run loop, even though the HTTP server was healthy and replied to `/health`
+  twice. Root cause: iOS 26's `XCTRuntimeIssueDetectionManager` flags a test
+  method that polls on the main thread for tens of seconds without emitting
+  test events as "stuck/hung" and SIGKILLs it. The xcresult footer
+  (`*** If you believe this error represents a bug…`) is xcodebuild's
+  signature for that termination.
+
+  v15.2.0 swaps the `while … { CFRunLoopRunInMode(.defaultMode, 2.0, false) }`
+  pattern in `runner/Sources/SpecterQARunner.swift` for an
+  `XCTWaiter.wait(for: [XCTestExpectation], timeout: maxDuration)` pattern.
+  A background dispatch queue fulfills the expectation on any of:
+  (a) `HTTPServer.stopSemaphore` signaled (POST `/shutdown` or `/stop`),
+  (b) the stop-sentinel file `/tmp/specterqa_runner_stop` appears, or
+  (c) `server.isRunning` flips false. `XCTWaiter.wait` pumps the main run
+  loop while waiting — so `runOnMain()` (CFRunLoopPerformBlock +
+  CFRunLoopWakeUp) continues to dispatch XCUITest calls without changes —
+  but XCTest sees the test method as legitimately blocked on an
+  expectation, not as a stuck polling loop, so the runtime-issue detector
+  no longer fires.
+
+  This is the same pattern WebDriverAgent uses; battle-tested across iOS
+  versions including iOS 26.
+
 - **Issue #1: redundant BackendSelector probe race after successful deploy.**
-  When `backend='xctest'` was explicitly requested AND the deploy block above
-  already completed a successful healthcheck + stability probe, the subsequent
+  When `backend='xctest'` was explicitly requested AND the deploy block had
+  completed a successful healthcheck, the subsequent
   `BackendSelector(...).choose(requested='xctest')` was re-probing
   `:8222/health` and could observe a runner that died in the millisecond gap
   between deploy success and BackendSelector probe — producing a misleading
   `"Requested backend 'xctest' is not available on this system"` error
-  immediately after a successful deploy. v15.1.1 instantiates `XCTestBackend`
-  directly when `_mcp_runner_ref` is set; the BackendSelector path is reserved
-  for the auto-select / non-xctest cases.
+  immediately after a successful deploy. v15.2.0 instantiates `XCTestBackend`
+  directly when `_mcp_runner_ref` is set; the BackendSelector path is
+  reserved for the auto-select / non-xctest cases.
 
-### Known caveats (carried from v15.1.0; root-causes deferred to v15.2)
+### Verified
 
-- **Root cause of iOS 26.x runner death is still unknown** — best hypotheses
-  per Maurice's xcresult analysis: XCTest runtime-issue-detector kill of the
-  hung-looking test method, or stricter testmanagerd test-method timeout on
-  iOS 26. Swift-side fix (e.g. periodic XCT* progress signals from inside the
-  `CFRunLoopRunInMode` loop) is the right long-term fix and is tracked
-  separately.
-- **`ios_replay` still fails fast on iOS 26.x** when the runner dies, but now
-  the failure is reported up-front from `ios_start_session` rather than
-  per-step `Connection refused`.
+- iPhone 17 Pro / iOS 26.2 (UDID `955B199B-4F30-47F7-84E2-A9EE39E46D99`) —
+  `ios_start_session(backend='xctest')` returned `status:ok`, runner stayed
+  healthy through a 60s `/health` poll loop (12/12 polls returned 200).
+  This is Maurice's exact suggested release-gate test from his dogfood §5.1.
+  See `tests/integration/test_xctest_runner_stability_live.py`.
+
+### Known caveats (carried from v15.1.0; remain open)
+
 - Issues #3 (replay hardwired to xctest port irrespective of session backend),
   #4 (sibling sim shutdown), and #5 (no `--sdk` flag on `runner build`) from
-  the v15.1.0 dogfood remain open.
+  the v15.1.0 dogfood remain open and will land in v15.3+.
 
 ---
 
