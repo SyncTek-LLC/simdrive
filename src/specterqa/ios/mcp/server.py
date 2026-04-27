@@ -46,6 +46,7 @@ INIT-2026-500 — SpecterQA iOS Headless Driver.
 from __future__ import annotations
 
 import base64
+import datetime
 import io
 import json
 import logging
@@ -352,6 +353,10 @@ def _sim_settle_wait(udid: str, settle_timeout_s: float = 10.0) -> float:
     (or bootTime) field. If the sim booted less than settle_timeout_s ago, sleeps
     the remaining delta. Otherwise returns immediately with 0 wait.
 
+    Accepts ``udid="booted"`` — resolves to the first device in Booted state
+    inside the same simctl listing call (no extra subprocess).  Without this,
+    callers using the ``"booted"`` shorthand silently skip settle.
+
     Returns the actual seconds waited (0 if no wait was needed).
     """
     if settle_timeout_s <= 0:
@@ -365,12 +370,19 @@ def _sim_settle_wait(udid: str, settle_timeout_s: float = 10.0) -> float:
         if result.returncode != 0:
             return 0.0
 
-        import json as _j
-        data = _j.loads(result.stdout)
+        data = json.loads(result.stdout)
         boot_time_str: str | None = None
+        # When caller passes "booted", resolve to the first Booted device — this
+        # makes settle work for the convenience-string path that previously
+        # bypassed it at the call site.
+        match_state_only = udid == "booted"
         for _rt_devs in data.get("devices", {}).values():
             for _d in _rt_devs:
-                if _d.get("udid") == udid:
+                if match_state_only:
+                    if _d.get("state") == "Booted":
+                        boot_time_str = _d.get("lastBootedAt") or _d.get("bootTime")
+                        break
+                elif _d.get("udid") == udid:
                     # CoreSimulator ≥ iOS 16 exposes "lastBootedAt" (ISO 8601)
                     boot_time_str = _d.get("lastBootedAt") or _d.get("bootTime")
                     break
@@ -380,14 +392,13 @@ def _sim_settle_wait(udid: str, settle_timeout_s: float = 10.0) -> float:
         if not boot_time_str:
             return 0.0
 
-        import datetime as _dt
         # Parse ISO 8601 with timezone offset
         try:
-            boot_dt = _dt.datetime.fromisoformat(boot_time_str.replace("Z", "+00:00"))
+            boot_dt = datetime.datetime.fromisoformat(boot_time_str.replace("Z", "+00:00"))
         except ValueError:
             return 0.0
 
-        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        now_dt = datetime.datetime.now(datetime.timezone.utc)
         age_s = (now_dt - boot_dt).total_seconds()
         if age_s < 0:
             age_s = 0.0
@@ -415,17 +426,21 @@ def _sim_settle_wait(udid: str, settle_timeout_s: float = 10.0) -> float:
 # ---------------------------------------------------------------------------
 
 # Patterns in error strings that indicate Apple-side transient failures.
+# IMPORTANT: Keep patterns as specific as possible.
+#   "unable to lookup" was rejected because it also matches bad-UDID errors
+#   (simctl emits "unable to lookup udid" for unknown device IDs) — those are
+#   fatal, not transient.  "CoreSimulator 405" is the specific retriable form.
+#   "runner not become healthy" was removed — grammatically broken, never matches;
+#   the actual emitted string is "Runner did not become healthy within" (above).
 _RETRYABLE_ERROR_PATTERNS = (
     "sim_shutdown_during_session",
     "installcoordinationd",
     "Runner did not become healthy within",
     "CoreSimulator 405",
-    "unable to lookup",
     "exited with code 65",
     "exited with code 70",
     "Connection refused",
     "ConnectionRefusedError",
-    "runner not become healthy",
 )
 
 
@@ -971,8 +986,9 @@ def handle_start_session(arguments: dict) -> dict:
             clone = arguments.get("clone", False)
 
             # sim_settle_timeout: smart wait when sim just booted.
-            # Resolve UDID first (if not "booted") so we can check boot time.
-            if device_type == "simulator" and device_id and device_id != "booted":
+            # _sim_settle_wait now resolves "booted" → first Booted device internally,
+            # so the convenience-string path no longer silently bypasses settle.
+            if device_type == "simulator" and device_id:
                 _sim_settle_wait(device_id, sim_settle_timeout)
 
             # v14.0.2 fix: When _mcp_runner_ref is already deployed and healthy
@@ -3433,19 +3449,31 @@ def _restart_runner_for_relaunch(udid: str, bundle_id: str) -> str | None:
         _precheck_t0 = time.monotonic()
         _precheck_budget_s = 10.0
         _runner_recovered = False
+        _precheck_iter = 0
         while time.monotonic() - _precheck_t0 < _precheck_budget_s:
+            _precheck_iter += 1
+            _precheck_elapsed = time.monotonic() - _precheck_t0
             try:
                 _ph = _backend.health()
                 if isinstance(_ph, dict) and _ph.get("status") == "ok":
                     logger.info(
                         "_restart_runner_for_relaunch: pre-flight health check passed "
                         "(runner healthy after %.1fs) — skipping recovery",
-                        time.monotonic() - _precheck_t0,
+                        _precheck_elapsed,
                     )
                     _runner_recovered = True
                     break
-            except Exception:
-                pass
+                logger.debug(
+                    "_restart_runner_for_relaunch: pre-flight iter %d at %.1fs — "
+                    "health=%r (not ok); will retry",
+                    _precheck_iter, _precheck_elapsed, _ph,
+                )
+            except Exception as _ph_exc:  # noqa: BLE001
+                logger.debug(
+                    "_restart_runner_for_relaunch: pre-flight iter %d at %.1fs — "
+                    "health raised %s: %s; will retry",
+                    _precheck_iter, _precheck_elapsed, type(_ph_exc).__name__, _ph_exc,
+                )
             time.sleep(1.0)
         if _runner_recovered:
             return None  # Skip recovery — transient sim-Shutdown signal
@@ -4536,6 +4564,12 @@ SETUP CHECK:
         x: float | None = None,
         y: float | None = None,
     ) -> str:
+        # HAZARD: _retry_once_on_transient can silently double-execute this tap.
+        # If the first attempt fires the tap but a transient runner error is returned
+        # before the result reaches the caller, the retry will fire the tap a second
+        # time. This is a deliberate tradeoff: better to double-fire than to fail on a
+        # short-lived sim hiccup. Do NOT use ios_tap for irreversible destructive
+        # actions (delete, send, confirm purchase) without probing state first.
         result = _retry_once_on_transient(
             handle_tap,
             {
@@ -5294,14 +5328,31 @@ SETUP CHECK:
         log_window_ms: int = 2000,
         session_id: str | None = None,
     ) -> str:
-        result = _retry_once_on_transient(
-            handle_action_with_logs,
-            {
-                "action": action,
-                "log_window_ms": log_window_ms,
-                "session_id": session_id,
-            },
-        )
+        # HAZARD: _retry_once_on_transient can silently double-execute this action.
+        # If the first attempt executes the UI action but a transient runner error is
+        # returned before the result reaches the caller, the retry will execute the
+        # action a second time. Additionally, the first attempt's entire log window is
+        # discarded on retry — the second attempt re-collects logs from a fresh cursor.
+        # This is a deliberate tradeoff: better to retry-and-double-fire than to
+        # fail on a transient. Do NOT use ios_action_with_logs for irreversible
+        # destructive actions (delete, send, confirm) without probing state first.
+        _args = {
+            "action": action,
+            "log_window_ms": log_window_ms,
+            "session_id": session_id,
+        }
+        result = handle_action_with_logs(_args)
+        if (
+            isinstance(result, dict)
+            and result.get("error")
+            and _is_retryable_error(str(result["error"]))
+        ):
+            logger.debug(
+                "ios_action_with_logs retry: first-attempt logs discarded; window will re-collect"
+            )
+            time.sleep(2.0)
+            result = handle_action_with_logs(_args)
+            result = _tag_retryable(result)
         return json.dumps(result, default=str)
 
     # ── Tool: ios_promote_session_to_test ──────────────────────────────────
