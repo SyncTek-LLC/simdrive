@@ -7,6 +7,90 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [16.0.0] — IN PROGRESS (Phase A landed; Phases B–F pending)
+
+**This is a strategic redirection, not a tweak.** The accessibility-tree
+selector layer that v15.x driving was built around has been doing negative
+work for vision-capable agents on iOS 26.x SwiftUI — lossy, brittle, and
+crash-prone (Maurice/Example Reader v15.2.0 dogfood, three runner deaths in one
+session via `XCUIElementQuery[label]` ambiguous-match `NSException`). v16.0
+pivots to **vision-first**: the agent reads the screenshot, picks
+coordinates, dispatches via a unified action verb. Same shape as Anthropic
+Computer Use, OpenAI Operator, claude-in-chrome.
+
+See `.specterqa/dogfood/v15.2.0-direction-proposal-maurice.md` for the
+strategic rationale and `.specterqa/dogfood/v15.2.0-runner-stability-patch-maurice.md`
+for the tactical patches that v16 makes redundant by deletion.
+
+### Added (Phase A — landed)
+
+- **`ios_observe`** — vision-first observation primitive. Returns
+  `screenshot` (base64 PNG), `device_w`/`device_h`, `app_state`,
+  `captured_at`, and `reliable_targets`: the small set of elements with
+  explicit `accessibilityIdentifier` set by the developer. Everything
+  without an explicit identifier is intentionally absent — the screenshot
+  is the truthful representation; `reliable_targets` is an opt-in
+  semantic helper for the rare elements the developer marked scriptable.
+- **`ios_act`** — unified action dispatcher. Single tool with
+  `action.kind ∈ {tap, type, swipe, key, scroll, long_press, drag}`.
+  Coordinate-primary; `identifier` permitted on `tap`/`long_press` as an
+  opt-in semantic helper. `normalized=true` treats coordinates in
+  [0.0, 1.0] as fractions of device dimensions. Label-based selectors
+  are NOT supported.
+- **ObjC bridge for `runOnMain` defense-in-depth.**
+  `runner/Sources/SpecterQAObjCBridge.{h,m}` adds a Swift-callable
+  `@try`/`@catch` shim. Phase B will delete the dominant throw site
+  (XCUIElementQuery selector layer); the bridge stays as a safety net
+  for any other XCTest API that can throw.
+- **Tier enforcement on the new primitives.** `ios_observe` and
+  `ios_act` are both `trial`-tier — observation and input are free.
+
+### Folded in from v15.x branches (un-shipped, now part of v16)
+
+- **PR #79 — Tier enforcement across the MCP tool surface.** Every tool
+  now declares a minimum license tier; bypass via
+  `SPECTERQA_LICENSE_BYPASS=1` (CI/dev) with module-level WARNING.
+- **PR #78 — SEC-HIGH-005 JWT offline grace decoder hardening.**
+  Hoisted imports, 2KB payload size cap, `TypeError` added to
+  `_check_offline_grace` exception tuple.
+
+### Pending (Phases B–F)
+
+- **Phase B — demolition.** Delete `runner/Sources/SpecterQAElementQuery.swift`,
+  strip `findByLabel`/`findByIdentifier`/`waitForElement` call paths from
+  `TapRoute`/`TypeRoute`/`SwipeRoute`. Delete legacy MCP tools:
+  `ios_screenshot`, `ios_elements`, `ios_tap`, `ios_long_press`, `ios_swipe`,
+  `ios_swipe_back`, `ios_type`, `ios_press_key`, `ios_dismiss_keyboard`,
+  `ios_wait_idle`, `ios_wait_for_element`, `ios_capture_state`,
+  `ios_action_with_logs`. Net 49 → ~22 tools.
+- **Phase C — replay rewrite.** New YAML schema based on coordinate
+  actions + visual SSIM diff. PNG references stored alongside YAML.
+  Per-step region mask + threshold override. Migration tool for
+  pre-v16 replay YAMLs.
+- **Phase D — recording rewrite.** Capture screenshot + tap coordinate
+  per step; optional OCR'd text near tap for human readability.
+- **Phase E — README rewrite, migration guide, real-sim integration tests
+  for the new primitives.**
+- **Phase F — PR, QualityAtlas certification, DeployAtlas tag/PyPI publish.**
+
+### Out-of-band signals (unchanged in v16)
+
+`ios_logs`, `ios_logs_tail`, `ios_perf`, `ios_memory`, `ios_network`,
+`ios_crashes`, `ios_app_state`, `ios_session_status`, `ios_doctor`,
+`ios_devices`, `ios_apps`, `ios_get_capabilities`, `ios_app_relaunch`,
+`ios_dismiss_first_launch_alerts`, `ios_pre_grant_permissions`,
+`ios_set_appearance`, `ios_dismiss_springboard_alert` — all kept as-is.
+These are operational primitives that don't depend on the selector layer.
+
+### Breaking changes
+
+- Pre-v16 replay YAMLs (asserting `expect_elements: [...]`) will not run
+  under v16 once Phase C lands. A migration tool will be provided.
+- v15.x label-based `ios_tap(label=...)` callers will see `tool not found`
+  once Phase B deletes `ios_tap`. Migrate to `ios_act({kind: 'tap', x, y})`.
+
+---
+
 ## [15.2.0] — 2026-04-27
 
 ### Fixed (iOS 26.x XCTest runner survives — Maurice/Example Reader dogfood cure)

@@ -84,7 +84,7 @@ def test_required_session_tool_present(tool_names: set[str], tool_name: str):
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_TOOL_COUNT = 47  # v15.0.0 adds ios_wait_for_session, ios_session_status, ios_dismiss_first_launch_alerts
+_EXPECTED_TOOL_COUNT = 49  # v16.0.0 adds ios_observe + ios_act (vision-first primitives)
 
 
 def test_total_tool_count(tool_names: set[str]):
