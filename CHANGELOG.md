@@ -32,6 +32,19 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
   (`sim_shutdown_during_session`, `installcoordinationd`, `Runner did not become healthy`, etc.) now
   carry `retryable: true`. Fatal errors (bad UDID, permissions denied) do not set this field.
 
+### Known caveats
+
+- **`ios_tap` is not idempotent under retry.** When the first tap dispatches successfully but the
+  runner returns a transient error before the result reaches the caller, the auto-retry will
+  fire the tap a second time. The tradeoff is deliberate — short-lived sim hiccups recover on
+  retry — but callers performing irreversible actions (delete, send, confirm purchase) should
+  probe state first rather than relying on `ios_tap` alone.
+- **`ios_action_with_logs` is not idempotent under retry, and the first attempt's log window is
+  discarded.** If the first attempt executes the UI action but a transient error is returned,
+  the retry re-executes the action and re-collects logs from a fresh cursor — the original
+  log window is lost. Same destructive-action caveat as `ios_tap` applies. Callers needing a
+  guaranteed-once-only action should call the underlying primitive without the retry wrapper.
+
 ---
 
 ## [15.0.0] — 2026-04-20
