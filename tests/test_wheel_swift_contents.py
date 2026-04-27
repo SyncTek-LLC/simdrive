@@ -112,7 +112,7 @@ def test_wheel_does_not_contain_runner_source(wheel_namelist):
 
 
 def test_wheel_version_is_final(built_wheel):
-    """Wheel filename must reflect the final version 15.1.0."""
-    assert "15.1.0" in built_wheel.name, (
-        f"Wheel filename does not contain '15.1.0': {built_wheel.name}"
+    """Wheel filename must reflect the final version 15.1.1."""
+    assert "15.1.1" in built_wheel.name, (
+        f"Wheel filename does not contain '15.1.1': {built_wheel.name}"
     )

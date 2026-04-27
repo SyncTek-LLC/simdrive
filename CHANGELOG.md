@@ -13,15 +13,18 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 - **Issue #2 mitigation: post-deploy stability probe on iOS 26.x.** After
   `ios_start_session(backend='xctest')` finishes its 90s healthcheck, the MCP
-  server now sleeps 5s and re-probes `/health` once before returning. On iOS
+  server now re-probes `/health` at +5s and +15s before returning. On iOS
   26.x simulators, XCTest's runtime-issue-detector / testmanagerd watchdog
   sometimes SIGKILLs the runner test method shortly after `CFRunLoopRunInMode`
-  entry, even though the in-sim HTTP server already replied to /health. The
-  v15.1.0 path returned `status: ok` and the user's first replay step then
-  failed with `Connection refused at :8222` on every step. v15.1.1 surfaces the
-  death as a structured `{"error": "runner_died_post_deploy", ...}` payload
-  (with xcodebuild stderr tail when available) so callers get an actionable
-  error instead of silent success → downstream connection-refused noise.
+  entry, even though the in-sim HTTP server already replied to /health. Two
+  probes catch both the immediate (~2-5s) kill and the slightly-delayed
+  (~10-15s) kill. The v15.1.0 path returned `status: ok` and the user's first
+  replay step then failed with `Connection refused at :8222` on every step.
+  v15.1.1 surfaces the death as a structured
+  `{"error": "runner_died_post_deploy", ...}` payload (with xcodebuild stderr
+  tail when available) so callers get an actionable error instead of silent
+  success → downstream connection-refused noise. Override the probe schedule
+  via `SPECTERQA_DEPLOY_STABILITY_S` (comma-separated seconds, e.g. `"5,15,30"`).
 - **Issue #1: redundant BackendSelector probe race after successful deploy.**
   When `backend='xctest'` was explicitly requested AND the deploy block above
   already completed a successful healthcheck + stability probe, the subsequent
