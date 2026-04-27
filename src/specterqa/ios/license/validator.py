@@ -167,8 +167,12 @@ def consume_trial_run() -> int:
     return _trial_run_count
 
 
-def reset_trial_counter() -> None:
-    """Reset the trial run counter. Primarily for use in tests."""
+def _reset_trial_counter() -> None:
+    """Reset the trial run counter. Primarily for use in tests.
+
+    SEC-MED-003: renamed from ``reset_trial_counter`` to private convention to
+    prevent library callers from bypassing the trial run limit.
+    """
     global _trial_run_count
     _trial_run_count = 0
 
@@ -313,18 +317,36 @@ class LicenseValidator:
         return False
 
     def _decode_jwt(self) -> Dict[str, Any]:
-        """Decode the JWT token associated with this license key.
+        """Decode the JWT payload segment from the license key.
 
-        This is a stub that subclasses or tests can patch. In production it
-        would decode the JWT header/payload (without signature verification
-        for the offline check — the expiry field alone is sufficient).
+        Keygen.sh may issue license keys in JWT format (``header.payload.sig``).
+        When the key has at least two dot-separated segments this method
+        base64url-decodes the second segment and parses it as JSON, returning
+        the payload dict.  Keys that are not JWT-shaped (opaque tokens, legacy
+        Keygen short keys) gracefully return ``{}``.
+
+        Signature verification is intentionally skipped here: the offline grace
+        check only reads expiry timestamps — the Keygen.sh server already
+        verified the key when it was activated online.
 
         Returns:
-            The decoded payload as a plain dict.
+            The decoded payload as a plain dict, or ``{}`` when the key is not
+            in JWT format or the payload cannot be decoded.
         """
-        # Production implementation would base64-decode the JWT payload segment.
-        # Tests patch this method directly, so we just return an empty dict here.
-        return {}
+        import base64  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        parts = self._license_key.split(".")
+        if len(parts) < 2:
+            return {}
+        # Re-add base64 padding stripped by JWT spec (length must be multiple of 4)
+        payload_b64 = parts[1]
+        padding_needed = (-len(payload_b64)) % 4
+        payload_b64 += "=" * padding_needed
+        try:
+            return _json.loads(base64.urlsafe_b64decode(payload_b64))
+        except Exception:  # noqa: BLE001
+            return {}
 
     # ------------------------------------------------------------------
     # Internal — API interaction
@@ -376,7 +398,7 @@ class LicenseValidator:
         url = f"{self._api_url}/licenses/{safe_key}/actions/validate"
         # 15s timeout matches the httpx-path budget; without it a hung Keygen.sh
         # API would block the entire SpecterQA process indefinitely on every
-        # license check (SEC-MED).
+        # license check (SEC-MED + SEC-LOW-003).
         response = requests.get(url, timeout=15.0)
         response.raise_for_status()
         return self._parse_api_response(response.json())
