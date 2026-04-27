@@ -45,6 +45,7 @@ Usage:
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 from typing import Any, Callable
@@ -85,12 +86,12 @@ _UPGRADE_URL = "https://synctek.io/specterqa#pricing"
 #           consume significant infra resources and that a free user needs
 #           to evaluate the product.
 #   indie:  Recording/replay (saves YAML artifacts), dismiss helpers,
-#           appearance/simctl/webview.  Mild value add; $29/mo tier.
+#           appearance/webview.  Mild value add; $29/mo tier.
 #   pro:    Performance + network monitoring + accessibility audit +
-#           AI debugging capture tools.  These require real infra compute
-#           and are the key upgrade motivators; $99/mo tier.
-#   team:   Session-multiplexing primitives: app_relaunch (fast debug
-#           iteration across many sessions), promote_session_to_test.
+#           AI debugging capture tools + high-trust simctl passthrough.
+#           These require real infra compute and are the key upgrade
+#           motivators; $99/mo tier.
+#   team:   Session-multiplexing primitives: promote_session_to_test.
 #           $299/mo tier.
 #   enterprise: Reserved for future tools only.
 
@@ -140,7 +141,7 @@ TOOL_TIER_MAP: dict[str, str] = {
     # ── Quality & Diagnostics ──────────────────────────────────────────────
     "ios_accessibility_audit": "pro",   # Full audit; non-trivial CPU
     "ios_set_appearance": "indie",      # Cosmetic test utility
-    "ios_simctl": "indie",              # Raw simctl access; power user
+    "ios_simctl": "pro",                # Pro tier: arbitrary simctl passthrough is high-trust; indie users get safer tools instead
     "ios_webview_elements": "indie",    # WKWebView introspection
     "ios_logs": "trial",                # Logs are essential for debugging even in trial
     "ios_crashes": "trial",             # Crash detection is essential; trial needs it
@@ -156,8 +157,8 @@ TOOL_TIER_MAP: dict[str, str] = {
     "ios_perf_compare": "pro",
 
     # ── AI Debugging Primitives (v14.0.0b1) ───────────────────────────────
-    # These are high-value debugging multipliers; gated at pro+ / team+.
-    "ios_app_relaunch": "team",
+    # These are high-value debugging multipliers; gated at pro+.
+    "ios_app_relaunch": "pro",          # Pro tier: single-session debug utility; team tier is dead-on-arrival for this use case
     "ios_logs_tail": "pro",
     "ios_capture_state": "pro",
     "ios_action_with_logs": "pro",
@@ -170,7 +171,7 @@ TOOL_TIER_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 _tier_cache: str | None = None
-_tier_cache_lock_val = None  # simple sentinel, not a real lock — single-thread cache
+# TODO: add threading.Lock when serve() goes multi-worker
 
 
 def _get_current_tier() -> str:
@@ -207,6 +208,14 @@ def _get_current_tier() -> str:
         validator = LicenseValidator(license_key=license_key)
         result = validator.validate()
         tier = result.get("tier", "trial") or "trial"
+        # Warn if the returned tier is not in the rank map (catches future/custom tiers
+        # that would silently lock the user out of all gated tools).
+        if tier not in TIER_RANK:
+            logger.warning(
+                "Unknown license tier %r — falling back to most-restrictive "
+                "(denying all gated tools)",
+                tier,
+            )
         _tier_cache = tier
         return _tier_cache
 
@@ -292,11 +301,9 @@ def require_tier(min_tier: str) -> Callable:
         async def ios_perf() -> str:
             ...
 
-    The decorated function may return either a dict or a JSON string (to match
-    the existing MCP tool conventions in server.py).  When the gate blocks, the
-    error is returned in the same type as the function's *expected* return type.
-    Since MCP tools return JSON strings, the error is JSON-encoded when the
-    underlying function is blocked before execution.
+    When the gate blocks, the error dict is returned as ``json.dumps(err)``
+    so that MCP clients always receive a JSON string (consistent with how
+    every other tool in server.py returns results).
 
     Bypass:
         Set ``SPECTERQA_LICENSE_BYPASS=1`` to skip all tier checks.
@@ -314,7 +321,7 @@ def require_tier(min_tier: str) -> Callable:
         def _check_gate() -> dict | None:
             """Return error dict if gate blocks, None if allowed.  May raise."""
             # CI / dev bypass
-            if os.environ.get("SPECTERQA_LICENSE_BYPASS", "").strip() in ("1", "true", "yes"):
+            if os.environ.get("SPECTERQA_LICENSE_BYPASS", "").strip().lower() in ("1", "true", "yes"):
                 return None
 
             # Resolve current tier (fail-open on exception)
@@ -340,7 +347,7 @@ def require_tier(min_tier: str) -> Callable:
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 err = _check_gate()
                 if err is not None:
-                    return err
+                    return json.dumps(err)
                 return await func(*args, **kwargs)
             return async_wrapper
         else:
@@ -348,8 +355,19 @@ def require_tier(min_tier: str) -> Callable:
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 err = _check_gate()
                 if err is not None:
-                    return err
+                    return json.dumps(err)
                 return func(*args, **kwargs)
             return sync_wrapper
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# Module-level startup warning when bypass is active
+# ---------------------------------------------------------------------------
+
+if os.environ.get("SPECTERQA_LICENSE_BYPASS", "").strip().lower() in ("1", "true", "yes"):
+    logger.warning(
+        "SPECTERQA_LICENSE_BYPASS is set — ALL tier enforcement is DISABLED. "
+        "This must NEVER be set in production deployments."
+    )
