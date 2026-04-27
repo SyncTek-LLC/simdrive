@@ -829,6 +829,72 @@ def handle_start_session(arguments: dict) -> dict:
                 try:
                     _mcp_runner.healthcheck(timeout_s=90.0)
                     logger.info("v14: MCP runner deployed and healthy on :%d", _deploy_port)
+
+                    # iOS 26.x stability probe: re-check /health 5s after the first
+                    # success. iOS 26 XCTest's runtime issue detector sometimes
+                    # SIGKILLs the test method shortly after CFRunLoopRunInMode
+                    # entry, causing the runner to die between deploy and first
+                    # replay step (v15.1.0 dogfood Issue #2). Catching it here
+                    # gives the caller a structured error instead of silent
+                    # success → downstream "Connection refused" on every step.
+                    time.sleep(5.0)
+                    _stability_health = False
+                    try:
+                        import urllib.request as _urlreq  # noqa: PLC0415
+                        # Hardcoded scheme + localhost target — bandit B310 false positive.
+                        with _urlreq.urlopen(  # nosec B310
+                            f"http://localhost:{_deploy_port}/health", timeout=2.0,
+                        ) as _resp:
+                            _stability_health = _resp.status == 200
+                    except Exception:  # noqa: BLE001
+                        _stability_health = False
+                    if not _stability_health:
+                        logger.error(
+                            "v14: MCP runner died within 5s of deploy — "
+                            "iOS 26.x XCTest watchdog suspected"
+                        )
+                        # Drain whatever stderr is available without blocking.
+                        # xcodebuild often stays alive even after the in-sim test
+                        # process dies, so we cannot rely on process-exit to read
+                        # stderr the way RunnerProcess.healthcheck does.
+                        _stderr_tail = ""
+                        try:
+                            _proc = getattr(_mcp_runner, "_process", None)
+                            if _proc is not None and _proc.stderr is not None:
+                                import os as _os_io  # noqa: PLC0415
+                                _os_io.set_blocking(_proc.stderr.fileno(), False)
+                                _drained = _proc.stderr.read() or b""
+                                _stderr_tail = _drained.decode(
+                                    "utf-8", errors="replace"
+                                )[-2000:]
+                        except Exception:  # noqa: BLE001
+                            _stderr_tail = ""
+                        try:
+                            _mcp_runner.stop()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        _err_payload = {
+                            "error": "runner_died_post_deploy",
+                            "message": (
+                                "The XCTest runner deployed and replied to /health "
+                                "successfully but stopped responding within 5 seconds. "
+                                "On iOS 26.x simulators this is typically an XCTest "
+                                "runtime-issue-detector kill of the test method."
+                            ),
+                            "retryable": False,
+                            "suggested_fix": (
+                                "1. Use backend='ax' for direct interaction (ios_tap, "
+                                "ios_elements) — replay is unsupported on AX today.\n"
+                                "2. Try a non-iOS-26 simulator for replay flows.\n"
+                                "3. File an issue with the xcresult bundle from "
+                                "~/Library/Developer/Xcode/DerivedData/SpecterQARunner-*/"
+                                "Logs/Test/*.xcresult/Staging/1_Test/Diagnostics/"
+                            ),
+                        }
+                        if _stderr_tail:
+                            _err_payload["xcodebuild_stderr_tail"] = _stderr_tail
+                        return _err_payload
+
                     # Store for cleanup on stop — but do NOT assign to _session yet.
                     # _session is set later (xctest path) to avoid a second deploy.
                     _mcp_runner_ref = _mcp_runner  # noqa: PLW0603
@@ -843,15 +909,30 @@ def handle_start_session(arguments: dict) -> dict:
                 logger.warning("v14: MCP runner deploy failed: %s", deploy_exc)
 
         from specterqa.ios.backends.selector import BackendSelector
+        from specterqa.ios.backends.xctest_client import XCTestBackend  # noqa: PLC0415
         from specterqa.ios.som_annotator import SoMAnnotator
 
-        try:
-            chosen = BackendSelector(udid=device_id).choose(
-                device_udid=device_id,
-                requested=backend_arg,
+        # v15.1.1 dogfood Issue #1: when xctest is explicitly requested AND the
+        # deploy block above already ran a successful healthcheck + stability probe,
+        # skip the BackendSelector re-probe.  The re-probe was racing the iOS 26.x
+        # XCTest watchdog kill — runner could be alive at healthcheck() return,
+        # dead by BackendSelector probe, producing a misleading "is not available"
+        # error after a successful deploy.  If we got past the stability probe
+        # above, the runner is live; trust that signal and instantiate directly.
+        if backend_arg == "xctest" and _mcp_runner_ref is not None:
+            chosen = XCTestBackend(udid=device_id)
+            logger.info(
+                "v15.1.1: bypassing BackendSelector probe — runner deployed "
+                "+ stability-confirmed above"
             )
-        except (RuntimeError, ValueError) as exc:
-            return {"error": str(exc)}
+        else:
+            try:
+                chosen = BackendSelector(udid=device_id).choose(
+                    device_udid=device_id,
+                    requested=backend_arg,
+                )
+            except (RuntimeError, ValueError) as exc:
+                return {"error": str(exc)}
 
         backend_name = type(chosen).__name__
 

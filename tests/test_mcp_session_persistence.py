@@ -125,6 +125,14 @@ class TestMCPSessionPersistence:
         session_mgr._DEFAULT_RUNNER_BUILD_DIR = "/fake/runner-build"
         session_mgr.write_version_marker = MagicMock()
 
+        # v15.1.1: stability probe makes a urllib.request.urlopen call to
+        # localhost:8222/health 5s after healthcheck succeeds.  Stub it to a
+        # 200 OK so the test exercises the post-probe success branch.
+        _stability_resp = MagicMock()
+        _stability_resp.status = 200
+        _stability_resp.__enter__ = MagicMock(return_value=_stability_resp)
+        _stability_resp.__exit__ = MagicMock(return_value=False)
+
         try:
             with (
                 patch.dict("sys.modules", {
@@ -141,6 +149,8 @@ class TestMCPSessionPersistence:
                     "specterqa.ios.drivers.simulator.network": MagicMock(NetworkInspector=net_cls),
                 }),
                 patch("specterqa.ios.mcp.server._circuit_breaker"),
+                patch("urllib.request.urlopen", return_value=_stability_resp),
+                patch("specterqa.ios.mcp.server.time.sleep"),
             ):
                 result = srv.handle_start_session({
                     "bundle_id": "com.example.app",
