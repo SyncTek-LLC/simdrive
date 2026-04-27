@@ -7,6 +7,49 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [15.1.1] — 2026-04-27
+
+### Fixed (iOS 26.x XCTest runner stability — Maurice/Palace dogfood)
+
+- **Issue #2 mitigation: post-deploy stability probe on iOS 26.x.** After
+  `ios_start_session(backend='xctest')` finishes its 90s healthcheck, the MCP
+  server now sleeps 5s and re-probes `/health` once before returning. On iOS
+  26.x simulators, XCTest's runtime-issue-detector / testmanagerd watchdog
+  sometimes SIGKILLs the runner test method shortly after `CFRunLoopRunInMode`
+  entry, even though the in-sim HTTP server already replied to /health. The
+  v15.1.0 path returned `status: ok` and the user's first replay step then
+  failed with `Connection refused at :8222` on every step. v15.1.1 surfaces the
+  death as a structured `{"error": "runner_died_post_deploy", ...}` payload
+  (with xcodebuild stderr tail when available) so callers get an actionable
+  error instead of silent success → downstream connection-refused noise.
+- **Issue #1: redundant BackendSelector probe race after successful deploy.**
+  When `backend='xctest'` was explicitly requested AND the deploy block above
+  already completed a successful healthcheck + stability probe, the subsequent
+  `BackendSelector(...).choose(requested='xctest')` was re-probing
+  `:8222/health` and could observe a runner that died in the millisecond gap
+  between deploy success and BackendSelector probe — producing a misleading
+  `"Requested backend 'xctest' is not available on this system"` error
+  immediately after a successful deploy. v15.1.1 instantiates `XCTestBackend`
+  directly when `_mcp_runner_ref` is set; the BackendSelector path is reserved
+  for the auto-select / non-xctest cases.
+
+### Known caveats (carried from v15.1.0; root-causes deferred to v15.2)
+
+- **Root cause of iOS 26.x runner death is still unknown** — best hypotheses
+  per Maurice's xcresult analysis: XCTest runtime-issue-detector kill of the
+  hung-looking test method, or stricter testmanagerd test-method timeout on
+  iOS 26. Swift-side fix (e.g. periodic XCT* progress signals from inside the
+  `CFRunLoopRunInMode` loop) is the right long-term fix and is tracked
+  separately.
+- **`ios_replay` still fails fast on iOS 26.x** when the runner dies, but now
+  the failure is reported up-front from `ios_start_session` rather than
+  per-step `Connection refused`.
+- Issues #3 (replay hardwired to xctest port irrespective of session backend),
+  #4 (sibling sim shutdown), and #5 (no `--sdk` flag on `runner build`) from
+  the v15.1.0 dogfood remain open.
+
+---
+
 ## [15.1.0] — 2026-04-21
 
 ### Changed (UX philosophy)
