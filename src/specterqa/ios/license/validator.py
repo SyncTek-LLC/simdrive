@@ -374,7 +374,10 @@ class LicenseValidator:
         # SEC-CRIT-001: sanitize key before interpolating into URL
         safe_key = _sanitize_license_key(self._license_key)
         url = f"{self._api_url}/licenses/{safe_key}/actions/validate"
-        response = requests.get(url)
+        # 15s timeout matches the httpx-path budget; without it a hung Keygen.sh
+        # API would block the entire SpecterQA process indefinitely on every
+        # license check (SEC-MED).
+        response = requests.get(url, timeout=15.0)
         response.raise_for_status()
         return self._parse_api_response(response.json())
 

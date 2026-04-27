@@ -291,7 +291,7 @@ class TestMCPServerProtocol:
             "ios_elements",
             "ios_swipe",
             "ios_type",
-            "ios_save_replay",
+            "ios_stop_recording",  # ios_save_replay removed in v14.0.0a1 (OQ-4)
         }
         missing = required - tool_names
         assert not missing, f"MCP server missing required tools: {missing}"
