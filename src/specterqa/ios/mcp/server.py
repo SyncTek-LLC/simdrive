@@ -2547,6 +2547,288 @@ def handle_wait_idle(arguments: dict) -> dict:
         return {"error": f"wait_idle failed: {exc}"}
 
 
+def handle_observe(arguments: dict) -> dict:
+    """v16.0.0 — vision-first observation primitive.
+
+    Returns the current screen state in the form a vision-capable agent (Claude,
+    GPT-4V, Gemini) can act on directly: a screenshot plus only the truly stable
+    semantic anchors. Replaces the v15.x ``ios_screenshot`` + ``ios_elements``
+    pair, with the deliberate scope reduction that ``reliable_targets`` excludes
+    everything without an explicit ``accessibilityIdentifier``.
+
+    The intent: stop trying to represent the iOS screen for the agent via the
+    accessibility tree, which on iOS 26.x SwiftUI is lossy (elements without
+    explicit accessibility setup vanish), brittle (label propagation across
+    NavigationStackHosting wrappers), and crash-prone (XCUIElementQuery
+    subscript throwing NSException on ambiguous matches). The screenshot is
+    the truthful visual representation; ``reliable_targets`` is an opt-in
+    semantic helper for the rare cases where the developer set an explicit
+    identifier.
+
+    Args:
+        quality: "standard" (50%, default), "full" (no resize), "thumbnail" (25%).
+        include_legacy_elements: When True, also include the un-filtered legacy
+            element list under ``"legacy_elements"`` for transition compatibility.
+            Default False — vision-first agents shouldn't need it.
+
+    Returns:
+        {
+            "screenshot": "<base64 PNG, annotated>",
+            "device_w": <int>,
+            "device_h": <int>,
+            "reliable_targets": [
+                {"identifier": "<string>", "label": "...", "type": "Button",
+                 "x": <px>, "y": <px>, "width": <px>, "height": <px>,
+                 "center_x": <px>, "center_y": <px>}
+            ],
+            "app_state": {<runner.app_state response>},
+            "captured_at": "<ISO 8601 UTC>"
+        }
+        or {"error": "<message>"} on failure.
+    """
+    global _last_elements
+
+    try:
+        _require_session()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+
+    if _session_udid:
+        _alive, _state = _verify_sim_alive(_session_udid)
+        if not _alive:
+            return _sim_shutdown_error(_state)
+
+    quality = str(arguments.get("quality", "standard")).lower()
+    include_legacy = bool(arguments.get("include_legacy_elements", False))
+    scale = _QUALITY_SCALES.get(quality, 0.5)
+
+    try:
+        annotated_b64, elements = _get_annotated_screenshot()
+        _last_elements = elements
+
+        # Filter to elements with explicit accessibilityIdentifier set.
+        # `identifier` was added to UIElement in v16.0.0; pre-v16 elements
+        # have it as empty string, so the filter is degenerate-empty for
+        # surfaces where the developer never opted in to scriptability.
+        reliable_targets = [
+            {
+                "identifier": e.identifier,
+                "label": e.label,
+                "type": e.element_type,
+                "x": e.x,
+                "y": e.y,
+                "width": e.width,
+                "height": e.height,
+                "center_x": e.center_x,
+                "center_y": e.center_y,
+            }
+            for e in elements
+            if getattr(e, "identifier", "")
+        ]
+
+        # Resize annotated screenshot per quality flag.
+        resized_b64 = _resize_screenshot(annotated_b64, scale=scale)
+
+        # Device dimensions — pull from the active session metadata when
+        # available; fall back to a runner /screenshot probe if needed.
+        device_w = device_h = 0
+        try:
+            sess = _session
+            if sess is not None:
+                device_w = int(getattr(sess, "_device_w", 0) or 0)
+                device_h = int(getattr(sess, "_device_h", 0) or 0)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # App state (foreground / background / suspended) — out-of-band.
+        app_state_payload: dict = {}
+        try:
+            if _backend is not None:
+                app_state_payload = _backend.app_state()
+        except Exception as exc:  # noqa: BLE001
+            app_state_payload = {"error": f"app_state probe failed: {exc}"}
+
+        from datetime import datetime, timezone  # noqa: PLC0415
+        captured_at = datetime.now(timezone.utc).isoformat()
+
+        result = {
+            "screenshot": resized_b64,
+            "device_w": device_w,
+            "device_h": device_h,
+            "reliable_targets": reliable_targets,
+            "app_state": app_state_payload,
+            "captured_at": captured_at,
+        }
+        if include_legacy:
+            result["legacy_elements"] = [e.to_dict() for e in elements]
+        return result
+
+    except Exception as exc:
+        return {"error": f"observe failed: {exc}"}
+
+
+def handle_act(arguments: dict) -> dict:
+    """v16.0.0 — unified vision-first action dispatcher.
+
+    Single entry point for tap / type / swipe / key / scroll / long_press / drag.
+    All actions are coordinate-primary: the agent is responsible for choosing
+    coordinates from the ``ios_observe`` screenshot. ``identifier`` is allowed
+    on tap/long_press as an opt-in semantic helper for elements with explicit
+    ``accessibilityIdentifier`` (the ``reliable_targets`` shape from observe).
+    Label-based selectors are *not* supported — they're the v15.x crash class
+    that v16 deletes.
+
+    Args:
+        action: dict with required ``"kind"`` and kind-specific fields:
+            {"kind": "tap",        "x": float, "y": float}
+            {"kind": "tap",        "identifier": str}        # opt-in semantic
+            {"kind": "long_press", "x": float, "y": float, "duration_s"?: float}
+            {"kind": "long_press", "identifier": str, "duration_s"?: float}
+            {"kind": "type",       "text": str, "x"?: float, "y"?: float}
+            {"kind": "swipe",      "from": [x,y], "to": [x,y], "duration_ms"?: int}
+            {"kind": "key",        "name": str}
+            {"kind": "scroll",     "direction": "up"|"down"|"left"|"right",
+                                   "x"?: float, "y"?: float}
+            {"kind": "drag",       "from": [x,y], "to": [x,y], "duration_ms"?: int}
+        normalized: when True, x/y values in [0.0, 1.0] are treated as fractions
+            of device dimensions and converted to device-points before dispatch.
+
+    Returns:
+        Runner response dict, or {"error": "<message>"}.
+    """
+    if not isinstance(arguments, dict):
+        return {"error": "ios_act: arguments must be a dict"}
+
+    action = arguments.get("action")
+    if not isinstance(action, dict):
+        return {"error": "ios_act: 'action' must be a dict with a 'kind' field"}
+
+    kind = action.get("kind")
+    if not kind:
+        return {"error": "ios_act: action.kind is required"}
+
+    normalized = bool(arguments.get("normalized", False))
+
+    # Resolve normalized coords to device-points if needed.
+    def _denorm(coords: tuple[float, float]) -> tuple[float, float]:
+        if not normalized:
+            return coords
+        # Pull device dimensions from the active session.
+        dw = dh = 0
+        try:
+            if _session is not None:
+                dw = int(getattr(_session, "_device_w", 0) or 0)
+                dh = int(getattr(_session, "_device_h", 0) or 0)
+        except Exception:  # noqa: BLE001
+            pass
+        if dw <= 0 or dh <= 0:
+            return coords  # unable to denormalize; pass through
+        return (coords[0] * dw, coords[1] * dh)
+
+    if kind == "tap":
+        identifier = action.get("identifier")
+        if identifier:
+            return handle_tap({"identifier": identifier})
+        x = action.get("x")
+        y = action.get("y")
+        if x is None or y is None:
+            return {"error": "ios_act tap: requires either identifier or (x, y)"}
+        nx, ny = _denorm((float(x), float(y)))
+        return handle_tap({"x": nx, "y": ny})
+
+    if kind == "long_press":
+        identifier = action.get("identifier")
+        duration = float(action.get("duration_s", 1.0))
+        if identifier:
+            return handle_long_press({"identifier": identifier, "duration_s": duration})
+        x = action.get("x")
+        y = action.get("y")
+        if x is None or y is None:
+            return {"error": "ios_act long_press: requires either identifier or (x, y)"}
+        nx, ny = _denorm((float(x), float(y)))
+        return handle_long_press({"x": nx, "y": ny, "duration_s": duration})
+
+    if kind == "type":
+        text = action.get("text", "")
+        x = action.get("x")
+        y = action.get("y")
+        payload = {"text": text}
+        if x is not None and y is not None:
+            nx, ny = _denorm((float(x), float(y)))
+            payload["x"] = nx
+            payload["y"] = ny
+        return handle_type(payload)
+
+    if kind == "swipe":
+        frm = action.get("from") or [None, None]
+        to = action.get("to") or [None, None]
+        if len(frm) != 2 or len(to) != 2:
+            return {"error": "ios_act swipe: 'from' and 'to' must be [x, y] arrays"}
+        fx, fy = _denorm((float(frm[0]), float(frm[1])))
+        tx, ty = _denorm((float(to[0]), float(to[1])))
+        duration_ms = int(action.get("duration_ms", 200))
+        return handle_swipe({
+            "start_x": fx, "start_y": fy,
+            "end_x": tx, "end_y": ty,
+            "duration_ms": duration_ms,
+        })
+
+    if kind == "drag":
+        frm = action.get("from") or [None, None]
+        to = action.get("to") or [None, None]
+        if len(frm) != 2 or len(to) != 2:
+            return {"error": "ios_act drag: 'from' and 'to' must be [x, y] arrays"}
+        fx, fy = _denorm((float(frm[0]), float(frm[1])))
+        tx, ty = _denorm((float(to[0]), float(to[1])))
+        duration_ms = int(action.get("duration_ms", 500))
+        return handle_swipe({
+            "start_x": fx, "start_y": fy,
+            "end_x": tx, "end_y": ty,
+            "duration_ms": duration_ms,
+        })
+
+    if kind == "key":
+        name = action.get("name")
+        if not name:
+            return {"error": "ios_act key: 'name' is required"}
+        return handle_press_key({"key": name})
+
+    if kind == "scroll":
+        direction = action.get("direction")
+        if direction not in ("up", "down", "left", "right"):
+            return {"error": "ios_act scroll: direction must be up/down/left/right"}
+        # Existing handle_swipe-based scroll: translate to a swipe from
+        # provided anchor (or screen center) in the inverse direction.
+        x = action.get("x")
+        y = action.get("y")
+        # If anchor not provided, scroll from screen center.
+        if x is None or y is None:
+            dw = dh = 0
+            try:
+                if _session is not None:
+                    dw = int(getattr(_session, "_device_w", 0) or 0)
+                    dh = int(getattr(_session, "_device_h", 0) or 0)
+            except Exception:  # noqa: BLE001
+                pass
+            if dw <= 0 or dh <= 0:
+                return {"error": "ios_act scroll: cannot resolve screen center; supply (x, y)"}
+            x, y = dw / 2, dh / 2
+        else:
+            x, y = _denorm((float(x), float(y)))
+        # Scroll-down means content moves up — swipe from below to above the anchor.
+        delta = 200.0
+        if direction == "down":
+            return handle_swipe({"start_x": x, "start_y": y + delta, "end_x": x, "end_y": y - delta, "duration_ms": 200})
+        if direction == "up":
+            return handle_swipe({"start_x": x, "start_y": y - delta, "end_x": x, "end_y": y + delta, "duration_ms": 200})
+        if direction == "left":
+            return handle_swipe({"start_x": x + delta, "start_y": y, "end_x": x - delta, "end_y": y, "duration_ms": 200})
+        if direction == "right":
+            return handle_swipe({"start_x": x - delta, "start_y": y, "end_x": x + delta, "end_y": y, "duration_ms": 200})
+
+    return {"error": f"ios_act: unsupported action.kind={kind!r}"}
+
+
 def handle_app_state(arguments: dict) -> dict:
     """Check if the app is running, backgrounded, or crashed.
 
@@ -4259,7 +4541,7 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (47 total):
+AVAILABLE TOOLS (49 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
@@ -4535,9 +4817,74 @@ SETUP CHECK:
                     ),
                 },
             ],
-            "tool_count": 47,
+            "tool_count": 49,
         }
         return json.dumps(caps)
+
+    # ── v16.0.0 vision-first primitives: ios_observe + ios_act ────────────
+    #
+    # These are the recommended entry points for vision-capable agents (Claude,
+    # GPT-4V, Gemini, etc.). The legacy tools below (ios_screenshot, ios_tap,
+    # ios_elements, ios_wait_for_element, ...) are scheduled for removal — they
+    # depend on the XCUIElementQuery selector layer that's lossy/brittle/crash-
+    # prone on iOS 26.x SwiftUI per Maurice's v15.x dogfood. See
+    # `.specterqa/dogfood/v15.2.0-direction-proposal-maurice.md` for the
+    # strategic rationale.
+
+    @mcp.tool(
+        name="ios_observe",
+        description=(
+            "VISION-FIRST OBSERVATION (v16.0.0). Returns a screenshot, device "
+            "dimensions, app state, and the small set of reliable_targets — "
+            "elements with explicit accessibilityIdentifier set by the app's "
+            "developer (by-construction unique and stable). The screenshot is "
+            "the truthful representation of the screen; vision-capable agents "
+            "should choose coordinates from it and dispatch via ios_act. "
+            "reliable_targets is an opt-in semantic helper for the rare case "
+            "where the developer explicitly identified an element. "
+            "quality: 'standard' (50%, default), 'full' (no resize), 'thumbnail' (25%). "
+            "include_legacy_elements=True also returns the v15.x-style filtered "
+            "element list (transition compatibility; default False)."
+        ),
+    )
+    @require_tier("trial")
+    async def ios_observe(
+        quality: str = "standard",
+        include_legacy_elements: bool = False,
+    ) -> str:
+        result = handle_observe({
+            "quality": quality,
+            "include_legacy_elements": include_legacy_elements,
+        })
+        return json.dumps(result, default=_json_serialize)
+
+    @mcp.tool(
+        name="ios_act",
+        description=(
+            "VISION-FIRST UNIFIED ACTION (v16.0.0). Single dispatcher for "
+            "tap / type / swipe / key / scroll / long_press / drag. All actions "
+            "are coordinate-primary: the agent picks (x, y) from the ios_observe "
+            "screenshot. identifier is allowed on tap/long_press as an opt-in "
+            "semantic helper for elements with explicit accessibilityIdentifier "
+            "(the reliable_targets shape). Label-based selectors are NOT "
+            "supported — they're the v15.x crash class that v16 deletes.\n"
+            "action shapes:\n"
+            "  {kind: 'tap',        x, y}\n"
+            "  {kind: 'tap',        identifier}\n"
+            "  {kind: 'long_press', x, y, duration_s?}\n"
+            "  {kind: 'long_press', identifier, duration_s?}\n"
+            "  {kind: 'type',       text, x?, y?}\n"
+            "  {kind: 'swipe',      from: [x, y], to: [x, y], duration_ms?}\n"
+            "  {kind: 'drag',       from: [x, y], to: [x, y], duration_ms?}\n"
+            "  {kind: 'key',        name}\n"
+            "  {kind: 'scroll',     direction: up|down|left|right, x?, y?}\n"
+            "normalized=true treats x/y in [0.0, 1.0] as fractions of device dims."
+        ),
+    )
+    @require_tier("trial")
+    async def ios_act(action: dict, normalized: bool = False) -> str:
+        result = handle_act({"action": action, "normalized": normalized})
+        return json.dumps(result, default=_json_serialize)
 
     # ── Tool: ios_screenshot ───────────────────────────────────────────────
 

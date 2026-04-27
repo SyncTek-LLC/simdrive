@@ -100,7 +100,16 @@ TOOL_TIER_MAP: dict[str, str] = {
     "ios_start_session": "trial",
     "ios_stop_session": "trial",
 
-    # ── Observation ────────────────────────────────────────────────────────
+    # ── Vision-first primitives (v16.0.0) ─────────────────────────────────
+    # These are the recommended entry points for vision-capable agents.
+    # ios_observe + ios_act replace the v15.x screenshot/elements/tap/etc.
+    # surface; legacy tools below are deprecated in v16 and slated for
+    # removal — keep them tier-mapped so the gate still rejects unknown
+    # tiers while the legacy surface exists.
+    "ios_observe": "trial",
+    "ios_act": "trial",
+
+    # ── Observation (legacy v15.x — deprecated in v16.0.0) ────────────────
     "ios_screenshot": "trial",
     "ios_elements": "trial",
 
