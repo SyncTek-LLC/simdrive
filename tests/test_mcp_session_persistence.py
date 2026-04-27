@@ -562,8 +562,18 @@ class TestConcurrentMCPCallRaceGuard:
             old = _make_runner_mock(udid="CONCURRENT-UDID")
             srv._mcp_runner_ref = old
             srv._session = old
-            srv._backend = MagicMock()
+            # Set backend health to always raise so pre-check budget exhausts fast
+            _be = MagicMock()
+            _be.health.side_effect = ConnectionRefusedError("down")
+            srv._backend = _be
             try:
+                # Monotonic advances by 2s each call — exhausts pre-check (10s)
+                # and outer timeout (120s) budgets without real sleeping.
+                _tick = [1000.0]
+                def _advancing_monotonic():
+                    _tick[0] += 2.0
+                    return _tick[0]
+
                 with (
                     patch.dict("sys.modules", {
                         "specterqa.ios.runner_process": runner_process_module,
@@ -573,7 +583,7 @@ class TestConcurrentMCPCallRaceGuard:
                     patch("specterqa.ios.mcp.server.time") as mock_time,
                 ):
                     mock_sp.run.side_effect = _mock_run
-                    mock_time.monotonic.return_value = 1000.0
+                    mock_time.monotonic.side_effect = _advancing_monotonic
                     mock_time.sleep = MagicMock()
                     r = srv._restart_runner_for_relaunch("CONCURRENT-UDID", "com.example.app")
                 results.append(r)

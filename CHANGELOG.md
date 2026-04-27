@@ -7,6 +7,46 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [15.1.0] — 2026-04-21
+
+### Changed (UX philosophy)
+
+- **Retry-first, forgive-transients:** `ios_capture_state`, `ios_tap`, `ios_action_with_logs`,
+  and `ios_app_state` now retry once transparently on Apple-side transient failures (runner HTTP
+  5xx, connection refused, sim state flicker) before surfacing any error to the caller. A 2s sleep
+  separates the first and second attempts. Only the second failure is returned as a user-visible error.
+- **`_verify_sim_alive` polls for 15s before declaring a session dead.** On first Shutdown
+  detection the function enters a retry-poll loop (1s sleep between checks). This gives SpringBoard
+  5-10s to respawn before returning `sim_shutdown_during_session`. Detection is forgiving by default.
+- **`_restart_runner_for_relaunch` pre-checks runner HTTP health for up to 10s** before kicking the
+  36-42s recovery path. If the runner becomes healthy during the pre-check window, recovery is
+  skipped entirely — the sim-Shutdown signal was transient.
+
+### Added
+
+- **`sim_settle_timeout: float = 10.0`** param on `ios_start_session`. Smart wait only when the
+  sim just booted: reads `lastBootedAt` from `simctl list devices --json`, sleeps only the
+  remaining delta (e.g. if the sim booted 3s ago, waits 7s). No wait when sim has been booted
+  longer than `sim_settle_timeout` seconds. Mitigates the SpringBoard startup race on fresh sim boot.
+- **`retryable: bool`** field on transient error payloads. Errors representing Apple-side transients
+  (`sim_shutdown_during_session`, `installcoordinationd`, `Runner did not become healthy`, etc.) now
+  carry `retryable: true`. Fatal errors (bad UDID, permissions denied) do not set this field.
+
+### Known caveats
+
+- **`ios_tap` is not idempotent under retry.** When the first tap dispatches successfully but the
+  runner returns a transient error before the result reaches the caller, the auto-retry will
+  fire the tap a second time. The tradeoff is deliberate — short-lived sim hiccups recover on
+  retry — but callers performing irreversible actions (delete, send, confirm purchase) should
+  probe state first rather than relying on `ios_tap` alone.
+- **`ios_action_with_logs` is not idempotent under retry, and the first attempt's log window is
+  discarded.** If the first attempt executes the UI action but a transient error is returned,
+  the retry re-executes the action and re-collects logs from a fresh cursor — the original
+  log window is lost. Same destructive-action caveat as `ios_tap` applies. Callers needing a
+  guaranteed-once-only action should call the underlying primitive without the retry wrapper.
+
+---
+
 ## [15.0.0] — 2026-04-20
 
 ### BREAKING CHANGES
