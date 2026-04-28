@@ -136,7 +136,14 @@ TOOL_TIER_MAP: dict[str, str] = {
     "ios_crashes": "trial",             # Crash detection is essential; trial needs it
     "ios_pre_grant_permissions": "indie",
     "ios_dismiss_springboard_alert": "indie",
-    "ios_dismiss_first_launch_alerts": "indie",
+    # v16.0.0a2 Bug #2 fix (Maurice/Palace dogfood §3.2): moved back to trial.
+    # On iOS 26+ simctl cannot pre-grant `notifications` (OS-restricted) and
+    # ios_act cannot reach SpringBoard alert windows (outside target-app
+    # coord scope). Without this tool at trial tier, trial users on iOS 26+
+    # have NO path past the first-launch notifications prompt — a hard
+    # regression vs v15.x where this tool was free. The capability is a
+    # workaround for an Apple limitation, not a premium feature.
+    "ios_dismiss_first_launch_alerts": "trial",
 
     # ── Performance & Network Monitoring ───────────────────────────────────
     "ios_perf": "pro",
