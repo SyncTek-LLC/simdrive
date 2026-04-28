@@ -48,6 +48,11 @@ class UIElement:
     enabled: bool = True
     visible: bool = True
     hittable: bool = True  # False when element exists but is obscured (behind sheet/overlay)
+    identifier: str = ""  # accessibilityIdentifier — empty when developer didn't set one.
+                          # v16.0.0: used by ios_observe to surface "reliable_targets" —
+                          # only elements with explicit identifier are exposed to vision-
+                          # capable agents as semantic anchors. Everything else is
+                          # coordinate-only.
 
     @property
     def center_x(self) -> float:
@@ -495,6 +500,7 @@ class SoMAnnotator:
                     pos_duplicate = any(e.label == label and abs(e.y - y) < 10 for e in elements)
 
                     if not child_redundant and not pos_duplicate:
+                        identifier = elem.get("identifier", "") or ""
                         elements.append(
                             UIElement(
                                 index=index,
@@ -508,6 +514,7 @@ class SoMAnnotator:
                                 visible=visible,
                                 enabled=enabled,
                                 hittable=bool(hittable),
+                                identifier=str(identifier),
                             )
                         )
                         index += 1

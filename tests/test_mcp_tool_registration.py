@@ -84,7 +84,7 @@ def test_required_session_tool_present(tool_names: set[str], tool_name: str):
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_TOOL_COUNT = 47  # v15.0.0 adds ios_wait_for_session, ios_session_status, ios_dismiss_first_launch_alerts
+_EXPECTED_TOOL_COUNT = 35  # v16.0.0a1: vision-first primitives + 33 retained tools (legacy selector layer deleted)
 
 
 def test_total_tool_count(tool_names: set[str]):
@@ -106,10 +106,10 @@ def test_total_tool_count(tool_names: set[str]):
 
 
 PHASE2_TOOLS = [
+    # v16.0.0a1: ios_capture_state + ios_action_with_logs deleted (folded
+    # into ios_observe + ios_act + ios_logs_tail composition).
     "ios_app_relaunch",
     "ios_logs_tail",
-    "ios_capture_state",
-    "ios_action_with_logs",
     "ios_promote_session_to_test",
 ]
 

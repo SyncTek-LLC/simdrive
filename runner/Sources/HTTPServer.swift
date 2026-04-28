@@ -324,12 +324,37 @@ final class HTTPServer {
     // thread is already inside a sync call; the RunLoop approach is safer.
 
     func runOnMain(_ block: @escaping () -> Void) {
+        // v16.0.0 — defense-in-depth (Maurice/Example Reader dogfood).
+        //
+        // XCTest can throw an ObjC NSException out of XCUICoordinate /
+        // snapshot APIs on unexpected simulator states. Swift cannot
+        // @try / @catch ObjC exceptions natively, so without this bridge
+        // a throw inside a route handler propagates through
+        // CFRunLoopPerformBlock and kills the test method that testServe()
+        // is parked on.
+        //
+        // v16.0.0 deletes the SpecterQAElementQuery selector layer (which
+        // was the dominant throw site in v15.x). The bridge stays as a
+        // safety net — XCUICoordinate.tap and screenshot APIs can still
+        // throw on rare iOS bugs.
+        let safeBlock: () -> Void = { [weak self] in
+            if let exception = SpecterQAObjCBridge.tryBlock(block) {
+                let name = exception.name.rawValue
+                let reason = exception.reason ?? "<no reason>"
+                NSLog("[SpecterQA] runOnMain caught NSException: %@ — %@", name, reason)
+                self?.addLog(
+                    "NSException in route: \(name) — \(reason)",
+                    level: "error"
+                )
+            }
+        }
+
         if Thread.isMainThread {
-            block()
+            safeBlock()
         } else {
             let sem = DispatchSemaphore(value: 0)
             CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue) {
-                block()
+                safeBlock()
                 sem.signal()
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())

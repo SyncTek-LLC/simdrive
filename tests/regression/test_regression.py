@@ -25,20 +25,15 @@ class TestReg001TypeDoesntUseFocusedTap:
 
 
 class TestReg002NoRawElementTap:
-    """v11.9.3 bug: el.tap() throws ObjC SIGABRT on iOS 26."""
+    """v11.9.3 bug: el.tap() throws ObjC SIGABRT on iOS 26.
 
+    v16.0.0a1: the entire element-based tap path was deleted; TapRoute.swift
+    is now coordinate-only. The original SIGABRT class is no longer reachable.
+    """
+
+    @pytest.mark.skip(reason="v16.0.0a1: element tap deleted; coord-only TapRoute makes this regression unreachable")
     def test_httpserver_uses_coordinate_tap_not_el_tap(self):
-        """Verify POST /tap uses element.coordinate().tap(), not element.tap().
-
-        After the HTTPServer split refactor, tap handling moved from the 24-case
-        switch in HTTPServer.swift into runner/Sources/Routes/TapRoute.swift.
-        The coordinate-tap invariant must still hold there.
-        """
-        swift = REPO_ROOT / "runner" / "Sources" / "Routes" / "TapRoute.swift"
-        content = swift.read_text()
-        # The element-based tap section should use coordinate, not raw tap
-        assert "withNormalizedOffset" in content, \
-            "HTTPServer element tap doesn't use coordinate — v11.9.3 SIGABRT risk"
+        pass
 
 
 class TestReg003RunnerSourceBundled:
@@ -93,17 +88,15 @@ class TestReg003RunnerSourceBundled:
 
 
 class TestReg004GreedyLabelMatch:
-    """v11.5.0 bug: 'Password' matched 'Forgot your password?'."""
+    """v11.5.0 bug: 'Password' matched 'Forgot your password?'.
 
+    v16.0.0a1: label-based element resolution deleted entirely. Vision-first
+    agents pick coordinates from the screenshot; greedy matching cannot occur.
+    """
+
+    @pytest.mark.skip(reason="v16.0.0a1: _lookup / label-resolution deleted — greedy match unreachable")
     def test_lookup_uses_scored_matching(self):
-        """Verify _lookup function exists with score-based matching."""
-        server = REPO_ROOT / "src" / "specterqa" / "ios" / "mcp" / "server.py"
-        content = server.read_text()
-        assert "_lookup" in content, "Element resolver _lookup function missing"
-        # Should have scoring logic
-        assert "exact" in content.lower() or "score" in content.lower() or \
-               "prefix" in content.lower(), \
-            "No scoring in element resolver — greedy match risk"
+        pass
 
 
 class TestReg005ScreenshotJpeg:
@@ -117,16 +110,17 @@ class TestReg005ScreenshotJpeg:
 
 
 class TestReg006TypeAcceptsTargetField:
-    """v12.0.0 feature: ios_type must accept label/identifier/element_index."""
+    """v12.0.0 feature: ios_type must accept label/identifier/element_index.
 
+    v16.0.0a1: ios_type tool deleted; ios_act({"kind": "type"}) is the v16
+    surface. Selector-based typing is intentionally gone.
+    """
+
+    @pytest.mark.skip(reason="v16.0.0a1: ios_type deleted; use ios_act({kind:'type'}) with coords")
     def test_handle_type_accepts_label(self):
-        server = REPO_ROOT / "src" / "specterqa" / "ios" / "mcp" / "server.py"
-        content = server.read_text()
-        # handle_type should read label from arguments
-        assert 'arguments.get("label")' in content or \
-               "arguments.get('label')" in content, \
-            "handle_type doesn't accept label param — multi-field typing broken"
+        pass
 
+    @pytest.mark.skip(reason="v16.0.0a1: ios_type deleted; element_index path gone")
     def test_handle_type_accepts_element_index(self):
         server = REPO_ROOT / "src" / "specterqa" / "ios" / "mcp" / "server.py"
         content = server.read_text()
