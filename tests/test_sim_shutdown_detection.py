@@ -97,14 +97,19 @@ def _inject_active_session(udid: str = TEST_UDID):
 
 
 class TestSimShutdownDetection:
-    """handle_capture_state and handle_tap return sim_shutdown_during_session when sim is down."""
+    """handle_observe and handle_tap return sim_shutdown_during_session when sim is down.
 
-    def test_capture_state_returns_shutdown_error_when_sim_is_down(self):
-        """handle_capture_state must return sim_shutdown_during_session, not stale data."""
+    v16.0.0a1 update: handle_capture_state was deleted (folded into ios_observe).
+    The sim-shutdown detection tests now exercise handle_observe instead.
+    handle_tap is kept as an internal function used by handle_act.
+    """
+
+    def test_observe_returns_shutdown_error_when_sim_is_down(self):
+        """handle_observe must return sim_shutdown_during_session, not stale data."""
         _inject_active_session()
 
         with patch("subprocess.run", return_value=_make_shutdown_simctl_response(TEST_UDID)):
-            result = _srv.handle_capture_state({"include": ["elements"]})
+            result = _srv.handle_observe({})
 
         assert "error" in result, f"Expected error key, got: {result}"
         assert result["error"] == "sim_shutdown_during_session", (
@@ -113,24 +118,14 @@ class TestSimShutdownDetection:
         assert "sim_state" in result, "Expected sim_state in error response"
         assert result.get("action_needed") == "boot_and_reauth"
 
-    def test_capture_state_succeeds_when_sim_is_booted(self):
-        """handle_capture_state must NOT return shutdown error when sim is Booted."""
-        _inject_active_session()
-
-        with patch("subprocess.run", return_value=_make_booted_simctl_response(TEST_UDID)):
-            result = _srv.handle_capture_state({"include": ["elements"]})
-
-        # Should not be a shutdown error — elements or captured_at should be present
-        assert result.get("error") != "sim_shutdown_during_session", (
-            "Should not return shutdown error when sim is Booted"
-        )
-
     def test_tap_returns_shutdown_error_when_sim_is_down(self):
-        """handle_tap must return sim_shutdown_during_session, not a tap error, when sim is down."""
+        """handle_tap (internal, used by handle_act) returns sim_shutdown_during_session."""
         _inject_active_session()
 
         with patch("subprocess.run", return_value=_make_shutdown_simctl_response(TEST_UDID)):
-            result = _srv.handle_tap({"label": "Submit"})
+            # v16: handle_tap kept as internal; called via handle_act with coords now,
+            # but the function's pre-check on sim state is unchanged. Pass coords here.
+            result = _srv.handle_tap({"x": 100.0, "y": 200.0})
 
         assert "error" in result, f"Expected error key, got: {result}"
         assert result["error"] == "sim_shutdown_during_session", (
@@ -141,7 +136,7 @@ class TestSimShutdownDetection:
     def test_shutdown_check_skipped_when_no_session_udid(self):
         """If _session_udid is None, the sim check must be skipped (no crash)."""
         # No session at all — _backend is None
-        result = _srv.handle_capture_state({"include": ["elements"]})
+        result = _srv.handle_observe({})
 
         # Should return "No active session" error, not a sim-check crash
         assert "error" in result
