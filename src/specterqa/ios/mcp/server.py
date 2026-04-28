@@ -10,22 +10,13 @@ Usage:
     python -m specterqa.ios.mcp  # alternative invocation
     specterqa ios serve          # via CLI serve command
 
-Tools (43 total):
+Tools (35 total — v16.0.0a1 vision-first surface):
     ios_start_session       Start session on the iOS Simulator (AX or XCTest backend)
     ios_stop_session        Stop the XCTest runner and clean up
-    ios_screenshot          Annotated screenshot with numbered elements
-    ios_tap                 Tap element by label (preferred) or index number
-    ios_long_press          Long-press element by index (context menus, drag init)
-    ios_press_key           Press a keyboard key (return, escape, delete, tab, ...)
-    ios_swipe               Swipe in a direction
-    ios_swipe_back          iOS back navigation gesture
-    ios_type                Type text into focused field
-    ios_wait                Sleep for N seconds
-    ios_wait_for_element    Poll until a labelled element appears
-    ios_wait_idle           Wait for app to become idle (element tree stabilizes)
+    ios_observe             Vision-first observation: screenshot + reliable_targets
+    ios_act                 Unified action verb: tap/type/swipe/key/scroll/long_press/drag
     ios_app_state           Check app lifecycle state (foreground/background/suspended)
     ios_dismiss_sheet       Dismiss a sheet/modal by swiping down
-    ios_elements            Get element list without screenshot
     ios_set_appearance      Toggle dark/light mode on the simulator
     ios_simctl              Run arbitrary simctl subcommand on the simulator
     ios_webview_elements    Get elements inside WKWebView content (EPUB readers, PDF viewers)
@@ -39,6 +30,12 @@ Tools (43 total):
     ios_network             Network activity: URLs, bytes in/out, throughput
     ios_perf_baseline       Capture a perf snapshot as a reference baseline
     ios_perf_compare        Compare current perf to the stored baseline (deltas + severity)
+
+v16.0.0a1 deletes the v15.x AX-tree selector layer (ios_screenshot,
+ios_tap, ios_elements, ios_long_press, ios_swipe, ios_swipe_back,
+ios_type, ios_press_key, ios_dismiss_keyboard, ios_wait,
+ios_wait_for_element, ios_wait_idle, ios_capture_state,
+ios_action_with_logs) — replaced by ios_observe + ios_act.
 
 INIT-2026-500 — SpecterQA iOS Headless Driver.
 """
@@ -1417,171 +1414,6 @@ def handle_crashes(arguments: dict) -> dict:
     return result
 
 
-def handle_screenshot(arguments: dict) -> dict:
-    """Capture an annotated screenshot with numbered element badges.
-
-    This is the KEY tool — Claude sees the annotated image and picks
-    element numbers to interact with via ios_tap.
-
-    Args:
-        max_elements: Cap the number of elements returned (default 100).
-                      Use 0 for unlimited.  Excess elements are truncated
-                      after annotation so badges remain accurate for the
-                      returned set.
-        quality:      Screenshot size vs. quality trade-off.
-                      "standard" (default) — resize to 50% (< 200 KB typical).
-                      "full"               — no resize (original resolution).
-                      "thumbnail"          — resize to 25% (< 50 KB typical).
-
-    Returns:
-        {
-            "image": "<base64 PNG with numbered bounding-box annotations>",
-            "elements": [
-                {"index": 1, "label": "General", "type": "Cell",
-                 "x": 16, "y": 278, "width": 358, "height": 52},
-                ...
-            ],
-            "count": <int>,
-            "truncated": <bool>,   # present only when elements were capped
-            "total": <int>,        # total before truncation (when truncated=True)
-        }
-        or {"error": "<message>"} on failure.
-    """
-    global _last_elements
-
-    # BUG V5-2 FIX: honour max_elements cap (default 100; 0 = unlimited).
-    max_elements = int(arguments.get("max_elements", 100))
-    # BUG V5-5 FIX: honour quality parameter to control output image size.
-    quality = str(arguments.get("quality", "standard")).lower()
-    scale = _QUALITY_SCALES.get(quality, 0.5)
-
-    try:
-        annotated_b64, elements = _get_annotated_screenshot()
-
-        total = len(elements)
-        truncated = False
-        if max_elements > 0 and total > max_elements:
-            elements = elements[:max_elements]
-            truncated = True
-
-        _last_elements = elements
-
-        # Resize the annotated screenshot AFTER annotation so numbers remain
-        # readable (annotation was done on full-res; we just shrink the result).
-        resized_b64 = _resize_screenshot(annotated_b64, scale=scale)
-
-        element_list = [
-            {
-                "index": e.index,
-                "label": e.label,
-                "type": e.element_type,
-                "x": e.x,
-                "y": e.y,
-                "width": e.width,
-                "height": e.height,
-            }
-            for e in elements
-        ]
-
-        result: dict = {
-            "image": resized_b64,
-            "elements": element_list,
-            "count": len(element_list),
-        }
-        if truncated:
-            result["truncated"] = True
-            result["total"] = total
-            result["returned"] = len(element_list)
-        return result
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-def _lookup(label, identifier, element_index, element_type, elements):
-    """Look up an element from *elements* using priority: identifier > label > index.
-
-    Label matching uses scored matching: exact > prefix > substring, shorter wins.
-    Index matching does NOT auto-refresh (indices are position-dependent).
-
-    Args:
-        label:         Label substring to match (case-insensitive).
-        identifier:    Exact accessibilityIdentifier to match.
-        element_index: Integer index to match.
-        element_type:  Optional element type filter (applied to label candidates).
-        elements:      List of UIElement objects to search.
-
-    Returns:
-        The matching UIElement, or None.
-    """
-    # 1. Identifier (exact match)
-    if identifier:
-        match = next((e for e in elements if getattr(e, "identifier", "") == identifier), None)
-        if match:
-            return match
-
-    # 2. Label (scored: exact > prefix > substring, shorter wins)
-    if label:
-        label_lower = label.lower()
-        candidates = []
-        for e in elements:
-            el = e.label.lower()
-            if el == label_lower:
-                candidates.append((2, -len(el), e))  # exact
-            elif el.startswith(label_lower):
-                candidates.append((1, -len(el), e))  # prefix
-            elif label_lower in el:
-                candidates.append((0, -len(el), e))  # substring
-
-        if element_type:
-            type_lower = element_type.lower()
-            typed = [(s, l, e) for s, l, e in candidates if e.element_type.lower() == type_lower]
-            if typed:
-                candidates = typed
-
-        if candidates:
-            candidates.sort(key=lambda x: (-x[0], -x[1]))  # highest score, shortest label
-            return candidates[0][2]
-
-    # 3. Index (NO auto-refresh — indices are position-dependent)
-    if element_index is not None:
-        return next((e for e in elements if e.index == element_index), None)
-
-    return None
-
-
-def _resolve_element(
-    label=None,
-    identifier=None,
-    element_index=None,
-    element_type=None,
-):
-    """Resolve an element from cache, auto-refreshing on miss.
-
-    Returns (element, was_refreshed).
-    Priority: identifier > label > element_index.
-    Label uses scored matching: exact > prefix > substring, shorter wins.
-    Index-based lookups do NOT trigger auto-refresh (indices are stale after navigation).
-    """
-    global _last_elements
-
-    target = _lookup(label, identifier, element_index, element_type, _last_elements)
-    if target is not None:
-        return target, False
-
-    # Cache miss for identifier/label — auto-refresh once (navigation likely happened).
-    # Do NOT auto-refresh for index-only lookups (position-dependent, refresh is misleading).
-    if element_index is None and _annotator is not None:
-        try:
-            fresh = _annotator.get_elements_from_runner()
-            _last_elements = fresh
-            target = _lookup(label, identifier, None, element_type, fresh)
-            return target, True
-        except Exception:
-            pass
-
-    return None, False
-
-
 def handle_tap(arguments: dict) -> dict:
     """Tap an element by identifier, label, index, or explicit coordinates.
 
@@ -1785,60 +1617,6 @@ def handle_tap(arguments: dict) -> dict:
     if was_refreshed:
         result["cache_refreshed"] = True
     return result
-
-
-def handle_wait(arguments: dict) -> dict:
-    """Sleep for a specified number of seconds (capped at 30s).
-
-    Args:
-        seconds: Time to wait in seconds (default 1.0, max 30.0).
-
-    Returns:
-        {"status": "ok", "waited": <seconds>}
-    """
-    import time as _time
-
-    seconds = max(0.0, min(float(arguments.get("seconds", 1.0)), 30.0))
-    _time.sleep(seconds)
-    return {"status": "ok", "waited": seconds}
-
-
-def handle_wait_for_element(arguments: dict) -> dict:
-    """Poll the element tree until an element matching *label* appears.
-
-    Args:
-        label:   Case-insensitive substring to match against element labels (required).
-        timeout: Maximum wait in seconds (default 10, max 30).
-
-    Returns:
-        {"status": "found", "label": "<matched label>", "index": <int>}
-        or {"status": "not_found", "label": "<label>", "timeout": <seconds>}
-        or {"error": "<message>"} when no session is active.
-    """
-    try:
-        _require_session()
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-
-    label = str(arguments.get("label", ""))
-    if not label:
-        return {"error": "label is required"}
-
-    timeout = min(float(arguments.get("timeout", 10)), 30.0)
-    poll_interval = 0.5
-    deadline = time.time() + timeout
-
-    while time.time() < deadline:
-        try:
-            elements = _annotator.get_elements_from_runner()
-            for e in elements:
-                if label.lower() in e.label.lower():
-                    return {"status": "found", "label": e.label, "index": e.index}
-        except Exception as exc:  # noqa: BLE001 — element probe must not abort wait loop
-            logger.debug("Element probe failed during wait: %s", exc)
-        time.sleep(poll_interval)
-
-    return {"status": "not_found", "label": label, "timeout": timeout}
 
 
 def handle_start_recording(arguments: dict) -> dict:
@@ -2162,94 +1940,6 @@ def handle_type(arguments: dict) -> dict:
     return result
 
 
-def handle_elements(arguments: dict) -> dict:
-    """Get the current element list without capturing a screenshot (fast).
-
-    Useful when Claude needs to refresh the element index without the
-    overhead of image annotation.
-
-    Args:
-        max_elements: Cap the number of elements returned (default 100).
-                      Use 0 for unlimited.
-
-    Returns:
-        {
-            "elements": [
-                {"index": 1, "label": "...", "type": "...",
-                 "x": .., "y": .., "width": .., "height": ..},
-                ...
-            ],
-            "count": <int>,
-            "truncated": <bool>,   # present only when elements were capped
-            "total": <int>,        # total before truncation (when truncated=True)
-        }
-        or {"error": "<message>"} on failure.
-    """
-    global _last_elements
-
-    try:
-        _require_session()
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-
-    if _session_udid:
-        _alive, _state = _verify_sim_alive(_session_udid)
-        if not _alive:
-            return _sim_shutdown_error(_state)
-
-    # BUG V5-2 FIX: honour max_elements cap (default 100; 0 = unlimited).
-    max_elements = int(arguments.get("max_elements", 100))
-
-    try:
-        # Use JSON-direct path to skip the XML roundtrip.
-        elements = _annotator.get_elements_from_runner()
-
-        total = len(elements)
-        truncated = False
-        if max_elements > 0 and total > max_elements:
-            elements = elements[:max_elements]
-            truncated = True
-
-        _last_elements = elements
-
-        element_list = [
-            {
-                "index": e.index,
-                "label": e.label,
-                "type": e.element_type,
-                "x": e.x,
-                "y": e.y,
-                "width": e.width,
-                "height": e.height,
-            }
-            for e in elements
-        ]
-
-        result: dict = {"elements": element_list, "count": len(element_list)}
-        if truncated:
-            result["truncated"] = True
-            result["total"] = total
-            result["returned"] = len(element_list)
-        return result
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-def _find_element(element_index: int | None):
-    """Look up an element by index in the last-captured element cache.
-
-    Args:
-        element_index: Integer index from the last ``ios_screenshot`` or
-                       ``ios_elements`` call.
-
-    Returns:
-        The matching ``UIElement``, or ``None`` if not found.
-    """
-    if element_index is None:
-        return None
-    return next((e for e in _last_elements if e.index == element_index), None)
-
-
 def handle_press_key(arguments: dict) -> dict:
     """Press a named keyboard key on the focused element.
 
@@ -2525,28 +2215,6 @@ def handle_webview_elements(arguments: dict) -> dict:
         return {"error": str(exc)}
 
 
-def handle_wait_idle(arguments: dict) -> dict:
-    """Wait for the app to become idle (element tree stabilizes).
-
-    Args:
-        timeout: Maximum wait in seconds (default 10.0, max 30.0).
-
-    Returns:
-        Runner response dict, or {"error": "<message>"} on failure.
-    """
-    try:
-        _require_session()
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-
-    timeout = min(float(arguments.get("timeout", 10.0)), 30.0)
-    try:
-        result = _backend.wait_idle(timeout=timeout)
-        return result
-    except Exception as exc:
-        return {"error": f"wait_idle failed: {exc}"}
-
-
 def handle_observe(arguments: dict) -> dict:
     """v16.0.0 — vision-first observation primitive.
 
@@ -2629,16 +2297,40 @@ def handle_observe(arguments: dict) -> dict:
         # Resize annotated screenshot per quality flag.
         resized_b64 = _resize_screenshot(annotated_b64, scale=scale)
 
-        # Device dimensions — pull from the active session metadata when
-        # available; fall back to a runner /screenshot probe if needed.
+        # Device dimensions — try session metadata first, then fall back to
+        # decoding the screenshot PNG header (pixel dims). For xctest sessions
+        # _session doesn't carry _device_w/_device_h; for AX sessions it does.
         device_w = device_h = 0
         try:
             sess = _session
             if sess is not None:
                 device_w = int(getattr(sess, "_device_w", 0) or 0)
                 device_h = int(getattr(sess, "_device_h", 0) or 0)
+            # Also check the backend (AXBackend exposes it directly)
+            if (device_w == 0 or device_h == 0) and _backend is not None:
+                device_w = int(getattr(_backend, "_device_w", device_w) or device_w)
+                device_h = int(getattr(_backend, "_device_h", device_h) or device_h)
         except Exception:  # noqa: BLE001
             pass
+
+        # Last-resort fallback: read pixel dims from the raw screenshot PNG.
+        # These are pixel dimensions (retina-scaled), not device-points;
+        # downstream callers using normalized=true on ios_act should still
+        # work because both ios_observe coords and ios_act denormalization
+        # use the same units. Logical-point conversion arrives in v16.0.0a2.
+        if device_w == 0 or device_h == 0:
+            try:
+                import base64 as _b64  # noqa: PLC0415
+                from PIL import Image  # noqa: PLC0415
+                from io import BytesIO  # noqa: PLC0415
+                img = Image.open(BytesIO(_b64.b64decode(annotated_b64)))
+                pw, ph = img.size
+                if device_w == 0:
+                    device_w = pw
+                if device_h == 0:
+                    device_h = ph
+            except Exception:  # noqa: BLE001
+                pass
 
         # App state (foreground / background / suspended) — out-of-band.
         app_state_payload: dict = {}
@@ -2737,16 +2429,16 @@ def handle_act(arguments: dict) -> dict:
         return handle_tap({"x": nx, "y": ny})
 
     if kind == "long_press":
-        identifier = action.get("identifier")
-        duration = float(action.get("duration_s", 1.0))
-        if identifier:
-            return handle_long_press({"identifier": identifier, "duration_s": duration})
+        # v16.0.0a1: handle_long_press is element-only (legacy). For coord-based
+        # long press we dispatch through handle_tap with duration > 0 — the
+        # runner's TapRoute supports this via TouchInjector.tap(x, y, duration:).
         x = action.get("x")
         y = action.get("y")
         if x is None or y is None:
-            return {"error": "ios_act long_press: requires either identifier or (x, y)"}
+            return {"error": "ios_act long_press: requires (x, y) coordinates"}
         nx, ny = _denorm((float(x), float(y)))
-        return handle_long_press({"x": nx, "y": ny, "duration_s": duration})
+        duration = float(action.get("duration_s", 1.0))
+        return handle_tap({"x": nx, "y": ny, "duration": duration})
 
     if kind == "type":
         text = action.get("text", "")
@@ -2797,21 +2489,31 @@ def handle_act(arguments: dict) -> dict:
         direction = action.get("direction")
         if direction not in ("up", "down", "left", "right"):
             return {"error": "ios_act scroll: direction must be up/down/left/right"}
-        # Existing handle_swipe-based scroll: translate to a swipe from
-        # provided anchor (or screen center) in the inverse direction.
+        # Anchor: caller-supplied (x, y) is the gesture starting point.
+        # If absent, we infer screen center from the most recent ios_observe
+        # screenshot dimensions (cached from the session backend / annotator
+        # / PIL fallback). When dims aren't available, use safe iPhone defaults.
         x = action.get("x")
         y = action.get("y")
-        # If anchor not provided, scroll from screen center.
         if x is None or y is None:
             dw = dh = 0
             try:
                 if _session is not None:
                     dw = int(getattr(_session, "_device_w", 0) or 0)
                     dh = int(getattr(_session, "_device_h", 0) or 0)
+                if (dw == 0 or dh == 0) and _backend is not None:
+                    dw = int(getattr(_backend, "_device_w", dw) or dw)
+                    dh = int(getattr(_backend, "_device_h", dh) or dh)
+                if (dw == 0 or dh == 0) and _annotator is not None:
+                    sz = getattr(_annotator, "screen_size", None)
+                    if sz and len(sz) >= 2:
+                        dw = int(sz[0]) if dw == 0 else dw
+                        dh = int(sz[1]) if dh == 0 else dh
             except Exception:  # noqa: BLE001
                 pass
             if dw <= 0 or dh <= 0:
-                return {"error": "ios_act scroll: cannot resolve screen center; supply (x, y)"}
+                # Safe iPhone defaults (iPhone 14 device-points)
+                dw, dh = 390, 844
             x, y = dw / 2, dh / 2
         else:
             x, y = _denorm((float(x), float(y)))
@@ -2871,29 +2573,6 @@ def handle_dismiss_sheet(arguments: dict) -> dict:
         return {"status": "ok", "action": "swipe_down_dismiss"}
     except Exception as exc:
         return {"error": f"dismiss_sheet failed: {exc}"}
-
-
-def handle_dismiss_keyboard(arguments: dict) -> dict:
-    """Dismiss the software keyboard by tapping just above it.
-
-    Calls the runner's /dismiss_keyboard endpoint which taps above the keyboard
-    frame to dismiss it, with a swipe-down fallback if the tap doesn't work.
-
-    Returns:
-        {"status": "ok", "dismissed": true}
-        or {"status": "ok", "dismissed": false} if no keyboard was visible
-        or {"error": "<message>"} on failure.
-    """
-    try:
-        _require_session()
-    except RuntimeError as exc:
-        return {"error": str(exc)}
-
-    try:
-        result = _backend._post("/dismiss_keyboard", {})
-        return result
-    except Exception as exc:
-        return {"error": f"dismiss_keyboard failed: {exc}"}
 
 
 # ---------------------------------------------------------------------------
@@ -4266,183 +3945,6 @@ def handle_logs_tail(arguments: dict) -> dict:
         return {"error": f"logs_tail failed: {exc}"}
 
 
-def handle_capture_state(arguments: dict) -> dict:
-    """Bundle screenshot + elements + logs + app_state + perf in one call.
-
-    Args:
-        include: List of keys to include. Default None = all.
-                 Supported: "screenshot", "elements", "logs", "app_state", "perf".
-        session_id: Ignored (reserved for future multi-session).
-
-    Returns:
-        {screenshot?, elements?, logs?, app_state?, perf?, captured_at}
-        or {"error": "<message>"} on failure.
-    """
-    if _backend is None:
-        return {"error": "No active session. Call ios_start_session first."}
-
-    if _session_udid:
-        _alive, _state = _verify_sim_alive(_session_udid)
-        if not _alive:
-            return _sim_shutdown_error(_state)
-
-    include_filter = arguments.get("include")  # None or list[str]
-    if include_filter is not None:
-        include_set = set(include_filter)
-    else:
-        include_set = {"screenshot", "elements", "logs", "app_state", "perf"}
-
-    import datetime
-    captured_at = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-
-    result: dict = {"captured_at": captured_at}
-
-    # Screenshot
-    if "screenshot" in include_set:
-        try:
-            annotated_b64, elements = _get_annotated_screenshot()
-            result["screenshot"] = annotated_b64
-        except Exception as exc:
-            result["screenshot"] = None
-            result["screenshot_error"] = str(exc)
-
-    # Elements
-    if "elements" in include_set:
-        try:
-            if _annotator is not None:
-                elems = _annotator.get_elements_from_runner()
-            else:
-                elems = _last_elements
-            result["elements"] = [
-                {
-                    "index": e.index,
-                    "label": e.label,
-                    "type": e.element_type,
-                    "x": e.x,
-                    "y": e.y,
-                    "width": e.width,
-                    "height": e.height,
-                }
-                for e in elems
-            ]
-        except Exception as exc:
-            result["elements"] = []
-            result["elements_error"] = str(exc)
-
-    # Logs (last 2s)
-    if "logs" in include_set:
-        try:
-            log_result = handle_logs({"seconds": 2.0})
-            result["logs"] = log_result.get("logs", [])
-        except Exception as exc:
-            result["logs"] = []
-            result["logs_error"] = str(exc)
-
-    # App state
-    if "app_state" in include_set:
-        try:
-            state_result = handle_app_state({})
-            result["app_state"] = state_result.get("state", str(state_result))
-        except Exception as exc:
-            result["app_state"] = None
-            result["app_state_error"] = str(exc)
-
-    # Perf
-    if "perf" in include_set:
-        try:
-            perf = handle_perf({})
-            if "error" not in perf:
-                result["perf"] = {
-                    "cpu_pct": perf.get("cpu_percent"),
-                    "mem_mb": perf.get("memory_mb") or perf.get("memory_rss_mb"),
-                }
-            else:
-                result["perf"] = None
-        except Exception:
-            result["perf"] = None
-
-    return result
-
-
-def handle_action_with_logs(arguments: dict) -> dict:
-    """Execute an action and return logs that fired during the action window.
-
-    Atomic semantics: snapshot cursor → execute action → wait log_window_ms → return logs.
-
-    Args:
-        action: Dict with 'type' key. Supported types: tap, long_press, type, swipe, press_key.
-                Additional keys forwarded to the underlying handler.
-        log_window_ms: How long to wait after action for logs to accumulate (default 2000).
-        session_id: Ignored (reserved for future multi-session).
-
-    Returns:
-        {action_result, logs, log_window_ms, action_elapsed_ms}
-        or {"error": "<message>"} on failure.
-    """
-    if _backend is None:
-        return {"error": "No active session. Call ios_start_session first."}
-
-    if _session_udid:
-        _alive, _state = _verify_sim_alive(_session_udid)
-        if not _alive:
-            return _sim_shutdown_error(_state)
-
-    action = arguments.get("action")
-    if not action or not isinstance(action, dict):
-        return {"error": "'action' dict is required (e.g. {'type': 'tap', 'label': 'Submit'})"}
-
-    action_type = str(action.get("type", "")).lower()
-    log_window_ms = int(arguments.get("log_window_ms", 2000))
-
-    _ACTION_HANDLERS = {
-        "tap": handle_tap,
-        "long_press": handle_long_press,
-        "type": handle_type,
-        "swipe": handle_swipe,
-        "press_key": handle_press_key,
-    }
-
-    handler = _ACTION_HANDLERS.get(action_type)
-    if handler is None:
-        return {
-            "error": (
-                f"Unknown action type '{action_type}'. "
-                f"Supported: {', '.join(_ACTION_HANDLERS)}"
-            )
-        }
-
-    # Snapshot log cursor BEFORE action
-    session_id = str(arguments.get("session_id", "default") or "default")
-    # Prime the cursor if not set
-    if session_id not in _log_tail_cursors and _console_monitor is not None:
-        handle_logs_tail({"since_last_call": False, "session_id": session_id})
-
-    # Execute action
-    t_action_start = time.monotonic()
-    try:
-        action_result = handler(dict(action))
-    except Exception as exc:
-        action_result = {"error": str(exc)}
-    action_elapsed_ms = int((time.monotonic() - t_action_start) * 1000)
-
-    # Wait for log window
-    if log_window_ms > 0:
-        time.sleep(log_window_ms / 1000.0)
-
-    # Collect logs that fired during the window
-    logs = []
-    if _console_monitor is not None:
-        tail_result = handle_logs_tail({"since_last_call": True, "session_id": session_id})
-        logs = tail_result.get("logs", [])
-
-    return {
-        "action_result": action_result,
-        "logs": logs,
-        "log_window_ms": log_window_ms,
-        "action_elapsed_ms": action_elapsed_ms,
-    }
-
-
 def handle_promote_session_to_test(arguments: dict) -> dict:
     """Promote the current recording buffer to a named test replay YAML.
 
@@ -4541,33 +4043,27 @@ def create_server() -> Any:
         "specterqa-ios",
         instructions="""SpecterQA iOS — AI-native iOS testing via MCP.
 
-AVAILABLE TOOLS (49 total):
+AVAILABLE TOOLS (35 total):
 
   Session lifecycle:
     ios_start_session    — Deploy XCTest runner; launch the app (required first step)
     ios_stop_session     — Stop runner and clean up (always call when done)
 
-  Observation:
-    ios_screenshot       — Annotated screenshot with numbered bounding boxes + element list
-    ios_elements         — Element list only (faster than screenshot, no image)
+  Vision-first primitives (v16.0.0 — the recommended driving surface):
+    ios_observe          — Screenshot + reliable_targets (elements with explicit
+                            accessibilityIdentifier) + device_w/h + app_state.
+                            Replaces all v15.x screenshot/element-list tools.
+    ios_act              — Unified action verb. action.kind ∈ {tap, type, swipe,
+                            key, scroll, long_press, drag}. Coordinate-primary;
+                            identifier optional on tap/long_press for elements
+                            with explicit accessibilityIdentifier. Replaces all
+                            v15.x selector-based interaction tools.
 
-  Interaction:
-    ios_tap              — Tap: identifier > label > element_index > (x,y) coordinates
-    ios_long_press       — Long-press by index (context menus, drag init)
-    ios_type             — Type text: identifier > label > element_index > (x,y) coordinates
-    ios_press_key        — Press a named key: return, escape, delete, tab, space
-    ios_swipe            — Swipe in a direction: up, down, left, right
-    ios_swipe_back       — iOS edge swipe back navigation gesture
-    ios_dismiss_keyboard — Dismiss the software keyboard
-
-  Waiting:
-    ios_wait             — Arbitrary delay (N seconds). Use only when no better option.
-    ios_wait_for_element — Poll until a labelled element appears. Use for specific element.
-    ios_wait_idle        — Wait for element tree to stabilize. Use after navigation/transitions.
+  Lifecycle / state:
     ios_app_state        — Check app lifecycle state (foreground/background/suspended)
     ios_dismiss_sheet    — Dismiss a sheet/modal by swiping down
 
-  Recording & Replay:
+  Recording & Replay (recording-rewrite pending in v16.0.0a2):
     ios_start_recording  — Clear step buffer; begin clean recording
     ios_stop_recording   — Save replay YAML + clear buffer (end of flow); preferred save path
     ios_list_replays     — List saved replay YAML files (name, steps, modified). Call before ios_replay.
@@ -4600,16 +4096,13 @@ AVAILABLE TOOLS (49 total):
   AI Debugging Primitives (v14.0.0b1):
     ios_app_relaunch        — Restart the app without tearing down the runner (fast debug cycle)
     ios_logs_tail           — Incremental logs since last call (cursor-based, use in debug loops)
-    ios_capture_state       — Bundle screenshot + elements + logs + app_state + perf in one call
-    ios_action_with_logs    — Execute action + return logs that fired during the window (atomic)
     ios_promote_session_to_test — Promote recording buffer to a named replay YAML + auto-validate
 
-FIRST SESSION — minimum viable loop:
+FIRST SESSION — minimum viable loop (v16.0.0a1):
   ios_start_session(bundle_id="com.example.app")
-  → ios_screenshot()
-  → ios_tap(label="Sign In")
-  → ios_screenshot()
-  → ios_stop_recording(name="signin-flow")
+  → ios_observe()                              # screenshot + reliable_targets
+  → ios_act({"kind": "tap", "x": 195, "y": 337})
+  → ios_observe()                              # verify state
   → ios_stop_session()
 
 BACKEND SELECTION (ios_start_session backend= param):
@@ -4617,10 +4110,10 @@ BACKEND SELECTION (ios_start_session backend= param):
 - Use backend="ax" when startup speed matters and you only need tap-by-label on root-level elements. Note: AX does not enumerate .sheet-presented UIKit content.
 - backend="auto" (default) uses AX if available, falls back to XCTest.
 
-WAITING — decision tree:
-- Waiting for a specific element to appear → ios_wait_for_element(label="...")
-- After navigation / screen transition → ios_wait_idle()
-- Fixed animation delay or splash screen → ios_wait(seconds=N)
+WAITING (v16.0.0a1):
+- Poll ios_observe() in a loop until the screen reflects the expected state.
+  The vision-first model pulls waiting into the agent's reasoning loop —
+  it's the agent that decides "still loading" vs "ready", not a selector.
 
 PERFORMANCE TESTING:
 1. Call ios_perf_baseline() at app launch — this is your BASELINE
@@ -4652,15 +4145,16 @@ DEBUGGING:
 - ios_network() — check recent HTTP requests if the app seems stuck
 - ios_app_state() — verify the app is in foreground
 
-TYPING INTO FORMS:
-- ALWAYS specify the target field: ios_type(text="value", identifier="field_id")
-- Priority: identifier > label > element_index > (x,y) coordinates
-- After typing, call ios_elements() to verify the value was accepted
+TYPING INTO FORMS (v16.0.0a1):
+- ios_act({"kind": "tap", "x": <field_x>, "y": <field_y>}) to focus
+- ios_act({"kind": "type", "text": "value"}) types into the focused field
+- After typing, call ios_observe() to verify the screen reflects the value
 
 COMMON PITFALLS:
-- Keyboard covers buttons: call ios_dismiss_keyboard() before tapping buttons below the keyboard
-- Tab bar covered: call ios_dismiss_keyboard() before switching tabs
-- Stale elements after navigation: ios_tap auto-refreshes, but call ios_elements() if unsure
+- Keyboard covers buttons: tap the iOS dismiss-keyboard glyph or send a Return
+  via ios_act({"kind": "key", "name": "return"})
+- Tab bar covered: same dismissal — keyboard goes via ios_act, not a dedicated tool
+- Stale screen state after navigation: call ios_observe() to refresh
 - SecureField value masked: SecureField shows bullet characters (•), not the actual text
 
 RECORDING WORKFLOW (best practice):
@@ -4817,7 +4311,7 @@ SETUP CHECK:
                     ),
                 },
             ],
-            "tool_count": 49,
+            "tool_count": 35,
         }
         return json.dumps(caps)
 
@@ -4886,102 +4380,6 @@ SETUP CHECK:
         result = handle_act({"action": action, "normalized": normalized})
         return json.dumps(result, default=_json_serialize)
 
-    # ── Tool: ios_screenshot ───────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_screenshot",
-        description=(
-            "Capture an annotated screenshot of the running iOS app. "
-            "Returns a base64 PNG with numbered red bounding boxes overlaid on "
-            "every interactive element, plus a structured element list. "
-            "Use the element index numbers with ios_tap to interact. "
-            "This is the primary perception tool — call it before tapping. "
-            "max_elements caps the returned element count (default 100; 0 = unlimited). "
-            "quality controls image size: 'standard' (50%, default), 'full' (no resize), "
-            "'thumbnail' (25%)."
-        ),
-    )
-    async def ios_screenshot(
-        max_elements: int = 100,
-        quality: str = "standard",
-    ) -> str:
-        result = handle_screenshot({"max_elements": max_elements, "quality": quality})
-        return json.dumps(result, default=_json_serialize)
-
-    # ── Tool: ios_tap ──────────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_tap",
-        description=(
-            "Tap an element by IDENTIFIER (most reliable), LABEL, index number, or raw COORDINATES. "
-            "Priority: identifier > label > element_index > coordinates. "
-            "IDENTIFIER: use identifier='settingsButton' to tap the element with that accessibilityIdentifier (exact match). "
-            "LABEL: use label='Save' for case-insensitive substring match. "
-            "Optional type='Button' narrows label matching to a specific element type. "
-            "FALLBACK: use element_index=N (integer from ios_screenshot) when no label or identifier is available. "
-            "COORDINATES: use x=195, y=275 to tap at exact screen coordinates (use when element has no label or identifier). "
-            "Call ios_screenshot first to populate the element cache (not needed for coordinate taps)."
-        ),
-    )
-    async def ios_tap(
-        element_index: int | None = None,
-        label: str | None = None,
-        type: str | None = None,
-        identifier: str | None = None,
-        x: float | None = None,
-        y: float | None = None,
-    ) -> str:
-        # HAZARD: _retry_once_on_transient can silently double-execute this tap.
-        # If the first attempt fires the tap but a transient runner error is returned
-        # before the result reaches the caller, the retry will fire the tap a second
-        # time. This is a deliberate tradeoff: better to double-fire than to fail on a
-        # short-lived sim hiccup. Do NOT use ios_tap for irreversible destructive
-        # actions (delete, send, confirm purchase) without probing state first.
-        result = _retry_once_on_transient(
-            handle_tap,
-            {
-                "element_index": element_index,
-                "label": label,
-                "type": type,
-                "identifier": identifier,
-                "x": x,
-                "y": y,
-            },
-        )
-        return json.dumps(result)
-
-    # ── Tool: ios_wait ─────────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_wait",
-        description=(
-            "Wait (sleep) for a specified number of seconds. "
-            "Use for fixed animation delays or splash screens. "
-            "seconds defaults to 1.0; capped at 30. "
-            "Decision: specific element → ios_wait_for_element. "
-            "Navigation/transition → ios_wait_idle. Arbitrary delay → ios_wait."
-        ),
-    )
-    async def ios_wait(seconds: float = 1.0) -> str:
-        result = handle_wait({"seconds": seconds})
-        return json.dumps(result)
-
-    # ── Tool: ios_wait_for_element ─────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_wait_for_element",
-        description=(
-            "Poll the element tree until an element matching label appears, or timeout expires. "
-            "label is a case-insensitive substring matched against element labels (required). "
-            "timeout is the maximum wait in seconds (default 10, max 30). "
-            "Returns {status: 'found', label, index} on success or {status: 'not_found'} on timeout. "
-            "Decision: specific element → ios_wait_for_element. "
-            "Navigation/transition → ios_wait_idle. Arbitrary delay → ios_wait."
-        ),
-    )
-    async def ios_wait_for_element(label: str, timeout: float = 10.0) -> str:
-        result = handle_wait_for_element({"label": label, "timeout": timeout})
-        return json.dumps(result)
 
     # ── Tool: ios_start_recording ──────────────────────────────────────────
 
@@ -5047,81 +4445,6 @@ SETUP CHECK:
         result = handle_accessibility_audit({})
         return json.dumps(result)
 
-    # ── Tool: ios_swipe ────────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_swipe",
-        description=(
-            "Swipe in a cardinal direction on the iOS Simulator screen. "
-            "direction must be 'up', 'down', 'left', or 'right'. "
-            "Use 'down' to scroll down (content moves up), 'up' to scroll up. "
-            "After swiping, call ios_screenshot to see the updated screen."
-        ),
-    )
-    async def ios_swipe(direction: str = "down") -> str:
-        result = handle_swipe({"direction": direction})
-        return json.dumps(result)
-
-    # ── Tool: ios_swipe_back ───────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_swipe_back",
-        description=(
-            "Perform the iOS swipe-from-left-edge back navigation gesture. "
-            "Equivalent to the system back swipe on navigation controllers."
-        ),
-    )
-    async def ios_swipe_back() -> str:
-        result = handle_swipe_back({})
-        return json.dumps(result)
-
-    # ── Tool: ios_type ─────────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_type",
-        description=(
-            "Type text into a text field on the iOS Simulator. "
-            "Target field priority: identifier > label > element_index > (x,y) coordinates. "
-            "RECOMMENDED: always specify a target field to ensure text goes into the correct field. "
-            "Without a target, types into whatever field currently has focus (unreliable on multi-field forms). "
-            "Examples: ios_type(text='hello', identifier='emailField') or "
-            "ios_type(text='hello', label='Password') or ios_type(text='hello', element_index=5). "
-            "text is required and must be non-empty."
-        ),
-    )
-    async def ios_type(
-        text: str,
-        label: str | None = None,
-        identifier: str | None = None,
-        element_index: int | None = None,
-        x: float | None = None,
-        y: float | None = None,
-    ) -> str:
-        result = handle_type({
-            "text": text,
-            "label": label,
-            "identifier": identifier,
-            "element_index": element_index,
-            "x": x,
-            "y": y,
-        })
-        return json.dumps(result)
-
-    # ── Tool: ios_elements ─────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_elements",
-        description=(
-            "Get the current interactive element list without capturing a screenshot. "
-            "Faster than ios_screenshot when you only need element indices and labels. "
-            "Also updates the element cache used by ios_tap. "
-            "max_elements caps the returned element count (default 100; 0 = unlimited)."
-        ),
-    )
-    async def ios_elements(max_elements: int = 100) -> str:
-        result = handle_elements({"max_elements": max_elements})
-        return json.dumps(result, default=_json_serialize)
-
     # ── Tool: ios_set_appearance ───────────────────────────────────────────
 
     @mcp.tool(
@@ -5137,41 +4460,6 @@ SETUP CHECK:
     async def ios_set_appearance(mode: str = "dark") -> str:
         result = handle_set_appearance({"mode": mode})
         return json.dumps(result)
-
-    # ── Tool: ios_press_key ────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_press_key",
-        description=(
-            "Press a named keyboard key on the iOS Simulator. "
-            "Use this after tapping a text field to send control keys: "
-            "'return' (submit/next field), 'escape' (dismiss), "
-            "'delete' (backspace), 'tab' (next field), 'space', etc. "
-            "key is required."
-        ),
-    )
-    async def ios_press_key(key: str) -> str:
-        result = handle_press_key({"key": key})
-        return json.dumps(result)
-
-    # ── Tool: ios_long_press ───────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_long_press",
-        description=(
-            "Long-press an element by its index number from the last screenshot. "
-            "Use for context menus, drag initiation, or any gesture requiring a "
-            "sustained hold. "
-            "element_index is required (integer from ios_screenshot). "
-            "duration is the hold time in seconds (default 1.0)."
-        ),
-    )
-    async def ios_long_press(element_index: int, duration: float = 1.0) -> str:
-        result = handle_long_press({"element_index": element_index, "duration": duration})
-        return json.dumps(result)
-
-
-    # ios_save_replay REMOVED in v14.0.0a1 (OQ-4). Use ios_stop_recording(name=...) instead.
 
     # ── Tool: ios_simctl ───────────────────────────────────────────────────
 
@@ -5218,23 +4506,6 @@ SETUP CHECK:
             result = {"error": str(exc)}
         return json.dumps(result)
 
-    # ── Tool: ios_wait_idle ────────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_wait_idle",
-        description=(
-            "Wait for the app to become idle (no pending UI changes). "
-            "Monitors element tree stability. "
-            "Use after navigation transitions, screen pushes/pops, and tab switches. "
-            "timeout defaults to 10s, max 30s. "
-            "Decision: specific element → ios_wait_for_element. "
-            "Navigation/transition → ios_wait_idle. Arbitrary delay → ios_wait."
-        ),
-    )
-    async def ios_wait_idle(timeout: float = 10.0) -> str:
-        result = handle_wait_idle({"timeout": timeout})
-        return json.dumps(result)
-
     # ── Tool: ios_app_state ────────────────────────────────────────────────
 
     @mcp.tool(
@@ -5246,22 +4517,6 @@ SETUP CHECK:
     )
     async def ios_app_state() -> str:
         result = _retry_once_on_transient(handle_app_state, {})
-        return json.dumps(result)
-
-    # ── Tool: ios_dismiss_keyboard ────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_dismiss_keyboard",
-        description=(
-            "Dismiss the software keyboard. "
-            "Call before tapping buttons or switching tabs that are covered by an open keyboard. "
-            "Returns {dismissed: true} if a keyboard was visible and dismissed, "
-            "{dismissed: false} if no keyboard was present. "
-            "Requires an active session (ios_start_session)."
-        ),
-    )
-    async def ios_dismiss_keyboard() -> str:
-        result = handle_dismiss_keyboard({})
         return json.dumps(result)
 
     # ── Tool: ios_dismiss_sheet ────────────────────────────────────────────
@@ -5666,80 +4921,6 @@ SETUP CHECK:
             "regex": regex,
             "session_id": session_id,
         })
-        return json.dumps(result, default=str)
-
-    # ── Tool: ios_capture_state ────────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_capture_state",
-        description=(
-            "Bundle screenshot + elements + logs + app_state + perf in ONE call. "
-            "Default include=None returns all fields. "
-            "Pass include=['screenshot','elements','logs'] to slim the payload. "
-            "Supported include values: 'screenshot', 'elements', 'logs', 'app_state', 'perf'. "
-            "Returns {screenshot?, elements?, logs?, app_state?, perf?, captured_at}. "
-            "Use at the start of a debugging loop or after a state change to orient quickly. "
-            "Requires an active session (ios_start_session)."
-        ),
-    )
-    @require_tier("pro")
-    async def ios_capture_state(
-        include: list[str] | None = None,
-        session_id: str | None = None,
-    ) -> str:
-        result = _retry_once_on_transient(
-            handle_capture_state,
-            {"include": include, "session_id": session_id},
-        )
-        return json.dumps(result, default=str)
-
-    # ── Tool: ios_action_with_logs ─────────────────────────────────────────
-
-    @mcp.tool(
-        name="ios_action_with_logs",
-        description=(
-            "Execute an action and return the logs that fired during the action window. "
-            "Atomic: snapshot cursor → run action → wait log_window_ms → return new logs. "
-            "action dict: {'type': 'tap', 'label': 'Submit'} or "
-            "{'type': 'type', 'text': 'hello'} or {'type': 'swipe', 'direction': 'up'} etc. "
-            "Supported types: tap, long_press, type, swipe, press_key. "
-            "log_window_ms: how long to wait after action (default 2000ms). "
-            "Returns {action_result, logs, log_window_ms, action_elapsed_ms}. "
-            "Use instead of ios_tap + ios_logs_tail when you want atomic action+log correlation. "
-            "Requires an active session (ios_start_session)."
-        ),
-    )
-    @require_tier("pro")
-    async def ios_action_with_logs(
-        action: dict,
-        log_window_ms: int = 2000,
-        session_id: str | None = None,
-    ) -> str:
-        # HAZARD: _retry_once_on_transient can silently double-execute this action.
-        # If the first attempt executes the UI action but a transient runner error is
-        # returned before the result reaches the caller, the retry will execute the
-        # action a second time. Additionally, the first attempt's entire log window is
-        # discarded on retry — the second attempt re-collects logs from a fresh cursor.
-        # This is a deliberate tradeoff: better to retry-and-double-fire than to
-        # fail on a transient. Do NOT use ios_action_with_logs for irreversible
-        # destructive actions (delete, send, confirm) without probing state first.
-        _args = {
-            "action": action,
-            "log_window_ms": log_window_ms,
-            "session_id": session_id,
-        }
-        result = handle_action_with_logs(_args)
-        if (
-            isinstance(result, dict)
-            and result.get("error")
-            and _is_retryable_error(str(result["error"]))
-        ):
-            logger.debug(
-                "ios_action_with_logs retry: first-attempt logs discarded; window will re-collect"
-            )
-            time.sleep(2.0)
-            result = handle_action_with_logs(_args)
-            result = _tag_retryable(result)
         return json.dumps(result, default=str)
 
     # ── Tool: ios_promote_session_to_test ──────────────────────────────────
