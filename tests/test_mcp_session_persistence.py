@@ -28,6 +28,14 @@ from unittest.mock import MagicMock, patch, PropertyMock
 import pytest
 
 
+# 1×1 transparent PNG, base64-encoded — used as a stand-in screenshot in
+# session-persistence tests so handle_observe() can decode dimensions
+# without erroring out on Incorrect padding.
+_TINY_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+
+
 # ---------------------------------------------------------------------------
 # Helpers — build a minimal RunnerProcess mock
 # ---------------------------------------------------------------------------
@@ -183,14 +191,14 @@ class TestMCPSessionPersistence:
             backend_mock.get_elements.return_value = {"elements": [], "count": 0}
             backend_mock.app_state.return_value = {"state": "foreground"}
 
-            with patch("specterqa.ios.mcp.server._get_annotated_screenshot", return_value=("base64data", [])):
-                result = srv.handle_capture_state({"include": ["elements", "app_state"]})
+            with patch("specterqa.ios.mcp.server._get_annotated_screenshot", return_value=(_TINY_PNG_B64, [])):
+                result = srv.handle_observe({})
 
             # Session must be unchanged
-            assert srv._session is original_session, "capture_state must not replace _session"
-            assert srv._mcp_runner_ref is original_session, "capture_state must not clear _mcp_runner_ref"
+            assert srv._session is original_session, "observe must not replace _session"
+            assert srv._mcp_runner_ref is original_session, "observe must not clear _mcp_runner_ref"
             assert srv._session_state == "running", "session_state must remain 'running'"
-            assert "error" not in result, f"capture_state returned error: {result}"
+            assert "error" not in result, f"observe returned error: {result}"
 
         finally:
             # Cleanup module state
@@ -215,8 +223,8 @@ class TestMCPSessionPersistence:
         srv._session_state = "running"
 
         try:
-            with patch("specterqa.ios.mcp.server._get_annotated_screenshot", return_value=("b64", [])):
-                srv.handle_capture_state({"include": ["elements"]})
+            with patch("specterqa.ios.mcp.server._get_annotated_screenshot", return_value=(_TINY_PNG_B64, [])):
+                srv.handle_observe({})
 
             # No stop() called between start and capture
             runner_mock.stop.assert_not_called()
