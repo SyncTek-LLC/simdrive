@@ -843,15 +843,30 @@ def handle_start_session(arguments: dict) -> dict:
                 logger.warning("v14: MCP runner deploy failed: %s", deploy_exc)
 
         from specterqa.ios.backends.selector import BackendSelector
+        from specterqa.ios.backends.xctest_client import XCTestBackend  # noqa: PLC0415
         from specterqa.ios.som_annotator import SoMAnnotator
 
-        try:
-            chosen = BackendSelector(udid=device_id).choose(
-                device_udid=device_id,
-                requested=backend_arg,
+        # v15.1.1 dogfood Issue #1: when xctest is explicitly requested AND the
+        # deploy block above already ran a successful healthcheck + stability probe,
+        # skip the BackendSelector re-probe.  The re-probe was racing the iOS 26.x
+        # XCTest watchdog kill — runner could be alive at healthcheck() return,
+        # dead by BackendSelector probe, producing a misleading "is not available"
+        # error after a successful deploy.  If we got past the stability probe
+        # above, the runner is live; trust that signal and instantiate directly.
+        if backend_arg == "xctest" and _mcp_runner_ref is not None:
+            chosen = XCTestBackend(udid=device_id)
+            logger.info(
+                "v15.1.1: bypassing BackendSelector probe — runner deployed "
+                "+ stability-confirmed above"
             )
-        except (RuntimeError, ValueError) as exc:
-            return {"error": str(exc)}
+        else:
+            try:
+                chosen = BackendSelector(udid=device_id).choose(
+                    device_udid=device_id,
+                    requested=backend_arg,
+                )
+            except (RuntimeError, ValueError) as exc:
+                return {"error": str(exc)}
 
         backend_name = type(chosen).__name__
 

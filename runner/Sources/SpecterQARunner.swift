@@ -145,40 +145,64 @@ class SpecterQARunnerTests: XCTestCase {
         NSLog("[SpecterQA] Runner listening on port \(port) targeting '\(bundleId)' (app state=\(injector.app.state.rawValue))")
         NSLog("[SpecterQA] Endpoints: GET /health /source /screenshot /elements  POST /tap /swipe /type /key /press_button /scroll /wait /launch /terminate /dismiss-alert /shutdown /stop")
 
-        // Step 6: Spin the RunLoop with CFRunLoopRunInMode.
+        // Step 6: Park the test method on an XCTestExpectation (iOS 26-safe).
         //
-        // MUST use CFRunLoopRunInMode here — not RunLoop.current.run() or Thread.sleep.
-        // The runOnMain() helper in HTTPServer.swift uses CFRunLoopPerformBlock +
-        // CFRunLoopWakeUp to dispatch XCUITest calls to the main thread.
-        // CFRunLoopRunInMode processes those blocks; a plain RunLoop.current.run()
-        // call exits after the first dispatched block, and Thread.sleep blocks
-        // the main thread entirely (deadlocking runOnMain).
+        // Why not CFRunLoopRunInMode polling (the v15.1.0 pattern)?
+        // iOS 26's XCTRuntimeIssueDetectionManager flags long-running test
+        // methods that poll on the main thread as "stuck" and SIGKILLs the
+        // test process — even though the in-sim HTTP server is healthy
+        // (Maurice/Palace 2026-04-27 dogfood, v15.1.0 Issue #2).
         //
-        // Use a timed mode loop so we can check the stop sentinel periodically.
+        // XCTWaiter.wait(for:[expectation], timeout:) is XCTest's blessed
+        // wait primitive: the test method appears legitimately blocked on
+        // an expectation rather than spinning the runloop manually, so the
+        // runtime-issue detector does not fire.  XCTWaiter.wait still
+        // pumps the main run loop while it waits, so the existing
+        // runOnMain() helper in HTTPServer.swift (CFRunLoopPerformBlock +
+        // CFRunLoopWakeUp) continues to dispatch XCUITest calls to the
+        // main thread without changes.
+        //
+        // The watcher dispatch on a background queue fulfills the
+        // expectation on any of:
+        //   (a) HTTPServer.stopSemaphore signaled (POST /shutdown, /stop)
+        //   (b) Stop sentinel file appears (out-of-band kill switch)
+        //   (c) server.isRunning flips false (server crashed / lifecycle end)
 
-        NSLog("[SpecterQA] Entering CFRunLoopRunInMode loop...")
+        NSLog("[SpecterQA] Entering XCTWaiter pattern (iOS 26 watchdog-safe)...")
 
-        // Watch the server's stop semaphore on a background thread
-        var serverStopped = false
-        let stopWatcher = DispatchQueue(label: "com.specterqa.runner.stopwatcher")
+        let stopExpectation = XCTestExpectation(
+            description: "specterqa runner shutdown signal received"
+        )
+
+        let stopWatcher = DispatchQueue(
+            label: "com.specterqa.runner.stopwatcher",
+            qos: .background
+        )
+        let fileManager = FileManager.default
+        let sentinelPath = stopSentinelPath  // capture for closure
+
         stopWatcher.async {
-            server.stopSemaphore.wait()
-            serverStopped = true
+            while server.isRunning {
+                // (a) HTTP shutdown — short timeout so we can also poll sentinel
+                if server.stopSemaphore.wait(timeout: .now() + .milliseconds(500)) == .success {
+                    NSLog("[SpecterQA] stopSemaphore signaled — fulfilling shutdown expectation.")
+                    break
+                }
+                // (b) Out-of-band sentinel file
+                if fileManager.fileExists(atPath: sentinelPath) {
+                    NSLog("[SpecterQA] Stop sentinel detected — fulfilling shutdown expectation.")
+                    try? fileManager.removeItem(atPath: sentinelPath)
+                    break
+                }
+            }
+            // (c) server.isRunning flipped or one of (a)/(b) hit — fulfill
+            stopExpectation.fulfill()
         }
 
-        let deadline = Date().addingTimeInterval(maxDuration)
-        let fileManager = FileManager.default
+        let waitResult = XCTWaiter.wait(for: [stopExpectation], timeout: maxDuration)
 
-        while server.isRunning && !serverStopped && Date() < deadline {
-            // Check sentinel file
-            if fileManager.fileExists(atPath: stopSentinelPath) {
-                NSLog("[SpecterQA] Stop sentinel detected — exiting.")
-                try? fileManager.removeItem(atPath: stopSentinelPath)
-                break
-            }
-
-            // Run the loop for tapInterval seconds, processing any pending blocks
-            CFRunLoopRunInMode(.defaultMode, tapInterval, false)
+        if waitResult == .timedOut {
+            NSLog("[SpecterQA] Max duration (\(maxDuration)s) reached — graceful shutdown.")
         }
 
         // Step 7: Clean shutdown
