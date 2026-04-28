@@ -7,6 +7,61 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [16.0.0a2] — 2026-04-28 (alpha — Maurice/Example Reader dogfood feedback)
+
+**Status:** integration-bug fixes from Maurice's v16.0.0a1 dogfood
+(`.specterqa/dogfood/v16.0.0a1-maurice.md`). The design landed correctly in
+a1; a2 is plumbing fixes.
+
+### Fixed
+
+- **Bug #1 (P0): `RunnerProcess` no longer terminal in FAILED state.**
+  After a failed xctest deploy (e.g. iOS 26.2 `Unknown application` bug
+  causing healthcheck timeout), every subsequent `ios_start_session(backend='xctest')`
+  re-raised the cached error until MCP server restart, because
+  `ios_stop_session` only cleared the registry on success paths. v16.0.0a2
+  auto-recovers: on `deploy()` against a FAILED instance, kill any stale
+  child process, clear `_last_error`, transition to IDLE, fall through to
+  the normal deploy flow. One MCP-restart round-trip per session avoided.
+  (`runner_process.py:233-262`)
+
+- **Bug #2 (P1): `ios_dismiss_first_launch_alerts` moved back to trial tier.**
+  The tool was at indie tier in v16.0.0a1, but on iOS 26+ simctl cannot
+  pre-grant `notifications` (OS-restricted) and `ios_act` cannot reach
+  SpringBoard alert windows (outside target-app coord scope). Trial users
+  on v16 + iOS 26.x had NO path past the first-launch notifications prompt
+  — a hard regression vs v15.x. The capability is a workaround for an
+  Apple limitation, not a premium feature; trial tier restored.
+  (`tier_gate.py`)
+
+- **Bug #3 partial (P1): runner Swift now bails out fast and continues in
+  degraded mode when XCUIApplication binding fails.** On iOS 26.2 the
+  `Unknown application` LaunchServices bug causes XCTest's internal
+  `isApplicationStateKnown` waiter to never fulfill; previously the runner
+  burned ~30-60s on retries before the Python `_wait_for_health(90s)`
+  gave up. v16.0.0a2 attempts launch ONCE with a 5s wait, logs the failure
+  as `NSLog ERROR` (not buried in `XCTDebug`), and falls through to start
+  the HTTP server anyway. Coordinate-based `/tap` (cg_event_direct in
+  TouchInjector) does not depend on app binding and continues to work in
+  degraded mode. (`runner/Sources/SpecterQARunner.swift:82-115`)
+
+### Deferred to v16.0.0a3 / v16.0.0 stable
+
+- Bug #3 full: the `/elements` and `/source` endpoints currently return
+  host-chrome only (Action / Volume Up / Sleep-Wake) when the runner is
+  in degraded mode. v16.0.0a3 will add an explicit 503 + degraded marker
+  and surface the bind-failure reason via `/health`.
+- AX-backend `ios_act` for SwiftUI list cells (Maurice §P2)
+- Apple radar for the iOS 26.2 `Unknown application` regression
+- Replay v2 (visual SSIM diff) + recording v2
+
+### Verified
+
+- 526 unit tests pass / 24 skipped / 0 fail (a2 changes are runner-Swift
+  + tier-map + Python state-machine; existing tests cover all three).
+
+---
+
 ## [16.0.0a1] — 2026-04-28 (alpha pre-release; replay rewrite + recording rewrite still pending)
 
 **Status:** Maurice/Example Reader dogfoodable. The vision-first primitives work

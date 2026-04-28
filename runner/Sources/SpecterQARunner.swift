@@ -82,25 +82,40 @@ class SpecterQARunnerTests: XCTestCase {
 
         let injector = TouchInjector(bundleId: bundleId)
 
-        // Step 3: Launch the app with retries (Springboard may not be ready immediately)
-        var launchAttempts = 0
-        let maxAttempts = 3
-        while injector.app.state != .runningForeground && launchAttempts < maxAttempts {
-            launchAttempts += 1
-            NSLog("[SpecterQA] Launching app '\(bundleId)' (attempt \(launchAttempts)/\(maxAttempts))...")
-            injector.app.launch()
-            let launched = injector.app.wait(for: .runningForeground, timeout: 10)
-            if launched {
-                NSLog("[SpecterQA] App launched successfully on attempt \(launchAttempts)")
-                break
-            }
-            if launchAttempts < maxAttempts {
-                NSLog("[SpecterQA] Waiting before retry...")
-                Thread.sleep(forTimeInterval: 3)
-            }
-        }
-        if injector.app.state != .runningForeground {
-            NSLog("[SpecterQA] WARNING: App failed to reach foreground after \(maxAttempts) attempts (state=\(injector.app.state.rawValue))")
+        // Step 3: Launch the app — single attempt, short timeout.
+        //
+        // v16.0.0a2 (Maurice/Example Reader dogfood §3.3): on iOS 26.2, XCTest's
+        // XCUIApplication(bundleIdentifier:) sometimes returns
+        // "Unknown application" (LaunchServices error 10100) for
+        // legitimately-installed apps. Internally `launch()` then enters
+        // a 60s XCTWaiter on `isApplicationStateKnown` that NEVER
+        // fulfills. The previous code (3 attempts × 10s + 3s sleeps)
+        // burned ~60s+ on iOS 26 before the Python side's 90s deploy
+        // healthcheck gave up — the in-sim HTTP server hadn't started
+        // yet because we were still in the launch loop.
+        //
+        // Now: 1 attempt, 5s wait. If the app didn't reach foreground
+        // we log the error LOUDLY (not as XCTDebug breadcrumb) and fall
+        // through to start the HTTP server anyway. Coordinate-based tap
+        // (cg_event_direct in TouchInjector) does not depend on the
+        // XCUIApplication handle being bound, so /tap, /screenshot via
+        // simctl, and basic flow control still work even in this state.
+        // /elements and /source will return empty/host-chrome data —
+        // that's a known limitation tracked in v16.0.0a3.
+        let appBindTimeout: TimeInterval = 5
+        NSLog("[SpecterQA] Launching app '\(bundleId)' (single attempt, %.0fs bind timeout)...", appBindTimeout)
+        injector.app.launch()
+        let launched = injector.app.wait(for: .runningForeground, timeout: appBindTimeout)
+        if launched {
+            NSLog("[SpecterQA] App launched successfully")
+        } else {
+            NSLog(
+                "[SpecterQA] ERROR: XCUIApplication never reached runningForeground for '%@' within %.0fs " +
+                "(state=%d). Likely cause: iOS 26.x XCTest 'Unknown application' (LaunchServices error 10100). " +
+                "Continuing in DEGRADED mode — coord-based /tap and simctl-based /screenshot will work; " +
+                "/elements and /source will return host-chrome only.",
+                bundleId, appBindTimeout, injector.app.state.rawValue
+            )
         }
 
         // Step 4: Build server with v2 subsystems

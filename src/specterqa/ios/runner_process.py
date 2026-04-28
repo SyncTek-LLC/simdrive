@@ -232,11 +232,30 @@ class RunnerProcess:
                 return
 
             if self._state == RunnerState.FAILED:
-                raise RunnerDeployError(
-                    f"RunnerProcess is in FAILED state: {self._last_error}",
-                    udid=self._udid,
-                    port=self._port,
+                # v16.0.0a2 Bug #1 fix (Maurice/Example Reader dogfood §3.1):
+                # FAILED was previously a terminal sink — every subsequent
+                # deploy() re-raised the cached error until MCP server
+                # restart, because ios_stop_session only fired on success
+                # paths and never cleared the registry's FAILED instance.
+                #
+                # Auto-recover: kill any stale child process, clear the
+                # cached error, drop back to IDLE, then fall through to
+                # the normal IDLE → BUILDING → DEPLOYED → RUNNING flow
+                # below. This lets a second deploy attempt try fresh.
+                logger.info(
+                    "RunnerProcess.deploy: clearing FAILED state from a "
+                    "previous deploy (last_error=%s); re-trying as IDLE",
+                    self._last_error,
                 )
+                if self._process is not None:
+                    try:
+                        self._process.kill()
+                        self._process.wait(timeout=5)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._process = None
+                self._last_error = None
+                self._transition(RunnerState.IDLE)
 
             effective_port = port if port is not None else self._port
 
