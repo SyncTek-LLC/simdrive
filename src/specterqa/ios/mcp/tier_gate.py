@@ -101,31 +101,11 @@ TOOL_TIER_MAP: dict[str, str] = {
     "ios_stop_session": "trial",
 
     # ── Vision-first primitives (v16.0.0) ─────────────────────────────────
-    # These are the recommended entry points for vision-capable agents.
-    # ios_observe + ios_act replace the v15.x screenshot/elements/tap/etc.
-    # surface; legacy tools below are deprecated in v16 and slated for
-    # removal — keep them tier-mapped so the gate still rejects unknown
-    # tiers while the legacy surface exists.
+    # The only sanctioned input + observation surface in v16.
     "ios_observe": "trial",
     "ios_act": "trial",
 
-    # ── Observation (legacy v15.x — deprecated in v16.0.0) ────────────────
-    "ios_screenshot": "trial",
-    "ios_elements": "trial",
-
-    # ── Interaction ────────────────────────────────────────────────────────
-    "ios_tap": "trial",
-    "ios_long_press": "trial",
-    "ios_type": "trial",
-    "ios_press_key": "trial",
-    "ios_swipe": "trial",
-    "ios_swipe_back": "trial",
-    "ios_dismiss_keyboard": "trial",
-
-    # ── Waiting ────────────────────────────────────────────────────────────
-    "ios_wait": "trial",
-    "ios_wait_for_element": "trial",
-    "ios_wait_idle": "trial",
+    # ── Lifecycle / state (kept) ──────────────────────────────────────────
     "ios_app_state": "trial",
     "ios_dismiss_sheet": "trial",
 
@@ -167,10 +147,10 @@ TOOL_TIER_MAP: dict[str, str] = {
 
     # ── AI Debugging Primitives (v14.0.0b1) ───────────────────────────────
     # These are high-value debugging multipliers; gated at pro+.
+    # ios_capture_state + ios_action_with_logs deleted in v16.0.0 (folded
+    # into ios_observe + ios_act + ios_logs_tail composition).
     "ios_app_relaunch": "pro",          # Pro tier: single-session debug utility; team tier is dead-on-arrival for this use case
     "ios_logs_tail": "pro",
-    "ios_capture_state": "pro",
-    "ios_action_with_logs": "pro",
     "ios_promote_session_to_test": "team",
 }
 

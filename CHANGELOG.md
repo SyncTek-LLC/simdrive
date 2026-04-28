@@ -7,7 +7,18 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
-## [16.0.0] — IN PROGRESS (Phase A landed; Phases B–F pending)
+## [16.0.0a1] — 2026-04-28 (alpha pre-release; replay rewrite + recording rewrite still pending)
+
+**Status:** Maurice/Example Reader dogfoodable. The vision-first primitives work
+end-to-end on iOS 26.x; the AX-tree selector layer is gone from the MCP
+surface. Replay v2 (visual SSIM diff) + recording v2 are deferred to
+v16.0.0a2 / v16.0.0; pre-v16 replay YAMLs do not run on this alpha.
+
+Install: `pip install specterqa-ios==16.0.0a1` (note the `a1` suffix —
+this is a PEP 440 alpha pre-release; `pip install specterqa-ios`
+without the version pin still installs v15.2.0 stable).
+
+## [16.0.0] — IN PROGRESS (Phase A + B-Lite landed; Phases C–F pending)
 
 **This is a strategic redirection, not a tweak.** The accessibility-tree
 selector layer that v15.x driving was built around has been doing negative

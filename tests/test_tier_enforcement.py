@@ -599,17 +599,19 @@ class TestTierMapping:
             )
 
     def test_trial_tools_accessible(self):
-        """Core interaction tools (ios_tap, ios_screenshot, etc.) are trial-accessible."""
+        """Core observation + action tools are trial-accessible (v16.0.0a1).
+
+        Pre-v16: ios_tap, ios_screenshot, ios_elements, ios_swipe, ios_type
+        were trial-tier. v16 deletes those — ios_observe + ios_act take their
+        place at the same trial tier.
+        """
         from specterqa.ios.mcp.tier_gate import TOOL_TIER_MAP, TIER_RANK
 
         trial_expected = [
             "ios_start_session",
             "ios_stop_session",
-            "ios_screenshot",
-            "ios_tap",
-            "ios_type",
-            "ios_swipe",
-            "ios_elements",
+            "ios_observe",
+            "ios_act",
             "ios_logs",
             "ios_crashes",
             "ios_doctor",
@@ -638,23 +640,24 @@ class TestTierMapping:
                 f"{tool} should be exactly 'team' tier, got {tool_tier}"
             )
 
-    def test_all_47_tools_covered(self):
-        """TOOL_TIER_MAP should cover all 47 registered tools (no gaps)."""
+    def test_all_v16_tools_covered(self):
+        """TOOL_TIER_MAP should cover every registered tool in the v16.0.0 surface."""
         from specterqa.ios.mcp.tier_gate import TOOL_TIER_MAP
 
-        # 47 tools listed in the server docstring
+        # v16.0.0a1: vision-first surface — 35 tools after the legacy AX-tree
+        # selector layer was deleted.  ios_screenshot, ios_elements, ios_tap,
+        # ios_long_press, ios_type, ios_press_key, ios_swipe, ios_swipe_back,
+        # ios_dismiss_keyboard, ios_wait, ios_wait_for_element, ios_wait_idle,
+        # ios_capture_state, ios_action_with_logs are all GONE — replaced by
+        # ios_observe + ios_act.
         expected_tools = {
             # Session lifecycle
             "ios_start_session", "ios_stop_session",
-            # Observation
-            "ios_screenshot", "ios_elements",
-            # Interaction
-            "ios_tap", "ios_long_press", "ios_type", "ios_press_key",
-            "ios_swipe", "ios_swipe_back", "ios_dismiss_keyboard",
-            # Waiting
-            "ios_wait", "ios_wait_for_element", "ios_wait_idle",
+            # Vision-first primitives (the v16 entry points)
+            "ios_observe", "ios_act",
+            # Lifecycle / state
             "ios_app_state", "ios_dismiss_sheet",
-            # Recording & Replay
+            # Recording & Replay (recording rewrite still pending in v16.0.0a2)
             "ios_start_recording", "ios_stop_recording",
             "ios_list_replays", "ios_replay", "ios_validate_replay",
             # Environment Discovery
@@ -669,9 +672,10 @@ class TestTierMapping:
             "ios_perf", "ios_memory", "ios_network",
             "ios_perf_baseline", "ios_perf_compare",
             # AI Debugging Primitives
-            "ios_app_relaunch", "ios_logs_tail", "ios_capture_state",
-            "ios_action_with_logs", "ios_promote_session_to_test",
+            "ios_app_relaunch", "ios_logs_tail", "ios_promote_session_to_test",
         }
 
         missing = expected_tools - set(TOOL_TIER_MAP.keys())
+        extra = set(TOOL_TIER_MAP.keys()) - expected_tools
         assert not missing, f"Tools missing from TOOL_TIER_MAP: {sorted(missing)}"
+        assert not extra, f"Unexpected tools in TOOL_TIER_MAP (not deleted in v16?): {sorted(extra)}"
