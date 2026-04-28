@@ -7,6 +7,49 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [15.3.0] — 2026-04-28
+
+### Added (revenue feature: license-tier gating across MCP tools)
+
+- **License-tier enforcement on the full MCP tool surface** (`src/specterqa/ios/mcp/tier_gate.py`).
+  Every tool registered in `server.py` now declares a minimum tier (trial / indie / pro / team / enterprise).
+  Decorator `@require_tier("pro")` blocks the call before the tool runs and returns a JSON-string
+  error with `error: "tier_required"`, `required_tier`, `current_tier`, `upgrade_url`. Both sync and
+  async tool wrappers return `json.dumps(err)` so MCP clients always get a JSON string.
+  - Per-tier defaults (verified consistent across docs/landing/website at release time):
+    `trial` (free, 1 sim, 3 runs), `indie` ($29/mo, 2 sims), `pro` ($99/mo, 4 sims),
+    `team` ($299/mo, 10 sims), `enterprise` (custom).
+  - Bypass: `SPECTERQA_LICENSE_BYPASS=1` skips all tier checks (CI / dev only).
+    Module-level WARNING fires at import when bypass is active so it can't go unnoticed in
+    production logs.
+  - Fail-open on validator exception (network outage, bad config) with WARNING log — dev environments
+    aren't bricked, but failures are visible.
+- **Tool tiering** (notable picks):
+  - `ios_simctl` → `pro` (raw simctl passthrough is high-trust)
+  - `ios_app_relaunch` → `pro` (single-session debug primitive)
+  - `ios_perf`, `ios_memory`, `ios_network`, `ios_perf_baseline`, `ios_perf_compare`, `ios_accessibility_audit`,
+    `ios_capture_state`, `ios_logs_tail`, `ios_action_with_logs` → `pro` (the upgrade motivators)
+  - `ios_promote_session_to_test` → `team`
+  - All discovery / observation / basic interaction tools remain `trial`.
+- **34 new tests** in `tests/test_tier_enforcement.py` covering: core gating logic, decorator (sync + async),
+  bypass env-var, startup-bypass-warning, scenario coverage, tier-mapping completeness (all 47 tools
+  enumerated). `pytest-asyncio>=0.23` added to dev deps; `asyncio_mode = "strict"` enabled in `[tool.pytest.ini_options]`.
+
+### Fixed (carried from PR #79 cleanup)
+
+- `_tier_cache_lock_val` sentinel removed; replaced with TODO comment about adding `threading.Lock` when
+  `serve()` goes multi-worker.
+- WARNING when validator returns an unknown tier string (so future / custom tiers surface a log signal
+  rather than silently locking the user out of every gated tool).
+
+### Notes
+
+- This is the first revenue-relevant gate on the MCP surface. Until v15.3.0 every tool was effectively
+  open; from v15.3.0 onward, trial users see `tier_required` JSON when calling `pro`/`team` tools and
+  are pointed at the upgrade URL.
+
+---
+
 ## [15.2.0] — 2026-04-27
 
 ### Fixed (iOS 26.x XCTest runner survives — Maurice/Example Reader dogfood cure)
