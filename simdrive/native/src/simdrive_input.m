@@ -249,30 +249,78 @@ int main(int argc, const char *argv[]) {
       usleep(20 * 1000);
       sendBlocking(client, gMessageForKeyboard(code, DIRECTION_UP));
     } else if (strcmp(cmd, "text") == 0 && argc == 4) {
-      // Map ASCII → HID keyboard usage codes (US layout).
+      // Map ASCII → HID keyboard usage codes (US layout) + whether Shift is required.
       // Reference: HID Usage Tables, page 53.
-      static const int lower[128] = {
+      // (code, needsShift) per ASCII char.
+      static const int code_for[128] = {
         ['a']=4,['b']=5,['c']=6,['d']=7,['e']=8,['f']=9,['g']=10,['h']=11,
         ['i']=12,['j']=13,['k']=14,['l']=15,['m']=16,['n']=17,['o']=18,['p']=19,
         ['q']=20,['r']=21,['s']=22,['t']=23,['u']=24,['v']=25,['w']=26,['x']=27,
         ['y']=28,['z']=29,
+        ['A']=4,['B']=5,['C']=6,['D']=7,['E']=8,['F']=9,['G']=10,['H']=11,
+        ['I']=12,['J']=13,['K']=14,['L']=15,['M']=16,['N']=17,['O']=18,['P']=19,
+        ['Q']=20,['R']=21,['S']=22,['T']=23,['U']=24,['V']=25,['W']=26,['X']=27,
+        ['Y']=28,['Z']=29,
         ['1']=30,['2']=31,['3']=32,['4']=33,['5']=34,['6']=35,['7']=36,['8']=37,
         ['9']=38,['0']=39,
+        ['!']=30,['@']=31,['#']=32,['$']=33,['%']=34,['^']=35,['&']=36,['*']=37,
+        ['(']=38,[')']=39,
         ['\n']=40,['\t']=43,[' ']=44,
-        ['-']=45,['=']=46,['[']=47,[']']=48,['\\']=49,[';']=51,['\'']=52,
-        ['`']=53,[',']=54,['.']=55,['/']=56,
+        ['-']=45,['_']=45,
+        ['=']=46,['+']=46,
+        ['[']=47,['{']=47,
+        [']']=48,['}']=48,
+        ['\\']=49,['|']=49,
+        [';']=51,[':']=51,
+        ['\'']=52,['"']=52,
+        ['`']=53,['~']=53,
+        [',']=54,['<']=54,
+        ['.']=55,['>']=55,
+        ['/']=56,['?']=56,
       };
+      // chars that require shift to produce
+      static const int needs_shift[128] = {
+        ['A']=1,['B']=1,['C']=1,['D']=1,['E']=1,['F']=1,['G']=1,['H']=1,
+        ['I']=1,['J']=1,['K']=1,['L']=1,['M']=1,['N']=1,['O']=1,['P']=1,
+        ['Q']=1,['R']=1,['S']=1,['T']=1,['U']=1,['V']=1,['W']=1,['X']=1,
+        ['Y']=1,['Z']=1,
+        ['!']=1,['@']=1,['#']=1,['$']=1,['%']=1,['^']=1,['&']=1,['*']=1,
+        ['(']=1,[')']=1,
+        ['_']=1,['+']=1,['{']=1,['}']=1,['|']=1,[':']=1,['"']=1,['~']=1,
+        ['<']=1,['>']=1,['?']=1,
+      };
+
+      const int kShift = 0xE1;  // HID usage for left shift
+      int shiftDown = 0;        // track shift state to avoid redundant down/up
+      // iOS's keyboard subsystem needs ~20ms to register a modifier-state
+      // change before the next keystroke lands; tighter than that drops chars.
+      const useconds_t kModSettle = 25 * 1000;
+      const useconds_t kKeyHold = 12 * 1000;
+      const useconds_t kKeyGap = 12 * 1000;
+
       const char *s = argv[3];
       for (size_t i = 0; s[i]; i++) {
-        char c = s[i];
-        int code = 0;
-        if (c >= 'A' && c <= 'Z') code = lower[(int)(c - 'A' + 'a')];
-        else if (c < 128) code = lower[(int)c];
-        if (!code) continue;  // skip unsupported chars
+        unsigned char uc = (unsigned char)s[i];
+        if (uc >= 128) continue;  // skip non-ASCII (callers should use the paste path)
+        int code = code_for[uc];
+        if (!code) continue;
+        int wantsShift = needs_shift[uc];
+        if (wantsShift && !shiftDown) {
+          sendBlocking(client, gMessageForKeyboard(kShift, DIRECTION_DOWN));
+          usleep(kModSettle);
+          shiftDown = 1;
+        } else if (!wantsShift && shiftDown) {
+          sendBlocking(client, gMessageForKeyboard(kShift, DIRECTION_UP));
+          usleep(kModSettle);
+          shiftDown = 0;
+        }
         sendBlocking(client, gMessageForKeyboard(code, DIRECTION_DOWN));
-        usleep(8 * 1000);
+        usleep(kKeyHold);
         sendBlocking(client, gMessageForKeyboard(code, DIRECTION_UP));
-        usleep(8 * 1000);
+        usleep(kKeyGap);
+      }
+      if (shiftDown) {
+        sendBlocking(client, gMessageForKeyboard(kShift, DIRECTION_UP));
       }
     } else if (strcmp(cmd, "chord") == 0 && argc >= 4) {
       // chord <modifier> <key>  — e.g.  chord cmd v   →  Cmd+V (paste)

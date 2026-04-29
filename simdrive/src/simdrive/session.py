@@ -39,6 +39,23 @@ def _workroot() -> Path:
     return Path(base)
 
 
+def append_action(s: "Session", record: dict) -> None:
+    """Append an action entry to the session's actions.jsonl audit log.
+
+    One JSON object per line. Records every act-tool call (with args, resolved
+    target, screenshot paths, timestamp) so a session directory is a complete
+    artifact — no need to call record_start to capture a flow.
+    """
+    import json as _json
+    log_path = s.workdir / "actions.jsonl"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a") as f:
+            f.write(_json.dumps(record) + "\n")
+    except Exception:
+        pass  # never fail the act tool because of audit logging
+
+
 def start(
     device_name: Optional[str] = None,
     os_version: Optional[str] = None,

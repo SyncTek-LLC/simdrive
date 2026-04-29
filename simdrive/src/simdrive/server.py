@@ -138,6 +138,16 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
         cx, cy = m.center
         return cx, cy, f"mark:{mark_id}({m.text!r})"
 
+    if "stable_id" in args:
+        sid_q = str(args["stable_id"])
+        m = som.find_by_stable_id(s.last_marks or [], sid_q)
+        if not m:
+            available = [{"stable_id": mk.stable_id, "text": mk.text}
+                         for mk in (s.last_marks or [])]
+            raise errors.target_not_found("stable_id", sid_q, available)
+        cx, cy = m.center
+        return cx, cy, f"stable_id:{sid_q}({m.text!r})"
+
     if "text" in args:
         query = str(args["text"])
         m = som.find_by_text(s.last_marks or [], query)
@@ -171,6 +181,12 @@ def tool_tap(arguments: dict) -> dict:
     args = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
     if pre_path:
         _record_act_step(s, "tap", args, pre_path)
+    session.append_action(s, {
+        "action": "tap",
+        "args": dict(arguments),
+        "resolved": {"pixel_x": x, "pixel_y": y, "via": resolved_via},
+        "at": _now(),
+    })
     return {
         "ok": True,
         "pixel_x": x,
@@ -197,7 +213,19 @@ def tool_swipe(arguments: dict) -> dict:
         x2, y2, _ = _resolve_target_xy(s, arguments["to"])
         resolved_via = "from/to"
     else:
-        raise ValueError("swipe requires {x1,y1,x2,y2} or {from: target, to: target}")
+        raise errors.invalid_argument("swipe", arguments,
+                                       "requires {x1,y1,x2,y2} or {from: target, to: target}")
+
+    # Home-indicator guard rail: any swipe ending in the bottom strip is
+    # interpreted by iOS as the home-indicator gesture and exits the app.
+    warnings: list[str] = []
+    home_zone_top = sh - max(80, int(sh * 0.04))
+    if y2 >= home_zone_top:
+        warnings.append(
+            f"swipe end y={y2} is in the home-indicator zone (y >= {home_zone_top}); "
+            "iOS will likely interpret this as the home gesture and exit the app. "
+            "Suggested: cap y2 at {home_zone_top - 1}."
+        )
 
     pre_path = s.last_screenshot_path
     act.swipe(x1, y1, x2, y2, sw, sh, duration_ms, udid=s.device.udid)
@@ -208,7 +236,17 @@ def tool_swipe(arguments: dict) -> dict:
     }
     if pre_path:
         _record_act_step(s, "swipe", args, pre_path)
-    return {"ok": True, "resolved_via": resolved_via}
+    session.append_action(s, {
+        "action": "swipe",
+        "args": dict(arguments),
+        "resolved": {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "via": resolved_via},
+        "warnings": warnings,
+        "at": _now(),
+    })
+    response: dict = {"ok": True, "resolved_via": resolved_via}
+    if warnings:
+        response["warnings"] = warnings
+    return response
 
 
 def tool_type_text(arguments: dict) -> dict:
@@ -229,6 +267,11 @@ def tool_type_text(arguments: dict) -> dict:
     s.last_action_at = _now()
     if pre_path:
         _record_act_step(s, "type_text", {"text": text}, pre_path)
+    session.append_action(s, {
+        "action": "type_text",
+        "args": {"text": text, "tap_first": tap_target},
+        "at": _now(),
+    })
     return {"ok": True, "chars": len(text)}
 
 
@@ -241,6 +284,7 @@ def tool_press_key(arguments: dict) -> dict:
     s.last_action_at = _now()
     if pre_path:
         _record_act_step(s, "press_key", {"key": key}, pre_path)
+    session.append_action(s, {"action": "press_key", "args": {"key": key}, "at": _now()})
     return {"ok": True, "key": key}
 
 
@@ -345,7 +389,8 @@ _TOOLS: list[dict] = [
         "name": "tap",
         "description": (
             "Tap a target. Supply ONE of: {x, y} (screenshot pixel coords), "
-            "{mark: <id>} (a mark id from the most recent observe), or "
+            "{mark: <id>} (mark id from latest observe — reshuffles per observe), "
+            "{stable_id: <hash>} (stable across observes; preferred for replay), or "
             "{text: \"...\"} (best-match against the last observe's marks)."
         ),
         "inputSchema": {
@@ -355,7 +400,8 @@ _TOOLS: list[dict] = [
                 "session_id": {"type": "string"},
                 "x": {"type": "integer", "description": "Pixel x (paired with y)."},
                 "y": {"type": "integer", "description": "Pixel y (paired with x)."},
-                "mark": {"type": "integer", "description": "Mark id from the latest observe."},
+                "mark": {"type": "integer", "description": "Mark id from the latest observe (reshuffles every observe)."},
+                "stable_id": {"type": "string", "description": "Stable mark hash (text + bucketed position) — survives reshuffling."},
                 "text": {"type": "string", "description": "Match a mark by visible text (exact > prefix > substring)."},
             },
         },

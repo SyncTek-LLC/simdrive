@@ -1,6 +1,7 @@
 """Observe the current simulator state — screenshot + optional SoM annotation + logs."""
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,7 +82,7 @@ def observe(
         except Exception as exc:
             logs_text = f"<log capture failed: {exc}>"
 
-    return Observation(
+    obs = Observation(
         screenshot_path=raw_path,
         annotated_path=annotated_path,
         screenshot_w=w,
@@ -91,3 +92,13 @@ def observe(
         marks=marks,
         recent_logs=logs_text,
     )
+
+    # Persist a sidecar JSON next to the screenshot so anyone reading the
+    # session directory has the full structured observation, not just pixels.
+    sidecar = raw_path.with_suffix(".json")
+    try:
+        sidecar.write_text(json.dumps(obs.to_dict(), indent=2))
+    except Exception:
+        pass  # never let sidecar persistence fail the observe call
+
+    return obs

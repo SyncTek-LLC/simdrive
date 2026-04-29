@@ -11,7 +11,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "0.1.0a1"
+    assert server.__version__ == "0.1.0a2"
 
 
 def test_tool_count_is_twelve():
@@ -287,3 +287,72 @@ def test_pasteboard_helper_call_signature():
 def test_chord_helper_call_signature():
     from simdrive import hid_inject
     assert callable(hid_inject.chord)
+
+
+def test_mark_stable_id_is_position_text_hash():
+    from simdrive.som import Mark
+    m1 = Mark(id=1, x=100, y=200, w=80, h=20, text="Borrow", confidence=1.0)
+    m2 = Mark(id=99, x=103, y=205, w=80, h=20, text="Borrow", confidence=1.0)
+    # Same text, position within the 20px bucket → same stable_id
+    assert m1.stable_id == m2.stable_id
+    # Different text → different stable_id
+    m3 = Mark(id=1, x=100, y=200, w=80, h=20, text="Return", confidence=1.0)
+    assert m1.stable_id != m3.stable_id
+
+
+def test_find_by_stable_id():
+    from simdrive.som import Mark, find_by_stable_id
+    marks = [
+        Mark(id=1, x=0, y=0, w=10, h=10, text="A", confidence=1.0),
+        Mark(id=2, x=50, y=50, w=10, h=10, text="B", confidence=1.0),
+    ]
+    target = marks[1].stable_id
+    assert find_by_stable_id(marks, target).text == "B"
+    assert find_by_stable_id(marks, "nope") is None
+
+
+def test_observe_writes_sidecar_json(tmp_path, monkeypatch):
+    """observe() should drop a <screenshot>.json next to the PNG."""
+    from simdrive import observe
+    from PIL import Image
+    monkeypatch.setattr(observe, "sim", _stub_sim_for_observe(tmp_path))
+
+    out_dir = tmp_path / "obs"
+    obs = observe.observe(udid="X", out_dir=out_dir, annotate=False)
+    sidecar = obs.screenshot_path.with_suffix(".json")
+    assert sidecar.exists()
+    import json as _j
+    payload = _j.loads(sidecar.read_text())
+    assert "screenshot_path" in payload
+    assert "marks" in payload
+
+
+def _stub_sim_for_observe(tmp_path):
+    """Build a stub `sim` namespace that yields a 100x100 PNG without simctl."""
+    from PIL import Image
+    class StubSim:
+        @staticmethod
+        def screenshot(udid, dest):
+            Image.new("RGB", (100, 100), (200, 200, 200)).save(dest)
+            return dest
+        @staticmethod
+        def get_log_tail(*args, **kwargs):
+            return ""
+    return StubSim
+
+
+def test_session_append_action_writes_jsonl(tmp_path):
+    from simdrive import session as ses
+    from simdrive.sim import Device
+    s = ses.Session(
+        session_id="aud",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+    )
+    ses.append_action(s, {"action": "tap", "args": {"x": 10, "y": 20}})
+    ses.append_action(s, {"action": "press_key", "args": {"key": "home"}})
+    log = (tmp_path / "actions.jsonl").read_text().strip().splitlines()
+    assert len(log) == 2
+    import json as _j
+    assert _j.loads(log[0])["action"] == "tap"
+    assert _j.loads(log[1])["action"] == "press_key"
