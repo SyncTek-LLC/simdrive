@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0a2 — 2026-04-29
+
+Palace dogfood feedback round 1 (Maurice / PP-4164 regression workload).
+
+### Fixed
+- **`type_text` now correctly uppercases** — sends the Shift HID modifier for `A-Z` and shifted symbols (`!@#$%^&*()_+{}|:"<>?~`). Previous behavior typed `"A1QA"` as `"a1qa"`. Credentialed flows (basic auth, SAML, OIDC) now work.
+- `swipe` warns when the end y-coordinate falls in the iOS home-indicator zone (bottom ~80px). Saves an accidental "exit to home screen" gesture.
+
+### Added
+- **Sidecar JSON per observation** — every screenshot now writes `<screenshot>.json` next to the PNG with the full structured observation (marks, bounds, captured_at, logs). A session directory is now a complete artifact for downstream test infrastructure; no need to capture MCP responses by hand.
+- **`actions.jsonl` per session** — every tap / swipe / type_text / press_key call appends to `<session_workdir>/actions.jsonl`. Replay-ready without `record_start`.
+- **`Mark.stable_id`** — short hash of `(text + bucketed-position)`. Survives mark-id reshuffling between observes. New tap form: `tap({stable_id: "abc123"})`.
+
+### Investigation notes (not changed)
+- The "candidate-build app exits on `< Back` tap" log signature (`Failed to create a bundle instance representing '...PalaceTests.xctest'`) is iOS looking up a *Palace*-side test bundle, not anything simdrive ships. simdrive does not run XCTest. Likely candidate-side regression in scene-lifecycle teardown.
+- The 1-in-4 first-launch-alert miss is being investigated — likely a SpringBoard PID-handoff race during permission-alert ownership transition.
+
 ## 0.1.0a1 — 2026-04-27
 
 Initial alpha. simdrive is a fresh package, born from the ashes of `specterqa-ios` after a hard pivot away from XCTest.
