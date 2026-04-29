@@ -823,20 +823,74 @@ def handle_start_session(arguments: dict) -> dict:
                         logger.debug("Sim boot-check after cleanup failed: %s", _boot_exc)
 
                 _deploy_port = 8222
+
+                # v16.0.0a3 P0-1 (Maurice/Palace dogfood): ensure the sim is
+                # booted before deploy.  Previously _ensure_sim_booted was wired
+                # into handle_app_relaunch but NOT into handle_start_session —
+                # so a shutdown sim would hand the deploy a guaranteed-fail
+                # situation.
+                if device_id and device_id != "booted" and device_type == "simulator":
+                    try:
+                        if not _ensure_sim_booted(device_id):
+                            return {
+                                "error": "sim_boot_failed",
+                                "message": (
+                                    f"Simulator {device_id} could not be booted "
+                                    "before runner deploy. Check the device exists "
+                                    "(xcrun simctl list devices) and try again."
+                                ),
+                                "udid": device_id,
+                                "retryable": True,
+                            }
+                    except NameError:
+                        # _ensure_sim_booted lives lower in the file; if we hit
+                        # this during refactor, fall through (the legacy path
+                        # below also handles partial sim states).
+                        pass
+
                 _mcp_runner = RunnerProcess.acquire(device_id, _deploy_port)
                 _mcp_runner.deploy(bundle_id or "")
 
                 # Wait for the runner to become healthy (up to 90s).
                 # Cold runner boot on an idle simulator takes 35–50s.
+                #
+                # v16.0.0a3 P0-1: previously a healthcheck timeout was
+                # WARNING-logged and we silently fell through to BackendSelector,
+                # which would then return status:ok with a dead runner_url.
+                # Maurice's Palace dogfood: agent-side this read as success and
+                # subsequent ios_observe calls returned cached/empty data with
+                # no obvious error.  v16.0.0a3 returns a structured error
+                # immediately so the caller knows the deploy failed.
                 try:
                     _mcp_runner.healthcheck(timeout_s=90.0)
                     logger.info("v14: MCP runner deployed and healthy on :%d", _deploy_port)
-                    # Store for cleanup on stop — but do NOT assign to _session yet.
-                    # _session is set later (xctest path) to avoid a second deploy.
                     _mcp_runner_ref = _mcp_runner  # noqa: PLW0603
                 except RunnerDeployError as health_exc:
-                    logger.warning("v14: MCP runner did not become healthy: %s", health_exc)
-                    _mcp_runner_ref = None
+                    logger.error(
+                        "v14: MCP runner did not become healthy within 90s: %s",
+                        health_exc,
+                    )
+                    _set_deploy_state(
+                        "failed",
+                        udid=device_id,
+                        error=str(health_exc),
+                    )
+                    return {
+                        "error": "runner_deploy_health_timeout",
+                        "message": (
+                            "The XCTest runner did not respond to /health within "
+                            "90 seconds of deploy. The runner test process likely "
+                            "exited early (common cause on iOS 26.0: SDK mismatch "
+                            "between the .xctestrun file's iphonesimulator26.X "
+                            "target and the booted sim's runtime; rebuild the "
+                            "runner: `specterqa-ios runner clean --yes && "
+                            "specterqa-ios runner build`)."
+                        ),
+                        "udid": device_id,
+                        "port": _deploy_port,
+                        "retryable": False,
+                        "underlying_error": str(health_exc),
+                    }
 
             except RunnerDeployError as deploy_exc:
                 # Loud error — no silent fallback to AX
@@ -2216,22 +2270,19 @@ def handle_webview_elements(arguments: dict) -> dict:
 
 
 def handle_observe(arguments: dict) -> dict:
-    """v16.0.0 — vision-first observation primitive.
+    """v16.0.0a3 — vision-first observation primitive (file-path delivery).
 
-    Returns the current screen state in the form a vision-capable agent (Claude,
-    GPT-4V, Gemini) can act on directly: a screenshot plus only the truly stable
-    semantic anchors. Replaces the v15.x ``ios_screenshot`` + ``ios_elements``
-    pair, with the deliberate scope reduction that ``reliable_targets`` excludes
-    everything without an explicit ``accessibilityIdentifier``.
+    Captures the current screen and writes the screenshot to a temp file, then
+    returns the file path plus structured metadata. Vision-capable agents read
+    the path with their native file-read tool to get the image into multimodal
+    input — avoiding the v16.0.0a1/a2 problem where the inline base64 payload
+    (188KB at standard quality) blew the MCP envelope cap (~25KB).
 
-    The intent: stop trying to represent the iOS screen for the agent via the
-    accessibility tree, which on iOS 26.x SwiftUI is lossy (elements without
-    explicit accessibility setup vanish), brittle (label propagation across
-    NavigationStackHosting wrappers), and crash-prone (XCUIElementQuery
-    subscript throwing NSException on ambiguous matches). The screenshot is
-    the truthful visual representation; ``reliable_targets`` is an opt-in
-    semantic helper for the rare cases where the developer set an explicit
-    identifier.
+    Coord space (v16.0.0a3 fix per Maurice §P0-4): ``device_w`` and ``device_h``
+    are LOGICAL POINTS (e.g. 390x844 for iPhone 12). Use these for ``ios_act``
+    coordinates. Separate ``screenshot_w`` / ``screenshot_h`` report the JPEG
+    pixel dims at the chosen quality — useful for normalized math but NOT for
+    tap targeting.
 
     Args:
         quality: "standard" (50%, default), "full" (no resize), "thumbnail" (25%).
@@ -2241,15 +2292,13 @@ def handle_observe(arguments: dict) -> dict:
 
     Returns:
         {
-            "screenshot": "<base64 PNG, annotated>",
-            "device_w": <int>,
-            "device_h": <int>,
-            "reliable_targets": [
-                {"identifier": "<string>", "label": "...", "type": "Button",
-                 "x": <px>, "y": <px>, "width": <px>, "height": <px>,
-                 "center_x": <px>, "center_y": <px>}
-            ],
-            "app_state": {<runner.app_state response>},
+            "screenshot_path": "/tmp/specterqa-observe-<uuid>.jpg",
+            "device_w": <int — LOGICAL POINTS>,
+            "device_h": <int — LOGICAL POINTS>,
+            "screenshot_w": <int — pixel width of the saved JPEG>,
+            "screenshot_h": <int — pixel height of the saved JPEG>,
+            "reliable_targets": [...],
+            "app_state": {...},
             "captured_at": "<ISO 8601 UTC>"
         }
         or {"error": "<message>"} on failure.
@@ -2275,9 +2324,6 @@ def handle_observe(arguments: dict) -> dict:
         _last_elements = elements
 
         # Filter to elements with explicit accessibilityIdentifier set.
-        # `identifier` was added to UIElement in v16.0.0; pre-v16 elements
-        # have it as empty string, so the filter is degenerate-empty for
-        # surfaces where the developer never opted in to scriptability.
         reliable_targets = [
             {
                 "identifier": e.identifier,
@@ -2297,40 +2343,51 @@ def handle_observe(arguments: dict) -> dict:
         # Resize annotated screenshot per quality flag.
         resized_b64 = _resize_screenshot(annotated_b64, scale=scale)
 
-        # Device dimensions — try session metadata first, then fall back to
-        # decoding the screenshot PNG header (pixel dims). For xctest sessions
-        # _session doesn't carry _device_w/_device_h; for AX sessions it does.
+        # P0-3 fix — write the screenshot to a temp file and return the path
+        # instead of the inline base64. Drops the 188KB JSON envelope problem.
+        import base64 as _b64  # noqa: PLC0415
+        import uuid as _uuid_mod  # noqa: PLC0415
+        from PIL import Image as _PILImage  # noqa: PLC0415
+        from io import BytesIO as _BytesIO  # noqa: PLC0415
+
+        screenshot_bytes = _b64.b64decode(resized_b64)
+        screenshot_id = _uuid_mod.uuid4().hex[:8]
+        screenshot_path = f"/tmp/specterqa-observe-{screenshot_id}.jpg"
+        try:
+            with open(screenshot_path, "wb") as _f:
+                _f.write(screenshot_bytes)
+        except OSError as exc:
+            return {"error": f"observe: could not write screenshot to disk: {exc}"}
+
+        # Read pixel dims from the saved JPEG.
+        try:
+            img = _PILImage.open(_BytesIO(screenshot_bytes))
+            screenshot_w, screenshot_h = img.size
+        except Exception:  # noqa: BLE001
+            screenshot_w = screenshot_h = 0
+
+        # P0-4 fix — device_w/h must be LOGICAL POINTS, not pixel dims.
+        # Try the session/backend objects first, then fall back to a
+        # device-name → known-points map, then a safe iPhone default.
         device_w = device_h = 0
         try:
             sess = _session
             if sess is not None:
                 device_w = int(getattr(sess, "_device_w", 0) or 0)
                 device_h = int(getattr(sess, "_device_h", 0) or 0)
-            # Also check the backend (AXBackend exposes it directly)
             if (device_w == 0 or device_h == 0) and _backend is not None:
                 device_w = int(getattr(_backend, "_device_w", device_w) or device_w)
                 device_h = int(getattr(_backend, "_device_h", device_h) or device_h)
         except Exception:  # noqa: BLE001
             pass
 
-        # Last-resort fallback: read pixel dims from the raw screenshot PNG.
-        # These are pixel dimensions (retina-scaled), not device-points;
-        # downstream callers using normalized=true on ios_act should still
-        # work because both ios_observe coords and ios_act denormalization
-        # use the same units. Logical-point conversion arrives in v16.0.0a2.
+        # Look up logical-point dims by device name when session metadata is empty.
         if device_w == 0 or device_h == 0:
-            try:
-                import base64 as _b64  # noqa: PLC0415
-                from PIL import Image  # noqa: PLC0415
-                from io import BytesIO  # noqa: PLC0415
-                img = Image.open(BytesIO(_b64.b64decode(annotated_b64)))
-                pw, ph = img.size
-                if device_w == 0:
-                    device_w = pw
-                if device_h == 0:
-                    device_h = ph
-            except Exception:  # noqa: BLE001
-                pass
+            dw, dh = _resolve_device_logical_points(_session_udid)
+            if device_w == 0:
+                device_w = dw
+            if device_h == 0:
+                device_h = dh
 
         # App state (foreground / background / suspended) — out-of-band.
         app_state_payload: dict = {}
@@ -2344,9 +2401,11 @@ def handle_observe(arguments: dict) -> dict:
         captured_at = datetime.now(timezone.utc).isoformat()
 
         result = {
-            "screenshot": resized_b64,
+            "screenshot_path": screenshot_path,
             "device_w": device_w,
             "device_h": device_h,
+            "screenshot_w": screenshot_w,
+            "screenshot_h": screenshot_h,
             "reliable_targets": reliable_targets,
             "app_state": app_state_payload,
             "captured_at": captured_at,
@@ -2357,6 +2416,157 @@ def handle_observe(arguments: dict) -> dict:
 
     except Exception as exc:
         return {"error": f"observe failed: {exc}"}
+
+
+# ---------------------------------------------------------------------------
+# _ensure_sim_booted — module-level (shared by handle_start_session +
+# handle_app_relaunch's nested copy)
+# ---------------------------------------------------------------------------
+#
+# v16.0.0a3 (Maurice/Palace dogfood §P0-1): handle_start_session previously
+# proceeded to deploy without checking the sim was Booted. On a Shutdown sim
+# the runner deploy was guaranteed to fail; the agent saw status:ok but the
+# /health probe never went 200. This module-level helper is now called from
+# both handle_start_session (new) and handle_app_relaunch (existing nested
+# copy still works — kept for now to keep this PR small).
+
+
+def _ensure_sim_booted(target_udid: str) -> bool:
+    """Return True if the simulator is Booted (or successfully booted now).
+
+    Handles iOS 26.x xcodebuild test lifecycle quirks: sim may be in
+    "Shutting Down" or "Shutdown" between MCP calls. Steps:
+      1. Poll up to 15s for "Shutting Down" to complete
+      2. Issue xcrun simctl boot
+      3. Poll up to 20s for "Booted"
+    """
+    def _get_state() -> str:
+        try:
+            rp = subprocess.run(
+                ["xcrun", "simctl", "list", "devices", "--json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if rp.returncode == 0:
+                data = json.loads(rp.stdout)
+                for _rt in data.get("devices", {}).values():
+                    for _d in _rt:
+                        if _d.get("udid") == target_udid:
+                            return _d.get("state", "Unknown")
+        except Exception:  # noqa: BLE001
+            pass
+        return "Unknown"
+
+    try:
+        state = _get_state()
+        if state == "Booted":
+            return True
+        if state == "Shutting Down":
+            logger.info("_ensure_sim_booted: sim %s is Shutting Down — waiting", target_udid)
+            for _ in range(15):
+                time.sleep(1)
+                state = _get_state()
+                if state == "Shutdown":
+                    break
+                if state == "Booted":
+                    return True
+        logger.info("_ensure_sim_booted: sim %s in state %r — attempting boot", target_udid, state)
+        boot_r = subprocess.run(
+            ["xcrun", "simctl", "boot", target_udid],
+            capture_output=True, text=True, timeout=30,
+        )
+        if boot_r.returncode != 0 and "current state: Booted" not in boot_r.stderr:
+            logger.warning("_ensure_sim_booted: simctl boot failed: %s", boot_r.stderr.strip())
+            return False
+        for _ in range(20):
+            time.sleep(1)
+            if _get_state() == "Booted":
+                logger.info("_ensure_sim_booted: sim %s is Booted", target_udid)
+                return True
+        logger.warning("_ensure_sim_booted: sim %s did not reach Booted within 20s", target_udid)
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_ensure_sim_booted error: %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Device-name → logical-point dimensions
+# ---------------------------------------------------------------------------
+#
+# v16.0.0a3 (Maurice/Palace dogfood §P0-4): ios_observe + ios_act use ONE
+# coordinate space — logical points, matching what the Swift runner hit-tests
+# against and what `:8222/health` reports. The pixel dimensions of the saved
+# JPEG are surfaced separately (screenshot_w / screenshot_h) for any agent
+# that wants to do pixel-level reasoning, but tap targeting always goes
+# through points.
+
+_KNOWN_DEVICE_POINTS: dict[str, tuple[int, int]] = {
+    # iPhone 12 family
+    "iPhone 12 mini":     (375, 812),
+    "iPhone 12":          (390, 844),
+    "iPhone 12 Pro":      (390, 844),
+    "iPhone 12 Pro Max":  (428, 926),
+    # iPhone 13 family
+    "iPhone 13 mini":     (375, 812),
+    "iPhone 13":          (390, 844),
+    "iPhone 13 Pro":      (390, 844),
+    "iPhone 13 Pro Max":  (428, 926),
+    # iPhone 14 family
+    "iPhone 14":          (390, 844),
+    "iPhone 14 Plus":     (428, 926),
+    "iPhone 14 Pro":      (393, 852),
+    "iPhone 14 Pro Max":  (430, 932),
+    # iPhone 15 family
+    "iPhone 15":          (393, 852),
+    "iPhone 15 Plus":     (430, 932),
+    "iPhone 15 Pro":      (393, 852),
+    "iPhone 15 Pro Max":  (430, 932),
+    # iPhone 16 family
+    "iPhone 16":          (393, 852),
+    "iPhone 16 Plus":     (430, 932),
+    "iPhone 16 Pro":      (402, 874),
+    "iPhone 16 Pro Max":  (440, 956),
+    # iPhone 17 family
+    "iPhone 17":          (402, 874),
+    "iPhone 17 Pro":      (402, 874),
+    "iPhone 17 Pro Max":  (440, 956),
+    # iPhone SE 3rd gen
+    "iPhone SE (3rd generation)": (375, 667),
+}
+
+
+def _resolve_device_logical_points(udid: str | None) -> tuple[int, int]:
+    """Return (device_w, device_h) logical-point dimensions for *udid*.
+
+    Looks up the device name via ``xcrun simctl list devices --json`` and
+    matches against ``_KNOWN_DEVICE_POINTS``. Falls back to a safe iPhone 14
+    default (390x844) when the device is unknown or simctl is unavailable —
+    that's the modal iPhone form factor and matches the v15.x default.
+    """
+    if not udid:
+        return (390, 844)
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "--json"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return (390, 844)
+        data = json.loads(result.stdout)
+        for runtime_devices in data.get("devices", {}).values():
+            for d in runtime_devices:
+                if d.get("udid") == udid:
+                    name = d.get("name", "")
+                    if name in _KNOWN_DEVICE_POINTS:
+                        return _KNOWN_DEVICE_POINTS[name]
+                    # Best-effort partial match (e.g. simctl might add a suffix)
+                    for known_name, dims in _KNOWN_DEVICE_POINTS.items():
+                        if known_name in name:
+                            return dims
+                    break
+    except Exception:  # noqa: BLE001
+        pass
+    return (390, 844)
 
 
 def handle_act(arguments: dict) -> dict:
@@ -2401,18 +2611,23 @@ def handle_act(arguments: dict) -> dict:
 
     normalized = bool(arguments.get("normalized", False))
 
-    # Resolve normalized coords to device-points if needed.
+    # Resolve normalized coords to logical points (v16.0.0a3 — single coord
+    # space everywhere, matches handle_observe.device_w/h).
     def _denorm(coords: tuple[float, float]) -> tuple[float, float]:
         if not normalized:
             return coords
-        # Pull device dimensions from the active session.
         dw = dh = 0
         try:
             if _session is not None:
                 dw = int(getattr(_session, "_device_w", 0) or 0)
                 dh = int(getattr(_session, "_device_h", 0) or 0)
+            if (dw == 0 or dh == 0) and _backend is not None:
+                dw = int(getattr(_backend, "_device_w", dw) or dw)
+                dh = int(getattr(_backend, "_device_h", dh) or dh)
         except Exception:  # noqa: BLE001
             pass
+        if dw <= 0 or dh <= 0:
+            dw, dh = _resolve_device_logical_points(_session_udid)
         if dw <= 0 or dh <= 0:
             return coords  # unable to denormalize; pass through
         return (coords[0] * dw, coords[1] * dh)
@@ -4328,14 +4543,18 @@ SETUP CHECK:
     @mcp.tool(
         name="ios_observe",
         description=(
-            "VISION-FIRST OBSERVATION (v16.0.0). Returns a screenshot, device "
-            "dimensions, app state, and the small set of reliable_targets — "
-            "elements with explicit accessibilityIdentifier set by the app's "
-            "developer (by-construction unique and stable). The screenshot is "
-            "the truthful representation of the screen; vision-capable agents "
-            "should choose coordinates from it and dispatch via ios_act. "
-            "reliable_targets is an opt-in semantic helper for the rare case "
-            "where the developer explicitly identified an element. "
+            "VISION-FIRST OBSERVATION (v16.0.0a3). Returns: screenshot_path "
+            "(/tmp/specterqa-observe-<uuid>.jpg — read it with your file-read "
+            "tool to get the image into vision input), device_w/device_h "
+            "(LOGICAL POINTS — use these for ios_act coordinates), "
+            "screenshot_w/screenshot_h (pixel dims of the saved JPEG), "
+            "reliable_targets (only elements with explicit "
+            "accessibilityIdentifier — by-construction unique and stable), "
+            "app_state, captured_at. "
+            "v16.0.0a3 changes from a1/a2: screenshot is delivered as a file "
+            "path, not inline base64 — fits the MCP envelope at every quality "
+            "level. device_w/device_h are now LOGICAL POINTS (not pixels) and "
+            "match the runner's coord space. "
             "quality: 'standard' (50%, default), 'full' (no resize), 'thumbnail' (25%). "
             "include_legacy_elements=True also returns the v15.x-style filtered "
             "element list (transition compatibility; default False)."
@@ -4995,17 +5214,51 @@ SETUP CHECK:
         name="ios_session_status",
         description=(
             "Return the current session status without blocking. "
-            "Returns {status: 'idle'|'deploying'|'healthy'|'failed', elapsed_ms, udid}. "
+            "Returns {status: 'idle'|'deploying'|'healthy'|'degraded'|'failed', "
+            "elapsed_ms, udid, deploy_id, started_at, error, daemon_pid}. "
+            "Status semantics (v16.0.0a3):\n"
+            "  idle      — no session has been configured this daemon lifetime\n"
+            "  deploying — handle_start_session is in flight (wait=False path)\n"
+            "  healthy   — runner is responding to /health right now (probed live)\n"
+            "  degraded  — backend object exists but runner /health is failing\n"
+            "  failed    — last deploy attempt errored\n"
             "Use between ios_start_session(wait=False) and ios_wait_for_session "
             "to check progress without blocking. "
-            "status='healthy' means the runner is up and tools can be called."
+            "status='healthy' is the only state in which tools can be called."
         ),
     )
     async def ios_session_status() -> str:
+        # v16.0.0a3 (Maurice/Palace dogfood §P0-1, §P1-1): the previous
+        # implementation overrode any idle/deploying state to "healthy" if
+        # `_backend` was non-None — even when the runner had silently died.
+        # That gave agents a false-success reading. Now we probe live.
         state = _get_deploy_state()
-        # Override with live backend status
-        if _backend is not None and state["status"] in ("idle", "deploying"):
-            state["status"] = "healthy"
+        state["daemon_pid"] = os.getpid()
+
+        # If the deploy state machine is in a definitive terminal state, trust it.
+        if state["status"] in ("deploying", "failed"):
+            return json.dumps(state)
+
+        # If we have a backend object, probe its /health for the live truth.
+        if _backend is not None:
+            try:
+                health = _backend.health()
+                if isinstance(health, dict) and health.get("status") == "ok":
+                    state["status"] = "healthy"
+                    if state.get("udid") is None and _session_udid is not None:
+                        state["udid"] = _session_udid
+                else:
+                    state["status"] = "degraded"
+                    state["error"] = (
+                        f"runner /health did not return ok: {health!r}"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                state["status"] = "degraded"
+                state["error"] = (
+                    f"runner /health probe failed: {type(exc).__name__}: {exc}"
+                )
+        # else: keep status="idle" (no backend ever configured this lifetime)
+
         return json.dumps(state)
 
     # ── Tool: ios_dismiss_first_launch_alerts (Issue 9 helper 1) ─────────
@@ -5090,6 +5343,52 @@ SETUP CHECK:
 # ---------------------------------------------------------------------------
 
 
+def _reap_orphan_daemons() -> int:
+    """Kill any other specterqa-ios-mcp processes before this one binds.
+
+    v16.0.0a3 (Maurice/Palace dogfood §P0-1.5): orphan MCP daemons from prior
+    Claude Code sessions or `/mcp` reconnects sometimes survive their parent
+    process and continue holding port :8222 with stale state. A new daemon
+    that comes up alongside an orphan is silently piggybacking on the
+    orphan's HTTP server, returning fresh-shaped responses with stale pixels.
+
+    On daemon startup, locate any other specterqa-ios-mcp processes via pgrep
+    and SIGKILL them (excluding self). Returns the count of orphans killed.
+
+    Note: this is intentionally aggressive. The cost of a false positive
+    (killing a legitimately concurrent daemon) is much lower than the cost
+    of silent piggyback (false-success agent decisions on dead state). If
+    multi-daemon support is needed in the future it can be opted in via
+    `SPECTERQA_ALLOW_MULTI_DAEMON=1`.
+    """
+    if os.environ.get("SPECTERQA_ALLOW_MULTI_DAEMON", "").strip().lower() in ("1", "true", "yes"):
+        return 0
+    try:
+        import signal as _signal  # noqa: PLC0415
+        my_pid = os.getpid()
+        # pgrep may not be on PATH in every environment; ps -A is portable.
+        result = subprocess.run(
+            ["pgrep", "-f", "specterqa-ios-mcp"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return 0
+        pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
+        orphans = [p for p in pids if p != my_pid]
+        for pid in orphans:
+            try:
+                os.kill(pid, _signal.SIGKILL)
+                logger.warning(
+                    "Reaped orphan specterqa-ios-mcp daemon pid=%d before binding", pid,
+                )
+            except (ProcessLookupError, PermissionError) as exc:  # noqa: PERF203
+                logger.debug("Could not kill orphan pid=%d: %s", pid, exc)
+        return len(orphans)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Orphan-daemon reaping failed: %s", exc)
+        return 0
+
+
 def serve() -> None:
     """Start the SpecterQA iOS MCP server on stdio transport.
 
@@ -5102,6 +5401,12 @@ def serve() -> None:
         level=logging.WARNING,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+
+    # v16.0.0a3 — kill any orphan daemons holding the MCP port with stale state
+    # before this daemon binds. See _reap_orphan_daemons for rationale.
+    reaped = _reap_orphan_daemons()
+    if reaped:
+        logger.warning("Reaped %d orphan daemon(s) on startup", reaped)
 
     server = create_server()
     server.run(transport="stdio")
