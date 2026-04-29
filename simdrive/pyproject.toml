@@ -29,6 +29,7 @@ dependencies = [
     "pyyaml>=6.0",
     "mcp>=1.0",
     "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-Vision>=10.0",
 ]
 
 [project.urls]

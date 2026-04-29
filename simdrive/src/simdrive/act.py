@@ -30,9 +30,18 @@ def _pixels_to_screen(
 
 
 def _backend() -> str:
-    """Return which backend will be used for the next act call."""
+    """Return which backend will be used for the next act call.
+
+    Default is "cliclick" (foreground; reliably reaches iOS). Set
+    SIMDRIVE_INPUT_BACKEND=pid to opt into the PID-direct path (currently
+    unreliable on macOS Sequoia / Xcode 26 — synthetic events post but
+    aren't received by iOS). The opt-in exists so we can keep iterating
+    on the non-disruptive path without forcing it on users.
+    """
+    import os as _os
+    requested = _os.environ.get("SIMDRIVE_INPUT_BACKEND", "").lower()
     cap = pid_input.capability()
-    if cap.background_capable:
+    if requested == "pid" and cap.background_capable:
         return "pid"
     return "cliclick"
 

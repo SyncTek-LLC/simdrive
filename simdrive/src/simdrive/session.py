@@ -28,6 +28,7 @@ class Session:
     last_screenshot_w: int = 0
     last_screenshot_h: int = 0
     last_screenshot_path: Optional[Path] = None
+    last_marks: list = field(default_factory=list)  # list[som.Mark]
     last_action_at: float = field(default_factory=time.time)
     state: str = "active"  # "active" | "degraded"
     recorder: Optional["Recorder"] = None  # set by recorder.py to avoid import cycle
