@@ -207,23 +207,83 @@ def test_resolve_target_xy_text(tmp_path):
 
 
 def test_resolve_target_xy_missing_raises(tmp_path):
-    from simdrive import server, session as ses
+    from simdrive import server, session as ses, errors as err
     from simdrive.sim import Device
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(err.SimdriveError) as exc_info:
         server._resolve_target_xy(s, {})
+    assert exc_info.value.code == "missing_target"
 
 
 def test_resolve_target_xy_mark_not_found(tmp_path):
-    from simdrive import server, session as ses
+    from simdrive import server, session as ses, errors as err
     from simdrive.sim import Device
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
         last_marks=[],
     )
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(err.SimdriveError) as exc_info:
         server._resolve_target_xy(s, {"mark": 1})
+    assert exc_info.value.code == "target_not_found"
+
+
+def test_simdrive_error_to_dict():
+    from simdrive import errors as err
+    e = err.no_session("abc")
+    d = e.to_dict()
+    assert d["ok"] is False
+    assert d["error"]["code"] == "no_session"
+    assert d["error"]["details"]["session_id"] == "abc"
+
+
+def test_no_device_error_codes():
+    from simdrive import errors as err
+    e1 = err.no_device({"udid": "X"})
+    assert e1.code == "no_device"
+    assert "udid" in e1.details["query"]
+
+
+def test_multi_session_isolation(tmp_path, monkeypatch):
+    """Two sessions running in the same process must keep separate state."""
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    from simdrive import session as ses
+    from simdrive.sim import Device
+
+    # Reset module-level session dict
+    ses._SESSIONS.clear()
+
+    d1 = Device(udid="UDID-AAA", name="iPhone A", os_version="26.3", state="Booted")
+    d2 = Device(udid="UDID-BBB", name="iPhone B", os_version="26.3", state="Booted")
+
+    # Direct construction (bypassing simctl boot calls)
+    s1 = ses.Session(session_id="alpha", device=d1, workdir=tmp_path / "alpha")
+    s1.last_marks = ["mark-from-A"]
+    s2 = ses.Session(session_id="beta", device=d2, workdir=tmp_path / "beta")
+    s2.last_marks = ["mark-from-B"]
+
+    ses._SESSIONS["alpha"] = s1
+    ses._SESSIONS["beta"] = s2
+
+    assert ses.get("alpha").device.udid == "UDID-AAA"
+    assert ses.get("beta").device.udid == "UDID-BBB"
+    assert ses.get("alpha").last_marks == ["mark-from-A"]
+    assert ses.get("beta").last_marks == ["mark-from-B"]
+
+    ses.end("alpha")
+    assert "alpha" not in ses._SESSIONS
+    assert "beta" in ses._SESSIONS
+
+
+def test_pasteboard_helper_call_signature():
+    """Smoke-test that set_pasteboard exists with the expected signature."""
+    from simdrive import sim
+    assert callable(sim.set_pasteboard)
+
+
+def test_chord_helper_call_signature():
+    from simdrive import hid_inject
+    assert callable(hid_inject.chord)

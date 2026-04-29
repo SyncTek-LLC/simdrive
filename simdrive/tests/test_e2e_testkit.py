@@ -192,15 +192,19 @@ def test_tap_by_coords_dispatches(session_id):
 
 @pytest.mark.live
 def test_tap_unresolvable_text_raises(session_id):
+    from simdrive import errors as err
     server.tool_observe({"session_id": session_id})
-    with pytest.raises(ValueError, match="no text match"):
+    with pytest.raises(err.SimdriveError) as exc:
         server.tool_tap({"session_id": session_id, "text": "definitely-not-a-real-target-xyz"})
+    assert exc.value.code == "target_not_found"
 
 
 @pytest.mark.live
 def test_tap_missing_target_raises(session_id):
-    with pytest.raises(ValueError, match="target required"):
+    from simdrive import errors as err
+    with pytest.raises(err.SimdriveError) as exc:
         server.tool_tap({"session_id": session_id})
+    assert exc.value.code == "missing_target"
 
 
 # ---------------------------------------------------------------------- #

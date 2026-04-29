@@ -122,16 +122,37 @@ def swipe(
 
 
 def type_text(text: str, udid: Optional[str] = None) -> None:
-    """Send keystrokes. Caller is responsible for tapping a focused field first."""
+    """Send keystrokes. Caller is responsible for tapping a focused field first.
+
+    For non-ASCII characters (accented, emoji, non-Latin), falls back to the
+    pasteboard path: simctl pbcopy + Cmd-V — preserves the focused-field state
+    and works around the HID keyboard's US-ASCII-only key map.
+    """
     if not text:
         return
+
+    is_ascii = all(ord(c) < 128 for c in text)
+
     if _backend() == "hid" and udid:
-        hid_inject.type_text(udid, text)
+        if is_ascii:
+            hid_inject.type_text(udid, text)
+            return
+        # Non-ASCII path: pbcopy + paste-shortcut
+        sim.set_pasteboard(udid, text)
+        time.sleep(0.05)
+        # Cmd-V via HID — issue Cmd modifier hold + V keypress
+        # HID usage 0xE3 = Left Cmd; 0x19 = V
+        _hid_paste(udid)
         return
 
     activate()
     time.sleep(0.15)
     _run_cliclick(["t:" + text])
+
+
+def _hid_paste(udid: str) -> None:
+    """Cmd-V via the HID helper — works in background mode."""
+    hid_inject.chord(udid, "cmd", "v")
 
 
 _CLICLICK_KEY_MAP = {
