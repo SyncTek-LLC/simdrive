@@ -24,6 +24,7 @@ class Session:
     session_id: str
     device: Device
     workdir: Path
+    target: str = "simulator"  # "simulator" | "device"
     app_bundle_id: Optional[str] = None
     last_screenshot_w: int = 0
     last_screenshot_h: int = 0
@@ -61,14 +62,16 @@ def start(
     os_version: Optional[str] = None,
     udid: Optional[str] = None,
     app_bundle_id: Optional[str] = None,
+    target: str = "simulator",
 ) -> Session:
-    """Find or boot a sim, start a session.
+    """Find or boot a sim/device, start a session.
 
-    Resolution order:
-      1. udid given → use it
-      2. device_name given → first match (preferring booted)
-      3. neither → first booted sim
+    target="simulator" (default): existing simulator behavior.
+    target="device": resolve a connected real device by udid.
     """
+    if target == "device":
+        return _start_device(udid=udid, app_bundle_id=app_bundle_id)
+
     if udid:
         d = sim.find_device(udid=udid)
         if not d:
@@ -103,6 +106,39 @@ def start(
         device=d,
         workdir=workdir,
         app_bundle_id=app_bundle_id,
+        target="simulator",
+    )
+    _SESSIONS[sid] = s
+    return s
+
+
+def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
+    """Start a real-device session. Touch input is unavailable in v0.2.x; observe + logs only."""
+    from . import device  # local import to avoid hard requirement when target=simulator
+    if not udid:
+        raise errors.no_device({"target": "device", "any_booted": True})
+    rd = device.find_device(udid)
+    if not rd:
+        raise errors.no_device({"target": "device", "udid": udid})
+    # Treat the real device as a Device for type compatibility
+    d = Device(udid=rd.udid, name=rd.name, os_version=rd.model, state="active")
+
+    if app_bundle_id:
+        try:
+            device.launch_app(rd.udid, app_bundle_id)
+        except device.DeviceError as exc:
+            raise errors.no_device({"target": "device", "udid": udid,
+                                    "launch_failed": str(exc)})
+
+    sid = secrets.token_urlsafe(8)
+    workdir = _workroot() / "sessions" / sid
+    workdir.mkdir(parents=True, exist_ok=True)
+    s = Session(
+        session_id=sid,
+        device=d,
+        workdir=workdir,
+        app_bundle_id=app_bundle_id,
+        target="device",
     )
     _SESSIONS[sid] = s
     return s

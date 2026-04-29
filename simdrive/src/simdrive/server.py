@@ -43,7 +43,14 @@ def tool_session_start(arguments: dict) -> dict:
     os_version = arguments.get("os_version")
     udid = arguments.get("udid")
     app_bundle_id = arguments.get("app_bundle_id")
-    s = session.start(device_name=device_name, os_version=os_version, udid=udid, app_bundle_id=app_bundle_id)
+    target = arguments.get("target", "simulator")
+    if target not in ("simulator", "device"):
+        raise errors.invalid_argument("target", target,
+                                       "must be 'simulator' or 'device'")
+    s = session.start(
+        device_name=device_name, os_version=os_version, udid=udid,
+        app_bundle_id=app_bundle_id, target=target,
+    )
     return {
         "session_id": s.session_id,
         "udid": s.device.udid,
@@ -51,6 +58,7 @@ def tool_session_start(arguments: dict) -> dict:
         "os_version": s.device.os_version,
         "app_bundle_id": s.app_bundle_id,
         "state": s.state,
+        "target": s.target,
     }
 
 
@@ -104,6 +112,7 @@ def tool_observe(arguments: dict) -> dict:
         capture_logs=bool(arguments.get("capture_logs", False)),
         log_lines=int(arguments.get("log_lines", 50)),
         log_predicate=arguments.get("log_predicate"),
+        target=s.target,
     )
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
@@ -173,6 +182,8 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> None:
 
 def tool_tap(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("tap")
     sw, sh = _ensure_screenshot_dims(s)
     x, y, resolved_via = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
@@ -200,6 +211,8 @@ def tool_tap(arguments: dict) -> dict:
 
 def tool_swipe(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("swipe")
     duration_ms = int(arguments.get("duration_ms", 300))
     sw, sh = _ensure_screenshot_dims(s)
 
@@ -251,6 +264,8 @@ def tool_swipe(arguments: dict) -> dict:
 
 def tool_type_text(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("type_text")
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
 
@@ -277,6 +292,8 @@ def tool_type_text(arguments: dict) -> dict:
 
 def tool_press_key(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("press_key")
     key = str(arguments["key"])
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
@@ -313,11 +330,41 @@ def tool_replay(arguments: dict) -> dict:
     return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold)
 
 
+def tool_list_devices(arguments: dict) -> dict:
+    """Enumerate real devices reachable via Apple devicectl + libimobiledevice."""
+    from . import device
+    ok, missing = device.libimobiledevice_available()
+    devs = []
+    err: dict | None = None
+    try:
+        for d in device.list_devices():
+            devs.append({
+                "udid": d.udid,
+                "name": d.name,
+                "model": d.model,
+                "transport": d.transport,
+                "state": d.state,
+            })
+    except device.DeviceError as exc:
+        err = {"code": "discovery_failed", "message": str(exc)}
+    return {
+        "ok": err is None,
+        "devices": devs,
+        "libimobiledevice_ready": ok,
+        "missing_tools": missing,
+        "error": err,
+    }
+
+
 def tool_logs(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
     lines = int(arguments.get("lines", 200))
     predicate = arguments.get("predicate")
-    text = sim.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+    if s.target == "device":
+        from . import device
+        text = device.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+    else:
+        text = sim.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
     return {"ok": True, "lines": len(text.splitlines()), "logs": text}
 
 
@@ -328,13 +375,17 @@ def tool_logs(arguments: dict) -> dict:
 _TOOLS: list[dict] = [
     {
         "name": "session_start",
-        "description": "Boot/find an iOS simulator, optionally launch an app, and start a simdrive session. Returns session_id.",
+        "description": (
+            "Boot/find an iOS simulator (or attach to a real device), optionally "
+            "launch an app, and start a simdrive session. Returns session_id."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
+                "target": {"type": "string", "enum": ["simulator", "device"], "default": "simulator", "description": "'simulator' (default) or 'device' for a real iPhone/iPad. Real-device sessions support observe + logs + app lifecycle; tap/swipe/type_text/press_key require WebDriverAgent (v0.2 roadmap)."},
                 "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
-                "udid": {"type": "string", "description": "Specific simulator UDID. Overrides device/os_version."},
+                "udid": {"type": "string", "description": "Simulator UDID, or real-device UDID when target='device'."},
                 "app_bundle_id": {"type": "string", "description": "Optional bundle id to launch after boot, e.g. 'com.apple.Preferences'."},
             },
         },
@@ -496,6 +547,17 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_replay,
+    },
+    {
+        "name": "list_devices",
+        "description": (
+            "Enumerate real iPhones/iPads paired with this Mac. Use the returned "
+            "udid in session_start({target: 'device', udid: ...}) to attach. "
+            "Note: real-device sessions support observe + logs + app lifecycle; "
+            "tap/swipe/type_text/press_key require WebDriverAgent (v0.2 roadmap)."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_list_devices,
     },
     {
         "name": "logs",

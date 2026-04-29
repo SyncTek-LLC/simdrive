@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0a1 — 2026-04-29
+
+First slice of real-device support. **Observe + logs + app lifecycle** work against connected iPhones and iPads. Touch input still requires WebDriverAgent (v0.2.x roadmap; see `docs/REAL_DEVICE_FEASIBILITY.md`).
+
+### Added
+- **`target` parameter on `session_start`**: `"simulator"` (default) or `"device"` to attach to a paired iPhone/iPad by UDID.
+- **`list_devices` MCP tool** — enumerates all paired real devices via `xcrun devicectl`. Returns udid, name, model, transport, state.
+- **`device.py` backend module** — `idevicescreenshot` for screenshots, `idevicesyslog` for logs, `xcrun devicectl device install/process launch/process signal` for app lifecycle.
+- **`device_input_unavailable` error code** — clear, actionable error for tap/swipe/type_text/press_key on real-device sessions, pointing at the v0.2 WDA roadmap.
+
+### Requirements (real device)
+- macOS with Xcode (provides `devicectl`)
+- `brew install libimobiledevice` (provides `idevicescreenshot`, `idevicesyslog`)
+- Device paired with this Mac via Xcode (one-time)
+- Developer Disk Image mounted on the device — error message names the exact `ideviceimagemounter` command if missing
+
 ## 0.1.0a2 — 2026-04-29
 
 Example Reader dogfood feedback round 1 (Maurice / internal-ticket regression workload).
