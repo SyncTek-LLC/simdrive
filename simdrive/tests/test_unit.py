@@ -151,3 +151,86 @@ def test_pid_input_ascii_keycode_table_covers_alphanumeric():
     for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         assert ch in table, f"missing keycode for {ch!r}"
         assert table[ch][1] is True, f"{ch!r} should require shift"
+
+
+def test_som_find_by_text():
+    from simdrive.som import Mark, find_by_text
+    marks = [
+        Mark(id=1, x=0, y=0, w=100, h=20, text="Settings", confidence=0.9),
+        Mark(id=2, x=0, y=30, w=100, h=20, text="Don't Allow", confidence=0.95),
+        Mark(id=3, x=0, y=60, w=100, h=20, text="Allow Once", confidence=0.92),
+    ]
+    assert find_by_text(marks, "Settings").id == 1
+    assert find_by_text(marks, "settings").id == 1  # case-insensitive
+    assert find_by_text(marks, "Don't").id == 2  # prefix
+    assert find_by_text(marks, "Allow").id in {2, 3}  # both contain
+    assert find_by_text(marks, "nothing-here") is None
+
+
+def test_som_find_by_mark_id():
+    from simdrive.som import Mark, find_by_mark_id
+    marks = [Mark(id=1, x=0, y=0, w=10, h=10, text="a", confidence=1.0)]
+    assert find_by_mark_id(marks, 1).text == "a"
+    assert find_by_mark_id(marks, 99) is None
+
+
+def test_resolve_target_xy_coords(monkeypatch, tmp_path):
+    """{x, y} resolves to those literal coords."""
+    from simdrive import server, session as ses
+    from simdrive.sim import Device
+    s = ses.Session(
+        session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+    )
+    x, y, via = server._resolve_target_xy(s, {"x": 100, "y": 200})
+    assert (x, y) == (100, 200)
+    assert via == "coords"
+
+
+def test_resolve_target_xy_mark(tmp_path):
+    from simdrive import server, session as ses, som
+    from simdrive.sim import Device
+    s = ses.Session(
+        session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+        last_marks=[som.Mark(id=5, x=100, y=200, w=40, h=20, text="OK", confidence=0.9)],
+    )
+    x, y, via = server._resolve_target_xy(s, {"mark": 5})
+    assert (x, y) == (120, 210)  # center of bbox
+    assert "mark:5" in via
+
+
+def test_resolve_target_xy_text(tmp_path):
+    from simdrive import server, session as ses, som
+    from simdrive.sim import Device
+    s = ses.Session(
+        session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+        last_marks=[som.Mark(id=2, x=0, y=0, w=200, h=40, text="Don't Allow", confidence=0.95)],
+    )
+    x, y, via = server._resolve_target_xy(s, {"text": "Don't Allow"})
+    assert (x, y) == (100, 20)
+    assert "text:" in via
+
+
+def test_resolve_target_xy_missing_raises(tmp_path):
+    from simdrive import server, session as ses
+    from simdrive.sim import Device
+    s = ses.Session(
+        session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+    )
+    with pytest.raises(ValueError):
+        server._resolve_target_xy(s, {})
+
+
+def test_resolve_target_xy_mark_not_found(tmp_path):
+    from simdrive import server, session as ses
+    from simdrive.sim import Device
+    s = ses.Session(
+        session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+        last_marks=[],
+    )
+    with pytest.raises(ValueError, match="not found"):
+        server._resolve_target_xy(s, {"mark": 1})

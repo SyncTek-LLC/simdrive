@@ -49,12 +49,20 @@ You: open Settings on iPhone 17 Pro and turn on Airplane Mode.
 
 Claude (using simdrive):
   → session_start({device: "iPhone 17 Pro", app_bundle_id: "com.apple.Preferences"})
-  → observe()                                    # sees Settings home
-  → tap({x: 600, y: 580})                        # taps "Airplane Mode" row
-  → observe()                                    # sees the toggle
-  → tap({x: 1100, y: 220})                       # flips toggle
-  → observe()                                    # confirms it's green
+  → observe()                              # screenshot + annotated copy with numbered marks
+  → tap({text: "Airplane Mode"})           # by visible text
+  → observe()                              # sees the toggle
+  → tap({mark: 12})                        # by mark number from the annotation
+  → observe()                              # confirms it's green
 ```
+
+You can also `tap({x, y})` if you have specific pixel coords (great for replay). Pick whichever is lowest-friction per call:
+
+| Form | Use it for |
+|------|------------|
+| `{text: "..."}` | Buttons, labels, anything with visible text |
+| `{mark: N}` | When the agent has just looked at the annotated screenshot |
+| `{x, y}` | Replays, deterministic UI tests, icons without text |
 
 That's the whole loop. No selectors. No waits. No XCTest.
 

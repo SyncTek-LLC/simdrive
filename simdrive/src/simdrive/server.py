@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, act, observe, recorder, session, sim
+from . import __version__, act, observe, recorder, session, sim, som
 
 
 def _now() -> float:
@@ -61,14 +61,14 @@ def tool_session_end(arguments: dict) -> dict:
 
 
 def tool_session_status(arguments: dict) -> dict:
-    from . import pid_input
+    from . import act as _act
     sid = arguments.get("session_id")
     if sid:
         s = session.get(sid)
         sessions = [s]
     else:
         sessions = session.all_sessions()
-    cap = pid_input.capability()
+    backend = _act._backend()
     return {
         "sessions": [
             {
@@ -80,15 +80,16 @@ def tool_session_status(arguments: dict) -> dict:
                 "app_bundle_id": s.app_bundle_id,
                 "last_action_at": s.last_action_at,
                 "recording": s.recorder.name if s.recorder else None,
+                "last_marks": len(s.last_marks or []),
             }
             for s in sessions
         ],
         "version": __version__,
-        "mode": "background" if cap.background_capable else "foreground",
+        "mode": "background" if backend == "pid" else "foreground",
         "mode_note": (
-            "Running in background — your foreground app keeps focus."
-            if cap.background_capable
-            else "Running in foreground fallback — Simulator will be brought to front on each action."
+            "Running in background mode — your foreground app keeps focus."
+            if backend == "pid"
+            else "Simulator will be brought to front on each action."
         ),
     }
 
@@ -99,6 +100,7 @@ def tool_observe(arguments: dict) -> dict:
     obs = observe.observe(
         s.device.udid,
         s.workdir / "observations",
+        annotate=bool(arguments.get("annotate", True)),
         capture_logs=bool(arguments.get("capture_logs", False)),
         log_lines=int(arguments.get("log_lines", 50)),
         log_predicate=arguments.get("log_predicate"),
@@ -106,6 +108,7 @@ def tool_observe(arguments: dict) -> dict:
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
     s.last_screenshot_path = obs.screenshot_path
+    s.last_marks = obs.marks
     s.last_action_at = _now()
     return obs.to_dict()
 
@@ -117,7 +120,44 @@ def _ensure_screenshot_dims(s) -> tuple[int, int]:
         s.last_screenshot_w = obs.screenshot_w
         s.last_screenshot_h = obs.screenshot_h
         s.last_screenshot_path = obs.screenshot_path
+        s.last_marks = obs.marks
     return s.last_screenshot_w, s.last_screenshot_h
+
+
+def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
+    """Translate {x,y} | {mark} | {text} into pixel coords + a debug 'how' string.
+
+    Returns (x, y, resolved_via). Raises ValueError if no recognized form is given.
+    """
+    if "x" in args and "y" in args:
+        return int(args["x"]), int(args["y"]), "coords"
+
+    if "mark" in args:
+        mark_id = int(args["mark"])
+        m = som.find_by_mark_id(s.last_marks or [], mark_id)
+        if not m:
+            raise ValueError(
+                f"mark {mark_id} not found in last observe (last had {len(s.last_marks or [])} marks). "
+                f"Call observe first."
+            )
+        cx, cy = m.center
+        return cx, cy, f"mark:{mark_id}({m.text!r})"
+
+    if "text" in args:
+        query = str(args["text"])
+        m = som.find_by_text(s.last_marks or [], query)
+        if not m:
+            available = [mk.text for mk in (s.last_marks or [])][:30]
+            raise ValueError(
+                f"no text match for {query!r} in last observe. "
+                f"Available text marks: {available}"
+            )
+        cx, cy = m.center
+        return cx, cy, f"text:{query!r}->mark:{m.id}"
+
+    raise ValueError(
+        "tap target required: provide {x, y}, {mark: <id>}, or {text: <query>}"
+    )
 
 
 def _record_act_step(s, action: str, args: dict, pre_path: Path) -> None:
@@ -133,38 +173,66 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> None:
 
 def tool_tap(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
-    x = int(arguments["x"])
-    y = int(arguments["y"])
     sw, sh = _ensure_screenshot_dims(s)
+    x, y, resolved_via = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
     sx, sy = act.tap(x, y, sw, sh)
     s.last_action_at = _now()
     args = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
     if pre_path:
         _record_act_step(s, "tap", args, pre_path)
-    return {"ok": True, "screen_x": sx, "screen_y": sy, "screenshot_size_pixels": [sw, sh]}
+    return {
+        "ok": True,
+        "pixel_x": x,
+        "pixel_y": y,
+        "screen_x": sx,
+        "screen_y": sy,
+        "screenshot_size_pixels": [sw, sh],
+        "resolved_via": resolved_via,
+    }
 
 
 def tool_swipe(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
-    x1 = int(arguments["x1"])
-    y1 = int(arguments["y1"])
-    x2 = int(arguments["x2"])
-    y2 = int(arguments["y2"])
     duration_ms = int(arguments.get("duration_ms", 300))
     sw, sh = _ensure_screenshot_dims(s)
+
+    # swipe accepts either explicit endpoints {x1,y1,x2,y2} or {from: target, to: target}
+    if "x1" in arguments and "y1" in arguments and "x2" in arguments and "y2" in arguments:
+        x1, y1 = int(arguments["x1"]), int(arguments["y1"])
+        x2, y2 = int(arguments["x2"]), int(arguments["y2"])
+        resolved_via = "coords"
+    elif "from" in arguments and "to" in arguments:
+        x1, y1, _ = _resolve_target_xy(s, arguments["from"])
+        x2, y2, _ = _resolve_target_xy(s, arguments["to"])
+        resolved_via = "from/to"
+    else:
+        raise ValueError("swipe requires {x1,y1,x2,y2} or {from: target, to: target}")
+
     pre_path = s.last_screenshot_path
     act.swipe(x1, y1, x2, y2, sw, sh, duration_ms)
     s.last_action_at = _now()
-    args = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "screenshot_w": sw, "screenshot_h": sh, "duration_ms": duration_ms}
+    args = {
+        "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+        "screenshot_w": sw, "screenshot_h": sh, "duration_ms": duration_ms,
+    }
     if pre_path:
         _record_act_step(s, "swipe", args, pre_path)
-    return {"ok": True}
+    return {"ok": True, "resolved_via": resolved_via}
 
 
 def tool_type_text(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
     text = str(arguments["text"])
+    tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
+
+    if tap_target:
+        sw, sh = _ensure_screenshot_dims(s)
+        tx, ty, _ = _resolve_target_xy(s, tap_target)
+        act.tap(tx, ty, sw, sh)
+        import time as _t
+        _t.sleep(0.4)  # give the keyboard a moment to come up
+
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
     act.type_text(text)
@@ -262,12 +330,20 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "observe",
-        "description": "Capture a screenshot of the current simulator state. Returns screenshot_path (PNG file). The agent should read the file via its filesystem/image tools.",
+        "description": (
+            "Capture screenshot + numbered marks of all detected text/UI regions. "
+            "Returns: screenshot_path (raw PNG), annotated_path (PNG with red numbered "
+            "boxes drawn over each mark), marks (id, bbox, center, text). The agent can "
+            "either look at the annotated image and tap by mark id/text, or look at the "
+            "raw screenshot and tap by pixel coords. Set annotate=false to skip the SoM "
+            "pass and get a faster, raw-only observation."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
             "properties": {
                 "session_id": {"type": "string"},
+                "annotate": {"type": "boolean", "default": True, "description": "Run Set-of-Mark detection + annotation."},
                 "capture_logs": {"type": "boolean", "default": False, "description": "Include a tail of recent simulator logs."},
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
@@ -277,30 +353,41 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "tap",
-        "description": "Tap at (x, y) in screenshot pixel coordinates from the most recent observe.",
+        "description": (
+            "Tap a target. Supply ONE of: {x, y} (screenshot pixel coords), "
+            "{mark: <id>} (a mark id from the most recent observe), or "
+            "{text: \"...\"} (best-match against the last observe's marks)."
+        ),
         "inputSchema": {
             "type": "object",
-            "required": ["session_id", "x", "y"],
+            "required": ["session_id"],
             "properties": {
                 "session_id": {"type": "string"},
-                "x": {"type": "integer", "description": "Pixel x in the most recent screenshot."},
-                "y": {"type": "integer", "description": "Pixel y in the most recent screenshot."},
+                "x": {"type": "integer", "description": "Pixel x (paired with y)."},
+                "y": {"type": "integer", "description": "Pixel y (paired with x)."},
+                "mark": {"type": "integer", "description": "Mark id from the latest observe."},
+                "text": {"type": "string", "description": "Match a mark by visible text (exact > prefix > substring)."},
             },
         },
         "handler": tool_tap,
     },
     {
         "name": "swipe",
-        "description": "Drag from (x1, y1) to (x2, y2) in screenshot pixel coordinates. duration_ms 50-5000 (default 300).",
+        "description": (
+            "Drag between two points. Supply EITHER {x1,y1,x2,y2} pixel coords OR "
+            "{from: <target>, to: <target>} where each target is {x,y} | {mark} | {text}."
+        ),
         "inputSchema": {
             "type": "object",
-            "required": ["session_id", "x1", "y1", "x2", "y2"],
+            "required": ["session_id"],
             "properties": {
                 "session_id": {"type": "string"},
                 "x1": {"type": "integer"},
                 "y1": {"type": "integer"},
                 "x2": {"type": "integer"},
                 "y2": {"type": "integer"},
+                "from": {"type": "object", "description": "Start target: {x,y}, {mark}, or {text}."},
+                "to": {"type": "object", "description": "End target: {x,y}, {mark}, or {text}."},
                 "duration_ms": {"type": "integer", "default": 300},
             },
         },
@@ -308,13 +395,17 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "type_text",
-        "description": "Send text via the keyboard. Caller should ensure a text field is focused first (tap it).",
+        "description": (
+            "Send text via the keyboard. If tap_first is given (a target dict), tap "
+            "that target first to focus a field, then type."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["session_id", "text"],
             "properties": {
                 "session_id": {"type": "string"},
                 "text": {"type": "string"},
+                "tap_first": {"type": "object", "description": "Optional focus target: {x,y}, {mark}, or {text}."},
             },
         },
         "handler": tool_type_text,
