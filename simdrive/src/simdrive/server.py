@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, act, observe, recorder, session, sim, som
+from . import __version__, act, errors, observe, recorder, session, sim, som
 
 
 def _now() -> float:
@@ -125,10 +125,7 @@ def _ensure_screenshot_dims(s) -> tuple[int, int]:
 
 
 def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
-    """Translate {x,y} | {mark} | {text} into pixel coords + a debug 'how' string.
-
-    Returns (x, y, resolved_via). Raises ValueError if no recognized form is given.
-    """
+    """Translate {x,y} | {mark} | {text} into pixel coords + a debug 'how' string."""
     if "x" in args and "y" in args:
         return int(args["x"]), int(args["y"]), "coords"
 
@@ -136,10 +133,8 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
         mark_id = int(args["mark"])
         m = som.find_by_mark_id(s.last_marks or [], mark_id)
         if not m:
-            raise ValueError(
-                f"mark {mark_id} not found in last observe (last had {len(s.last_marks or [])} marks). "
-                f"Call observe first."
-            )
+            available = [{"id": mk.id, "text": mk.text} for mk in (s.last_marks or [])]
+            raise errors.target_not_found("mark", mark_id, available)
         cx, cy = m.center
         return cx, cy, f"mark:{mark_id}({m.text!r})"
 
@@ -147,17 +142,12 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
         query = str(args["text"])
         m = som.find_by_text(s.last_marks or [], query)
         if not m:
-            available = [mk.text for mk in (s.last_marks or [])][:30]
-            raise ValueError(
-                f"no text match for {query!r} in last observe. "
-                f"Available text marks: {available}"
-            )
+            available = [mk.text for mk in (s.last_marks or [])]
+            raise errors.target_not_found("text", query, available)
         cx, cy = m.center
         return cx, cy, f"text:{query!r}->mark:{m.id}"
 
-    raise ValueError(
-        "tap target required: provide {x, y}, {mark: <id>}, or {text: <query>}"
-    )
+    raise errors.missing_target()
 
 
 def _record_act_step(s, action: str, args: dict, pre_path: Path) -> None:
@@ -516,9 +506,18 @@ async def _serve_async() -> None:
     async def _call_tool(name: str, arguments: dict | None) -> list[mtypes.TextContent | mtypes.ImageContent]:
         try:
             result = call_tool(name, arguments or {})
-        except Exception as exc:
-            err = {"ok": False, "error": str(exc), "error_type": type(exc).__name__}
-            return [mtypes.TextContent(type="text", text=json.dumps(err))]
+        except errors.SimdriveError as exc:
+            return [mtypes.TextContent(type="text", text=json.dumps(exc.to_dict()))]
+        except Exception as exc:  # last-resort catch-all → wrap as 'internal' code
+            envelope = {
+                "ok": False,
+                "error": {
+                    "code": "internal",
+                    "message": str(exc),
+                    "details": {"exception_type": type(exc).__name__},
+                },
+            }
+            return [mtypes.TextContent(type="text", text=json.dumps(envelope))]
         return [mtypes.TextContent(type="text", text=json.dumps(result))]
 
     async with stdio_server() as (read, write):

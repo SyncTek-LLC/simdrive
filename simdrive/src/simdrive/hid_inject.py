@@ -110,3 +110,9 @@ def press_button(udid: str, button: str) -> None:
 
 def press_key(udid: str, hid_usage_code: int) -> None:
     _run([udid, "key", str(int(hid_usage_code))])
+
+
+def chord(udid: str, modifier: str, key: str) -> None:
+    """Send a modifier-key chord (e.g. Cmd-V for paste)."""
+    _run([udid, "chord", modifier, key])
+

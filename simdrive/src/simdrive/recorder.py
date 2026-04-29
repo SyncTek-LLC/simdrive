@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 import yaml
 
-from . import act, observe, sim
+from . import act, errors, observe, sim
 from .session import Session
 
 
@@ -79,7 +79,7 @@ class Recorder:
 
 def start(session: Session, name: str) -> Recorder:
     if session.recorder is not None:
-        raise RuntimeError(f"session {session.session_id} already recording {session.recorder.name!r}")
+        raise errors.already_recording(session.session_id, session.recorder.name)
     root = recordings_root() / name
     if root.exists():
         # Overwrite with timestamped suffix to avoid silent collision.
@@ -92,7 +92,7 @@ def start(session: Session, name: str) -> Recorder:
 
 def stop(session: Session) -> Path:
     if session.recorder is None:
-        raise RuntimeError(f"session {session.session_id} is not recording")
+        raise errors.not_recording(session.session_id)
     rec = session.recorder
     yaml_path = rec.finalize()
     session.recorder = None
@@ -153,7 +153,7 @@ def replay(name: str, session: Session, on_drift: str = "halt", drift_threshold:
     rec_dir = recordings_root() / name
     yaml_path = rec_dir / "recording.yaml"
     if not yaml_path.exists():
-        raise FileNotFoundError(f"recording not found: {yaml_path}")
+        raise errors.recording_not_found(name, str(yaml_path))
     payload = yaml.safe_load(yaml_path.read_text())
     steps = payload.get("steps", [])
 

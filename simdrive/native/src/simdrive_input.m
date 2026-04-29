@@ -274,6 +274,42 @@ int main(int argc, const char *argv[]) {
         sendBlocking(client, gMessageForKeyboard(code, DIRECTION_UP));
         usleep(8 * 1000);
       }
+    } else if (strcmp(cmd, "chord") == 0 && argc >= 4) {
+      // chord <modifier> <key>  — e.g.  chord cmd v   →  Cmd+V (paste)
+      // Modifier names → HID usage codes (Keyboard/Keypad page 0x07).
+      const char *mod = argv[3];
+      int modCode = 0;
+      if (strcasecmp(mod, "cmd") == 0 || strcasecmp(mod, "command") == 0) modCode = 0xE3;
+      else if (strcasecmp(mod, "shift") == 0) modCode = 0xE1;
+      else if (strcasecmp(mod, "option") == 0 || strcasecmp(mod, "alt") == 0) modCode = 0xE2;
+      else if (strcasecmp(mod, "control") == 0 || strcasecmp(mod, "ctrl") == 0) modCode = 0xE0;
+      else { fprintf(stderr, "unknown modifier %s\n", mod); return 11; }
+
+      int keyCode = 0;
+      if (argc >= 5) {
+        const char *key = argv[4];
+        // Single character → US-ASCII map (lowercase only).
+        if (strlen(key) == 1) {
+          char c = key[0];
+          static const int ascii[128] = {
+            ['a']=4,['b']=5,['c']=6,['d']=7,['e']=8,['f']=9,['g']=10,['h']=11,
+            ['i']=12,['j']=13,['k']=14,['l']=15,['m']=16,['n']=17,['o']=18,['p']=19,
+            ['q']=20,['r']=21,['s']=22,['t']=23,['u']=24,['v']=25,['w']=26,['x']=27,
+            ['y']=28,['z']=29,
+          };
+          if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+          if (c >= 0 && c < 128) keyCode = ascii[(int)c];
+        }
+      }
+      if (!keyCode) { fprintf(stderr, "chord needs a single ASCII letter as the key\n"); return 12; }
+
+      sendBlocking(client, gMessageForKeyboard(modCode, DIRECTION_DOWN));
+      usleep(15 * 1000);
+      sendBlocking(client, gMessageForKeyboard(keyCode, DIRECTION_DOWN));
+      usleep(15 * 1000);
+      sendBlocking(client, gMessageForKeyboard(keyCode, DIRECTION_UP));
+      usleep(10 * 1000);
+      sendBlocking(client, gMessageForKeyboard(modCode, DIRECTION_UP));
     } else if (strcmp(cmd, "size") == 0) {
       CGSize sz = [[device deviceType] mainScreenSize];
       float sc = [[device deviceType] mainScreenScale];

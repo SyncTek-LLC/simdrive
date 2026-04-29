@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from . import sim
+from . import errors, sim
 from .sim import Device, SimError
 
 
@@ -55,17 +55,15 @@ def start(
     if udid:
         d = sim.find_device(udid=udid)
         if not d:
-            raise SimError(f"no device with udid {udid}")
+            raise errors.no_device({"udid": udid})
     elif device_name:
         d = sim.find_device(name=device_name, os_version=os_version)
         if not d:
-            raise SimError(f"no device matching name={device_name!r} os={os_version!r}")
+            raise errors.no_device({"device_name": device_name, "os_version": os_version})
     else:
         d = sim.first_booted()
         if not d:
-            raise SimError(
-                "no booted simulator found. Pass device_name (e.g. 'iPhone 17 Pro') to boot one."
-            )
+            raise errors.no_device({"any_booted": True})
 
     if not d.is_booted:
         sim.boot(d.udid)
@@ -96,7 +94,7 @@ def start(
 def get(session_id: str) -> Session:
     s = _SESSIONS.get(session_id)
     if not s:
-        raise SimError(f"unknown session_id {session_id!r}. Call session_start first.")
+        raise errors.no_session(session_id)
     return s
 
 
