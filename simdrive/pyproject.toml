@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simdrive"
+version = "0.1.0a1"
+description = "Hand your iOS simulator to your agent. Claude-native MCP driver for iOS simulator testing — vision, taps, recordings."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "SyncTek LLC", email = "info@synctek.io"},
+]
+keywords = ["ios", "simulator", "mcp", "claude", "testing", "qa", "agent", "anthropic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "Pillow>=10.0",
+    "pyyaml>=6.0",
+    "mcp>=1.0",
+    "pyobjc-framework-Quartz>=10.0",
+]
+
+[project.urls]
+Homepage = "https://synctek.io/simdrive"
+Repository = "https://github.com/SyncTek-LLC/simdrive"
+Issues = "https://github.com/SyncTek-LLC/simdrive/issues"
+
+[project.optional-dependencies]
+ssim = ["scikit-image>=0.22"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+simdrive = "simdrive.server:serve"
+simdrive-mcp = "simdrive.server:serve"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "live: tests that require a booted iOS Simulator and Xcode",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
