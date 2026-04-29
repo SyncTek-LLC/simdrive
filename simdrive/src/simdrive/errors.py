@@ -121,6 +121,19 @@ def recording_not_found(name: str, path: str) -> SimdriveError:
     )
 
 
+def device_input_unavailable(action: str) -> SimdriveError:
+    return SimdriveError(
+        code="device_input_unavailable",
+        message=(
+            f"'{action}' on a real device is not yet supported. simdrive v0.1.x "
+            "drives observe + logs + app lifecycle on real devices, but synthetic "
+            "touch/keyboard input requires WebDriverAgent. Coming in v0.2; track "
+            "in docs/REAL_DEVICE_FEASIBILITY.md."
+        ),
+        details={"action": action},
+    )
+
+
 def replay_drift_halt(step_id: int, similarity: float, threshold: float) -> SimdriveError:
     return SimdriveError(
         code="replay_drift_halt",

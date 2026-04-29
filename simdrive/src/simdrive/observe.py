@@ -52,12 +52,20 @@ def observe(
     capture_logs: bool = False,
     log_lines: int = 50,
     log_predicate: str | None = None,
+    target: str = "simulator",
 ) -> Observation:
-    """Capture a screenshot + measure it; optionally annotate with SoM marks; optionally tail logs."""
+    """Capture a screenshot + measure it; optionally annotate with SoM marks; optionally tail logs.
+
+    `target` selects the backend: "simulator" (default) or "device" (real iPhone/iPad).
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = int(time.time() * 1000)
     raw_path = out_dir / f"observe-{ts}.png"
-    sim.screenshot(udid, raw_path)
+    if target == "device":
+        from . import device  # avoid import cost when not used
+        device.screenshot(udid, raw_path)
+    else:
+        sim.screenshot(udid, raw_path)
     with Image.open(raw_path) as im:
         w, h = im.size
 
@@ -78,7 +86,11 @@ def observe(
     logs_text: str | None = None
     if capture_logs:
         try:
-            logs_text = sim.get_log_tail(udid, lines=log_lines, predicate=log_predicate)
+            if target == "device":
+                from . import device
+                logs_text = device.get_log_tail(udid, lines=log_lines, predicate=log_predicate)
+            else:
+                logs_text = sim.get_log_tail(udid, lines=log_lines, predicate=log_predicate)
         except Exception as exc:
             logs_text = f"<log capture failed: {exc}>"
 

@@ -11,12 +11,12 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "0.1.0a2"
+    assert server.__version__ == "0.2.0a1"
 
 
-def test_tool_count_is_twelve():
+def test_tool_count_is_thirteen():
     tools = server.list_tools()
-    assert len(tools) == 12, f"expected 12 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 13, f"expected 13 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -25,7 +25,7 @@ def test_tool_names_match_spec():
         "observe",
         "tap", "swipe", "type_text", "press_key",
         "record_start", "record_stop", "replay",
-        "logs",
+        "logs", "list_devices",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
@@ -339,6 +339,53 @@ def _stub_sim_for_observe(tmp_path):
         def get_log_tail(*args, **kwargs):
             return ""
     return StubSim
+
+
+def test_device_input_tools_raise_on_device_target(tmp_path):
+    """tap/swipe/type_text/press_key must surface device_input_unavailable when target=device."""
+    from simdrive import server, session as ses, errors as err
+    from simdrive.sim import Device
+    ses._SESSIONS.clear()
+
+    sid = "dev-only"
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPad", os_version="iPadOS 17", state="active"),
+        workdir=tmp_path,
+        target="device",
+    )
+    ses._SESSIONS[sid] = s
+
+    for fn, args in (
+        (server.tool_tap, {"session_id": sid, "x": 100, "y": 100}),
+        (server.tool_swipe, {"session_id": sid, "x1": 0, "y1": 0, "x2": 1, "y2": 1}),
+        (server.tool_type_text, {"session_id": sid, "text": "hi"}),
+        (server.tool_press_key, {"session_id": sid, "key": "home"}),
+    ):
+        with pytest.raises(err.SimdriveError) as exc:
+            fn(args)
+        assert exc.value.code == "device_input_unavailable", (
+            f"{fn.__name__} should raise device_input_unavailable, got {exc.value.code}"
+        )
+
+
+def test_session_start_invalid_target_raises():
+    from simdrive import server, errors as err
+    with pytest.raises(err.SimdriveError) as exc:
+        server.tool_session_start({"target": "android"})
+    assert exc.value.code == "invalid_argument"
+
+
+def test_device_module_imports_and_exposes_helpers():
+    from simdrive import device
+    assert callable(device.list_devices)
+    assert callable(device.find_device)
+    assert callable(device.screenshot)
+    assert callable(device.get_log_tail)
+    ok, missing = device.libimobiledevice_available()
+    # macOS test host either has it or it's expected to fail gracefully.
+    assert isinstance(ok, bool)
+    assert isinstance(missing, list)
 
 
 def test_session_append_action_writes_jsonl(tmp_path):
