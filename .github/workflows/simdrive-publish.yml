@@ -1,0 +1,80 @@
+name: simdrive Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "simdrive-v*.*.*"
+      - "simdrive-v*.*.*a*"
+      - "simdrive-v*.*.*b*"
+      - "simdrive-v*.*.*rc*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build only, no publish)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build wheel + sdist (universal2)
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: simdrive
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build native HID helper (universal2)
+        run: cd native && make clean && make
+
+      - name: Verify universal2 binary
+        run: |
+          file src/simdrive/_bin/simdrive-input
+          file src/simdrive/_bin/simdrive-input | grep -q "universal binary"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build distributions
+        env:
+          SIMDRIVE_SKIP_NATIVE_BUILD: "1"
+        run: python -m build
+
+      - name: Verify dist contents
+        run: |
+          ls -la dist/
+          twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simdrive-dist
+          path: simdrive/dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/simdrive-v') && !inputs.dry_run }}
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: simdrive-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI }}
+          skip-existing: true

@@ -119,6 +119,23 @@ def terminate_app(udid: str, bundle_id: str) -> None:
     _simctl("terminate", udid, bundle_id, timeout=10.0)
 
 
+def set_pasteboard(udid: str, text: str) -> None:
+    """Push UTF-8 text onto the simulator's pasteboard.
+
+    Used as the fallback for non-ASCII characters in type_text since the HID
+    keyboard only emits US-ASCII keycodes.
+    """
+    res = subprocess.run(
+        ["xcrun", "simctl", "pbcopy", udid],
+        input=text,
+        text=True,
+        capture_output=True,
+        timeout=5.0,
+    )
+    if res.returncode != 0:
+        raise SimError(f"simctl pbcopy failed: {res.stderr.strip()}")
+
+
 def get_log_tail(udid: str, lines: int = 50, predicate: str | None = None) -> str:
     """Capture a one-shot tail of recent simulator logs.
 

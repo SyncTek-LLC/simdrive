@@ -1,0 +1,63 @@
+name: simdrive CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "simdrive/**"
+      - ".github/workflows/simdrive-ci.yml"
+  pull_request:
+    paths:
+      - "simdrive/**"
+      - ".github/workflows/simdrive-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build native + run unit tests
+    runs-on: macos-14  # arm64 runner; supports universal2 cross-compile
+    defaults:
+      run:
+        working-directory: simdrive
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify Xcode tools available
+        run: |
+          xcrun --show-sdk-path
+          ls /Applications/Xcode*.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework
+
+      - name: Build native HID helper (universal2)
+        run: cd native && make clean && make
+
+      - name: Verify universal2 binary
+        run: |
+          file src/simdrive/_bin/simdrive-input
+          file src/simdrive/_bin/simdrive-input | grep -q "universal binary"
+
+      - name: Install build deps
+        run: pip install build pytest pyyaml Pillow pyobjc-framework-Vision mcp
+
+      - name: Build wheel
+        env:
+          SIMDRIVE_SKIP_NATIVE_BUILD: "1"  # we already built it
+        run: python -m build --wheel
+
+      - name: Run unit tests
+        run: pip install -e . && pytest tests/test_unit.py -v
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simdrive-wheel-${{ github.sha }}
+          path: simdrive/dist/*.whl
+          retention-days: 14
