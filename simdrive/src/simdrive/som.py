@@ -6,6 +6,7 @@ no remote calls.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -25,9 +26,23 @@ class Mark:
     def center(self) -> tuple[int, int]:
         return (self.x + self.w // 2, self.y + self.h // 2)
 
+    @property
+    def stable_id(self) -> str:
+        """A short hash of (text, ~position) that survives observe() reshuffling.
+
+        IDs from `id` change every observe (top-to-bottom ordering); stable_id
+        stays the same as long as the same element keeps the same text and
+        appears in roughly the same place (rounded to 20px buckets).
+        """
+        bucket_x = (self.x + self.w // 2) // 20
+        bucket_y = (self.y + self.h // 2) // 20
+        key = f"{self.text}|{bucket_x},{bucket_y}".encode("utf-8")
+        return hashlib.blake2b(key, digest_size=6).hexdigest()
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "stable_id": self.stable_id,
             "bbox": [self.x, self.y, self.w, self.h],
             "center": list(self.center),
             "text": self.text,
@@ -153,5 +168,12 @@ def find_by_text(marks: list[Mark], query: str) -> Optional[Mark]:
 def find_by_mark_id(marks: list[Mark], mark_id: int) -> Optional[Mark]:
     for m in marks:
         if m.id == mark_id:
+            return m
+    return None
+
+
+def find_by_stable_id(marks: list[Mark], stable_id: str) -> Optional[Mark]:
+    for m in marks:
+        if m.stable_id == stable_id:
             return m
     return None

@@ -194,17 +194,19 @@ def replay(name: str, session: Session, on_drift: str = "halt", drift_threshold:
 def _execute_step(step: dict, session: Session) -> None:
     action = step["action"]
     args = step.get("args", {})
+    udid = session.device.udid
     if action == "tap":
-        act.tap(args["x"], args["y"], args["screenshot_w"], args["screenshot_h"])
+        act.tap(args["x"], args["y"], args["screenshot_w"], args["screenshot_h"], udid=udid)
     elif action == "swipe":
         act.swipe(
             args["x1"], args["y1"], args["x2"], args["y2"],
             args["screenshot_w"], args["screenshot_h"],
             args.get("duration_ms", 300),
+            udid=udid,
         )
     elif action == "type_text":
-        act.type_text(args["text"])
+        act.type_text(args["text"], udid=udid)
     elif action == "press_key":
-        act.press_key(args["key"])
+        act.press_key(args["key"], udid=udid)
     else:
         raise ValueError(f"unsupported replay action: {action}")

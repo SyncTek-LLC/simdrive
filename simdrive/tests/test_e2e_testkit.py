@@ -492,9 +492,15 @@ def test_press_key_return_in_field_dismisses_keyboard_or_advances(session_id):
     server.tool_type_text(
         {"session_id": session_id, "text": "abc", "tap_first": {"mark": search_mark["id"]}}
     )
-    time.sleep(0.6)
-    obs = server.tool_observe({"session_id": session_id})
-    assert _has(obs, "abc") or _has(obs, "ABC"), f"text didn't enter: {_texts(obs)[:12]}"
+    # Allow up to 2s for the typed text to settle (iOS keyboard subsystem
+    # latency varies under suite-wide load).
+    deadline = time.time() + 2.0
+    saw_text = False
+    while time.time() < deadline and not saw_text:
+        time.sleep(0.3)
+        obs = server.tool_observe({"session_id": session_id})
+        saw_text = _has(obs, "abc") or _has(obs, "ABC")
+    assert saw_text, f"text didn't enter: {_texts(obs)[:15]}"
     # Press return — should dispatch without raising
     server.tool_press_key({"session_id": session_id, "key": "return"})
     time.sleep(0.4)
