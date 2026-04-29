@@ -22,11 +22,11 @@ simdrive replaces all of that with: **screenshot in, click out**. Your agent alr
 pip install simdrive
 ```
 
-You'll also need:
-- macOS with Xcode + iOS Simulator
-- Accessibility permission for whichever app launches `simdrive` (Terminal, iTerm, your editor, etc.) — System Settings → Privacy & Security → Accessibility. **Restart the host after granting** — TCC permissions only refresh on process restart.
+Requirements:
+- macOS with Xcode + iOS Simulator (for native HID input)
+- A booted simulator. simdrive will use a running one or boot one for you.
 
-simdrive runs in the background by default and reports its current operating mode via `session_status`. If your environment doesn't support background dispatch, install `cliclick` (`brew install cliclick`) for the fallback path — note that fallback mode brings Simulator to the foreground on each action.
+simdrive runs in the background by default — taps and keystrokes go straight to the simulator without raising its window or stealing your keyboard focus. Verify via `session_status` (`mode: "background"`).
 
 ## Wire into Claude
 
@@ -99,7 +99,17 @@ Later:
 replay({name: "checkout-flow", on_drift: "halt"})
 ```
 
-Each step is gated on visual similarity: if the live screen has drifted from the recorded pre-screenshot (SSIM < 0.85), the replay halts (`halt`), warns and continues (`warn`), or proceeds blind (`force`). The recording is a self-contained YAML+PNG bundle you can commit to your repo.
+Each step is gated on visual similarity: if the live screen has drifted from the recorded pre-screenshot, the replay halts (`halt`), warns and continues (`warn`), or proceeds blind (`force`). The recording is a self-contained YAML+PNG bundle you can commit to your repo.
+
+## Testing
+
+```bash
+pip install simdrive[dev]
+pytest                          # 22 unit tests, no sim required
+pytest -m live                  # 26 live tests against TestKitApp
+```
+
+Live tests boot a fresh TestKitApp session per test and exercise every tool: tap by text/mark/coords, type into focused fields, swipe-to-scroll, alert-while-focused dismissal (the iOS 26 case that defeated v15), record + replay with drift detection.
 
 ## What this isn't
 

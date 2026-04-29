@@ -128,12 +128,15 @@ def test_press_key_lists_supported_keys_in_error():
     assert "supported" in msg.lower() or "Supported" in msg
 
 
-def test_pid_input_capability_reports_state():
-    from simdrive import pid_input
-    cap = pid_input.capability()
-    # Quartz availability is a fact about the install; just ensure the call works.
-    assert isinstance(cap.quartz, bool)
-    assert cap.sim_pid is None or isinstance(cap.sim_pid, int)
+def test_hid_inject_binary_exists():
+    from simdrive import hid_inject
+    p = hid_inject._binary_path()
+    assert p is not None and p.exists()
+
+
+def test_hid_inject_available():
+    from simdrive import hid_inject
+    assert hid_inject.available() is True
 
 
 def test_session_status_reports_mode():
@@ -141,16 +144,6 @@ def test_session_status_reports_mode():
     assert "mode" in result
     assert result["mode"] in {"background", "foreground"}
     assert "mode_note" in result
-
-
-def test_pid_input_ascii_keycode_table_covers_alphanumeric():
-    from simdrive.pid_input import _build_ascii_keycodes
-    table = _build_ascii_keycodes()
-    for ch in "abcdefghijklmnopqrstuvwxyz0123456789":
-        assert ch in table, f"missing keycode for {ch!r}"
-    for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-        assert ch in table, f"missing keycode for {ch!r}"
-        assert table[ch][1] is True, f"{ch!r} should require shift"
 
 
 def test_som_find_by_text():
