@@ -85,10 +85,10 @@ def tool_session_status(arguments: dict) -> dict:
             for s in sessions
         ],
         "version": __version__,
-        "mode": "background" if backend == "pid" else "foreground",
+        "mode": "background" if backend == "hid" else "foreground",
         "mode_note": (
             "Running in background mode — your foreground app keeps focus."
-            if backend == "pid"
+            if backend == "hid"
             else "Simulator will be brought to front on each action."
         ),
     }
@@ -176,7 +176,7 @@ def tool_tap(arguments: dict) -> dict:
     sw, sh = _ensure_screenshot_dims(s)
     x, y, resolved_via = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
-    sx, sy = act.tap(x, y, sw, sh)
+    sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
     s.last_action_at = _now()
     args = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
     if pre_path:
@@ -210,7 +210,7 @@ def tool_swipe(arguments: dict) -> dict:
         raise ValueError("swipe requires {x1,y1,x2,y2} or {from: target, to: target}")
 
     pre_path = s.last_screenshot_path
-    act.swipe(x1, y1, x2, y2, sw, sh, duration_ms)
+    act.swipe(x1, y1, x2, y2, sw, sh, duration_ms, udid=s.device.udid)
     s.last_action_at = _now()
     args = {
         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
@@ -229,13 +229,13 @@ def tool_type_text(arguments: dict) -> dict:
     if tap_target:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _ = _resolve_target_xy(s, tap_target)
-        act.tap(tx, ty, sw, sh)
+        act.tap(tx, ty, sw, sh, udid=s.device.udid)
         import time as _t
-        _t.sleep(0.4)  # give the keyboard a moment to come up
+        _t.sleep(0.6)  # give the keyboard a moment to come up
 
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
-    act.type_text(text)
+    act.type_text(text, udid=s.device.udid)
     s.last_action_at = _now()
     if pre_path:
         _record_act_step(s, "type_text", {"text": text}, pre_path)
@@ -247,7 +247,7 @@ def tool_press_key(arguments: dict) -> dict:
     key = str(arguments["key"])
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
-    act.press_key(key)
+    act.press_key(key, udid=s.device.udid)
     s.last_action_at = _now()
     if pre_path:
         _record_act_step(s, "press_key", {"key": key}, pre_path)

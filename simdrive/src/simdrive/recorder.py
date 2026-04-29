@@ -103,8 +103,13 @@ def stop(session: Session) -> Path:
 
 
 def _ssim_or_fallback(a: Path, b: Path) -> float:
-    """Return a similarity score in [0, 1]. Uses skimage SSIM if available,
-    otherwise falls back to a coarse pixel-mean diff so replay still works."""
+    """Return a similarity score in [0, 1].
+
+    Uses skimage SSIM if available (strictly better at detecting structural
+    changes); otherwise falls back to a perceptual-hash–style block-difference
+    metric. Both metrics yield ~1.0 for identical screens and drop sharply for
+    visually different ones.
+    """
     try:
         from skimage.metrics import structural_similarity as ssim  # type: ignore
         from PIL import Image
@@ -113,22 +118,27 @@ def _ssim_or_fallback(a: Path, b: Path) -> float:
         ima = np.array(Image.open(a).convert("L"))
         imb = np.array(Image.open(b).convert("L"))
         if ima.shape != imb.shape:
-            from PIL import Image as _Im
-            imb = np.array(_Im.open(b).convert("L").resize(ima.shape[::-1]))
+            imb = np.array(Image.open(b).convert("L").resize(ima.shape[::-1]))
         score, _ = ssim(ima, imb, full=True)
         return float(score)
     except Exception:
-        # Cheap fallback: 1 - normalized mean absolute diff
-        from PIL import Image
-        ima = Image.open(a).convert("L")
-        imb = Image.open(b).convert("L").resize(ima.size)
-        pa = ima.tobytes()
-        pb = imb.tobytes()
-        n = len(pa)
-        if n == 0:
-            return 0.0
-        diff = sum(abs(x - y) for x, y in zip(pa, pb)) / n
-        return max(0.0, 1.0 - diff / 255.0)
+        return _block_similarity(a, b)
+
+
+def _block_similarity(a: Path, b: Path, grid: int = 32, threshold: int = 8) -> float:
+    """Block-average perceptual similarity, no numpy required.
+
+    Downsamples both images to grid×grid grayscale, then counts blocks that
+    differ by more than `threshold` (out of 255). Returns the *fraction of
+    matching blocks* — 1.0 = identical, ~0.5 = totally different. Much more
+    discriminating than mean-abs-diff for "is this the same screen."
+    """
+    from PIL import Image
+    ima = Image.open(a).convert("L").resize((grid, grid))
+    imb = Image.open(b).convert("L").resize((grid, grid))
+    pa, pb = ima.tobytes(), imb.tobytes()
+    matches = sum(1 for x, y in zip(pa, pb) if abs(x - y) <= threshold)
+    return matches / float(grid * grid)
 
 
 def replay(name: str, session: Session, on_drift: str = "halt", drift_threshold: float = 0.85) -> dict:
