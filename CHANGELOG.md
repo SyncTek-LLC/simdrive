@@ -7,6 +7,71 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [16.0.0a3] — 2026-04-28 (alpha — Maurice's a2 dogfood feedback, P0 plumbing fixes)
+
+**Status:** plumbing fixes from `.specterqa/dogfood/v16.0.0a2-maurice.md`. The
+v16 vision-first design was right; a2's runner-lifecycle and screenshot-delivery
+layer was not. a3 fixes the load-bearing plumbing.
+
+### Fixed (P0)
+
+- **P0-3: `ios_observe` no longer ships inline base64.** The screenshot is now
+  written to `/tmp/specterqa-observe-<uuid>.jpg` and the tool returns
+  `screenshot_path` instead. Drops the 188 KB / 64 KB JSON envelope problem
+  that exceeded the MCP cap (~25 KB) at every quality level. Vision agents read
+  the path with their native file-read tool. (`server.py` handle_observe)
+- **P0-4: One coord space — logical points.** `ios_observe.device_w` and
+  `device_h` are now LOGICAL POINTS (e.g. 390×844 for iPhone 12), matching
+  the runner's `:8222/health` and what UIKit hit-tests against. Pixel
+  dimensions of the saved JPEG are surfaced separately as
+  `screenshot_w` / `screenshot_h`. `ios_act` `normalized=true` denormalizes to
+  the same point space via a new `_resolve_device_logical_points` helper that
+  consults a known-device → points map (iPhone 12/13/14/15/16/17 families)
+  with a 390×844 default fallback.
+- **P0-1: `handle_start_session` ensures the sim is booted AND blocks on
+  health.** Previously a Shutdown sim was handed straight to runner deploy,
+  and a healthcheck timeout was warning-logged while the function fell through
+  to BackendSelector and returned `status:ok` with a dead `runner_url`.
+  v16.0.0a3 (a) calls `_ensure_sim_booted` before deploy and returns a
+  structured `sim_boot_failed` error if boot fails, (b) returns a structured
+  `runner_deploy_health_timeout` error on healthcheck failure with an iOS
+  26.0 SDK-mismatch hint and `retryable=False`. `_ensure_sim_booted` was
+  promoted to module level (was nested inside `handle_app_relaunch`).
+- **P0-1.5: orphan MCP daemon reaping on serve() startup.** `_reap_orphan_daemons`
+  pgrep's `specterqa-ios-mcp`, SIGKILLs any PID other than the current process
+  before binding the MCP transport. Eliminates the silent piggyback Maurice
+  identified where a fresh daemon was reading state from an orphan's
+  port-bound runner. Override via `SPECTERQA_ALLOW_MULTI_DAEMON=1` for
+  intentional multi-daemon setups.
+
+### Fixed (P1)
+
+- **P1-1: `ios_session_status` now reflects daemon reality.**  v16.0.0a2 lied:
+  any daemon with a non-None `_backend` reported `"healthy"` even when the
+  runner had silently died. v16.0.0a3 distinguishes:
+  `idle` (no session configured this lifetime) | `deploying` (in-flight) |
+  `healthy` (live `/health` returned 200 just now) | `degraded` (backend
+  exists but `/health` failing) | `failed` (last deploy errored). Probe is
+  live, not cached. Also exposes `daemon_pid` so agents can correlate with
+  pgrep output.
+
+### Deferred (still — Maurice's a2 §P0-2, §P1-2, §P1-3)
+
+- **P0-2 — `ios_observe` returns frozen pixels when runner is stale.** Likely
+  resolved by the orphan-daemon reaping (P0-1.5) — the cached-frame
+  scenario depended on an orphan runner. If it persists in a3 dogfood,
+  add a refuse-on-stale check to the runner Swift `/screenshot` route.
+- **P1-2 — `ios_logs` returns count:0 on a dead sim** instead of erroring.
+- **P1-3 — `backend="xctest"` returns "not available" while `backend="auto"`
+  deploys xctest fine.** Code-path unification.
+
+### Verified before ship
+
+- 519 unit tests pass / 31 skipped / 0 fail
+- Live verification on iPhone 17 Pro / iOS 26.3 — see `.specterqa/v16-handoff.md` for the heavy-test record
+
+---
+
 ## [16.0.0a2] — 2026-04-28 (alpha — Maurice/Example Reader dogfood feedback)
 
 **Status:** integration-bug fixes from Maurice's v16.0.0a1 dogfood

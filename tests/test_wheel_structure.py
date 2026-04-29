@@ -114,10 +114,10 @@ def test_pyproject_no_runner_source_package_data():
 
 
 def test_pyproject_version_is_final():
-    """pyproject.toml version must be 16.0.0a2 (dogfood-feedback alpha)."""
+    """pyproject.toml version must be 16.0.0a3 (file-path screenshot + sim-boot fix)."""
     pyproject = REPO_ROOT / "pyproject.toml"
     content = pyproject.read_text(encoding="utf-8")
-    assert 'version = "16.0.0a2"' in content, (
-        "pyproject.toml version is not 16.0.0a2. "
-        "Bump version per the v16.0.0a2 dogfood-feedback alpha."
+    assert 'version = "16.0.0a3"' in content, (
+        "pyproject.toml version is not 16.0.0a3. "
+        "Bump version per the v16.0.0a3 dogfood-feedback alpha."
     )

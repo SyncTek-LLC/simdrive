@@ -149,6 +149,7 @@ class TestMCPSessionPersistence:
                     "specterqa.ios.drivers.simulator.network": MagicMock(NetworkInspector=net_cls),
                 }),
                 patch("specterqa.ios.mcp.server._circuit_breaker"),
+                patch("specterqa.ios.mcp.server._ensure_sim_booted", return_value=True),
             ):
                 result = srv.handle_start_session({
                     "bundle_id": "com.example.app",
