@@ -11,12 +11,12 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "0.2.0a2"
+    assert server.__version__ == "0.3.0a1"
 
 
-def test_tool_count_is_thirteen():
+def test_tool_count_is_twenty_seven():
     tools = server.list_tools()
-    assert len(tools) == 13, f"expected 13 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 27, f"expected 27 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -26,6 +26,11 @@ def test_tool_names_match_spec():
         "tap", "swipe", "type_text", "press_key",
         "record_start", "record_stop", "replay",
         "logs", "list_devices",
+        # v0.3.0a1 SpecterQA parity round 1
+        "perf", "perf_baseline", "perf_compare", "memory",
+        "doctor", "app_state", "apps", "crashes",
+        "dismiss_first_launch_alerts", "pre_grant_permissions",
+        "set_appearance", "dismiss_sheet", "list_replays", "validate_replay",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
@@ -1229,3 +1234,561 @@ def test_simdrive_cli_help_flag():
     )
     assert res.returncode == 0, f"stdout={res.stdout!r} stderr={res.stderr!r}"
     assert "MCP server" in res.stdout
+
+
+# =====================================================================
+# v0.3.0a1 — SpecterQA parity (perf / diagnostics / robustness)
+# =====================================================================
+
+
+def _make_session_with_app(tmp_path, sid="s-perf", bundle_id="com.example.App"):
+    """Build a Session with a bundle id wired up + register it in the module dict."""
+    from simdrive import session as ses
+    from simdrive.sim import Device
+    ses._SESSIONS.clear()
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="UDID-X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        app_bundle_id=bundle_id,
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+    return s
+
+
+def _stub_perf_subproc(monkeypatch, *, pid=4242, cpu=12.5, rss_kb=204800, threads=8):
+    """Patch perf._run so the perf module sees launchctl + ps output without shelling out."""
+    from simdrive import perf as _perf
+
+    launchctl_line = f"{pid}\t0\tUIKitApplication:com.example.App[uuid]"
+    ps_line = f"{cpu} {rss_kb}"
+    ps_M_lines = "USER PID TT STAT TIME COMMAND\n" + "\n".join(
+        f"alice {pid} ?? S 0:00.00 thread{i}" for i in range(threads)
+    )
+
+    def fake_run(cmd, timeout=10.0):
+        import subprocess as _sp
+        out = ""
+        if "launchctl" in cmd:
+            out = launchctl_line + "\n"
+        elif cmd[:1] == ["ps"] and "-M" in cmd:
+            out = ps_M_lines + "\n"
+        elif cmd[:1] == ["ps"]:
+            out = ps_line + "\n"
+        return _sp.CompletedProcess(cmd, 0, out, "")
+
+    monkeypatch.setattr(_perf, "_run", fake_run)
+
+
+def test_perf_returns_cpu_memory_threads(tmp_path, monkeypatch):
+    from simdrive import server
+    s = _make_session_with_app(tmp_path)
+    _stub_perf_subproc(monkeypatch, pid=999, cpu=22.5, rss_kb=153600, threads=12)
+
+    result = server.tool_perf({"session_id": s.session_id})
+    assert result["pid"] == 999
+    assert result["cpu_pct"] == 22.5
+    assert result["memory_rss_mb"] == 150.0  # 153600 / 1024
+    assert result["threads"] == 12
+    assert "captured_at" in result
+
+
+def test_perf_baseline_stores_on_session(tmp_path, monkeypatch):
+    from simdrive import server
+    s = _make_session_with_app(tmp_path)
+    _stub_perf_subproc(monkeypatch, pid=111, cpu=10.0, rss_kb=102400, threads=5)
+
+    result = server.tool_perf_baseline({"session_id": s.session_id})
+    assert result["label"] == "default"
+    assert "default" in s.perf_baselines
+    assert s.perf_baselines["default"]["memory_rss_mb"] == 100.0
+
+
+def test_perf_compare_severity_high_on_memory_jump(tmp_path, monkeypatch):
+    from simdrive import server
+    s = _make_session_with_app(tmp_path)
+
+    # Baseline snapshot: 100 MB
+    _stub_perf_subproc(monkeypatch, pid=1, cpu=10.0, rss_kb=102400, threads=5)
+    server.tool_perf_baseline({"session_id": s.session_id})
+
+    # Current snapshot: 165 MB (+65 MB → severity high)
+    _stub_perf_subproc(monkeypatch, pid=1, cpu=11.0, rss_kb=168960, threads=6)
+    res = server.tool_perf_compare({"session_id": s.session_id})
+    assert res["severity"] == "high"
+    assert res["delta"]["memory_rss_mb"] >= 60
+
+
+def test_perf_compare_severity_medium_on_cpu_jump(tmp_path, monkeypatch):
+    from simdrive import server
+    s = _make_session_with_app(tmp_path)
+
+    _stub_perf_subproc(monkeypatch, pid=1, cpu=5.0, rss_kb=102400, threads=5)
+    server.tool_perf_baseline({"session_id": s.session_id})
+
+    # +30% CPU, low memory delta → medium
+    _stub_perf_subproc(monkeypatch, pid=1, cpu=35.0, rss_kb=102400, threads=5)
+    res = server.tool_perf_compare({"session_id": s.session_id})
+    assert res["severity"] == "medium"
+
+
+def test_memory_returns_unavailable_when_footprint_missing(tmp_path, monkeypatch):
+    from simdrive import server, perf as _perf
+    s = _make_session_with_app(tmp_path)
+    monkeypatch.setattr(_perf.shutil, "which", lambda name: None)
+
+    result = server.tool_memory({"session_id": s.session_id})
+    assert result["available"] is False
+    assert "footprint" in result["reason"]
+
+
+def test_doctor_reports_checks(monkeypatch):
+    from simdrive import server, diagnostics, hid_inject
+    import subprocess as _sp
+
+    def fake_run(cmd, timeout=10.0):
+        if cmd[:1] == ["xcode-select"]:
+            return _sp.CompletedProcess(cmd, 0, "/Applications/Xcode.app/Contents/Developer", "")
+        if "runtimes" in cmd:
+            return _sp.CompletedProcess(cmd, 0, '{"runtimes": [{"name":"iOS 26.3"}]}', "")
+        if "booted" in cmd:
+            return _sp.CompletedProcess(
+                cmd, 0,
+                '{"devices": {"iOS-26-3": [{"udid":"X","state":"Booted"}]}}', "",
+            )
+        return _sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(diagnostics, "_run", fake_run)
+    monkeypatch.setattr(hid_inject, "available", lambda: True)
+    monkeypatch.setattr(hid_inject, "_binary_path", lambda: Path("/fake/simdrive-input"))
+
+    result = server.tool_doctor({})
+    assert result["ok"] is True
+    names = {c["name"] for c in result["checks"]}
+    assert {"xcode_select", "simctl_runtimes", "simctl_booted_devices", "hid_helper"} <= names
+
+
+def test_doctor_marks_failed_check(monkeypatch):
+    from simdrive import server, diagnostics, hid_inject
+    import subprocess as _sp
+
+    def fake_run(cmd, timeout=10.0):
+        if cmd[:1] == ["xcode-select"]:
+            return _sp.CompletedProcess(cmd, 0, "/Applications/Xcode.app/Contents/Developer", "")
+        if "runtimes" in cmd:
+            # No runtimes installed → check fails.
+            return _sp.CompletedProcess(cmd, 0, '{"runtimes": []}', "")
+        if "booted" in cmd:
+            return _sp.CompletedProcess(
+                cmd, 0,
+                '{"devices": {"iOS-26-3": [{"udid":"X","state":"Booted"}]}}', "",
+            )
+        return _sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(diagnostics, "_run", fake_run)
+    monkeypatch.setattr(hid_inject, "available", lambda: True)
+    monkeypatch.setattr(hid_inject, "_binary_path", lambda: Path("/fake/simdrive-input"))
+
+    result = server.tool_doctor({})
+    assert result["ok"] is False
+    runtimes_check = next(c for c in result["checks"] if c["name"] == "simctl_runtimes")
+    assert runtimes_check["ok"] is False
+
+
+def test_apps_parses_listapps_plist(tmp_path, monkeypatch):
+    from simdrive import server, diagnostics
+    import subprocess as _sp
+    import plistlib
+
+    s = _make_session_with_app(tmp_path)
+    plist_payload = plistlib.dumps({
+        "com.example.App": {
+            "CFBundleDisplayName": "Example",
+            "CFBundleShortVersionString": "1.2.3",
+            "Path": "/Applications/Example.app",
+        },
+        "com.example.Other": {
+            "CFBundleName": "Other",
+            "CFBundleVersion": "9.9",
+            "Path": "/Applications/Other.app",
+        },
+    })
+
+    def fake_run(cmd, timeout=15.0):
+        return _sp.CompletedProcess(cmd, 0, plist_payload.decode("utf-8"), "")
+
+    monkeypatch.setattr(diagnostics, "_run", fake_run)
+
+    result = server.tool_apps({"session_id": s.session_id})
+    bundles = {a["bundle_id"] for a in result["apps"]}
+    assert bundles == {"com.example.App", "com.example.Other"}
+    example = next(a for a in result["apps"] if a["bundle_id"] == "com.example.App")
+    assert example["name"] == "Example"
+    assert example["version"] == "1.2.3"
+
+
+def test_app_state_running(tmp_path, monkeypatch):
+    from simdrive import server, diagnostics
+    import subprocess as _sp
+    s = _make_session_with_app(tmp_path)
+
+    def fake_run(cmd, timeout=10.0):
+        return _sp.CompletedProcess(
+            cmd, 0,
+            "1234\t0\tUIKitApplication:com.example.App[uuid]\n",
+            "",
+        )
+
+    monkeypatch.setattr(diagnostics, "_run", fake_run)
+    result = server.tool_app_state({"session_id": s.session_id})
+    assert result["state"] == "foreground"
+    assert result["pid"] == 1234
+
+
+def test_app_state_not_running(tmp_path, monkeypatch):
+    from simdrive import server, diagnostics
+    import subprocess as _sp
+    s = _make_session_with_app(tmp_path)
+
+    monkeypatch.setattr(
+        diagnostics, "_run",
+        lambda cmd, timeout=10.0: _sp.CompletedProcess(cmd, 0, "999\t0\tcom.other\n", ""),
+    )
+    result = server.tool_app_state({"session_id": s.session_id})
+    assert result["state"] == "not-running"
+    assert result["pid"] is None
+
+
+def test_crashes_filters_by_session_start_time(tmp_path, monkeypatch):
+    """Three .ips files with different mtimes; only the post-session-start one surfaces."""
+    import os
+    import json as _json
+    from simdrive import server, diagnostics
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    payload = _json.dumps({"timestamp": "2026-04-29 00:00:00 -0400",
+                           "bundleID": "com.example.App"}) + "\n{}"
+
+    p_old1 = reports / "old1.ips"
+    p_old2 = reports / "old2.ips"
+    p_new = reports / "new.ips"
+    for p in (p_old1, p_old2, p_new):
+        p.write_text(payload)
+
+    os.utime(p_old1, (100, 100))
+    os.utime(p_old2, (200, 200))
+    os.utime(p_new, (10_000_000_000, 10_000_000_000))
+
+    monkeypatch.setattr(diagnostics, "_DIAGNOSTIC_REPORTS_DIR", reports)
+
+    s = _make_session_with_app(tmp_path)
+    s.started_at = 1_000_000_000  # cutoff between old and new
+
+    result = server.tool_crashes({"session_id": s.session_id})
+    names = [c["name"] for c in result["crashes"]]
+    assert names == ["new.ips"]
+
+
+def test_crashes_filters_by_bundle_id(tmp_path, monkeypatch):
+    import os
+    import json as _json
+    from simdrive import server, diagnostics
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+
+    def write_ips(name, bundle):
+        p = reports / name
+        body = _json.dumps({"timestamp": "x", "bundleID": bundle}) + "\n{}"
+        p.write_text(body)
+        os.utime(p, (10_000_000_000, 10_000_000_000))
+        return p
+
+    write_ips("a.ips", "com.example.App")
+    write_ips("b.ips", "com.other.App")
+    write_ips("c.ips", "com.example.App")
+
+    monkeypatch.setattr(diagnostics, "_DIAGNOSTIC_REPORTS_DIR", reports)
+    s = _make_session_with_app(tmp_path)
+    s.started_at = 0
+
+    result = server.tool_crashes({
+        "session_id": s.session_id,
+        "app_bundle_id": "com.example.App",
+        "since_session_start": False,
+    })
+    names = sorted(c["name"] for c in result["crashes"])
+    assert names == ["a.ips", "c.ips"]
+
+
+def test_dismiss_first_launch_alerts_loops_until_alert_gone(tmp_path, monkeypatch):
+    """First observe sees an Allow button, second observe is clean → one tap, attempts=1."""
+    from simdrive import server, observe as obs_mod, act, som
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    s = _make_session_with_app(tmp_path, sid="alert-once")
+
+    fake_screenshot = tmp_path / "fake.png"
+    Image.new("RGB", (100, 200), (10, 10, 10)).save(fake_screenshot)
+    allow_mark = som.Mark(id=1, x=200, y=400, w=80, h=40, text="Allow", confidence=0.95)
+
+    call_count = {"n": 0}
+
+    def fake_observe(udid, out_dir, **kwargs):
+        call_count["n"] += 1
+        marks = [allow_mark] if call_count["n"] == 1 else []
+        return Observation(
+            screenshot_path=fake_screenshot,
+            annotated_path=None,
+            screenshot_w=100,
+            screenshot_h=200,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=marks,
+        )
+
+    tap_calls: list[tuple] = []
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    monkeypatch.setattr(act, "tap",
+                        lambda x, y, sw, sh, udid=None: tap_calls.append((x, y)) or (x, y))
+
+    result = server.tool_dismiss_first_launch_alerts({"session_id": s.session_id})
+    assert result["dismissed"] == 1
+    assert result["attempts"] == 1
+    assert len(tap_calls) == 1
+
+
+def test_dismiss_first_launch_alerts_retries_on_alert_persisting(tmp_path, monkeypatch):
+    """Alert visible twice in a row, then gone → retries=1 should fire two taps."""
+    from simdrive import server, observe as obs_mod, act, som
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    s = _make_session_with_app(tmp_path, sid="alert-retry")
+
+    fake_screenshot = tmp_path / "fake.png"
+    Image.new("RGB", (100, 200), (10, 10, 10)).save(fake_screenshot)
+    allow_mark = som.Mark(id=1, x=200, y=400, w=80, h=40, text="Allow", confidence=0.95)
+
+    call_count = {"n": 0}
+
+    def fake_observe(udid, out_dir, **kwargs):
+        call_count["n"] += 1
+        marks = [allow_mark] if call_count["n"] <= 2 else []
+        return Observation(
+            screenshot_path=fake_screenshot,
+            annotated_path=None,
+            screenshot_w=100,
+            screenshot_h=200,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=marks,
+        )
+
+    tap_calls: list[tuple] = []
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    monkeypatch.setattr(act, "tap",
+                        lambda x, y, sw, sh, udid=None: tap_calls.append((x, y)) or (x, y))
+
+    result = server.tool_dismiss_first_launch_alerts({
+        "session_id": s.session_id,
+        "retries": 1,
+    })
+    assert result["attempts"] == 2
+    assert result["dismissed"] == 2
+    assert len(tap_calls) == 2
+
+
+def test_pre_grant_permissions_invokes_simctl_per_perm(tmp_path, monkeypatch):
+    from simdrive import server, robustness
+    import subprocess as _sp
+
+    s = _make_session_with_app(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        return _sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(robustness.subprocess, "run", fake_run)
+
+    result = server.tool_pre_grant_permissions({
+        "session_id": s.session_id,
+        "permissions": ["camera", "photos"],
+    })
+    assert result["ok"] is True
+    assert result["granted"] == ["camera", "photos"]
+    assert len(calls) == 2
+    assert calls[0][:5] == ["xcrun", "simctl", "privacy", "UDID-X", "grant"]
+    assert calls[0][5] == "camera"
+    assert calls[1][5] == "photos"
+
+
+def test_set_appearance_invokes_simctl_ui(tmp_path, monkeypatch):
+    from simdrive import server, robustness
+    import subprocess as _sp
+
+    s = _make_session_with_app(tmp_path)
+    captured: dict = {}
+
+    def fake_run(cmd, *args, **kwargs):
+        captured["cmd"] = list(cmd)
+        return _sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(robustness.subprocess, "run", fake_run)
+
+    result = server.tool_set_appearance({"session_id": s.session_id, "appearance": "dark"})
+    assert result["ok"] is True
+    assert result["appearance"] == "dark"
+    assert captured["cmd"] == ["xcrun", "simctl", "ui", "UDID-X", "appearance", "dark"]
+
+
+def test_dismiss_sheet_calls_swipe_with_screenshot_dims(tmp_path, monkeypatch):
+    from simdrive import server, act, observe as obs_mod, session as ses
+    from simdrive.observe import Observation
+    from simdrive.sim import Device
+    from PIL import Image
+
+    ses._SESSIONS.clear()
+    sid = "sheet"
+    pre_path = tmp_path / "pre.png"
+    Image.new("RGB", (1000, 2000), (200, 200, 200)).save(pre_path)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="UDID-X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        last_screenshot_w=1000,
+        last_screenshot_h=2000,
+        last_screenshot_path=pre_path,
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+
+    captured = {}
+
+    def fake_swipe(x1, y1, x2, y2, sw, sh, duration_ms, udid=None):
+        captured.update({
+            "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+            "sw": sw, "sh": sh, "duration_ms": duration_ms,
+        })
+
+    monkeypatch.setattr(act, "swipe", fake_swipe)
+
+    server.tool_dismiss_sheet({"session_id": sid})
+    assert captured["sw"] == 1000
+    assert captured["sh"] == 2000
+    assert captured["x1"] == 500
+    assert captured["x2"] == 500
+    assert captured["y1"] == int(2000 * 0.2)
+    assert captured["y2"] == int(2000 * 0.7)
+
+
+def test_list_replays_returns_metadata(tmp_path, monkeypatch):
+    import yaml as _yaml
+    from simdrive import server, recorder
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    root = recorder.recordings_root()
+    root.mkdir(parents=True, exist_ok=True)
+
+    for name in ("alpha", "beta"):
+        rec_dir = root / name
+        rec_dir.mkdir()
+        (rec_dir / "recording.yaml").write_text(_yaml.safe_dump({
+            "name": name,
+            "created_at": 1.0,
+            "simdrive_version": "0.3.0a1",
+            "tags": ["smoke"],
+            "steps": [{"id": 1, "action": "tap", "args": {}, "pre_screenshot": "x"}],
+        }))
+
+    result = server.tool_list_replays({})
+    names = sorted(r["name"] for r in result["replays"])
+    assert names == ["alpha", "beta"]
+    for r in result["replays"]:
+        assert r["steps"] == 1
+        assert r["simdrive_version"] == "0.3.0a1"
+        assert r["tags"] == ["smoke"]
+
+
+def test_validate_replay_passes_on_good_yaml(tmp_path, monkeypatch):
+    import yaml as _yaml
+    from simdrive import server, recorder
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    root = recorder.recordings_root()
+    rec_dir = root / "good"
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    snaps = rec_dir / "snapshots"
+    snaps.mkdir()
+    Image.new("RGB", (10, 10), (255, 0, 0)).save(snaps / "001_pre.png")
+    Image.new("RGB", (10, 10), (0, 255, 0)).save(snaps / "001_post.png")
+
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump({
+        "name": "good",
+        "created_at": 1.0,
+        "simdrive_version": "0.3.0a1",
+        "steps": [{
+            "id": 1, "action": "tap", "args": {"x": 1, "y": 1},
+            "pre_screenshot": "snapshots/001_pre.png",
+            "post_screenshot": "snapshots/001_post.png",
+        }],
+    }))
+
+    result = server.tool_validate_replay({"name": "good"})
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert result["step_count"] == 1
+
+
+def test_validate_replay_flags_missing_screenshot(tmp_path, monkeypatch):
+    import yaml as _yaml
+    from simdrive import server, recorder
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    root = recorder.recordings_root()
+    rec_dir = root / "missing-snap"
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump({
+        "name": "missing-snap",
+        "created_at": 1.0,
+        "steps": [{
+            "id": 1, "action": "tap", "args": {},
+            "pre_screenshot": "snapshots/missing.png",
+        }],
+    }))
+
+    result = server.tool_validate_replay({"name": "missing-snap"})
+    assert result["ok"] is False
+    assert any("missing.png" in e for e in result["errors"])
+
+
+def test_validate_replay_flags_unsupported_action(tmp_path, monkeypatch):
+    import yaml as _yaml
+    from simdrive import server, recorder
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    root = recorder.recordings_root()
+    rec_dir = root / "bad-action"
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    snaps = rec_dir / "snapshots"
+    snaps.mkdir()
+    Image.new("RGB", (10, 10), (255, 0, 0)).save(snaps / "001_pre.png")
+
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump({
+        "name": "bad-action",
+        "created_at": 1.0,
+        "steps": [{
+            "id": 1, "action": "dance", "args": {},
+            "pre_screenshot": "snapshots/001_pre.png",
+        }],
+    }))
+
+    result = server.tool_validate_replay({"name": "bad-action"})
+    assert result["ok"] is False
+    assert any("dance" in e for e in result["errors"])

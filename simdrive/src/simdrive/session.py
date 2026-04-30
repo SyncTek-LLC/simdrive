@@ -33,6 +33,8 @@ class Session:
     last_action_at: float = field(default_factory=time.time)
     state: str = "active"  # "active" | "degraded"
     recorder: Optional["Recorder"] = None  # set by recorder.py to avoid import cycle
+    perf_baselines: dict = field(default_factory=dict)  # label -> snapshot dict (for perf_compare)
+    started_at: float = field(default_factory=time.time)  # used by `crashes` to filter .ips by mtime
 
 
 def _workroot() -> Path:

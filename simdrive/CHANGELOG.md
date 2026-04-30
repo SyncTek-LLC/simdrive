@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0a1 — 2026-04-30
+
+SpecterQA parity sprint, round 1. simdrive grows from 13 to 27 MCP tools, closing the major capability gaps that kept Example Reader's full SpecterQA migration from being a clean cut. Headline: native performance monitoring on simulators, no XCTest required.
+
+### Added — performance monitoring
+- **`perf`** — CPU%, memory RSS, thread count for the active app. simctl + ps-based; no XCTest bridge needed.
+- **`perf_baseline`** — capture a labeled baseline; stored per-session for compare.
+- **`perf_compare`** — diff a current snapshot against a baseline; reports per-axis delta and severity (`high` / `medium` / `low`).
+- **`memory`** — detailed memory breakdown (footprint, dirty, swapped, clean) via the macOS `footprint` tool; reports `available: false` gracefully if the binary is missing.
+
+### Added — diagnostics
+- **`doctor`** — environment readiness check: Xcode CLT, simctl, runtimes, booted devices, native HID helper presence.
+- **`app_state`** — foreground / background / suspended / not-running for the session app.
+- **`apps`** — list installed apps on a sim (bundle id, name, version, path).
+- **`crashes`** — `.ips` crash report retrieval from `~/Library/Logs/DiagnosticReports`, filterable by session-start time and bundle id.
+
+### Added — robustness
+- **`dismiss_first_launch_alerts`** — taps Allow/Don't Allow on permission alerts. Includes the 1-in-4 alert-race fix from the v0.1 dogfood backlog: re-observes 200 ms post-tap and retries once if the alert text persists.
+- **`pre_grant_permissions`** — pre-grant location / camera / photos / etc. via `simctl privacy grant` before launch.
+- **`set_appearance`** — toggle the simulator into light or dark mode.
+- **`dismiss_sheet`** — dismiss a sheet/modal by swiping down 50 % of screen height.
+- **`list_replays`** — list saved replay recordings with metadata (steps, created_at, simdrive_version, tags).
+- **`validate_replay`** — structural validation of a recording YAML without executing it.
+
+### Deferred
+- `network` — large port (CFNetwork log parsing + nettop merge); needs its own sprint.
+- `accessibility_audit`, `webview_elements` — XCTest-only; do not fit simdrive's vision-first model.
+- `app_relaunch` — iOS 26.3 teardown recovery is fragile; deferred to a stability-focused cut.
+
 ## 0.2.0a2 — 2026-04-30
 
 Example Reader v0.2.0a1 dogfood feedback round. simdrive is now Example Reader's canonical iOS sim driver (SpecterQA archived). Three rough edges patched plus a maintainer-feedback follow-up: SSIM region masking, stable_id_loose, step_id correlation, list_devices HID truth, richer recording metadata, CLI flags, and richer replay halt context.
