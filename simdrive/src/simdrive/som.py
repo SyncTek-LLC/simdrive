@@ -39,10 +39,19 @@ class Mark:
         key = f"{self.text}|{bucket_x},{bucket_y}".encode("utf-8")
         return hashlib.blake2b(key, digest_size=6).hexdigest()
 
+    @property
+    def stable_id_loose(self) -> str:
+        """Coarser companion to stable_id — 60px bucket (3x tight) tolerates layout drift."""
+        bucket_x = (self.x + self.w // 2) // 60
+        bucket_y = (self.y + self.h // 2) // 60
+        key = f"{self.text}|{bucket_x},{bucket_y}".encode("utf-8")
+        return hashlib.blake2b(key, digest_size=6).hexdigest()
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
             "stable_id": self.stable_id,
+            "stable_id_loose": self.stable_id_loose,
             "bbox": [self.x, self.y, self.w, self.h],
             "center": list(self.center),
             "text": self.text,
@@ -175,5 +184,12 @@ def find_by_mark_id(marks: list[Mark], mark_id: int) -> Optional[Mark]:
 def find_by_stable_id(marks: list[Mark], stable_id: str) -> Optional[Mark]:
     for m in marks:
         if m.stable_id == stable_id:
+            return m
+    return None
+
+
+def find_by_stable_id_loose(marks: list[Mark], stable_id: str) -> Optional[Mark]:
+    for m in marks:
+        if m.stable_id_loose == stable_id:
             return m
     return None
