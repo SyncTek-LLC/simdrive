@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simdrive"
-version = "0.2.0a2"
+version = "0.3.0a1"
 description = "Hand your iOS simulator to your agent. Claude-native MCP driver for iOS simulator testing — vision, taps, recordings."
 readme = "README.md"
 license = "MIT"
