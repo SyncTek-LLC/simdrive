@@ -117,7 +117,11 @@ def tool_observe(arguments: dict) -> dict:
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
     s.last_screenshot_path = obs.screenshot_path
-    s.last_marks = obs.marks
+    # Only overwrite the mark cache when this observe actually produced marks.
+    # observe(annotate=False) returns marks=[] and used to wipe the cache, breaking
+    # subsequent tap text=/mark=/stable_id= calls with "no marks available."
+    if obs.marks:
+        s.last_marks = obs.marks
     s.last_action_at = _now()
     return obs.to_dict()
 
@@ -133,10 +137,15 @@ def _ensure_screenshot_dims(s) -> tuple[int, int]:
     return s.last_screenshot_w, s.last_screenshot_h
 
 
-def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
-    """Translate {x,y} | {mark} | {text} into pixel coords + a debug 'how' string."""
+def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | None"]:
+    """Translate {x,y} | {mark} | {text} | {stable_id} into pixel coords + debug 'how' + matched Mark.
+
+    The 4th element is the matched `som.Mark` for mark/stable_id/text resolutions, or
+    `None` for raw {x, y} resolutions. Callers that need to record `stable_id` alongside
+    pixel coords (so replay can re-resolve against the live screen) read it from there.
+    """
     if "x" in args and "y" in args:
-        return int(args["x"]), int(args["y"]), "coords"
+        return int(args["x"]), int(args["y"]), "coords", None
 
     if "mark" in args:
         mark_id = int(args["mark"])
@@ -145,7 +154,7 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
             available = [{"id": mk.id, "text": mk.text} for mk in (s.last_marks or [])]
             raise errors.target_not_found("mark", mark_id, available)
         cx, cy = m.center
-        return cx, cy, f"mark:{mark_id}({m.text!r})"
+        return cx, cy, f"mark:{mark_id}({m.text!r})", m
 
     if "stable_id" in args:
         sid_q = str(args["stable_id"])
@@ -155,7 +164,17 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
                          for mk in (s.last_marks or [])]
             raise errors.target_not_found("stable_id", sid_q, available)
         cx, cy = m.center
-        return cx, cy, f"stable_id:{sid_q}({m.text!r})"
+        return cx, cy, f"stable_id:{sid_q}({m.text!r})", m
+
+    if "stable_id_loose" in args:
+        sid_q = str(args["stable_id_loose"])
+        m = som.find_by_stable_id_loose(s.last_marks or [], sid_q)
+        if not m:
+            available = [{"stable_id_loose": mk.stable_id_loose, "text": mk.text}
+                         for mk in (s.last_marks or [])]
+            raise errors.target_not_found("stable_id_loose", sid_q, available)
+        cx, cy = m.center
+        return cx, cy, f"stable_id_loose:{sid_q}({m.text!r})", m
 
     if "text" in args:
         query = str(args["text"])
@@ -164,20 +183,20 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str]:
             available = [mk.text for mk in (s.last_marks or [])]
             raise errors.target_not_found("text", query, available)
         cx, cy = m.center
-        return cx, cy, f"text:{query!r}->mark:{m.id}"
+        return cx, cy, f"text:{query!r}->mark:{m.id}", m
 
     raise errors.missing_target()
 
 
-def _record_act_step(s, action: str, args: dict, pre_path: Path) -> None:
+def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
     if s.recorder is None:
-        return
+        return None
     # Capture post-screenshot for the recording.
     post_obs = observe.observe(s.device.udid, s.workdir / "observations")
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
-    s.recorder.add_step(action, args, pre_path, post_obs.screenshot_path)
+    return s.recorder.add_step(action, args, pre_path, post_obs.screenshot_path)
 
 
 def tool_tap(arguments: dict) -> dict:
@@ -185,20 +204,28 @@ def tool_tap(arguments: dict) -> dict:
     if s.target == "device":
         raise errors.device_input_unavailable("tap")
     sw, sh = _ensure_screenshot_dims(s)
-    x, y, resolved_via = _resolve_target_xy(s, arguments)
+    x, y, resolved_via, matched_mark = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
     sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
     s.last_action_at = _now()
     args = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
+    # Persist stable_id + stable_id_loose + text alongside pixel coords so replay
+    # can re-resolve against the live screen (a 1px layout shift no longer silently
+    # mistaps; loose covers the >3px shifts that escape the tight 20px bucket).
+    if matched_mark is not None:
+        args["stable_id"] = matched_mark.stable_id
+        args["stable_id_loose"] = matched_mark.stable_id_loose
+        args["text"] = matched_mark.text
+    step_id = None
     if pre_path:
-        _record_act_step(s, "tap", args, pre_path)
+        step_id = _record_act_step(s, "tap", args, pre_path)
     session.append_action(s, {
         "action": "tap",
         "args": dict(arguments),
         "resolved": {"pixel_x": x, "pixel_y": y, "via": resolved_via},
         "at": _now(),
     })
-    return {
+    response = {
         "ok": True,
         "pixel_x": x,
         "pixel_y": y,
@@ -207,6 +234,9 @@ def tool_tap(arguments: dict) -> dict:
         "screenshot_size_pixels": [sw, sh],
         "resolved_via": resolved_via,
     }
+    if step_id is not None:
+        response["step_id"] = step_id
+    return response
 
 
 def tool_swipe(arguments: dict) -> dict:
@@ -222,8 +252,8 @@ def tool_swipe(arguments: dict) -> dict:
         x2, y2 = int(arguments["x2"]), int(arguments["y2"])
         resolved_via = "coords"
     elif "from" in arguments and "to" in arguments:
-        x1, y1, _ = _resolve_target_xy(s, arguments["from"])
-        x2, y2, _ = _resolve_target_xy(s, arguments["to"])
+        x1, y1, _, _ = _resolve_target_xy(s, arguments["from"])
+        x2, y2, _, _ = _resolve_target_xy(s, arguments["to"])
         resolved_via = "from/to"
     else:
         raise errors.invalid_argument("swipe", arguments,
@@ -247,8 +277,9 @@ def tool_swipe(arguments: dict) -> dict:
         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
         "screenshot_w": sw, "screenshot_h": sh, "duration_ms": duration_ms,
     }
+    step_id = None
     if pre_path:
-        _record_act_step(s, "swipe", args, pre_path)
+        step_id = _record_act_step(s, "swipe", args, pre_path)
     session.append_action(s, {
         "action": "swipe",
         "args": dict(arguments),
@@ -259,6 +290,8 @@ def tool_swipe(arguments: dict) -> dict:
     response: dict = {"ok": True, "resolved_via": resolved_via}
     if warnings:
         response["warnings"] = warnings
+    if step_id is not None:
+        response["step_id"] = step_id
     return response
 
 
@@ -269,9 +302,10 @@ def tool_type_text(arguments: dict) -> dict:
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
 
+    focused_mark = None  # Mark of the tap_first target if resolved via mark/stable_id/text
     if tap_target:
         sw, sh = _ensure_screenshot_dims(s)
-        tx, ty, _ = _resolve_target_xy(s, tap_target)
+        tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
         act.tap(tx, ty, sw, sh, udid=s.device.udid)
         import time as _t
         _t.sleep(0.6)  # give the keyboard a moment to come up
@@ -280,14 +314,51 @@ def tool_type_text(arguments: dict) -> dict:
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
     act.type_text(text, udid=s.device.udid)
     s.last_action_at = _now()
+    step_id = None
     if pre_path:
-        _record_act_step(s, "type_text", {"text": text}, pre_path)
+        step_id = _record_act_step(s, "type_text", {"text": text}, pre_path)
     session.append_action(s, {
         "action": "type_text",
         "args": {"text": text, "tap_first": tap_target},
         "at": _now(),
     })
-    return {"ok": True, "chars": len(text)}
+
+    # Post-type observe so the caller can verify the field accepted focus without
+    # having to chain an extra observe() call. Heuristic: keyboard chrome shows
+    # well-known key labels OR a row of 1-2 char marks in the bottom 45% of the screen.
+    post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=True)
+    s.last_screenshot_w = post_obs.screenshot_w
+    s.last_screenshot_h = post_obs.screenshot_h
+    s.last_screenshot_path = post_obs.screenshot_path
+    if post_obs.marks:
+        s.last_marks = post_obs.marks
+
+    keyboard_chrome_words = {"return", "search", "go", "next", "done", "shift", "delete", "space"}
+    keyboard_visible = False
+    bottom_threshold = post_obs.screenshot_h * 0.55
+    short_marks_in_bottom = 0
+    for mk in post_obs.marks:
+        t = (mk.text or "").strip().lower()
+        if t in keyboard_chrome_words:
+            keyboard_visible = True
+            break
+        if 1 <= len(t) <= 2 and mk.y > bottom_threshold:
+            short_marks_in_bottom += 1
+    # Two or more short-text marks in the bottom half → likely keyboard key row.
+    if not keyboard_visible and short_marks_in_bottom >= 2:
+        keyboard_visible = True
+
+    focused_field = focused_mark.stable_id if focused_mark is not None else None
+
+    response = {
+        "ok": True,
+        "chars": len(text),
+        "keyboard_visible": keyboard_visible,
+        "focused_field": focused_field,
+    }
+    if step_id is not None:
+        response["step_id"] = step_id
+    return response
 
 
 def tool_press_key(arguments: dict) -> dict:
@@ -299,17 +370,24 @@ def tool_press_key(arguments: dict) -> dict:
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
     act.press_key(key, udid=s.device.udid)
     s.last_action_at = _now()
+    step_id = None
     if pre_path:
-        _record_act_step(s, "press_key", {"key": key}, pre_path)
+        step_id = _record_act_step(s, "press_key", {"key": key}, pre_path)
     session.append_action(s, {"action": "press_key", "args": {"key": key}, "at": _now()})
-    return {"ok": True, "key": key}
+    response = {"ok": True, "key": key}
+    if step_id is not None:
+        response["step_id"] = step_id
+    return response
 
 
 def tool_record_start(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
     name = str(arguments["name"])
-    rec = recorder.start(s, name)
-    return {"ok": True, "name": rec.name, "path": str(rec.root)}
+    tags = arguments.get("tags") or []
+    if not isinstance(tags, list):
+        raise errors.invalid_argument("tags", tags, "must be a list of strings")
+    rec = recorder.start(s, name, tags=[str(t) for t in tags])
+    return {"ok": True, "name": rec.name, "path": str(rec.root), "tags": list(rec.tags)}
 
 
 def tool_record_stop(arguments: dict) -> dict:
@@ -327,7 +405,9 @@ def tool_replay(arguments: dict) -> dict:
     name = str(arguments["name"])
     on_drift = str(arguments.get("on_drift", "halt"))
     threshold = float(arguments.get("drift_threshold", 0.85))
-    return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold)
+    mask_regions = arguments.get("mask_regions")
+    return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold,
+                           mask_regions=mask_regions)
 
 
 def tool_list_devices(arguments: dict) -> dict:
@@ -338,12 +418,16 @@ def tool_list_devices(arguments: dict) -> dict:
     err: dict | None = None
     try:
         for d in device.list_devices():
+            # hid_supported is always False for real devices in v0.2.x — input
+            # routes through WDA which is not yet shipped. Sim sessions are
+            # the only HID-capable target.
             devs.append({
                 "udid": d.udid,
                 "name": d.name,
                 "model": d.model,
                 "transport": d.transport,
                 "state": d.state,
+                "hid_supported": False,
             })
     except device.DeviceError as exc:
         err = {"code": "discovery_failed", "message": str(exc)}
@@ -352,6 +436,11 @@ def tool_list_devices(arguments: dict) -> dict:
         "devices": devs,
         "libimobiledevice_ready": ok,
         "missing_tools": missing,
+        "hid_note": (
+            "Real-device HID injection is not yet implemented. Use simulators "
+            "for tap/swipe/type_text/press_key. WDA-based real-device input is "
+            "on the v0.3 roadmap."
+        ),
         "error": err,
     }
 
@@ -441,7 +530,9 @@ _TOOLS: list[dict] = [
         "description": (
             "Tap a target. Supply ONE of: {x, y} (screenshot pixel coords), "
             "{mark: <id>} (mark id from latest observe — reshuffles per observe), "
-            "{stable_id: <hash>} (stable across observes; preferred for replay), or "
+            "{stable_id: <hash>} (stable across observes; preferred for replay), "
+            "{stable_id_loose: <hash>} (coarser 60px bucket — tolerates layout drift "
+            "that escapes the tight 20px stable_id), or "
             "{text: \"...\"} (best-match against the last observe's marks)."
         ),
         "inputSchema": {
@@ -452,7 +543,8 @@ _TOOLS: list[dict] = [
                 "x": {"type": "integer", "description": "Pixel x (paired with y)."},
                 "y": {"type": "integer", "description": "Pixel y (paired with x)."},
                 "mark": {"type": "integer", "description": "Mark id from the latest observe (reshuffles every observe)."},
-                "stable_id": {"type": "string", "description": "Stable mark hash (text + bucketed position) — survives reshuffling."},
+                "stable_id": {"type": "string", "description": "Stable mark hash (text + 20px bucketed position) — survives reshuffling."},
+                "stable_id_loose": {"type": "string", "description": "Coarser stable hash (text + 60px bucketed position) — tolerates >3px layout drift that breaks the tight stable_id."},
                 "text": {"type": "string", "description": "Match a mark by visible text (exact > prefix > substring)."},
             },
         },
@@ -484,7 +576,10 @@ _TOOLS: list[dict] = [
         "name": "type_text",
         "description": (
             "Send text via the keyboard. If tap_first is given (a target dict), tap "
-            "that target first to focus a field, then type."
+            "that target first to focus a field, then type. Returns ok, chars, "
+            "keyboard_visible (heuristic from a post-type observe), and focused_field "
+            "(the stable_id of the tap_first target when one was supplied and resolved "
+            "via mark/stable_id/text, else null)."
         ),
         "inputSchema": {
             "type": "object",
@@ -519,6 +614,11 @@ _TOOLS: list[dict] = [
             "properties": {
                 "session_id": {"type": "string"},
                 "name": {"type": "string"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of free-form tags persisted into the recording's metadata.",
+                },
             },
         },
         "handler": tool_record_start,
@@ -535,7 +635,12 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "replay",
-        "description": "Replay a recorded session by name. on_drift halt|warn|force; drift_threshold default 0.85 (SSIM).",
+        "description": (
+            "Replay a recorded session by name. on_drift halt|warn|force; "
+            "drift_threshold default 0.85 (SSIM). Pass mask_regions to exclude "
+            "noisy areas (e.g. status-bar clock) from the similarity compute. "
+            "When omitted, falls back to the recording's own ssim_masks if present."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["session_id", "name"],
@@ -544,6 +649,26 @@ _TOOLS: list[dict] = [
                 "name": {"type": "string"},
                 "on_drift": {"type": "string", "enum": ["halt", "warn", "force"], "default": "halt"},
                 "drift_threshold": {"type": "number", "default": 0.85},
+                "mask_regions": {
+                    "type": "array",
+                    "description": "Rectangles to blank in both screenshots before similarity. Each entry is [x, y, w, h] OR {x, y, w, h}.",
+                    "items": {
+                        "oneOf": [
+                            {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4},
+                            {
+                                "type": "object",
+                                "required": ["x", "y", "w", "h"],
+                                "properties": {
+                                    "x": {"type": "integer"},
+                                    "y": {"type": "integer"},
+                                    "w": {"type": "integer"},
+                                    "h": {"type": "integer"},
+                                    "label": {"type": "string"},
+                                },
+                            },
+                        ]
+                    },
+                },
             },
         },
         "handler": tool_replay,
@@ -632,8 +757,27 @@ async def _serve_async() -> None:
         await server.run(read, write, server.create_initialization_options())
 
 
+_HELP_TEXT = """\
+simdrive — iOS sim driver MCP server.
+
+Usage: simdrive (no args)  Run as MCP server on stdio.
+       simdrive --version
+       simdrive --help
+"""
+
+
 def serve() -> None:
     """Console-script entry point. Blocks running the MCP server on stdio."""
+    import sys
+    args = sys.argv[1:]
+    if args:
+        flag = args[0]
+        if flag in ("--version", "-V"):
+            print(f"simdrive {__version__}")
+            sys.exit(0)
+        if flag in ("--help", "-h"):
+            print(_HELP_TEXT, end="")
+            sys.exit(0)
     asyncio.run(_serve_async())
 
 
