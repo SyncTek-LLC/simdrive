@@ -28,7 +28,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import __version__, act, errors, observe, recorder, session, sim, som
+from . import (
+    __version__, act, diagnostics, errors, observe, perf, recorder,
+    robustness, session, sim, som,
+)
 
 
 def _now() -> float:
@@ -457,6 +460,196 @@ def tool_logs(arguments: dict) -> dict:
     return {"ok": True, "lines": len(text.splitlines()), "logs": text}
 
 
+# --------------------- Performance / diagnostics / robustness ----------- #
+
+
+def _resolve_bundle_id(s, arguments: dict) -> str:
+    bid = arguments.get("app_bundle_id") or s.app_bundle_id
+    if not bid:
+        raise errors.invalid_argument(
+            "app_bundle_id", None,
+            "no bundle_id on session and none provided in arguments",
+        )
+    return bid
+
+
+def tool_perf(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    bundle_id = _resolve_bundle_id(s, arguments)
+    snap = perf.snapshot(s.device.udid, bundle_id)
+    if snap.get("pid") is None:
+        raise errors.SimdriveError(
+            code="app_not_running",
+            message=f"no PID found for {bundle_id} on {s.device.udid}",
+            details={"bundle_id": bundle_id, "udid": s.device.udid},
+        )
+    s.last_action_at = _now()
+    return snap
+
+
+def tool_perf_baseline(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    bundle_id = _resolve_bundle_id(s, arguments)
+    label = str(arguments.get("label") or "default")
+    snap = perf.snapshot(s.device.udid, bundle_id)
+    if snap.get("pid") is None:
+        raise errors.SimdriveError(
+            code="app_not_running",
+            message=f"no PID found for {bundle_id} — cannot capture baseline",
+            details={"bundle_id": bundle_id, "udid": s.device.udid},
+        )
+    record = {"label": label, **snap}
+    s.perf_baselines[label] = record
+    return record
+
+
+def tool_perf_compare(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    bundle_id = _resolve_bundle_id(s, arguments)
+    label = str(arguments.get("label") or "default")
+    baseline = s.perf_baselines.get(label)
+    if baseline is None:
+        raise errors.SimdriveError(
+            code="no_baseline",
+            message=f"no baseline labeled {label!r}; call perf_baseline first.",
+            details={"label": label, "available": list(s.perf_baselines)},
+        )
+    current = perf.snapshot(s.device.udid, bundle_id)
+    delta = {
+        "cpu_pct": round(current["cpu_pct"] - baseline["cpu_pct"], 2),
+        "memory_rss_mb": round(current["memory_rss_mb"] - baseline["memory_rss_mb"], 2),
+        "threads": current["threads"] - baseline["threads"],
+    }
+    return {
+        "baseline": baseline,
+        "current": current,
+        "delta": delta,
+        "severity": perf.severity(delta),
+    }
+
+
+def tool_memory(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    bundle_id = _resolve_bundle_id(s, arguments)
+    return perf.memory_detail(s.device.udid, bundle_id)
+
+
+def tool_doctor(arguments: dict) -> dict:
+    return diagnostics.doctor()
+
+
+def tool_app_state(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    bundle_id = _resolve_bundle_id(s, arguments)
+    return diagnostics.app_state(s.device.udid, bundle_id)
+
+
+def tool_apps(arguments: dict) -> dict:
+    udid = arguments.get("udid")
+    if not udid:
+        sid = arguments.get("session_id")
+        if not sid:
+            raise errors.invalid_argument(
+                "session_id|udid", None,
+                "supply either session_id or a literal udid",
+            )
+        s = session.get(sid)
+        udid = s.device.udid
+    return {"apps": diagnostics.list_apps(udid)}
+
+
+def tool_crashes(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    since = bool(arguments.get("since_session_start", True))
+    since_ts = s.started_at if since else 0.0
+    bundle_id = arguments.get("app_bundle_id") or s.app_bundle_id  # optional
+    max_results = int(arguments.get("max", 10))
+    crashes = diagnostics.list_crashes(
+        since_ts=since_ts, bundle_id=bundle_id, max_results=max_results,
+    )
+    return {"crashes": crashes}
+
+
+def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
+    """Tap permission-alert buttons; re-observe after each tap and retry once.
+
+    Why retry: ~1-in-4 alert taps on iOS 26 fall through to the underlying view
+    because SpringBoard hands off alert ownership while the tap is in flight.
+    Re-observing 200 ms post-tap and retrying when the alert text persists
+    closes that window without inflating the no-alert path.
+    """
+    import time as _t
+    s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("dismiss_first_launch_alerts")
+    choice = str(arguments.get("choice", "allow"))
+    if choice not in ("allow", "deny"):
+        raise errors.invalid_argument("choice", choice, "must be 'allow' or 'deny'")
+    retries = int(arguments.get("retries", 1))
+
+    dismissed = 0
+    attempts = 0
+    while True:
+        obs = observe.observe(s.device.udid, s.workdir / "observations")
+        s.last_screenshot_w = obs.screenshot_w
+        s.last_screenshot_h = obs.screenshot_h
+        s.last_screenshot_path = obs.screenshot_path
+        if obs.marks:
+            s.last_marks = obs.marks
+        target_mark = robustness.alert_button_match(obs.marks, choice)
+        if target_mark is None:
+            break
+        attempts += 1
+        cx, cy = target_mark.center
+        try:
+            act.tap(cx, cy, obs.screenshot_w, obs.screenshot_h, udid=s.device.udid)
+            dismissed += 1
+        except Exception:
+            pass
+        _t.sleep(0.2)
+        if attempts > retries:
+            break
+    s.last_action_at = _now()
+    return {"ok": True, "dismissed": dismissed, "attempts": attempts}
+
+
+def tool_pre_grant_permissions(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    bundle_id = _resolve_bundle_id(s, arguments)
+    perms = arguments.get("permissions") or []
+    if not isinstance(perms, list) or not perms:
+        raise errors.invalid_argument("permissions", perms, "must be a non-empty list")
+    return robustness.grant_permissions(s.device.udid, bundle_id, [str(p) for p in perms])
+
+
+def tool_set_appearance(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    appearance = str(arguments.get("appearance", "light"))
+    return robustness.set_appearance(s.device.udid, appearance)
+
+
+def tool_dismiss_sheet(arguments: dict) -> dict:
+    s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("dismiss_sheet")
+    sw, sh = _ensure_screenshot_dims(s)
+    x_mid = sw // 2
+    y_start = int(sh * 0.2)
+    y_end = int(sh * 0.7)
+    act.swipe(x_mid, y_start, x_mid, y_end, sw, sh, 300, udid=s.device.udid)
+    s.last_action_at = _now()
+    return {"ok": True}
+
+
+def tool_list_replays(arguments: dict) -> dict:
+    return {"replays": robustness.list_replays(recorder.recordings_root())}
+
+
+def tool_validate_replay(arguments: dict) -> dict:
+    name = str(arguments["name"])
+    return robustness.validate_replay(recorder.recordings_root(), name)
+
+
 # ----------------------------- MCP wiring ------------------------------- #
 
 
@@ -697,6 +890,215 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_logs,
+    },
+    # ── Performance monitoring ──────────────────────────────────────────
+    {
+        "name": "perf",
+        "description": (
+            "Snapshot CPU%, memory RSS (MB), and thread count for the active app. "
+            "simctl + ps based — no XCTest bridge required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "app_bundle_id": {"type": "string", "description": "Override the session's bundle id (optional)."},
+            },
+        },
+        "handler": tool_perf,
+    },
+    {
+        "name": "perf_baseline",
+        "description": "Capture a labeled perf snapshot on the session for later compare. Default label='default'.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "label": {"type": "string", "default": "default"},
+                "app_bundle_id": {"type": "string"},
+            },
+        },
+        "handler": tool_perf_baseline,
+    },
+    {
+        "name": "perf_compare",
+        "description": (
+            "Diff a fresh perf snapshot against the stored baseline. Returns "
+            "{baseline, current, delta, severity}; severity is 'high' when "
+            "memory_rss_mb_delta>50 or threads_delta>10, 'medium' when "
+            "cpu_pct_delta>25, else 'low'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "label": {"type": "string", "default": "default"},
+                "app_bundle_id": {"type": "string"},
+            },
+        },
+        "handler": tool_perf_compare,
+    },
+    {
+        "name": "memory",
+        "description": (
+            "Detailed memory breakdown (footprint/dirty/swapped/clean MB) via "
+            "macOS `footprint`. Returns {available: false, reason} when the "
+            "binary is missing — never raises for that case."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "app_bundle_id": {"type": "string"},
+            },
+        },
+        "handler": tool_memory,
+    },
+    # ── Diagnostics ─────────────────────────────────────────────────────
+    {
+        "name": "doctor",
+        "description": (
+            "Environment readiness: Xcode CLT, simctl runtimes, booted devices, "
+            "native HID helper presence. Returns {ok, checks: [{name, ok, detail}]}."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_doctor,
+    },
+    {
+        "name": "app_state",
+        "description": (
+            "Heuristic app lifecycle state: foreground / not-running. (background/suspended "
+            "are reserved — distinguishing them needs an XCTest bridge.)"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "app_bundle_id": {"type": "string"},
+            },
+        },
+        "handler": tool_app_state,
+    },
+    {
+        "name": "apps",
+        "description": (
+            "List installed apps on a sim. Resolve UDID from session_id OR pass udid directly. "
+            "Each entry: bundle_id, name, version, path."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string"},
+                "udid": {"type": "string"},
+            },
+        },
+        "handler": tool_apps,
+    },
+    {
+        "name": "crashes",
+        "description": (
+            "Retrieve `.ips` crash reports from ~/Library/Logs/DiagnosticReports. "
+            "Filter by session-start time (default true) and bundle id (optional). "
+            "Returns up to `max` reports newest-first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "since_session_start": {"type": "boolean", "default": True},
+                "app_bundle_id": {"type": "string"},
+                "max": {"type": "integer", "default": 10},
+            },
+        },
+        "handler": tool_crashes,
+    },
+    # ── Robustness ──────────────────────────────────────────────────────
+    {
+        "name": "dismiss_first_launch_alerts",
+        "description": (
+            "Tap Allow/Don't Allow on permission alerts. Re-observes 200 ms post-tap "
+            "and retries once when the alert text persists (closes the 1-in-4 "
+            "SpringBoard alert-handoff race)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "choice": {"type": "string", "enum": ["allow", "deny"], "default": "allow"},
+                "retries": {"type": "integer", "default": 1},
+            },
+        },
+        "handler": tool_dismiss_first_launch_alerts,
+    },
+    {
+        "name": "pre_grant_permissions",
+        "description": (
+            "Pre-grant permissions via `simctl privacy grant` BEFORE app launch. "
+            "Permissions: location, photos, contacts, camera, microphone, calendar, "
+            "reminders, motion, health, homekit, siri, speech, medialibrary, all."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "permissions"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "permissions": {"type": "array", "items": {"type": "string"}},
+                "app_bundle_id": {"type": "string"},
+            },
+        },
+        "handler": tool_pre_grant_permissions,
+    },
+    {
+        "name": "set_appearance",
+        "description": "Toggle the simulator's UI appearance: 'light' or 'dark'.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "appearance"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "appearance": {"type": "string", "enum": ["light", "dark"]},
+            },
+        },
+        "handler": tool_set_appearance,
+    },
+    {
+        "name": "dismiss_sheet",
+        "description": "Dismiss a presented sheet/modal by swiping down (20% → 70% of screen height).",
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {"session_id": {"type": "string"}},
+        },
+        "handler": tool_dismiss_sheet,
+    },
+    {
+        "name": "list_replays",
+        "description": (
+            "List saved replay recordings under SIMDRIVE_HOME/recordings. "
+            "Each entry: name, path, steps, created_at, modified_at, simdrive_version, tags."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_list_replays,
+    },
+    {
+        "name": "validate_replay",
+        "description": (
+            "Structural validation of a recording YAML without executing. Checks "
+            "required fields, step structure, supported actions, screenshot file presence."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {"name": {"type": "string"}},
+        },
+        "handler": tool_validate_replay,
     },
 ]
 
