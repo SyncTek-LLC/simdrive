@@ -11,7 +11,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "0.2.0a1"
+    assert server.__version__ == "0.2.0a2"
 
 
 def test_tool_count_is_thirteen():
@@ -168,42 +168,47 @@ def test_som_find_by_mark_id():
 
 
 def test_resolve_target_xy_coords(monkeypatch, tmp_path):
-    """{x, y} resolves to those literal coords."""
+    """{x, y} resolves to those literal coords; matched_mark is None for raw coords."""
     from simdrive import server, session as ses
     from simdrive.sim import Device
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
     )
-    x, y, via = server._resolve_target_xy(s, {"x": 100, "y": 200})
+    x, y, via, matched = server._resolve_target_xy(s, {"x": 100, "y": 200})
     assert (x, y) == (100, 200)
     assert via == "coords"
+    assert matched is None
 
 
 def test_resolve_target_xy_mark(tmp_path):
     from simdrive import server, session as ses, som
     from simdrive.sim import Device
+    target = som.Mark(id=5, x=100, y=200, w=40, h=20, text="OK", confidence=0.9)
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
-        last_marks=[som.Mark(id=5, x=100, y=200, w=40, h=20, text="OK", confidence=0.9)],
+        last_marks=[target],
     )
-    x, y, via = server._resolve_target_xy(s, {"mark": 5})
+    x, y, via, matched = server._resolve_target_xy(s, {"mark": 5})
     assert (x, y) == (120, 210)  # center of bbox
     assert "mark:5" in via
+    assert matched is target
 
 
 def test_resolve_target_xy_text(tmp_path):
     from simdrive import server, session as ses, som
     from simdrive.sim import Device
+    target = som.Mark(id=2, x=0, y=0, w=200, h=40, text="Don't Allow", confidence=0.95)
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
-        last_marks=[som.Mark(id=2, x=0, y=0, w=200, h=40, text="Don't Allow", confidence=0.95)],
+        last_marks=[target],
     )
-    x, y, via = server._resolve_target_xy(s, {"text": "Don't Allow"})
+    x, y, via, matched = server._resolve_target_xy(s, {"text": "Don't Allow"})
     assert (x, y) == (100, 20)
     assert "text:" in via
+    assert matched is target
 
 
 def test_resolve_target_xy_missing_raises(tmp_path):
@@ -403,3 +408,824 @@ def test_session_append_action_writes_jsonl(tmp_path):
     import json as _j
     assert _j.loads(log[0])["action"] == "tap"
     assert _j.loads(log[1])["action"] == "press_key"
+
+
+# ----------------- v0.2.0a2 dogfood-feedback fixes ----------------- #
+
+
+def test_observe_annotate_false_preserves_last_marks(tmp_path, monkeypatch):
+    """observe(annotate=false) returns marks=[] but must NOT wipe the session's mark cache."""
+    from simdrive import server, session as ses, observe as obs_mod, som
+    from simdrive.sim import Device
+
+    ses._SESSIONS.clear()
+    sid = "preserve"
+    cached_mark = som.Mark(id=1, x=10, y=20, w=80, h=20, text="OK", confidence=0.95)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+        last_marks=[cached_mark],
+    )
+    ses._SESSIONS[sid] = s
+
+    # Stub observe.observe to return an Observation with empty marks.
+    from simdrive.observe import Observation
+    fake_screenshot = tmp_path / "fake.png"
+    from PIL import Image
+    Image.new("RGB", (100, 200), (10, 10, 10)).save(fake_screenshot)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=fake_screenshot,
+            annotated_path=None,
+            screenshot_w=100,
+            screenshot_h=200,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    server.tool_observe({"session_id": sid, "annotate": False})
+
+    # Mark cache must still hold the original — the screen state did update.
+    assert s.last_marks == [cached_mark]
+    assert s.last_screenshot_w == 100
+    assert s.last_screenshot_h == 200
+
+
+def test_recording_includes_stable_id_when_resolved_via_stable_id(tmp_path, monkeypatch):
+    """tool_tap with {stable_id: ...} must record stable_id + text alongside pixel coords."""
+    from simdrive import server, session as ses, recorder as rec_mod, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    target_mark = som.Mark(id=3, x=100, y=200, w=80, h=20, text="Borrow", confidence=0.95)
+    target_sid = target_mark.stable_id
+
+    sid = "rec-stable"
+    pre_path = tmp_path / "pre.png"
+    Image.new("RGB", (1206, 2622), (250, 250, 250)).save(pre_path)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+        last_screenshot_path=pre_path,
+        last_marks=[target_mark],
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+
+    # Stub act.tap so we don't drive a real sim.
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+
+    # Stub the post-step observe (called inside _record_act_step).
+    post_path = tmp_path / "post.png"
+    Image.new("RGB", (1206, 2622), (200, 200, 200)).save(post_path)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=post_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    rec_mod.start(s, "stable-id-recording")
+    server.tool_tap({"session_id": sid, "stable_id": target_sid})
+
+    assert s.recorder is not None
+    last_step = s.recorder.steps[-1]
+    assert last_step["action"] == "tap"
+    args = last_step["args"]
+    assert "x" in args and "y" in args
+    assert args.get("stable_id") == target_sid
+    assert args.get("text") == "Borrow"
+
+
+def _write_replay_recording(rec_dir, step_args):
+    """Helper: write a single-step recording.yaml under rec_dir for replay tests."""
+    import yaml as _yaml
+    from PIL import Image
+    snaps = rec_dir / "snapshots"
+    snaps.mkdir(parents=True, exist_ok=True)
+    pre = snaps / "001_pre.png"
+    post = snaps / "001_post.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(pre)
+    Image.new("RGB", (1206, 2622), (200, 200, 200)).save(post)
+    payload = {
+        "name": rec_dir.name,
+        "created_at": 0.0,
+        "device": "iPhone Test",
+        "os_version": "26.3",
+        "app_bundle_id": None,
+        "steps": [
+            {
+                "id": 1,
+                "action": "tap",
+                "args": step_args,
+                "pre_screenshot": "snapshots/001_pre.png",
+                "post_screenshot": "snapshots/001_post.png",
+                "captured_at": 0.0,
+            }
+        ],
+    }
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
+
+
+def test_replay_prefers_stable_id_with_pixel_fallback(tmp_path, monkeypatch):
+    """Replay re-resolves stable_id against the live observe and taps the live center."""
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    rec_name = "stable-replay"
+    rec_dir = tmp_path / "recordings" / rec_name
+    _write_replay_recording(rec_dir, {
+        "x": 999, "y": 999,
+        "screenshot_w": 1206, "screenshot_h": 2622,
+        "stable_id": "abc",
+        "text": "Borrow",
+    })
+
+    s = ses.Session(
+        session_id="t",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+
+    # Live screenshot for the SSIM compare.
+    live_path = tmp_path / "live.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(live_path)
+
+    # Stub som.find_by_stable_id to return a Mark at (100, 200) center for "abc".
+    fake_mark = som.Mark(id=1, x=80, y=190, w=40, h=20, text="Borrow", confidence=0.95)
+    # Adjust so center is (100, 200): center_x = 80 + 40//2 = 100, center_y = 190 + 20//2 = 200.
+    assert fake_mark.center == (100, 200)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=live_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[fake_mark],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    # Force find_by_stable_id to match "abc" → fake_mark, regardless of hash equality.
+    monkeypatch.setattr(som, "find_by_stable_id",
+                        lambda marks, sid: fake_mark if sid == "abc" else None)
+
+    captured = {}
+
+    def fake_tap(px, py, sw, sh, udid=None):
+        captured["px"] = px
+        captured["py"] = py
+        return px, py
+
+    monkeypatch.setattr(act, "tap", fake_tap)
+
+    result = rec_mod.replay(rec_name, s, on_drift="force")
+    assert result["ok"] is True
+    assert captured == {"px": 100, "py": 200}
+
+
+def test_replay_falls_back_to_pixels_when_stable_id_missing(tmp_path, monkeypatch):
+    """If the live observation lacks the stable_id, replay falls back to recorded pixels."""
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    rec_name = "stable-fallback"
+    rec_dir = tmp_path / "recordings" / rec_name
+    _write_replay_recording(rec_dir, {
+        "x": 999, "y": 999,
+        "screenshot_w": 1206, "screenshot_h": 2622,
+        "stable_id": "abc",
+        "text": "Borrow",
+    })
+
+    s = ses.Session(
+        session_id="t",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+
+    live_path = tmp_path / "live.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(live_path)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=live_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],  # nothing to match against
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    monkeypatch.setattr(som, "find_by_stable_id", lambda marks, sid: None)
+
+    captured = {}
+
+    def fake_tap(px, py, sw, sh, udid=None):
+        captured["px"] = px
+        captured["py"] = py
+        return px, py
+
+    monkeypatch.setattr(act, "tap", fake_tap)
+
+    result = rec_mod.replay(rec_name, s, on_drift="force")
+    assert result["ok"] is True
+    assert captured == {"px": 999, "py": 999}
+
+
+def test_type_text_response_shape(tmp_path, monkeypatch):
+    """type_text returns ok/chars/keyboard_visible/focused_field; tap_first stable_id surfaces as focused_field."""
+    from simdrive import server, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    ses._SESSIONS.clear()
+    sid = "tt-shape"
+
+    target_mark = som.Mark(id=1, x=100, y=200, w=120, h=40, text="Username", confidence=0.95)
+    target_sid = target_mark.stable_id
+
+    pre_path = tmp_path / "pre.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(pre_path)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+        last_screenshot_path=pre_path,
+        last_marks=[target_mark],
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+    monkeypatch.setattr(act, "type_text", lambda text, udid=None: None)
+
+    # Post-type observe returns marks indicating a keyboard: a "return" key plus a single-char
+    # mark in the bottom half of the 2622-tall screenshot.
+    return_mark = som.Mark(id=10, x=900, y=2300, w=80, h=40, text="return", confidence=0.95)
+    a_mark = som.Mark(id=11, x=300, y=2400, w=20, h=40, text="A", confidence=0.95)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=pre_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[return_mark, a_mark],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    result = server.tool_type_text({
+        "session_id": sid,
+        "text": "hi",
+        "tap_first": {"stable_id": target_sid},
+    })
+    assert result["ok"] is True
+    assert result["chars"] == 2
+    assert result["keyboard_visible"] is True
+    assert result["focused_field"] == target_sid
+
+
+def test_type_text_response_no_focus_when_no_tap_first(tmp_path, monkeypatch):
+    """Without tap_first, focused_field is None even if keyboard is visible."""
+    from simdrive import server, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    ses._SESSIONS.clear()
+    sid = "tt-nofocus"
+
+    pre_path = tmp_path / "pre.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(pre_path)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+        last_screenshot_path=pre_path,
+        last_marks=[],
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+
+    monkeypatch.setattr(act, "type_text", lambda text, udid=None: None)
+
+    return_mark = som.Mark(id=10, x=900, y=2300, w=80, h=40, text="return", confidence=0.95)
+    a_mark = som.Mark(id=11, x=300, y=2400, w=20, h=40, text="A", confidence=0.95)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=pre_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[return_mark, a_mark],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    result = server.tool_type_text({"session_id": sid, "text": "hi"})
+    assert result["ok"] is True
+    assert result["chars"] == 2
+    assert result["focused_field"] is None
+
+
+# ----------------- v0.2.0a2 dogfood-feedback round 2 ----------------- #
+
+
+def _make_grayscale_png(path, size, fill=200, top_band_height=0, top_band_fill=50):
+    """Helper: write a grayscale PNG; optional top band differs from the body."""
+    from PIL import Image, ImageDraw
+    im = Image.new("L", size, fill)
+    if top_band_height > 0:
+        draw = ImageDraw.Draw(im)
+        draw.rectangle([0, 0, size[0], top_band_height], fill=top_band_fill)
+    im.save(path)
+
+
+def test_ssim_mask_excludes_status_bar_region(tmp_path):
+    """Two images differing only in a top band: similarity rises with the band masked."""
+    from simdrive import recorder as rec_mod
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.png"
+    # Use a 200px band on a 600-tall image (~33%) at strong contrast so the
+    # bare-SSIM score lands well below 0.85 — matches the real-world regime
+    # where the iOS status-bar area pulls full-screen SSIM into the 0.6s.
+    _make_grayscale_png(a, (320, 600), fill=200, top_band_height=200, top_band_fill=10)
+    _make_grayscale_png(b, (320, 600), fill=200, top_band_height=200, top_band_fill=240)
+
+    bare_ssim = rec_mod._ssim_or_fallback(a, b)
+    masked_ssim = rec_mod._ssim_or_fallback(a, b, masks=[(0, 0, 320, 200)])
+    assert bare_ssim < 0.85
+    assert masked_ssim >= 0.95
+
+    bare_block = rec_mod._block_similarity(a, b)
+    masked_block = rec_mod._block_similarity(a, b, masks=[(0, 0, 320, 200)])
+    assert bare_block < 0.85
+    assert masked_block >= 0.95
+
+
+def test_replay_uses_yaml_ssim_masks_when_caller_doesnt_pass(tmp_path, monkeypatch):
+    """A recording.yaml with ssim_masks set is used when caller passes no mask_regions."""
+    import yaml as _yaml
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    rec_name = "yaml-mask"
+    rec_dir = tmp_path / "recordings" / rec_name
+    snaps = rec_dir / "snapshots"
+    snaps.mkdir(parents=True, exist_ok=True)
+
+    pre = snaps / "001_pre.png"
+    post = snaps / "001_post.png"
+    _make_grayscale_png(pre, (320, 600), fill=200, top_band_height=60, top_band_fill=10)
+    _make_grayscale_png(post, (320, 600), fill=180)
+
+    payload = {
+        "name": rec_name,
+        "created_at": 0.0,
+        "device": "iPhone Test",
+        "os_version": "26.3",
+        "app_bundle_id": None,
+        "ssim_masks": [{"x": 0, "y": 0, "w": 320, "h": 60, "label": "status-bar"}],
+        "steps": [
+            {
+                "id": 1,
+                "action": "tap",
+                "args": {"x": 100, "y": 100, "screenshot_w": 320, "screenshot_h": 600},
+                "pre_screenshot": "snapshots/001_pre.png",
+                "post_screenshot": "snapshots/001_post.png",
+                "captured_at": 0.0,
+            }
+        ],
+    }
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
+
+    s = ses.Session(
+        session_id="t",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+
+    live = tmp_path / "live.png"
+    _make_grayscale_png(live, (320, 600), fill=200, top_band_height=60, top_band_fill=240)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=live,
+            annotated_path=None,
+            screenshot_w=320,
+            screenshot_h=600,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+
+    result = rec_mod.replay(rec_name, s, on_drift="halt", drift_threshold=0.9)
+    assert result["ok"] is True, f"replay halted unexpectedly: {result}"
+    assert result["halt_reason"] is None
+
+
+def test_mark_stable_id_loose_is_coarser_bucket():
+    from simdrive.som import Mark
+    # Centers 30px apart, both falling inside the same 60px loose bucket but
+    # different 20px tight buckets. Centers: m1=(75,75), m2=(105,105).
+    # Tight buckets (cx//20, cy//20): (3,3) vs (5,5) → differ.
+    # Loose buckets (cx//60, cy//60): (1,1) vs (1,1) → match.
+    m1 = Mark(id=1, x=35, y=65, w=80, h=20, text="Borrow", confidence=1.0)
+    m2 = Mark(id=2, x=65, y=95, w=80, h=20, text="Borrow", confidence=1.0)
+    assert m1.center == (75, 75)
+    assert m2.center == (105, 105)
+    assert m1.stable_id != m2.stable_id
+    assert m1.stable_id_loose == m2.stable_id_loose
+
+
+def test_resolve_target_xy_accepts_stable_id_loose(tmp_path):
+    from simdrive import server, session as ses, som
+    from simdrive.sim import Device
+    target = som.Mark(id=5, x=100, y=200, w=40, h=20, text="OK", confidence=0.9)
+    s = ses.Session(
+        session_id="t",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path,
+        last_marks=[target],
+    )
+    x, y, via, matched = server._resolve_target_xy(s, {"stable_id_loose": target.stable_id_loose})
+    assert (x, y) == target.center
+    assert "stable_id_loose" in via
+    assert matched is target
+
+
+def test_replay_falls_back_to_stable_id_loose_when_tight_misses(tmp_path, monkeypatch):
+    """Recording carries stable_id_loose; live observe lacks tight match but has loose."""
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    rec_name = "loose-fallback"
+    rec_dir = tmp_path / "recordings" / rec_name
+    _write_replay_recording(rec_dir, {
+        "x": 999, "y": 999,
+        "screenshot_w": 1206, "screenshot_h": 2622,
+        "stable_id": "tight-miss",
+        "stable_id_loose": "loose-hit",
+        "text": "Borrow",
+    })
+
+    s = ses.Session(
+        session_id="t",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+
+    live_path = tmp_path / "live.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(live_path)
+
+    fake_mark = som.Mark(id=1, x=80, y=190, w=40, h=20, text="Borrow", confidence=0.95)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=live_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[fake_mark],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    monkeypatch.setattr(som, "find_by_stable_id", lambda marks, sid: None)
+    monkeypatch.setattr(som, "find_by_stable_id_loose",
+                        lambda marks, sid: fake_mark if sid == "loose-hit" else None)
+
+    captured = {}
+
+    def fake_tap(px, py, sw, sh, udid=None):
+        captured["px"] = px
+        captured["py"] = py
+        return px, py
+
+    monkeypatch.setattr(act, "tap", fake_tap)
+
+    result = rec_mod.replay(rec_name, s, on_drift="force")
+    assert result["ok"] is True
+    assert captured == {"px": 100, "py": 200}
+
+
+def test_tap_response_includes_step_id_when_recording(tmp_path, monkeypatch):
+    from simdrive import server, session as ses, recorder as rec_mod, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    target_mark = som.Mark(id=3, x=100, y=200, w=80, h=20, text="OK", confidence=0.95)
+    sid = "rec-step-id"
+    pre_path = tmp_path / "pre.png"
+    Image.new("RGB", (1206, 2622), (250, 250, 250)).save(pre_path)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+        last_screenshot_path=pre_path,
+        last_marks=[target_mark],
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+    post_path = tmp_path / "post.png"
+    Image.new("RGB", (1206, 2622), (200, 200, 200)).save(post_path)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=post_path,
+            annotated_path=None,
+            screenshot_w=1206,
+            screenshot_h=2622,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    rec_mod.start(s, "step-id-rec")
+    res1 = server.tool_tap({"session_id": sid, "stable_id": target_mark.stable_id})
+    assert res1["step_id"] == 1
+    res2 = server.tool_tap({"session_id": sid, "stable_id": target_mark.stable_id})
+    assert res2["step_id"] == 2
+
+    # Without recorder, no step_id key.
+    rec_mod.stop(s)
+    res3 = server.tool_tap({"session_id": sid, "stable_id": target_mark.stable_id})
+    assert "step_id" not in res3
+
+
+def test_list_devices_emits_hid_supported_and_note(monkeypatch):
+    from simdrive import server
+    from simdrive import device as dev_mod
+
+    fake_dev = dev_mod.RealDevice(
+        udid="UDID-1234",
+        name="iPhone QA",
+        model="iPhone 17 Pro",
+        transport="wired",
+        state="available",
+    )
+    monkeypatch.setattr(dev_mod, "list_devices", lambda: [fake_dev])
+    monkeypatch.setattr(dev_mod, "libimobiledevice_available", lambda: (True, []))
+
+    result = server.tool_list_devices({})
+    assert result["ok"] is True
+    assert "hid_note" in result and "WDA" in result["hid_note"]
+    assert len(result["devices"]) == 1
+    d = result["devices"][0]
+    assert d["hid_supported"] is False
+    assert d["udid"] == "UDID-1234"
+
+
+def test_recording_metadata_includes_version_and_session(tmp_path, monkeypatch):
+    """Round-trip a recording; simdrive_version, created_by_session, tags must be present."""
+    import yaml
+    from simdrive import recorder, session as ses
+    from simdrive.sim import Device
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    fake_session = ses.Session(
+        session_id="meta-sid",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+    )
+    fake_session.workdir.mkdir(parents=True, exist_ok=True)
+
+    pre = tmp_path / "pre.png"
+    post = tmp_path / "post.png"
+    Image.new("RGB", (10, 10), (255, 0, 0)).save(pre)
+    Image.new("RGB", (10, 10), (0, 255, 0)).save(post)
+
+    rec = recorder.start(fake_session, "meta-recording")
+    rec.add_step("tap", {"x": 1, "y": 2, "screenshot_w": 1206, "screenshot_h": 2622}, pre, post)
+    yaml_path = recorder.stop(fake_session)
+
+    payload = yaml.safe_load(yaml_path.read_text())
+    from simdrive import __version__
+    assert payload["simdrive_version"] == __version__
+    assert payload["created_by_session"] == "meta-sid"
+    assert payload["tags"] == []
+    assert payload["screenshot_size_pixels"] == [1206, 2622]
+
+
+def test_recording_accepts_tags(tmp_path, monkeypatch):
+    import yaml
+    from simdrive import recorder, session as ses
+    from simdrive.sim import Device
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    fake_session = ses.Session(
+        session_id="tags-sid",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+    )
+    fake_session.workdir.mkdir(parents=True, exist_ok=True)
+
+    pre = tmp_path / "pre.png"
+    post = tmp_path / "post.png"
+    Image.new("RGB", (10, 10), (255, 0, 0)).save(pre)
+    Image.new("RGB", (10, 10), (0, 255, 0)).save(post)
+
+    rec = recorder.start(fake_session, "tagged-recording", tags=["foo", "bar"])
+    rec.add_step("tap", {"x": 1, "y": 2, "screenshot_w": 100, "screenshot_h": 100}, pre, post)
+    yaml_path = recorder.stop(fake_session)
+
+    payload = yaml.safe_load(yaml_path.read_text())
+    assert payload["tags"] == ["foo", "bar"]
+
+
+def test_replay_response_includes_halt_reason_threshold_steps_planned(tmp_path, monkeypatch):
+    """A 3-step recording where step 2 drifts: response must carry halt context."""
+    import yaml as _yaml
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    ses._SESSIONS.clear()
+
+    rec_name = "halt-context"
+    rec_dir = tmp_path / "recordings" / rec_name
+    snaps = rec_dir / "snapshots"
+    snaps.mkdir(parents=True, exist_ok=True)
+
+    # Step 1 + 3 pre snapshots match the live screen; step 2's pre snapshot is wildly different.
+    same_a = snaps / "001_pre.png"
+    same_b = snaps / "001_post.png"
+    drift_a = snaps / "002_pre.png"
+    drift_b = snaps / "002_post.png"
+    same_c = snaps / "003_pre.png"
+    same_d = snaps / "003_post.png"
+    Image.new("RGB", (320, 600), (200, 200, 200)).save(same_a)
+    Image.new("RGB", (320, 600), (200, 200, 200)).save(same_b)
+    Image.new("RGB", (320, 600), (10, 10, 10)).save(drift_a)
+    Image.new("RGB", (320, 600), (10, 10, 10)).save(drift_b)
+    Image.new("RGB", (320, 600), (200, 200, 200)).save(same_c)
+    Image.new("RGB", (320, 600), (200, 200, 200)).save(same_d)
+
+    def step(idx):
+        return {
+            "id": idx,
+            "action": "tap",
+            "args": {"x": 1, "y": 2, "screenshot_w": 320, "screenshot_h": 600},
+            "pre_screenshot": f"snapshots/{idx:03d}_pre.png",
+            "post_screenshot": f"snapshots/{idx:03d}_post.png",
+            "captured_at": 0.0,
+        }
+
+    payload = {
+        "name": rec_name,
+        "created_at": 0.0,
+        "device": "iPhone Test",
+        "os_version": "26.3",
+        "app_bundle_id": None,
+        "steps": [step(1), step(2), step(3)],
+    }
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
+
+    s = ses.Session(
+        session_id="t",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+
+    live = tmp_path / "live.png"
+    Image.new("RGB", (320, 600), (200, 200, 200)).save(live)
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=live,
+            annotated_path=None,
+            screenshot_w=320,
+            screenshot_h=600,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+
+    threshold = 0.85
+    result = rec_mod.replay(rec_name, s, on_drift="halt", drift_threshold=threshold)
+    assert result["ok"] is False
+    assert result["halt_reason"] == "drift"
+    assert result["threshold"] == threshold
+    assert result["steps_planned"] == 3
+    assert result["halted_at"] == 2
+
+
+def _cli_subprocess_env():
+    """Make `python -m simdrive.server` resolvable when running from a source checkout."""
+    import os
+    import simdrive
+    pkg_root = Path(simdrive.__file__).resolve().parent.parent  # .../src
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(pkg_root) + (os.pathsep + existing if existing else "")
+    return env
+
+
+def test_simdrive_cli_version_flag():
+    import subprocess
+    import sys
+    from simdrive import __version__
+    res = subprocess.run(
+        [sys.executable, "-m", "simdrive.server", "--version"],
+        capture_output=True, text=True, timeout=10.0,
+        env=_cli_subprocess_env(),
+    )
+    assert res.returncode == 0, f"stdout={res.stdout!r} stderr={res.stderr!r}"
+    assert res.stdout.startswith("simdrive ")
+    assert __version__ in res.stdout
+
+
+def test_simdrive_cli_help_flag():
+    import subprocess
+    import sys
+    res = subprocess.run(
+        [sys.executable, "-m", "simdrive.server", "--help"],
+        capture_output=True, text=True, timeout=10.0,
+        env=_cli_subprocess_env(),
+    )
+    assert res.returncode == 0, f"stdout={res.stdout!r} stderr={res.stderr!r}"
+    assert "MCP server" in res.stdout
