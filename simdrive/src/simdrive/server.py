@@ -431,6 +431,8 @@ def tool_list_devices(arguments: dict) -> dict:
                 "transport": d.transport,
                 "state": d.state,
                 "hid_supported": False,
+                "last_seen": d.last_seen,
+                "unavailable_reason": d.unavailable_reason,
             })
     except device.DeviceError as exc:
         err = {"code": "discovery_failed", "message": str(exc)}
