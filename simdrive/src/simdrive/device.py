@@ -27,6 +27,8 @@ class RealDevice:
     model: str
     transport: Optional[str]  # "wired" | "localNetwork" | None
     state: str  # "available" | "unavailable"
+    last_seen: Optional[str] = None  # ISO-8601 from devicectl lastConnectionDate
+    unavailable_reason: Optional[str] = None  # human reason when state="unavailable"
 
     @property
     def is_available(self) -> bool:
@@ -91,14 +93,38 @@ def list_devices() -> list[RealDevice]:
         hw = d.get("hardwareProperties", {}) or {}
         dp = d.get("deviceProperties", {}) or {}
         cp = d.get("connectionProperties", {}) or {}
+        transport = cp.get("transportType")
+        state = "available" if transport else "unavailable"
         out.append(RealDevice(
             udid=hw.get("udid", ""),
             name=dp.get("name", "<unknown>"),
             model=hw.get("marketingName") or hw.get("productType") or "<unknown>",
-            transport=cp.get("transportType"),
-            state="available" if d.get("connectionProperties", {}).get("transportType") else "unavailable",
+            transport=transport,
+            state=state,
+            last_seen=cp.get("lastConnectionDate"),
+            unavailable_reason=_unavailable_reason(state, cp, dp),
         ))
     return out
+
+
+def _unavailable_reason(state: str, cp: dict, dp: dict) -> Optional[str]:
+    """Compose a one-line reason from devicectl JSON when state='unavailable'.
+
+    devicectl JSON has no single 'reason' field; the diagnosis lives across
+    pairingState, tunnelState, transportType, developerModeStatus.
+    """
+    if state == "available":
+        return None
+    parts: list[str] = []
+    if cp.get("pairingState") == "unpaired":
+        parts.append("not paired")
+    if cp.get("tunnelState") == "disconnected":
+        parts.append("tunnel disconnected")
+    if not cp.get("transportType"):
+        parts.append("no transport")
+    if dp.get("developerModeStatus") == "disabled":
+        parts.append("developer mode disabled")
+    return "; ".join(parts) if parts else "device offline"
 
 
 def find_device(udid: str) -> Optional[RealDevice]:

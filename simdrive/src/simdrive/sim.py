@@ -8,6 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 class SimError(RuntimeError):
@@ -46,6 +47,52 @@ def list_devices() -> list[Device]:
                 continue
             out.append(Device(udid=d["udid"], name=d["name"], os_version=os_version, state=d.get("state", "")))
     return out
+
+
+def get_app_version(udid: str, bundle_id: str) -> Optional[str]:
+    """Return the installed app's CFBundleShortVersionString (or CFBundleVersion fallback).
+
+    Returns None if the bundle is not installed or simctl listapps can't be parsed.
+    Used by recorder.finalize() to stamp the recording with the app's version
+    so a stale replay against a newer build is diagnosable.
+    """
+    res = _simctl("listapps", udid, timeout=15.0)
+    if res.returncode != 0:
+        return None
+    body = res.stdout or ""
+    if not body.strip():
+        return None
+    data = _parse_listapps(body)
+    info = data.get(bundle_id) if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return None
+    return info.get("CFBundleShortVersionString") or info.get("CFBundleVersion")
+
+
+def _parse_listapps(body: str) -> dict:
+    """Parse simctl listapps output. It's OpenStep ASCII plist on Xcode 16+;
+    plistlib can't read that format, so route through `plutil -convert json`.
+    """
+    import plistlib
+    try:
+        return plistlib.loads(body.encode("utf-8"))
+    except Exception:
+        pass
+    try:
+        return json.loads(body)
+    except Exception:
+        pass
+    try:
+        conv = subprocess.run(
+            ["plutil", "-convert", "json", "-o", "-", "-"],
+            input=body, capture_output=True, text=True,
+            timeout=10.0, check=False,
+        )
+        if conv.returncode == 0 and conv.stdout.strip():
+            return json.loads(conv.stdout)
+    except Exception:
+        pass
+    return {}
 
 
 def find_device(name: str | None = None, os_version: str | None = None, udid: str | None = None) -> Device | None:

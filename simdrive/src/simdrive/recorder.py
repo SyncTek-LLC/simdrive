@@ -70,12 +70,19 @@ class Recorder:
         screenshot_size: Optional[list[int]] = None
         if self.session.last_screenshot_w and self.session.last_screenshot_h:
             screenshot_size = [self.session.last_screenshot_w, self.session.last_screenshot_h]
+        app_version: Optional[str] = None
+        if self.session.target == "simulator" and self.session.app_bundle_id:
+            try:
+                app_version = sim.get_app_version(self.session.device.udid, self.session.app_bundle_id)
+            except Exception:
+                app_version = None
         payload = {
             "name": self.name,
             "created_at": self.started_at,
             "device": self.session.device.name,
             "os_version": self.session.device.os_version,
             "app_bundle_id": self.session.app_bundle_id,
+            "app_version": app_version,
             "simdrive_version": __version__,
             "created_by_session": self.session.session_id,
             "screenshot_size_pixels": screenshot_size,
