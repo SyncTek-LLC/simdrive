@@ -21,7 +21,7 @@ from setuptools.command.build_py import build_py
 
 HERE = Path(__file__).parent
 NATIVE_DIR = HERE / "native"
-BINARY_PATH = HERE / "src" / "simdrive" / "_bin" / "simdrive-input"
+BINARY_PATH = HERE / "src" / "specterqa_ios" / "_bin" / "simdrive-input"
 
 
 class BuildPyWithNative(build_py):

@@ -42,7 +42,7 @@ The chairman's $5K-MRR-by-July target is **not realistic for simdrive standalone
 | API stability | 3/5 | No deprecation policy in writing. Two soft-breaks shipped post-0.1 (Session dataclass, type_text response shape). 1.0 needs `STABILITY.md`. |
 | Error UX | 4/5 | Structured `SimdriveError` codes, recovery instructions in messages. Minor: a few paths still bubble through the catch-all `internal` envelope. |
 | Documentation | 2/5 | **README still says "12 tools"** (`README.md:43`). CHANGELOG is current and detailed; `docs/` has 3 short docs. Missing: cookbook, examples, schema reference auto-generated from `_TOOLS`. |
-| Install ergonomics | 4/5 | One-line `pip install simdrive` ships universal2 native binary inline. CLI `--version`/`--help` shipped in 0.2.0a2. |
+| Install ergonomics | 4/5 | One-line `pip install specterqa-ios` ships universal2 native binary inline. CLI `--version`/`--help` shipped in 0.2.0a2. |
 | Test coverage | 4/5 | 91 unit + 26 live = 117 tests. No CI matrix (Xcode/macOS versions). |
 | Observability | 3/5 | Sidecar JSONs per observation, `actions.jsonl` per session, `_simdrive_warning` for version drift. Missing: structured logging, debug-mode env var, telemetry hook. |
 | Backwards compat | 2/5 | No SemVer guarantee. Required for 1.0. |
@@ -85,18 +85,18 @@ The chairman's $5K-MRR-by-July target is **not realistic for simdrive standalone
 ## 5. Brand identity
 
 ### Name
-**Lock "simdrive."** Memorability 8/10, pronunciation 10/10, two morphemes both load-bearing (sim = simulator + simulation; drive = pilot/operate). Honest weakness: collides with racing-rig hardware in SEO. Mitigate by always pairing the wordmark with iOS/MCP context. Procure `.io` and `.dev` domains before public launch.
+**Public brand: SpecterQA. Internal codename: simdrive.** SpecterQA is the public-facing name (PyPI, README, MCP listings, marketing); simdrive lives on as the internal codename — used in the binary filename, in dev branches, in commit history, and as the legacy console-script alias. Honest weakness on the public name: SEO competes with the broader QA-tools category; mitigate by always pairing the wordmark with iOS/MCP context. Domain: `synctek.io` is canonical; optional `simdrive.io` registration only.
 
 ### Tagline
 **"Hand your iOS simulator to your agent."** (already in use — keep)
 
 ### Logo system — Direction A "Pixel pin"
-A 4×4 pixel grid (the screenshot the agent sees), thin black crosshairs through one cell, a vivid red tap-pin (#FF3D2E) at the intersection. The mark literally depicts the mechanic — agent picked that pixel; simdrive taps it. Wordmark in geometric monospace, weight-600 `sim` + weight-400 `drive`. Source files in `simdrive/docs/brand/`:
+A 4×4 pixel grid (the screenshot the agent sees), thin black crosshairs through one cell, a vivid red tap-pin (#FF3D2E) at the intersection. The mark literally depicts the mechanic — agent picked that pixel; SpecterQA taps it. Wordmark in geometric monospace, weight-600 `Specter` + weight-400 `QA`. Source files in `simdrive/docs/brand/`:
 
 - `logo-primary.svg` (1200×320) — README hero, PyPI listing, MCP-registry submission
 - `logo-mark-only.svg` (200×200) — app icon, social avatar
 - `favicon.svg` (32×32) — browser tab, ≤32px contexts
-- `wordmark-bracket.svg` — typographic fallback (`[simdrive_]`) for CLI banners
+- `wordmark-bracket.svg` — typographic fallback (`[specterqa_]`) for CLI banners
 
 ### Voice (5 rules, codified from the existing CHANGELOG)
 1. **State the change, then the why, in that order.** Don't lead with motivation.
@@ -140,22 +140,25 @@ The **training-corpus channel** is the most under-rated. It's slow but the only 
 
 Today: ~15 minutes for an unprepared developer. Target: **under 5 minutes.** Two friction reductions:
 
-- `simdrive doctor` already exists; surface it in README with a one-liner: *"Don't have Xcode? `xcode-select --install` + open Simulator.app once."* Add a 30-second loom-style GIF as README hero.
+- `specterqa-ios doctor` already exists; surface it in README with a one-liner: *"Don't have Xcode? `xcode-select --install` + open Simulator.app once."* Add a 30-second loom-style GIF as README hero. (Install: `pip install specterqa-ios`.)
 - Make `session_start({})` (no args) auto-pick the first booted sim and return `device: iPhone 17 Pro, ready`. Document the zero-config path.
 
 ---
 
-## 7. SpecterQA → simdrive cutover plan
+## 7. SpecterQA cutover
 
-Example Reader is already migrated. No paying customers on `specterqa-ios`. **Use PEP 440 deprecation + replacement-redirect, not yank** — yanking breaks reproducible historical builds.
+**Decision (Chairman, 2026-05-01): SpecterQA is the public brand.** The iOS-arm PyPI rename is `simdrive` → `specterqa-ios`. The new code that was shipping as `simdrive 0.3.0a3` is now published as `specterqa-ios 17.0.0a1`, continuing the legacy `specterqa-ios` major-version line directly over the abandoned 16.x branch. simdrive lives on as the internal codename — used in the binary filename (`simdrive-input`), in dev branches, in commit history, and as the legacy console-script alias for back-compat.
+
+**No yank, no soft sunset of the historical 54 releases.** The original `specterqa-ios` package (releases through 16.0.0a3) stays on PyPI — historical pins continue to resolve. New publishes from this repo go to the same `specterqa-ios` namespace at version 17.0.0a1+ — pip's resolver picks the new code naturally for unpinned installs.
 
 | Date | Action |
 |---|---|
-| 2026-05-03 | Ship `specterqa-ios` 15.2.1 with: README banner pointing to simdrive, `DeprecationWarning` on import, PyPI long-description redirect on line 1. |
-| 2026-05-05 | Publish `MIGRATION_FROM_SPECTERQA.md` in simdrive repo. Key API diffs: Session dataclass, recording YAML incompatible, HTTP daemon gone, `tap` accepts `{stable_id\|mark\|text\|x,y}` instead of selectors. |
-| 2026-05-15 | Stop alpha cuts on `specterqa-ios`. Final 16.0.0 ships as deprecation marker only — README + classifier `Development Status :: 7 - Inactive` + explicit `pip install simdrive` redirect. |
-| 2026-07-31 | Last security-fix window closes. Package stays on PyPI (no yank) so historical pins resolve. |
-| 2026-05-03 | One-time pinned issue + GitHub Discussion announcing migration on the legacy repo. |
+| 2026-05-01 | Ship `specterqa-ios 17.0.0a1` to PyPI (the renamed `simdrive 0.3.0a3` codebase, no behavioral changes). |
+| 2026-05-01 | Ship `simdrive 0.3.0a4` deprecation stub: depends on `specterqa-ios>=17.0.0a1`, prints a one-line migration notice on import. So `pip install simdrive` keeps resolving and points users at the new package. |
+| 2026-05-05 | Update README banner + repo description pointing to `specterqa-ios`. Pin a migration issue on the repo. |
+| 2026-05-15 | Last `simdrive` deprecation-stub release. From here forward, all releases ship under `specterqa-ios` only. |
+
+The legacy 16.x `specterqa-ios` line (the abandoned XCTest-based codebase under `src/specterqa/` at the repo root) is being retired in a separate follow-up commit — the new code being published as `specterqa-ios 17.0.0a1` is a complete rewrite, no migration tooling needed for users (none exist on the old code).
 
 ---
 
@@ -228,9 +231,9 @@ These three calls require chairman direction. They reach beyond Atlas's scope.
 
 | # | Decision | Recommendation | Why it needs chairman |
 |---|---|---|---|
-| 1 | **Re-cast GOAL-2026-006 ($5K MRR by July) as a portfolio target** rather than a simdrive-standalone target. | Yes. simdrive's role through July is distribution (installs + design-partner LOIs). The proprietary closed-source iOS layer + other revenue lines carry the dollar number. | Changes a chairman directive; Atlas can't unilaterally redefine the goal. |
+| 1 | **Re-cast GOAL-2026-006 ($5K MRR by July) as a portfolio target** rather than a SpecterQA-iOS-standalone target. | Yes. SpecterQA for iOS's role through July is distribution (installs + design-partner LOIs). The proprietary closed-source iOS layer + other revenue lines carry the dollar number. | Changes a chairman directive; Atlas can't unilaterally redefine the goal. |
 | 2 | **1.0 timeline: sim-only in 2 weeks (recommended) or include WDA real-device for ~5 weeks.** | Sim-only at 2 weeks. WDA in 1.1. | Affects positioning and the launch-date commitment. |
-| 3 | **Procure `simdrive.io` and `simdrive.dev` domains before public launch.** | Yes. Budget cap: $TBD. | Spending decision. |
+| ~~3~~ | ~~Procure `simdrive.io` and `simdrive.dev` domains before public launch.~~ | **Resolved 2026-05-01:** `synctek.io` is canonical; optional `simdrive.io` registration only. | — |
 
 ---
 

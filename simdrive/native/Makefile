@@ -1,4 +1,4 @@
-BIN = ../src/simdrive/_bin/simdrive-input
+BIN = ../src/specterqa_ios/_bin/simdrive-input
 SRC = src/simdrive_input.m
 
 XCODE_DEV = /Applications/Xcode.app/Contents/Developer
