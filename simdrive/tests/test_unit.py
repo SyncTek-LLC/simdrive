@@ -11,12 +11,12 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "0.3.0a2"
+    assert server.__version__ == "0.3.0a3"
 
 
-def test_tool_count_is_twenty_seven():
+def test_tool_count_is_twenty_nine():
     tools = server.list_tools()
-    assert len(tools) == 27, f"expected 27 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 29, f"expected 29 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -31,6 +31,8 @@ def test_tool_names_match_spec():
         "doctor", "app_state", "apps", "crashes",
         "dismiss_first_launch_alerts", "pre_grant_permissions",
         "set_appearance", "dismiss_sheet", "list_replays", "validate_replay",
+        # v0.3.0a3 dogfood fixes
+        "version", "clear_field",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
@@ -1939,3 +1941,195 @@ def test_recording_app_version_none_when_unavailable(tmp_path, monkeypatch):
 
     payload = _yaml.safe_load(yaml_path.read_text())
     assert payload["app_version"] is None
+
+
+# ───────────────── v0.3.0a3 dogfood-feedback round ────────────────── #
+
+
+def _make_session(tmp_path, sid: str, marks=None):
+    """Helper for the v0.3.0a3 tests — minimal Session with a fake screenshot."""
+    from simdrive import session as ses
+    from simdrive.sim import Device
+    from PIL import Image
+
+    ses._SESSIONS.clear()
+    pre_path = tmp_path / f"pre-{sid}.png"
+    Image.new("RGB", (1206, 2622), (240, 240, 240)).save(pre_path)
+    s = ses.Session(
+        session_id=sid,
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / f"wd-{sid}",
+        last_screenshot_w=1206,
+        last_screenshot_h=2622,
+        last_screenshot_path=pre_path,
+        last_marks=list(marks or []),
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    ses._SESSIONS[sid] = s
+    return s, pre_path
+
+
+def test_type_text_response_includes_injection_method_and_dispatch_succeeded(tmp_path, monkeypatch):
+    """v0.3.0a3 — type_text response surfaces injection_method + dispatch_succeeded."""
+    from simdrive import server, act, observe as obs_mod, som
+    from simdrive.observe import Observation
+
+    target_mark = som.Mark(id=1, x=100, y=200, w=120, h=40, text="Username", confidence=0.95)
+    target_sid = target_mark.stable_id
+    s, pre_path = _make_session(tmp_path, "tt-injmethod", marks=[target_mark])
+
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+    monkeypatch.setattr(act, "type_text", lambda text, udid=None: None)
+    monkeypatch.setattr(act, "_backend", lambda: "hid")
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=pre_path, annotated_path=None,
+            screenshot_w=1206, screenshot_h=2622,
+            window_bounds=None, captured_at=0.0, marks=[],
+        )
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    result = server.tool_type_text({
+        "session_id": "tt-injmethod",
+        "text": "hello",
+        "tap_first": {"stable_id": target_sid},
+    })
+    assert result["injection_method"] == "hid"
+    assert result["dispatch_succeeded"] is True
+    # Legacy fields still present for the cliclick-path debug.
+    assert "keyboard_visible" in result
+    assert "focused_field" in result
+
+
+def test_mark_confidence_band_high_for_real_english():
+    """A clean OCR of real English text at high confidence stays high-band."""
+    from simdrive.som import Mark
+    m = Mark(id=1, x=0, y=0, w=10, h=10, text="The Dance Partner", confidence=0.95)
+    assert m.confidence_band == "high"
+    assert m.confidence == 0.95
+    assert m.raw_confidence == 0.95
+
+
+def test_mark_confidence_band_low_for_misread_gibberish():
+    """Stylized cover-art OCR misread at high engine confidence gets clamped."""
+    from simdrive.som import Mark
+    m = Mark(id=1, x=0, y=0, w=10, h=10, text="Sary of the Canadan liothest", confidence=1.0)
+    assert m.confidence_band == "low"
+    assert m.confidence <= 0.3
+    assert m.raw_confidence == 1.0
+
+
+def test_mark_confidence_band_handles_short_tokens():
+    """Short tokens always pass dictionary check — 'OK' should be high."""
+    from simdrive.som import Mark
+    m = Mark(id=1, x=0, y=0, w=10, h=10, text="OK", confidence=0.95)
+    assert m.confidence_band == "high"
+
+
+def test_version_tool_returns_loaded_and_disk():
+    """tool_version returns the four expected fields."""
+    from simdrive import server
+    result = server.tool_version({})
+    assert result["version"] == server.__version__
+    assert "loaded_at" in result
+    assert "disk_version" in result
+    assert "drift" in result
+
+
+def test_call_tool_emits_warning_on_version_drift(monkeypatch):
+    """When _check_version_drift returns a string, dispatcher injects it."""
+    from simdrive import server
+    server.session._SESSIONS.clear() if hasattr(server, "session") else None
+    monkeypatch.setattr(server, "_check_version_drift", lambda: "drift detected: 0.3.0a2 vs 0.3.0a3")
+    result = server.call_tool("version", {})
+    assert result["_simdrive_warning"] == "drift detected: 0.3.0a2 vs 0.3.0a3"
+
+
+def test_call_tool_no_warning_when_versions_match(monkeypatch):
+    """Default path: loaded == disk, no warning surfaces."""
+    from simdrive import server
+    monkeypatch.setattr(server, "_check_version_drift", lambda: None)
+    result = server.call_tool("version", {})
+    assert "_simdrive_warning" not in result
+
+
+def test_clear_field_tool_sends_cmd_a_and_delete(tmp_path, monkeypatch):
+    """clear_field tool dispatches Cmd-A then delete via HID."""
+    from simdrive import server, act, hid_inject
+
+    s, _ = _make_session(tmp_path, "clearfield-1")
+    chord_calls: list[tuple] = []
+    press_calls: list[tuple] = []
+    monkeypatch.setattr(hid_inject, "chord", lambda udid, m, k: chord_calls.append((udid, m, k)))
+    monkeypatch.setattr(act, "press_key", lambda key, udid=None: press_calls.append((key, udid)))
+
+    result = server.tool_clear_field({"session_id": "clearfield-1"})
+    assert result["ok"] is True
+    assert result["cleared"] is True
+    assert chord_calls == [("X", "cmd", "a")]
+    assert press_calls == [("delete", "X")]
+
+
+def test_type_text_clear_first_sends_cmd_a_delete_before_typing(tmp_path, monkeypatch):
+    """clear_first=True orders chord(cmd,a) → press_key(delete) → type_text(text)."""
+    from simdrive import server, act, hid_inject, observe as obs_mod, som
+    from simdrive.observe import Observation
+
+    target_mark = som.Mark(id=1, x=100, y=200, w=120, h=40, text="Search", confidence=0.95)
+    target_sid = target_mark.stable_id
+    s, pre_path = _make_session(tmp_path, "tt-clearfirst", marks=[target_mark])
+
+    call_order: list[str] = []
+    monkeypatch.setattr(act, "tap", lambda x, y, sw, sh, udid=None: (x, y))
+    monkeypatch.setattr(hid_inject, "chord",
+                        lambda udid, m, k: call_order.append(f"chord:{m},{k}"))
+    monkeypatch.setattr(act, "press_key",
+                        lambda key, udid=None: call_order.append(f"press_key:{key}"))
+    monkeypatch.setattr(act, "type_text",
+                        lambda text, udid=None: call_order.append(f"type_text:{text}"))
+    monkeypatch.setattr(act, "_backend", lambda: "hid")
+
+    def fake_observe(udid, out_dir, **kwargs):
+        return Observation(
+            screenshot_path=pre_path, annotated_path=None,
+            screenshot_w=1206, screenshot_h=2622,
+            window_bounds=None, captured_at=0.0, marks=[],
+        )
+    monkeypatch.setattr(obs_mod, "observe", fake_observe)
+
+    server.tool_type_text({
+        "session_id": "tt-clearfirst",
+        "text": "new",
+        "tap_first": {"stable_id": target_sid},
+        "clear_first": True,
+    })
+    # chord and delete must fire BEFORE type_text("new").
+    chord_idx = call_order.index("chord:cmd,a")
+    delete_idx = call_order.index("press_key:delete")
+    type_idx = call_order.index("type_text:new")
+    assert chord_idx < delete_idx < type_idx
+
+
+def test_find_by_text_resolves_search_via_icon_alias():
+    """find_by_text(marks, 'search') resolves to a mark whose text is 'Q/'."""
+    from simdrive.som import Mark, find_by_text
+    glyph_mark = Mark(id=1, x=10, y=10, w=20, h=20, text="Q/", confidence=0.6)
+    other = Mark(id=2, x=100, y=100, w=50, h=20, text="Library", confidence=0.95)
+    found = find_by_text([glyph_mark, other], "search")
+    assert found is glyph_mark
+
+
+def test_find_by_text_back_alias():
+    """'<' OCR resolves to find_by_text query 'back'."""
+    from simdrive.som import Mark, find_by_text
+    chevron = Mark(id=1, x=10, y=10, w=20, h=20, text="<", confidence=0.7)
+    found = find_by_text([chevron], "back")
+    assert found is chevron
+
+
+def test_find_by_text_returns_none_when_neither_exact_nor_alias_matches():
+    """No exact/prefix/substring AND no alias hit → None."""
+    from simdrive.som import Mark, find_by_text
+    other = Mark(id=1, x=10, y=10, w=20, h=20, text="Foo", confidence=0.7)
+    assert find_by_text([other], "search") is None
