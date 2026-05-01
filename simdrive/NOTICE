@@ -1,0 +1,26 @@
+SpecterQA (PyPI: specterqa-ios)
+Copyright 2026 SyncTek LLC
+
+Licensed under the MIT License (see LICENSE).
+
+This product incorporates code derived from third-party MIT-licensed sources:
+
+  Facebook idb — FBSimulatorIndigoHID
+  https://github.com/facebook/idb
+  Copyright (c) Meta Platforms, Inc. and affiliates.
+  Licensed under the MIT License.
+
+  Files derived from or referencing idb:
+    - simdrive/native/src/Indigo.h
+    - simdrive/native/src/FBSimulatorIndigoHID.h
+    - simdrive/native/src/simdrive_input.m  (Indigo touch wire format,
+                                              reduced to the minimum needed)
+
+The Indigo touch-message wire format is reverse-engineered from
+CoreSimulator's private SimDeviceLegacyHIDClient SPI; the implementation in
+simdrive_input.m is derived from idb's FBSimulatorIndigoHID.m, kept under
+the original MIT license terms.
+
+No other third-party code is bundled. The bundled native helper binary
+(specterqa_ios/_bin/simdrive-input) is built from these sources at package
+build time.
