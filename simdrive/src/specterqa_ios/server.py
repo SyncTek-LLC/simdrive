@@ -1,6 +1,6 @@
-"""simdrive MCP server.
+"""SpecterQA for iOS MCP server. (Internal codename: simdrive.)
 
-Exposes 12 tools to any MCP-compatible host (Claude, Cline, etc.):
+Exposes the MCP tool surface to any compatible host (Claude, Cline, etc.):
 
   Lifecycle:  session_start, session_end, session_status
   Observe:    observe
@@ -9,14 +9,16 @@ Exposes 12 tools to any MCP-compatible host (Claude, Cline, etc.):
   Utility:    logs
 
 Run:
+    specterqa-ios
+    # or (legacy alias, still works)
     simdrive
     # or
-    python -m simdrive.server
+    python -m specterqa_ios.server
 
 Add to .mcp.json:
     {
       "mcpServers": {
-        "simdrive": { "command": "simdrive" }
+        "specterqa-ios": { "command": "specterqa-ios" }
       }
     }
 """
@@ -61,7 +63,7 @@ def _disk_version() -> str | None:
         return _DISK_VERSION_CACHE["version"]  # type: ignore[return-value]
     try:
         import importlib.metadata as _md
-        v = _md.version("simdrive")
+        v = _md.version("specterqa-ios")
     except Exception:
         v = None
     _DISK_VERSION_CACHE["version"] = v
@@ -1338,11 +1340,13 @@ async def _serve_async() -> None:
 
 
 _HELP_TEXT = """\
-simdrive — iOS sim driver MCP server.
+specterqa-ios — SpecterQA for iOS MCP server. (codename: simdrive)
 
-Usage: simdrive (no args)  Run as MCP server on stdio.
-       simdrive --version
-       simdrive --help
+Usage: specterqa-ios (no args)  Run as MCP server on stdio.
+       specterqa-ios --version
+       specterqa-ios --help
+
+Aliases: `simdrive` and `simdrive-mcp` invoke the same server.
 """
 
 
@@ -1353,7 +1357,7 @@ def serve() -> None:
     if args:
         flag = args[0]
         if flag in ("--version", "-V"):
-            print(f"simdrive {__version__}")
+            print(f"specterqa-ios {__version__}")
             sys.exit(0)
         if flag in ("--help", "-h"):
             print(_HELP_TEXT, end="")

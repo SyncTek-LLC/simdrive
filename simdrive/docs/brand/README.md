@@ -1,6 +1,6 @@
-# simdrive Brand Assets
+# SpecterQA Brand Assets
 
-Vector source for the simdrive logo system. All marks are hand-coded SVG so they scale infinitely and are git-diff-friendly. Convert to PNG/ICO at the sizes you need with `rsvg-convert`, `inkscape --export-type=png`, or any browser.
+Vector source for the SpecterQA logo system. (Internal codename: simdrive — preserved in dev branches, the binary filename, and commit history; public surfaces use SpecterQA.) All marks are hand-coded SVG so they scale infinitely and are git-diff-friendly. Convert to PNG/ICO at the sizes you need with `rsvg-convert`, `inkscape --export-type=png`, or any browser.
 
 ## Files
 
@@ -13,7 +13,7 @@ Vector source for the simdrive logo system. All marks are hand-coded SVG so they
 
 ## Concept
 
-**"Pixel pin."** A 4 × 4 pixel grid (the screenshot the agent sees). Two thin crosshair lines pass through one cell. At the intersection: a vivid red tap-pin. The mark literally depicts the product mechanic — the agent picked that pixel; simdrive taps it.
+**"Pixel pin."** A 4 × 4 pixel grid (the screenshot the agent sees). Two thin crosshair lines pass through one cell. At the intersection: a vivid red tap-pin. The mark literally depicts the product mechanic — the agent picked that pixel; SpecterQA taps it.
 
 The mark scales: at favicon size the grid drops away and the crosshair + pin survive (see `favicon.svg`).
 
@@ -27,7 +27,7 @@ The mark scales: at favicon size the grid drops away and the crosshair + pin sur
 
 ## Typography
 
-The wordmark sets in a geometric monospace — JetBrains Mono, Berkeley Mono, or IBM Plex Mono are all aligned. Two weights: `600` for `sim`, `400` for `drive`. Lowercase always.
+The wordmark sets in a geometric monospace — JetBrains Mono, Berkeley Mono, or IBM Plex Mono are all aligned. Two weights: `600` for `Specter`, `400` for `QA`. Mixed case for the primary wordmark; the bracket-fallback `[specterqa_]` stays lowercase to preserve the terminal aesthetic.
 
 ## Voice
 

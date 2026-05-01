@@ -1,12 +1,12 @@
-name: simdrive Publish to PyPI
+name: specterqa-ios Publish to PyPI
 
 on:
   push:
     tags:
-      - "simdrive-v*.*.*"
-      - "simdrive-v*.*.*a*"
-      - "simdrive-v*.*.*b*"
-      - "simdrive-v*.*.*rc*"
+      - "specterqa-ios-v*.*.*"
+      - "specterqa-ios-v*.*.*a*"
+      - "specterqa-ios-v*.*.*b*"
+      - "specterqa-ios-v*.*.*rc*"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -38,8 +38,8 @@ jobs:
 
       - name: Verify universal2 binary
         run: |
-          file src/simdrive/_bin/simdrive-input
-          file src/simdrive/_bin/simdrive-input | grep -q "universal binary"
+          file src/specterqa_ios/_bin/simdrive-input
+          file src/specterqa_ios/_bin/simdrive-input | grep -q "universal binary"
 
       - name: Install build tools
         run: pip install build twine
@@ -57,20 +57,27 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: simdrive-dist
+          name: specterqa-ios-dist
           path: simdrive/dist/
 
   publish:
     name: Publish to PyPI
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ startsWith(github.ref, 'refs/tags/simdrive-v') && !inputs.dry_run }}
+    if: ${{ startsWith(github.ref, 'refs/tags/specterqa-ios-v') && !inputs.dry_run }}
     # PyPI Trusted Publishers (OIDC) — no token needed.
     # Configure once at: https://pypi.org/manage/account/publishing/
-    #   project name:  simdrive
+    #   project name:  specterqa-ios
     #   owner:         SyncTek-LLC
     #   repo:          specterqa-ios
-    #   workflow:      simdrive-publish.yml
+    #   workflow:      specterqa-ios-publish.yml
+    #
+    # NOTE: This workflow filename changed from `simdrive-publish.yml` to
+    # `specterqa-ios-publish.yml` as part of the v17 rename. PyPI Trusted
+    # Publisher entries are pinned to (project, owner, repo, workflow). A NEW
+    # entry for project=`specterqa-ios` matching this workflow filename must
+    # be configured before the first 17.0.0a1 publish — same 2-minute setup as
+    # the original `simdrive` entry.
     permissions:
       id-token: write
       contents: read
@@ -79,7 +86,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: simdrive-dist
+          name: specterqa-ios-dist
           path: dist/
 
       - name: Publish to PyPI (via Trusted Publisher / OIDC)
