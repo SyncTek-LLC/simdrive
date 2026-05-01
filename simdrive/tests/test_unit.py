@@ -11,7 +11,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "0.3.0a1"
+    assert server.__version__ == "0.3.0a2"
 
 
 def test_tool_count_is_twenty_seven():
@@ -1792,3 +1792,150 @@ def test_validate_replay_flags_unsupported_action(tmp_path, monkeypatch):
     result = server.tool_validate_replay({"name": "bad-action"})
     assert result["ok"] is False
     assert any("dance" in e for e in result["errors"])
+
+
+# v0.3.0a2 — closing the two partials
+
+def test_list_devices_emits_last_seen_and_unavailable_reason(tmp_path, monkeypatch):
+    """devicectl JSON has lastConnectionDate + pairingState/tunnelState we can
+    surface as last_seen and a composed unavailable_reason."""
+    from simdrive import server, device
+
+    fake_devs = [
+        device.RealDevice(
+            udid="UDID-1", name="Maurice's iPad",
+            model="iPad Pro", transport="localNetwork", state="available",
+            last_seen="2026-04-29T18:07:00.000Z", unavailable_reason=None,
+        ),
+        device.RealDevice(
+            udid="UDID-2", name="Old Tester",
+            model="iPhone 13 Pro", transport=None, state="unavailable",
+            last_seen=None, unavailable_reason="not paired; tunnel disconnected",
+        ),
+    ]
+    monkeypatch.setattr(device, "list_devices", lambda: fake_devs)
+    monkeypatch.setattr(device, "libimobiledevice_available", lambda: (True, []))
+
+    result = server.tool_list_devices({})
+    assert result["ok"] is True
+    by_udid = {d["udid"]: d for d in result["devices"]}
+    assert by_udid["UDID-1"]["last_seen"] == "2026-04-29T18:07:00.000Z"
+    assert by_udid["UDID-1"]["unavailable_reason"] is None
+    assert by_udid["UDID-2"]["last_seen"] is None
+    assert "not paired" in by_udid["UDID-2"]["unavailable_reason"]
+
+
+def test_unavailable_reason_compose():
+    from simdrive.device import _unavailable_reason
+    assert _unavailable_reason("available", {}, {}) is None
+    assert _unavailable_reason(
+        "unavailable",
+        {"pairingState": "unpaired", "tunnelState": "disconnected", "transportType": "wired"},
+        {},
+    ) == "not paired; tunnel disconnected"
+    assert _unavailable_reason(
+        "unavailable",
+        {"pairingState": "paired", "tunnelState": "disconnected"},
+        {"developerModeStatus": "disabled"},
+    ) == "tunnel disconnected; no transport; developer mode disabled"
+    assert _unavailable_reason("unavailable", {"transportType": "wired", "pairingState": "paired", "tunnelState": "connected"}, {}) == "device offline"
+
+
+def test_get_app_version_parses_listapps(monkeypatch):
+    """sim.get_app_version reads CFBundleShortVersionString from listapps output."""
+    import plistlib, subprocess as _sp
+    from simdrive import sim
+
+    plist_payload = plistlib.dumps({
+        "com.example.App": {
+            "CFBundleShortVersionString": "3.0.0",
+            "CFBundleVersion": "470",
+        },
+    })
+
+    def fake_simctl(*args, timeout=30.0, capture=True):
+        return _sp.CompletedProcess(("xcrun", "simctl") + args, 0, plist_payload.decode("utf-8"), "")
+
+    monkeypatch.setattr(sim, "_simctl", fake_simctl)
+    assert sim.get_app_version("UDID", "com.example.App") == "3.0.0"
+    assert sim.get_app_version("UDID", "com.unknown") is None
+
+
+def test_get_app_version_falls_back_to_cfbundleversion(monkeypatch):
+    import plistlib, subprocess as _sp
+    from simdrive import sim
+
+    plist_payload = plistlib.dumps({
+        "com.example.App": {"CFBundleVersion": "9.9"},
+    })
+
+    def fake_simctl(*args, timeout=30.0, capture=True):
+        return _sp.CompletedProcess(("xcrun", "simctl") + args, 0, plist_payload.decode("utf-8"), "")
+
+    monkeypatch.setattr(sim, "_simctl", fake_simctl)
+    assert sim.get_app_version("UDID", "com.example.App") == "9.9"
+
+
+def test_recording_metadata_includes_app_version(tmp_path, monkeypatch):
+    """recorder.finalize() stamps the recording with the app's version when available."""
+    import yaml as _yaml
+    from simdrive import recorder, session as ses, sim
+    from simdrive.sim import Device
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    monkeypatch.setattr(sim, "get_app_version", lambda udid, bundle: "3.0.0 (470)")
+
+    s = ses.Session(
+        session_id="appver-test",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        app_bundle_id="com.example.reader",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+    s.last_screenshot_w = 1206
+    s.last_screenshot_h = 2622
+
+    pre = tmp_path / "pre.png"
+    post = tmp_path / "post.png"
+    Image.new("RGB", (10, 10), (255, 0, 0)).save(pre)
+    Image.new("RGB", (10, 10), (0, 255, 0)).save(post)
+
+    rec = recorder.start(s, "appver-flow")
+    rec.add_step("tap", {"x": 1, "y": 2}, pre, post)
+    yaml_path = recorder.stop(s)
+
+    payload = _yaml.safe_load(yaml_path.read_text())
+    assert payload["app_version"] == "3.0.0 (470)"
+
+
+def test_recording_app_version_none_when_unavailable(tmp_path, monkeypatch):
+    """When sim.get_app_version raises or returns None, recording falls through cleanly."""
+    import yaml as _yaml
+    from simdrive import recorder, session as ses, sim
+    from simdrive.sim import Device
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    def boom(*a, **kw): raise RuntimeError("simctl missing")
+    monkeypatch.setattr(sim, "get_app_version", boom)
+
+    s = ses.Session(
+        session_id="noapp-test",
+        device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
+        workdir=tmp_path / "wd",
+        app_bundle_id="com.example.App",
+    )
+    s.workdir.mkdir(parents=True, exist_ok=True)
+
+    pre = tmp_path / "pre.png"
+    post = tmp_path / "post.png"
+    Image.new("RGB", (10, 10), (255, 0, 0)).save(pre)
+    Image.new("RGB", (10, 10), (0, 255, 0)).save(post)
+
+    rec = recorder.start(s, "noapp-flow")
+    rec.add_step("tap", {"x": 1, "y": 2}, pre, post)
+    yaml_path = recorder.stop(s)
+
+    payload = _yaml.safe_load(yaml_path.read_text())
+    assert payload["app_version"] is None
