@@ -8,6 +8,7 @@ version = "17.0.0a1"
 description = "SpecterQA for iOS — MCP-native iOS simulator driver. Vision-first, agent-driven."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 authors = [
     {name = "SyncTek LLC", email = "info@synctek.io"},
