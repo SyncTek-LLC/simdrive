@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "simdrive"
-version = "0.3.0a3"
-description = "Hand your iOS simulator to your agent. Claude-native MCP driver for iOS simulator testing — vision, taps, recordings."
+name = "specterqa-ios"
+version = "17.0.0a1"
+description = "SpecterQA for iOS — MCP-native iOS simulator driver. Vision-first, agent-driven."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -33,9 +33,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://synctek.io/simdrive"
-Repository = "https://github.com/SyncTek-LLC/simdrive"
-Issues = "https://github.com/SyncTek-LLC/simdrive/issues"
+Homepage = "https://synctek.io/specterqa"
+Repository = "https://github.com/SyncTek-LLC/specterqa-ios"
+Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
 
 [project.optional-dependencies]
 ssim = ["scikit-image>=0.22"]
@@ -46,14 +46,15 @@ dev = [
 ]
 
 [project.scripts]
-simdrive = "simdrive.server:serve"
-simdrive-mcp = "simdrive.server:serve"
+specterqa-ios = "specterqa_ios.server:serve"
+simdrive = "specterqa_ios.server:serve"
+simdrive-mcp = "specterqa_ios.server:serve"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-simdrive = ["_bin/simdrive-input"]
+specterqa_ios = ["_bin/simdrive-input"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,8 +1,8 @@
-# simdrive
+# SpecterQA for iOS
 
 > **Hand your iOS simulator to your agent.**
 
-Claude-native MCP server for driving iOS simulators. Vision-first. No XCTest, no accessibility-tree query, no daemons. Your agent looks at a screenshot, picks a pixel, and `simdrive` taps it.
+SpecterQA for iOS (simdrive internally) is an MCP server for driving iOS simulators. Vision-first. No XCTest, no accessibility-tree query, no daemons. Your agent looks at a screenshot, picks a pixel, and SpecterQA taps it.
 
 ## Why
 
@@ -14,19 +14,19 @@ Automating an iOS simulator from inside an LLM session has historically required
 - Bespoke selectors (`label:"Sign in"`) that drift with every UI change
 - Watchdogs killing your runner mid-test
 
-simdrive replaces all of that with: **screenshot in, click out**. Your agent already understands screenshots — the LLM is the selector engine.
+SpecterQA for iOS replaces all of that with: **screenshot in, click out**. Your agent already understands screenshots — the LLM is the selector engine.
 
 ## Install
 
 ```bash
-pip install simdrive
+pip install specterqa-ios
 ```
 
 Requirements:
 - macOS with Xcode + iOS Simulator (for native HID input)
-- A booted simulator. simdrive will use a running one or boot one for you.
+- A booted simulator. SpecterQA will use a running one or boot one for you.
 
-simdrive runs in the background by default — taps and keystrokes go straight to the simulator without raising its window or stealing your keyboard focus. Verify via `session_status` (`mode: "background"`).
+SpecterQA runs in the background by default — taps and keystrokes go straight to the simulator without raising its window or stealing your keyboard focus. Verify via `session_status` (`mode: "background"`).
 
 ## Wire into Claude
 
@@ -35,19 +35,21 @@ Add to your `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "simdrive": { "command": "simdrive" }
+    "specterqa-ios": { "command": "specterqa-ios" }
   }
 }
 ```
 
-Restart Claude Code. The 12 simdrive tools are now available.
+Restart Claude Code. The 29 SpecterQA MCP tools are now available.
+
+> Existing `.mcp.json` configs with `command: simdrive` keep working — both console scripts (`specterqa-ios` and `simdrive`) point at the same server.
 
 ## Quickstart
 
 ```
 You: open Settings on iPhone 17 Pro and turn on Airplane Mode.
 
-Claude (using simdrive):
+Claude (using SpecterQA):
   → session_start({device: "iPhone 17 Pro", app_bundle_id: "com.apple.Preferences"})
   → observe()                              # screenshot + annotated copy with numbered marks
   → tap({text: "Airplane Mode"})           # by visible text
@@ -66,22 +68,19 @@ You can also `tap({x, y})` if you have specific pixel coords (great for replay).
 
 That's the whole loop. No selectors. No waits. No XCTest.
 
-## Tool surface (12 tools)
+## Tool surface (29 MCP tools)
 
-| Tool | Purpose |
+| Group | Tools |
 |------|---------|
-| `session_start` | Boot/find a sim, optionally launch an app |
-| `session_end` | End session (sim stays booted) |
-| `session_status` | Inspect active session(s) |
-| `observe` | Capture screenshot (returns file path), optional log tail |
-| `tap` | Click at screenshot pixel coordinate |
-| `swipe` | Drag from (x1,y1)→(x2,y2) |
-| `type_text` | Send keyboard input |
-| `press_key` | Hardware buttons (home, lock, siri, shake, return, etc.) |
-| `record_start` | Begin recording every action |
-| `record_stop` | Finalize recording.yaml |
-| `replay` | Re-execute a recording with SSIM drift detection |
-| `logs` | Tail simulator logs (NSPredicate filterable) |
+| Lifecycle (3) | `session_start`, `session_end`, `session_status` |
+| Observe (1) | `observe` |
+| Act (5) | `tap`, `swipe`, `type_text`, `press_key`, `clear_field` |
+| Record/Replay (5) | `record_start`, `record_stop`, `replay`, `list_replays`, `validate_replay` |
+| Logs (1) | `logs` |
+| Performance (4) | `perf`, `perf_baseline`, `perf_compare`, `memory` |
+| Diagnostics (5) | `doctor`, `app_state`, `apps`, `crashes`, `list_devices` |
+| Robustness (4) | `dismiss_first_launch_alerts`, `pre_grant_permissions`, `set_appearance`, `dismiss_sheet` |
+| Version (1) | `version` |
 
 Coordinates are always in **screenshot pixel space** — same pixels the agent sees in the most recent `observe`.
 
@@ -104,8 +103,8 @@ Each step is gated on visual similarity: if the live screen has drifted from the
 ## Testing
 
 ```bash
-pip install simdrive[dev]
-pytest                          # 22 unit tests, no sim required
+pip install specterqa-ios[dev]
+pytest                          # 91 unit tests, no sim required
 pytest -m live                  # 26 live tests against TestKitApp
 ```
 
