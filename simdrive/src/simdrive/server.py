@@ -38,6 +38,54 @@ def _now() -> float:
     return time.time()
 
 
+# v0.3.0a3 — module-load timestamp + cached disk-version probe.
+# The whole point: catch the case where `pip install --upgrade simdrive`
+# refreshes the wheel on disk but the running MCP server is still serving
+# the old in-memory code. Every tool response gets a `_simdrive_warning`
+# side-channel field when drift is detected.
+_LOADED_AT: float = time.time()
+_LOADED_VERSION: str = __version__
+_DISK_VERSION_CACHE: dict[str, float | str | None] = {"version": None, "checked_at": 0.0}
+_DISK_VERSION_TTL_SEC = 5.0
+
+
+def _disk_version() -> str | None:
+    """Read simdrive's on-disk package version, cached for 5s.
+
+    Returns None when importlib.metadata can't find the package (dev installs
+    without metadata) — that's not drift, just unknown.
+    """
+    now = time.time()
+    last_at = float(_DISK_VERSION_CACHE.get("checked_at") or 0.0)
+    if now - last_at < _DISK_VERSION_TTL_SEC and _DISK_VERSION_CACHE.get("version") is not None:
+        return _DISK_VERSION_CACHE["version"]  # type: ignore[return-value]
+    try:
+        import importlib.metadata as _md
+        v = _md.version("simdrive")
+    except Exception:
+        v = None
+    _DISK_VERSION_CACHE["version"] = v
+    _DISK_VERSION_CACHE["checked_at"] = now
+    return v
+
+
+def _check_version_drift() -> str | None:
+    """Return a warning string when loaded != disk; else None.
+
+    Mounted on every call_tool response so an agent stuck on a stale server
+    sees the issue on the very next tool call after `pip install --upgrade`.
+    """
+    disk = _disk_version()
+    if disk is None:
+        return None
+    if disk == _LOADED_VERSION:
+        return None
+    return (
+        f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
+        "Restart the MCP server (or your agent host) to pick up the upgrade."
+    )
+
+
 # --------------------------- Tool implementations --------------------------- #
 
 
@@ -299,11 +347,13 @@ def tool_swipe(arguments: dict) -> dict:
 
 
 def tool_type_text(arguments: dict) -> dict:
+    from . import hid_inject
     s = session.get(arguments["session_id"])
     if s.target == "device":
         raise errors.device_input_unavailable("type_text")
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
+    clear_first = bool(arguments.get("clear_first", False))
 
     focused_mark = None  # Mark of the tap_first target if resolved via mark/stable_id/text
     if tap_target:
@@ -313,16 +363,32 @@ def tool_type_text(arguments: dict) -> dict:
         import time as _t
         _t.sleep(0.6)  # give the keyboard a moment to come up
 
+    # v0.3.0a3 — clear_first sends Cmd-A then delete BEFORE typing the new text.
+    # Replaces the five-press_key idiom for resetting search fields. Done after
+    # the focus tap so the field is the active first responder.
+    if clear_first:
+        if s.device.udid:
+            try:
+                hid_inject.chord(s.device.udid, "cmd", "a")
+            except Exception:
+                pass
+            try:
+                act.press_key("delete", udid=s.device.udid)
+            except Exception:
+                pass
+
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
     act.type_text(text, udid=s.device.udid)
+    dispatch_succeeded = True  # type_text only reaches here if act.type_text didn't raise
+    backend_used = act._backend()  # capture which backend actually dispatched
     s.last_action_at = _now()
     step_id = None
     if pre_path:
         step_id = _record_act_step(s, "type_text", {"text": text}, pre_path)
     session.append_action(s, {
         "action": "type_text",
-        "args": {"text": text, "tap_first": tap_target},
+        "args": {"text": text, "tap_first": tap_target, "clear_first": clear_first},
         "at": _now(),
     })
 
@@ -356,6 +422,14 @@ def tool_type_text(arguments: dict) -> dict:
     response = {
         "ok": True,
         "chars": len(text),
+        # v0.3.0a3 — `injection_method` and `dispatch_succeeded` are the
+        # reliable signals under HID. The legacy `keyboard_visible` /
+        # `focused_field` heuristics stay because they're still useful on the
+        # cliclick path (where the soft keyboard IS drawn) — but under HID the
+        # keystrokes always land even though the soft keyboard isn't visible,
+        # so don't trust the heuristic alone.
+        "injection_method": backend_used,
+        "dispatch_succeeded": dispatch_succeeded,
         "keyboard_visible": keyboard_visible,
         "focused_field": focused_field,
     }
@@ -652,6 +726,59 @@ def tool_validate_replay(arguments: dict) -> dict:
     return robustness.validate_replay(recorder.recordings_root(), name)
 
 
+# ─── v0.3.0a3 ─────────────────────────────────────────────────────────── #
+
+
+def tool_version(arguments: dict) -> dict:
+    """Report the loaded vs. on-disk simdrive version. Zero-arg.
+
+    `drift=True` means the running MCP server is stale relative to what's on
+    disk (after `pip install --upgrade simdrive` without restarting). The
+    fix is to restart the agent host / MCP server so the new code is loaded.
+    """
+    disk = _disk_version()
+    return {
+        "version": _LOADED_VERSION,
+        "loaded_at": _LOADED_AT,
+        "disk_version": disk,
+        "drift": (disk is not None and disk != _LOADED_VERSION),
+    }
+
+
+def tool_clear_field(arguments: dict) -> dict:
+    """Clear a focused text field by sending Cmd-A then delete via HID.
+
+    Useful when the agent wants to reset a search field without immediately
+    typing replacement text. If a `target` is given, tap it first to ensure
+    the field has first-responder focus before the chord.
+    """
+    from . import hid_inject
+    s = session.get(arguments["session_id"])
+    if s.target == "device":
+        raise errors.device_input_unavailable("clear_field")
+    target = arguments.get("target")
+    if target:
+        sw, sh = _ensure_screenshot_dims(s)
+        tx, ty, _, _ = _resolve_target_xy(s, target)
+        act.tap(tx, ty, sw, sh, udid=s.device.udid)
+        import time as _t
+        _t.sleep(0.5)  # let focus settle before the chord
+    cleared = False
+    try:
+        hid_inject.chord(s.device.udid, "cmd", "a")
+        act.press_key("delete", udid=s.device.udid)
+        cleared = True
+    except Exception:
+        cleared = False
+    s.last_action_at = _now()
+    session.append_action(s, {
+        "action": "clear_field",
+        "args": {"target": target},
+        "at": _now(),
+    })
+    return {"ok": cleared, "cleared": cleared}
+
+
 # ----------------------------- MCP wiring ------------------------------- #
 
 
@@ -771,10 +898,14 @@ _TOOLS: list[dict] = [
         "name": "type_text",
         "description": (
             "Send text via the keyboard. If tap_first is given (a target dict), tap "
-            "that target first to focus a field, then type. Returns ok, chars, "
-            "keyboard_visible (heuristic from a post-type observe), and focused_field "
-            "(the stable_id of the tap_first target when one was supplied and resolved "
-            "via mark/stable_id/text, else null)."
+            "that target first to focus a field, then type. If clear_first=true, send "
+            "Cmd-A + delete after focusing and before typing — convenient for resetting "
+            "search fields. Returns ok, chars, injection_method ('hid' or 'cliclick' — "
+            "the backend that actually dispatched), dispatch_succeeded (True when the "
+            "keystrokes landed; reliable signal under HID where the soft keyboard isn't "
+            "drawn), keyboard_visible (heuristic from a post-type observe; useful on the "
+            "cliclick path), and focused_field (the stable_id of the tap_first target "
+            "when one was supplied and resolved via mark/stable_id/text, else null)."
         ),
         "inputSchema": {
             "type": "object",
@@ -783,6 +914,11 @@ _TOOLS: list[dict] = [
                 "session_id": {"type": "string"},
                 "text": {"type": "string"},
                 "tap_first": {"type": "object", "description": "Optional focus target: {x,y}, {mark}, or {text}."},
+                "clear_first": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Send Cmd-A + delete after focusing (and before typing) to clear the field.",
+                },
             },
         },
         "handler": tool_type_text,
@@ -1102,6 +1238,38 @@ _TOOLS: list[dict] = [
         },
         "handler": tool_validate_replay,
     },
+    # ── v0.3.0a3: stale-MCP detection + field-clear idiom ──────────────
+    {
+        "name": "version",
+        "description": (
+            "Report loaded simdrive version vs. on-disk version. Zero-arg. "
+            "Returns {version, loaded_at, disk_version, drift}; drift=true means "
+            "the running server is stale (`pip install --upgrade simdrive` without "
+            "restarting the agent host). Cheap; safe to call any time."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "handler": tool_version,
+    },
+    {
+        "name": "clear_field",
+        "description": (
+            "Clear a focused text field by sending Cmd-A + delete via HID. "
+            "If `target` is given, tap it first so the field is the active "
+            "first responder. Returns {ok, cleared}."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "target": {
+                    "type": "object",
+                    "description": "Optional focus target before clearing: {x,y}, {mark}, {text}, {stable_id}, or {stable_id_loose}.",
+                },
+            },
+        },
+        "handler": tool_clear_field,
+    },
 ]
 
 
@@ -1113,7 +1281,15 @@ def list_tools() -> list[dict]:
 def call_tool(name: str, arguments: dict) -> dict:
     for t in _TOOLS:
         if t["name"] == name:
-            return t["handler"](arguments or {})
+            result = t["handler"](arguments or {})
+            # v0.3.0a3 — inject `_simdrive_warning` side-channel field when the
+            # running server is stale relative to the on-disk wheel. Doesn't
+            # replace the tool result, just rides along so the agent sees it
+            # on every tool call after a `pip install --upgrade`.
+            warning = _check_version_drift()
+            if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
+                result["_simdrive_warning"] = warning
+            return result
     raise ValueError(f"unknown tool: {name}")
 
 

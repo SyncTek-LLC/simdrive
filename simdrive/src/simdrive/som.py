@@ -7,9 +7,171 @@ no remote calls.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+
+# v0.3.0a3 — small inline dictionary used to dictionary-gate raw OCR confidence.
+# Stylized cover art frequently OCRs as plausible-looking gibberish ("Sary of the
+# Canadan liothest") at confidence 1.0; vowel-ratio alone doesn't catch it because
+# the misreads still contain real words mixed with fake ones. The dictionary check
+# is the fence: a mark whose tokens mostly aren't in the wordlist (and aren't short
+# or numeric) gets clamped down even when raw_confidence is 1.0.
+#
+# Keep this list <= 200 entries: stop words + common UI vocabulary. Palace will
+# tell us what to add when something real-world legitimate gets clamped.
+_ENGLISH_WORDS: frozenset[str] = frozenset(
+    {
+        # function words / pronouns / common verbs
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "am", "have", "has", "had", "having", "do", "did", "does", "doing",
+        "of", "in", "on", "at", "to", "from", "by", "for", "with", "without",
+        "about", "as", "and", "or", "but", "not", "no", "yes", "if", "then",
+        "than", "so", "this", "that", "these", "those", "it", "its", "i",
+        "you", "your", "we", "our", "us", "they", "them", "their", "he",
+        "she", "his", "her", "him", "me", "my", "mine", "yours", "ours",
+        # UI verbs
+        "ok", "cancel", "done", "next", "back", "previous", "close", "save",
+        "delete", "edit", "add", "remove", "new", "open", "select", "submit",
+        "send", "receive", "share", "send", "view", "show", "hide", "more",
+        "less", "search", "filter", "sort", "copy", "cut", "paste", "undo",
+        "redo", "refresh", "reload", "retry", "play", "pause", "stop", "start",
+        "resume", "skip", "follow", "unfollow", "like", "comment", "post",
+        # auth / account
+        "sign", "signin", "signup", "login", "logout", "register", "email",
+        "password", "username", "name", "first", "last", "phone", "address",
+        "settings", "profile", "account", "help", "about", "support",
+        # status
+        "loading", "please", "try", "again", "error", "success", "failed",
+        "warning", "alert", "info", "ready", "complete", "completed",
+        "pending", "active", "inactive",
+        # nav
+        "home", "tab", "menu", "list", "grid", "page", "pages", "all", "any",
+        "some", "none", "every",
+        # Palace / library domain
+        "library", "book", "books", "read", "reading", "title", "author",
+        "content", "chapter", "return", "borrow", "hold", "catalog", "cart",
+        "ebook", "audiobook", "audio", "video", "media", "magazine",
+        "library", "shelf", "shelves", "favorites", "downloaded",
+        # generic content
+        "title", "subtitle", "description", "summary", "details", "details",
+        # directions / states
+        "up", "down", "left", "right", "top", "bottom", "center",
+        "on", "off", "true", "false", "now", "today", "yesterday",
+        "tomorrow", "date", "time",
+        # quantities
+        "one", "two", "three", "four", "five", "six", "seven", "eight",
+        "nine", "ten", "many", "few",
+        # connectives
+        "because", "since", "while", "when", "where", "what", "who", "how",
+        "why", "which", "into", "onto", "out", "over", "under",
+        # confirmations
+        "confirm", "agree", "accept", "decline", "allow", "deny", "skip",
+        # date / calendar
+        "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+        "sunday", "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+        # misc UI
+        "welcome", "hello", "goodbye", "logout", "trial", "free", "premium",
+        "upgrade", "subscribe", "subscription",
+        # common content nouns / verbs that show up in titles & cells
+        "dance", "partner", "story", "tale", "world", "people", "person",
+        "place", "thing", "year", "day", "way", "man", "woman", "child",
+        "life", "hand", "part", "case", "week", "company", "system",
+        "program", "question", "work", "government", "number", "night",
+        "point", "house", "money", "fact", "month", "lot", "right", "study",
+        "job", "word", "issue", "side", "kind", "head", "father", "mother",
+        "force", "moment", "air", "war", "history", "party", "result",
+        "change", "morning", "reason", "research", "girl", "boy", "guy",
+        "moment", "music", "film", "movie", "show",
+    }
+)
+
+
+# v0.3.0a3 — semantic-name → likely-OCR-misread lookup for icon glyphs.
+# OCR rasterizes the search magnifying glass as "Q/" / "Q." / "O" depending
+# on resolution. Stable IDs catch it for replay against the same screen, but
+# `text="search"` from a fresh agent doesn't match. This whitelist lets
+# find_by_text fall back to alias lookup when no direct match is found.
+#
+# Canonical form: `{semantic_name: [list of OCR strings the glyph commonly
+# rasterizes as, including the semantic name itself]}`. Match is
+# case-insensitive on the mark text against the alias list. Keep this seed
+# set small — Palace will tell us what's missing.
+_ICON_GLYPH_ALIASES: dict[str, list[str]] = {
+    # search magnifying glass renders as Q, Q/, Q., Q\, O, etc.
+    "search": ["q", "q/", "q.", "q\\", "o", "search"],
+    # back / chevron-left
+    "back": ["<", "‹", "back"],
+    # forward / chevron-right
+    "forward": [">", "›", "forward", "next"],
+    # gear / settings
+    "settings": ["⚙", "settings", "gear"],
+    # hamburger / menu
+    "menu": ["≡", "menu", "☰"],
+    # close / x
+    "close": ["x", "✕", "✖", "close", "cancel"],
+    # plus / add
+    "add": ["+", "add", "new"],
+}
+
+
+_ALLOWED_PUNCT = set("-'.,!?:")
+_VOWELS = set("aeiouAEIOU")
+_TOKEN_RE = re.compile(r"\s+")
+
+
+def _is_english_like_token(token: str) -> bool:
+    """A token passes if: in dictionary, OR <= 3 chars, OR fully numeric."""
+    if not token:
+        return True  # ignore empty splits
+    if token.isdigit():
+        return True
+    cleaned = token.strip("".join(_ALLOWED_PUNCT)).lower()
+    if not cleaned:
+        return True  # punctuation-only fragment
+    if len(cleaned) <= 3:
+        return True
+    return cleaned in _ENGLISH_WORDS
+
+
+def _english_likeness(text: str) -> bool:
+    """Return True if `text` looks like real English (dictionary-gated).
+
+    Cheap pre-checks first (charset, token length, vowel ratio); then the
+    dictionary check decides borderline cases. Stylized OCR misreads typically
+    contain real words AND fake ones at high vowel ratios — only the dictionary
+    fence catches those reliably.
+    """
+    s = (text or "").strip()
+    if not s:
+        return False
+    # Charset: letters/digits/spaces/basic punctuation only
+    for ch in s:
+        if ch.isalnum() or ch.isspace() or ch in _ALLOWED_PUNCT:
+            continue
+        return False
+    tokens = [t for t in _TOKEN_RE.split(s) if t]
+    if not tokens:
+        return False
+    # Length sanity: real words don't exceed ~25 chars
+    if any(len(t) > 25 for t in tokens):
+        return False
+    # Vowel ratio sanity: most tokens contain at least one vowel
+    voweled = sum(1 for t in tokens if any(c in _VOWELS for c in t))
+    if tokens and voweled / len(tokens) < 0.6:
+        # Acronym escape: any all-caps token of length >= 4 is OK
+        if not any(t.isupper() and len(t) >= 4 for t in tokens):
+            return False
+    # Dictionary fence: >= 50% of tokens must be english-like
+    eligible = [t for t in tokens if not (t.isdigit() or len(t) <= 3)]
+    if not eligible:
+        # Everything is short/numeric — let it pass (single-letter labels, "OK", "12")
+        return True
+    likes = sum(1 for t in tokens if _is_english_like_token(t))
+    return (likes / len(tokens)) >= 0.5
 
 
 @dataclass
@@ -20,7 +182,56 @@ class Mark:
     w: int
     h: int
     text: str
-    confidence: float
+    confidence: float  # legacy; in v0.3.0a3 this is the *gated* score
+
+    # v0.3.0a3 — `raw_confidence` preserves the OCR engine's unclamped value.
+    # When None, callers reading `raw_confidence` see the unclamped legacy value
+    # (set in __post_init__ from `confidence`).
+    raw_confidence: Optional[float] = None
+    # `confidence_band` is the dictionary-gated quality bucket. None = compute lazily.
+    _band: Optional[str] = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        # If callers constructed a Mark with only `confidence`, that value is
+        # the raw OCR score — preserve it as `raw_confidence`, then compute the
+        # band and clamp `confidence` accordingly.
+        if self.raw_confidence is None:
+            self.raw_confidence = float(self.confidence)
+        # Compute band once.
+        self._band = self._compute_band()
+        # Clamp legacy confidence per the band.
+        self.confidence = self._clamped_confidence()
+
+    def _compute_band(self) -> str:
+        """Three-band quality bucket — gated primarily on the dictionary.
+
+        Misreads at raw 1.0 (stylized covers OCRing as plausible-looking
+        gibberish) fail the English-likeness check and surface as "low" even
+        with a perfect engine-side score. That's the dogfood signal Palace's
+        engineers can trust.
+        """
+        raw = float(self.raw_confidence or 0.0)
+        english_like = _english_likeness(self.text)
+        if not english_like:
+            # Dictionary fence failed — the OCR doesn't read as English. Don't
+            # promote on raw confidence alone; this is the case the v0.3.0a3
+            # gating exists to catch.
+            return "low"
+        if raw >= 0.85:
+            return "high"
+        return "medium"
+
+    def _clamped_confidence(self) -> float:
+        raw = float(self.raw_confidence or 0.0)
+        if self._band == "high":
+            return raw
+        if self._band == "medium":
+            return min(raw, 0.5)
+        return min(raw, 0.3)
+
+    @property
+    def confidence_band(self) -> str:
+        return self._band or self._compute_band()
 
     @property
     def center(self) -> tuple[int, int]:
@@ -55,7 +266,16 @@ class Mark:
             "bbox": [self.x, self.y, self.w, self.h],
             "center": list(self.center),
             "text": self.text,
+            # `confidence` stays legacy: dictionary-clamped so a misread at
+            # raw 1.0 with no dictionary hits surfaces as <= 0.3. Existing
+            # callers that filter on `confidence > 0.7` get the dogfood fix
+            # for free.
             "confidence": round(self.confidence, 3),
+            # `raw_confidence` exposes the unclamped OCR engine score; engineers
+            # comparing against Vision's own threshold get an honest number.
+            "raw_confidence": round(float(self.raw_confidence or 0.0), 3),
+            # `confidence_band` is the human-readable quality bucket.
+            "confidence_band": self.confidence_band,
         }
 
 
@@ -158,7 +378,15 @@ def annotate(image_path: Path, marks: list[Mark], out_path: Path) -> Path:
 
 
 def find_by_text(marks: list[Mark], query: str) -> Optional[Mark]:
-    """Best mark matching `query`. Exact > prefix > substring (case-insensitive)."""
+    """Best mark matching `query`. Exact > prefix > substring (case-insensitive).
+
+    v0.3.0a3 — when no direct text match is found, fall back to the icon-glyph
+    alias whitelist: `find_by_text(marks, "search")` resolves to the
+    magnifying-glass mark whose OCR text is "Q/" / "Q." / "O" / etc. Aliases
+    are a *final* fallback; exact/prefix/substring still win when present, so
+    behavior is backwards-compatible for any caller that wasn't relying on
+    glyph fallbacks.
+    """
     q = query.strip().lower()
     if not q or not marks:
         return None
@@ -171,6 +399,13 @@ def find_by_text(marks: list[Mark], query: str) -> Optional[Mark]:
     sub = [m for m in marks if q in m.text.lower()]
     if sub:
         return max(sub, key=lambda m: m.confidence)
+    # Final fallback: icon-glyph semantic-name aliases.
+    aliases = _ICON_GLYPH_ALIASES.get(q)
+    if aliases:
+        alias_set = {a.lower() for a in aliases}
+        cands = [m for m in marks if m.text.strip().lower() in alias_set]
+        if cands:
+            return max(cands, key=lambda m: m.confidence)
     return None
 
 
