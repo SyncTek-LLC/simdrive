@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 220" width="880" height="220" role="img" aria-label="simdrive">
+  <title>simdrive — bracket wordmark (typographic fallback)</title>
+  <desc>Direction D fallback: monospaced [simdrive_] with terminal-cursor underscore. Use in CLI banners, ASCII contexts, mono-only surfaces.</desc>
+
+  <text x="440" y="110"
+        font-family="'JetBrains Mono', 'Berkeley Mono', 'IBM Plex Mono', 'Menlo', monospace"
+        font-size="120"
+        font-weight="500"
+        fill="#0A0A0A"
+        letter-spacing="-2"
+        text-anchor="middle"
+        dominant-baseline="central">[simdrive_]</text>
+</svg>
