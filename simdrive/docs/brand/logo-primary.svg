@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="SpecterQA — agent picks a pixel, SpecterQA taps it">
-  <title>SpecterQA</title>
-  <desc>Pixel pin mark: a 4×4 light-gray pixel grid, black crosshairs through one cell, a vivid red tap-pin at the intersection. Wordmark "SpecterQA" in monospace, with weight-600 "Specter" and weight-400 "QA".</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="SimDrive — agent picks a pixel, SimDrive taps it">
+  <title>SimDrive</title>
+  <desc>Pixel pin mark: a 4×4 light-gray pixel grid, black crosshairs through one cell, a vivid red tap-pin at the intersection. Wordmark "simdrive" in monospace, with weight-600 "sim" and weight-400 "drive".</desc>
 
   <g transform="translate(80, 80)">
     <g fill="#E5E5E5">
@@ -36,6 +36,6 @@
         fill="#0A0A0A"
         letter-spacing="-2"
         dominant-baseline="central">
-    <tspan font-weight="600">Specter</tspan><tspan font-weight="400">QA</tspan>
+    <tspan font-weight="600">sim</tspan><tspan font-weight="400">drive</tspan>
   </text>
 </svg>
