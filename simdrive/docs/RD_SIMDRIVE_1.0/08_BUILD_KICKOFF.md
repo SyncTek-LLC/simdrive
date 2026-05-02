@@ -92,36 +92,89 @@ Only after all five pass do we tag and launch.
 
 Per chairman directive: **agentic development system** — three coding agents in parallel, not three human engineers. Each cycle takes one parallel agent run + Atlas integration pass.
 
-### Cycle 1 (next session — start here)
+### 4.0 Parallel-build rules (apply to every cycle)
 
-| Agent | Scope | New files (no edits to existing) |
+These rules are non-negotiable across all 5 cycles to keep parallel agent work safely mergeable:
+
+**Ownership rule** — every cycle assigns each agent a disjoint set of files / directories. An agent NEVER touches a file owned by another agent in the same cycle. Atlas owns the integration files (`server.py`, `pyproject.toml`, `CHANGELOG.md`, `MANIFEST.in`, GitHub workflows) and is the only writer to them.
+
+**New-files preferred** — agents create new files in their owned directory whenever possible. When an agent must extend an existing file in their territory, they describe the change in their report; Atlas applies it during integration.
+
+**Test-first inside each agent** — each agent writes failing tests first, then implementation, then runs the test suite for their owned scope. An agent does not return until their owned tests pass.
+
+**Atomic commit per cycle** — Atlas commits the integrated cycle as one logical commit (or a small chain on the same branch). No mid-cycle commits from agents directly.
+
+**Conflict-resolution protocol** — if two agents' returned diffs touch the same file (which should be rare given the ownership rule), Atlas resolves manually during integration; if the conflict is non-trivial, flag the cycle as needing a re-run with revised ownership boundaries.
+
+**Worktree posture** — currently NOT using git worktrees per memory `feedback_worktree_auth.md` (worktree agents fail "Not logged in"). Instead, agents run on the shared working tree with the disjoint-ownership rule enforcing safety.
+
+**Cycle gate before next** — Atlas does not start cycle N+1 until cycle N is committed, pushed, tests are green, and a brief progress summary has been surfaced to the chairman.
+
+### 4.1 Cycle 1 — Foundation (next session — start here)
+
+| Agent | Scope (component refs from `05_engineering_expansion.md`) | Files agent OWNS | Files agent NEVER touches |
+|---|---|---|---|
+| **A — Journey runner stack** | Components 1+2+3+8 — journey YAML schema, persona schema, runner core, `simdrive ci` orchestrator | `simdrive/src/specterqa_ios/journey/` (new dir: loader, schema, runner, result, ci) + `simdrive/tests/test_journey_*.py` | `server.py`, `license/`, `cloud/`, `LapsApp/`, any existing module |
+| **B — License + trial + Cloud API scaffold** | Components 4+7 — Ed25519 license, trial state, FastAPI Cloud API skeleton | `simdrive/src/specterqa_ios/license/` (new dir: keypair, signer, validator, trial) + new `cloud/` subdir (FastAPI app, R2 stubs) + `simdrive/tests/test_license_*.py` | `server.py`, `journey/`, `LapsApp/`, any existing module |
+| **C — LapsApp scaffold** | Xcode project + SwiftUI shell + 4 of 12 feature areas (Settings, Light/Dark, Crash-Trigger, Search) | New `LapsApp/` directory at repo root — separate Swift project | All Python (zero overlap) |
+
+**Atlas integration** (per § 5):
+- Merge tool registrations into `server.py:_TOOLS` (one new MCP tool from Agent A: `run_journey`)
+- Bump version in `pyproject.toml`
+- Update `CHANGELOG.md` with cycle 1 entry
+- Run full test suite + live smoke
+
+### 4.2 Cycle 2 — Real device + LapsApp expansion
+
+| Agent | Scope | Files agent OWNS | Files agent NEVER touches |
+|---|---|---|---|
+| **A — WDA real-device input (gated beta)** | Components 5+6 — `simdrive bootstrap-device` CLI + WDA HTTP client wired to act tools | `simdrive/src/specterqa_ios/wda/` (new dir: bootstrap, http_client, signing) + `simdrive/tests/test_wda_*.py` | All other Python modules; LapsApp |
+| **B — Cloud API completion** | Flesh out the FastAPI scaffold from cycle 1: real R2 storage, license-key bearer auth, per-tier quotas, deployment config | `cloud/` (extends own cycle-1 work) + `cloud/tests/` | Python `simdrive/src/`; LapsApp |
+| **C — LapsApp feature areas 5-8** | OAuth login (Sign in with Apple + Google), WebView reader, Lists with infinite scroll, Forms with async validation | `LapsApp/Sources/Features/{OAuth,Reader,Lists,Forms}/` + tests | All Python; LapsApp shell from cycle 1 stays untouched except for navigation registration |
+
+**Note on cycle 2:** WDA bootstrap requires interactive Maurice-side debugging on real hardware (signing identity, dev-team selection, cert-trust prompts). Agent A produces the code; Maurice runs `simdrive bootstrap-device <udid>` against his iPhone 17 Pro Max during the integration pass to surface real-world failures.
+
+**Atlas integration:**
+- Wire WDA path into existing `tap`/`swipe`/`type_text`/`press_key` tools when `target=device` (small surgical edit to those tool handlers)
+- Update `pyproject.toml`, `CHANGELOG.md`
+- Live smoke against Maurice's iPhone 17 Pro Max
+
+### 4.3 Cycle 3 — Hardening + LapsApp finish
+
+| Agent | Scope | Files agent OWNS | Files agent NEVER touches |
+|---|---|---|---|
+| **A — Production hardening** | Component 9 — error UX audit, structured logging, observability (`SIMDRIVE_DEBUG=1`), perf benchmarks with regression gates, edge-case coverage, docs | `simdrive/src/specterqa_ios/observability/` (new dir) + small surgical edits to existing tools (Atlas reviews each) + `simdrive/tests/test_observability_*.py` + `docs/` updates | `journey/`, `license/`, `wda/`, `cloud/`, LapsApp |
+| **B — Journey corpus** | Author 10 of the 20 pre-built journey YAMLs in `LapsApp/.simdrive/journeys/` against LapsApp's feature areas | `LapsApp/.simdrive/journeys/` + `LapsApp/.simdrive/personas/` | All code modules |
+| **C — LapsApp feature areas 9-12** | Sheets+Modals, Performance stress (1000-row list), Offline mode, Multi-app journey support | `LapsApp/Sources/Features/{Sheets,Perf,Offline,MultiApp}/` + tests | All Python; earlier LapsApp features |
+
+**Atlas integration:**
+- Apply hardening edits to existing tool handlers
+- Run perf benchmarks; establish baselines for CI gating
+- Run all 10 cycle-3 journeys against LapsApp end-to-end
+
+### 4.4 Cycle 4 — Dogfood-to-perfection
+
+This cycle is **not parallel agent build work** — it's the 5-pass dogfood phase from § 3:
+
+| Pass | Owner | Output |
 |---|---|---|
-| **A — Journey runner stack** | Components 1+2+3+8 — journey YAML schema, persona schema, runner core, `simdrive ci` orchestrator | `simdrive/src/specterqa_ios/journey/` (loader, schema, runner, result, ci) + tests in `simdrive/tests/test_journey_*.py` |
-| **B — License + trial + Cloud API scaffold** | Components 4+7 — Ed25519 license, trial state, FastAPI Cloud API skeleton | `simdrive/src/specterqa_ios/license/` (keypair, signer, validator, trial) + new `cloud/` subdir (FastAPI app, R2 storage stubs) + tests |
-| **C — LapsApp scaffold** | Xcode project + SwiftUI shell + 4 of 12 feature areas (Settings, Light/Dark, Crash-Trigger, Search) | New `LapsApp/` directory at repo root — separate Swift project, no Python overlap |
+| Self-dogfood week | All 3 agents in tandem (running journeys, filing bugs) | Bug backlog ranked P0/P1/P2 |
+| Palace re-validation | Atlas (sends Palace the v1.0 candidate; Palace runs their existing corpus) | Regression report from Maurice |
+| Beyond-LapsApp apps | Atlas (drives SimDrive against 2-3 additional iOS apps) | Failure mode catalog |
+| Adversarial testing | One coding agent (specialized) runs corrupted-input + crash-mid-tap + simctl-malformed scenarios | Test additions for every failure |
+| Performance verification | Atlas runs `simdrive ci` end-to-end across the LapsApp corpus, compares to v0.3.0a3 baseline | Perf gate (no journey > 2× baseline) |
 
-**Strict rule for cycle 1: agents only CREATE new files; never MODIFY existing files** (server.py, pyproject.toml, CHANGELOG.md, etc.). Atlas does the integration merges post-hoc to avoid merge conflicts.
+Atlas integrates fixes for any P0/P1 bug between passes. Cycle 4 ends when all 5 passes are green.
 
-### Cycle 2 (after cycle 1 lands)
+### 4.5 Cycle 5 — Launch
 
-- Component 5+6 (WDA real-device input) — high-risk, needs interactive sim+device debugging by Maurice on real hardware
-- Cloud API completion (the FastAPI scaffold from cycle 1 gets fleshed out)
-- LapsApp feature areas 5-8 (OAuth login, WebView reader, Lists with infinite scroll, Forms with async validation)
-
-### Cycle 3
-
-- Component 9 (production hardening pass)
-- LapsApp feature areas 9-12 (Sheets+Modals, Performance stress, Offline mode, Multi-app)
-- Journey corpus build-out (10 of the 20 journeys)
-
-### Cycle 4 (dogfood-to-perfection)
-
-The 5-pass dogfood phase from §3.
-
-### Cycle 5 (launch)
-
-- Tag v1.0 + LapsApp v1.0 same week
-- Coordinated MCP registry submissions (per `03_gtm_pricing.md` §7 launch sequence)
+| Workstream | Owner |
+|---|---|
+| Tag v1.0 + LapsApp v1.0 same week | Atlas (commit + tag + push; confirm Trusted Publisher entry; verify PyPI publish) |
+| Coordinated MCP registry submissions (Anthropic + Smithery + awesome-mcp) | Atlas + chairman (per `03_gtm_pricing.md` § 7) |
+| Show HN + Twitter + blog | Chairman (copy already drafted in `02_brand_marketing.md` § 4) |
+| Pricing page live (Stripe live products created, payment links, license server endpoint live) | Atlas + chairman (chairman approves Stripe live creation; Atlas wires it) |
+| Day 1-7 trial-signup hand-holding | Chairman |
 
 ---
 
