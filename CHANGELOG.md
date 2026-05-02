@@ -7,6 +7,56 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [16.0.0a4] — 2026-05-02 (alpha — SimDrive 1.0 Cycle 1: journey runner + license/cloud + LapsApp scaffold)
+
+**Status:** Cycle 1 of the SimDrive 1.0 build. Three parallel coding agents
+delivered 251 Python tests and 38 Xcode tests. Atlas integration pass merged
+25 new error codes, registered the `run_journey` MCP tool, wired `simdrive run`
+and `simdrive ci` CLI subcommands, and bumped the version.
+
+### Added
+
+- **Journey runner package** (`simdrive/src/specterqa_ios/journey/`) — Components
+  1, 2, 3, 8 of SimDrive spec: YAML schema + validator, Persona model, AI agent
+  loop with vision-first observe/act, success-criteria evaluator, CI orchestrator.
+  Exposes `run_journey()` as the core execution entry point.
+- **License package** (`simdrive/src/specterqa_ios/license/`) — NaCl-signed license
+  keys, trial activation, 7-day offline grace, entitlement tier model
+  (trial/solo/pro/team/enterprise), cloud CLI helpers. Adds `pynacl>=1.6.2`
+  dependency.
+- **Cloud API scaffold** (`simdrive/src/specterqa_ios/cloud/`) — FastAPI-based
+  license + recording API with R2 stub storage, JWT auth, Stripe webhook skeleton,
+  and rate-limiting groundwork.
+- **LapsApp Xcode scaffold** (`LapsApp/`) — SwiftUI test-host app (iOS 17+,
+  XcodeGen) with 4 feature areas: Search, Settings, Appearance, CrashTrigger.
+  Build and test verified against iPhone 16e iOS 26.2 sim.
+- **`run_journey` MCP tool** registered in `server.py:_TOOLS` — drives a
+  YAML journey against any active session via Claude. License-gated.
+- **`simdrive run` and `simdrive ci` CLI subcommands** — wired in `server.py:serve()`.
+  Both call `check_entitlement()` before proceeding. `run` dispatches to
+  `run_journey()`; `ci` dispatches to `journey.ci.run_ci()`.
+- **`ClaudeLLMClient`** (`journey/claude_client.py`) — Anthropic-SDK-backed
+  implementation of the `LLMClient` Protocol. Uses `claude-opus-4-7`, tracks
+  cumulative cost via `cost_usd` property.
+
+### Test additions
+
+- 137 Python tests — journey package (schema, persona, criteria, runner, CI)
+- 76 Python tests — license + cloud packages
+- 6 Python tests — ClaudeLLMClient (all mocked, no real API calls)
+- 38 Xcode/Swift tests — LapsApp feature unit + UI tests
+- **Total Cycle 1 new tests: 257 (219 Python + 38 Swift)**
+
+### Pending for Atlas before Cycle 2
+
+- Real `SIMDRIVE_PUBLIC_KEY_HEX` keypair needs Chairman generation and injection
+  into `license/public_key.py`. Current public key is a placeholder — license
+  signing/verification will fail in production until this is set.
+- Live smoke against TestKitApp deferred to Cycle 4 dogfood pass.
+- Cloud API requires database + R2 credentials before deployment.
+
+---
+
 ## [16.0.0a3] — 2026-04-28 (alpha — Maurice's a2 dogfood feedback, P0 plumbing fixes)
 
 **Status:** plumbing fixes from `.specterqa/dogfood/v16.0.0a2-maurice.md`. The

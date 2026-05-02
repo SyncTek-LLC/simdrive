@@ -14,9 +14,10 @@ def test_version_present():
     assert server.__version__ == "17.0.0a1"
 
 
-def test_tool_count_is_twenty_nine():
+def test_tool_count_is_thirty():
+    # 29 pre-existing tools + run_journey (SimDrive 1.0 Cycle 1) = 30
     tools = server.list_tools()
-    assert len(tools) == 29, f"expected 29 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 30, f"expected 30 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -33,6 +34,8 @@ def test_tool_names_match_spec():
         "set_appearance", "dismiss_sheet", "list_replays", "validate_replay",
         # v0.3.0a3 dogfood fixes
         "version", "clear_field",
+        # SimDrive 1.0 Cycle 1
+        "run_journey",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
