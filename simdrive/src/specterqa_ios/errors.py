@@ -140,3 +140,89 @@ def replay_drift_halt(step_id: int, similarity: float, threshold: float) -> Simd
         message=f"replay halted at step {step_id}: similarity {similarity:.3f} below threshold {threshold:.3f}",
         details={"step_id": step_id, "similarity": similarity, "threshold": threshold},
     )
+
+
+# --------- Cycle 1 — Extended error codes (Journey + License + Cloud) -------- #
+#
+# Atlas integration decision: the 25 new codes from Cycle 1 live in their
+# per-package modules as the source-of-truth (journey/errors.py,
+# license/errors.py, cloud/errors.py). This avoids circular imports since
+# those modules already import SimdriveError / LicenseError from here.
+#
+# Callers who want the extended codes import directly from the sub-packages:
+#   from specterqa_ios.journey.errors import journey_schema_invalid, ...
+#   from specterqa_ios.license.errors import LicenseError, license_expired, ...
+#   from specterqa_ios.cloud.errors import cloud_error
+#
+# Cloud codes (5) are inline below because cloud/errors.py does NOT import
+# from this module, so no circular import risk.
+#
+# License codes (7) and journey codes (13) are in their own packages to avoid
+# the circular-import problem (those modules import SimdriveError from here).
+# They are NOT re-imported here at module level.
+#
+# New error-code inventory for discoverability (25 codes total):
+#   Journey (13): journey_schema_invalid, journey_persona_not_found,
+#     journey_schema_version_unsupported, journey_device_selector_missing,
+#     persona_schema_invalid, persona_schema_version_unsupported,
+#     journey_budget_exceeded, claude_call_failed, claude_cost_cap_hit,
+#     act_tool_failed, success_criterion_unevaluable,
+#     ci_no_journeys_matched, ci_invalid_journey
+#   License (7): license_invalid, license_expired,
+#     license_offline_grace_exhausted, license_tier_insufficient,
+#     trial_already_used, license_not_found, trial_rate_limited
+#   Cloud (5): cloud_auth_missing, cloud_auth_invalid,
+#     cloud_storage_quota_exceeded, cloud_recording_not_found,
+#     cloud_rate_limited
+
+
+# ── Cloud error constructors (inline — no circular import) ───────────────────
+
+
+def _cloud_error(code: str, message: str, details: dict | None = None) -> dict:
+    """Internal helper — mirrors cloud/errors.py:cloud_error."""
+    return {"ok": False, "error": {"code": code, "message": message, "details": details or {}}}
+
+
+def cloud_auth_missing() -> dict:
+    return _cloud_error(
+        "cloud_auth_missing",
+        "Authorization header is missing. "
+        "Recovery: include 'Authorization: Bearer <token>' in your request.",
+    )
+
+
+def cloud_auth_invalid(reason: str) -> dict:
+    return _cloud_error(
+        "cloud_auth_invalid",
+        f"Authorization token is invalid: {reason}. "
+        "Recovery: re-authenticate via POST /auth/token or check your license key.",
+        {"reason": reason},
+    )
+
+
+def cloud_storage_quota_exceeded(used_gb: float, limit_gb: float) -> dict:
+    return _cloud_error(
+        "cloud_storage_quota_exceeded",
+        f"Storage quota exceeded ({used_gb:.1f} GB used of {limit_gb:.1f} GB limit). "
+        "Recovery: delete old recordings via DELETE /recordings/<id>, or upgrade your plan.",
+        {"used_gb": used_gb, "limit_gb": limit_gb},
+    )
+
+
+def cloud_recording_not_found(recording_id: str) -> dict:
+    return _cloud_error(
+        "cloud_recording_not_found",
+        f"Recording {recording_id!r} not found or has been deleted. "
+        "Recovery: list available recordings via GET /recordings.",
+        {"recording_id": recording_id},
+    )
+
+
+def cloud_rate_limited(retry_after_seconds: int) -> dict:
+    return _cloud_error(
+        "cloud_rate_limited",
+        f"Rate limit exceeded. Retry after {retry_after_seconds}s. "
+        "Recovery: reduce request frequency or upgrade to a higher-tier plan.",
+        {"retry_after_seconds": retry_after_seconds},
+    )
