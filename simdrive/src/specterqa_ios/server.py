@@ -781,6 +781,61 @@ def tool_clear_field(arguments: dict) -> dict:
     return {"ok": cleared, "cleared": cleared}
 
 
+# ─── SimDrive 1.0 — Journey runner MCP tool ──────────────────────────── #
+
+
+def tool_run_journey(arguments: dict) -> dict:
+    """Execute a YAML journey against a running session.
+
+    Requires a valid license (calls check_entitlement() — raises LicenseError
+    when the license is absent/expired/invalid).
+
+    Parameters
+    ----------
+    session_id:    Active session to drive.
+    journey_path:  Absolute or relative path to the journey YAML file.
+    persona_path:  Absolute or relative path to the persona YAML file.
+    budget_override: Optional dict with any subset of {max_steps, max_seconds,
+                     max_llm_calls} to override the journey's default budget.
+
+    Returns RunResult.to_dict().
+    """
+    from specterqa_ios.license.entitlement import check_entitlement
+    from specterqa_ios.journey.schema import load_journey
+    from specterqa_ios.journey.persona import load_persona
+    from specterqa_ios.journey.runner import run_journey
+    from specterqa_ios.journey.claude_client import ClaudeLLMClient
+
+    # License gate — raises LicenseError on expiry / invalid / not found.
+    check_entitlement()
+
+    session_id = arguments["session_id"]
+    s = session.get(session_id)
+
+    journey_path = arguments["journey_path"]
+    persona_path = arguments["persona_path"]
+    budget_override = arguments.get("budget_override")
+
+    journey = load_journey(journey_path)
+
+    # Apply any budget overrides before running.
+    if budget_override:
+        for key in ("max_steps", "max_seconds", "max_llm_calls"):
+            if key in budget_override:
+                setattr(journey.budget, key, int(budget_override[key]))
+
+    persona = load_persona(persona_path)
+    llm_client = ClaudeLLMClient()
+
+    result = run_journey(
+        journey=journey,
+        persona=persona,
+        session=s,
+        llm_client=llm_client,
+    )
+    return result.to_dict()
+
+
 # ----------------------------- MCP wiring ------------------------------- #
 
 
@@ -1272,6 +1327,50 @@ _TOOLS: list[dict] = [
         },
         "handler": tool_clear_field,
     },
+    # ── SimDrive 1.0 — Journey runner ───────────────────────────────────
+    {
+        "name": "run_journey",
+        "description": (
+            "Execute a YAML-defined AI journey against an active session. "
+            "The runner drives Claude to interact with the iOS simulator step-by-step "
+            "until all success criteria are met or the budget is exhausted. "
+            "Requires a valid license (trial or paid). "
+            "Returns: outcome (passed/failed/budget_exceeded/crashed/error), "
+            "steps_executed, llm_calls, llm_cost_usd, duration_seconds, "
+            "success_criteria, artifact_dir, failure_reason."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "journey_path", "persona_path"],
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Active session ID from session_start.",
+                },
+                "journey_path": {
+                    "type": "string",
+                    "description": "Absolute path to the journey YAML file.",
+                },
+                "persona_path": {
+                    "type": "string",
+                    "description": "Absolute path to the persona YAML file.",
+                },
+                "budget_override": {
+                    "type": "object",
+                    "description": (
+                        "Optional overrides for the journey budget. "
+                        "Keys: max_steps (int), max_seconds (int), max_llm_calls (int)."
+                    ),
+                    "properties": {
+                        "max_steps": {"type": "integer"},
+                        "max_seconds": {"type": "integer"},
+                        "max_llm_calls": {"type": "integer"},
+                    },
+                },
+            },
+        },
+        "handler": tool_run_journey,
+    },
 ]
 
 
@@ -1342,12 +1441,131 @@ async def _serve_async() -> None:
 _HELP_TEXT = """\
 specterqa-ios — SpecterQA for iOS MCP server. (codename: simdrive)
 
-Usage: specterqa-ios (no args)  Run as MCP server on stdio.
+Usage: specterqa-ios (no args)   Run as MCP server on stdio.
        specterqa-ios --version
        specterqa-ios --help
 
+SimDrive journey subcommands:
+  specterqa-ios run  --session-id <id> --journey <path> [--persona-override <path>]
+                     [--budget-override max_steps=N,max_seconds=N,max_llm_calls=N]
+  specterqa-ios ci   --session-id <id> [--journeys-dir <path>] [--tag <tag>...]
+
 Aliases: `simdrive` and `simdrive-mcp` invoke the same server.
 """
+
+
+def _parse_budget_override(value: str) -> dict:
+    """Parse ``max_steps=30,max_seconds=120`` into a dict."""
+    result = {}
+    for part in value.split(","):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            result[k.strip()] = int(v.strip())
+    return result
+
+
+def _cmd_run(args: list[str]) -> None:
+    """Handle `specterqa-ios run ...` CLI subcommand.
+
+    Requires a valid license. Instantiates ClaudeLLMClient and calls
+    run_journey(). Prints the RunResult summary to stdout and exits with
+    0 on pass, 1 on any other outcome.
+    """
+    import argparse
+    import json as _json
+    from specterqa_ios.license.entitlement import check_entitlement
+    from specterqa_ios.license.errors import LicenseError
+    from specterqa_ios.journey.schema import load_journey
+    from specterqa_ios.journey.persona import load_persona
+    from specterqa_ios.journey.runner import run_journey
+    from specterqa_ios.journey.claude_client import ClaudeLLMClient
+
+    parser = argparse.ArgumentParser(prog="specterqa-ios run")
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--journey", required=True, metavar="PATH")
+    parser.add_argument("--persona-override", metavar="PATH")
+    parser.add_argument("--budget-override", metavar="KEY=VAL[,...]", default="")
+    ns = parser.parse_args(args)
+
+    # License gate
+    try:
+        check_entitlement()
+    except LicenseError as exc:
+        print(f"LICENSE ERROR: {exc}", flush=True)
+        import sys; sys.exit(2)
+
+    journey = load_journey(ns.journey)
+
+    if ns.budget_override:
+        overrides = _parse_budget_override(ns.budget_override)
+        for k in ("max_steps", "max_seconds", "max_llm_calls"):
+            if k in overrides:
+                setattr(journey.budget, k, overrides[k])
+
+    # Load persona — use persona_override if supplied, otherwise look in same
+    # dir as the journey file with the journey's persona slug.
+    if ns.persona_override:
+        persona = load_persona(ns.persona_override)
+    else:
+        import pathlib
+        journey_dir = pathlib.Path(ns.journey).parent
+        persona_path = journey_dir / ".." / "personas" / f"{journey.persona}.yaml"
+        persona_path = persona_path.resolve()
+        if not persona_path.exists():
+            print(f"ERROR: persona file not found at {persona_path}. Use --persona-override <path>.")
+            import sys; sys.exit(2)
+        persona = load_persona(persona_path)
+
+    # Need an active session object — look it up from the in-memory registry.
+    s = session.get(ns.session_id)
+
+    llm_client = ClaudeLLMClient()
+    result = run_journey(journey=journey, persona=persona, session=s, llm_client=llm_client)
+
+    print(_json.dumps(result.to_dict(), indent=2))
+    import sys
+    sys.exit(0 if result.passed else 1)
+
+
+def _cmd_ci(args: list[str]) -> None:
+    """Handle `specterqa-ios ci ...` CLI subcommand.
+
+    Requires a valid license. Discovers journeys in --journeys-dir (default:
+    .simdrive/journeys), runs them all, and prints a JUnit XML summary.
+    """
+    import argparse
+    import json as _json
+    from specterqa_ios.license.entitlement import check_entitlement
+    from specterqa_ios.license.errors import LicenseError
+    from specterqa_ios.journey.ci import run_ci
+
+    parser = argparse.ArgumentParser(prog="specterqa-ios ci")
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--journeys-dir", default=".simdrive/journeys")
+    parser.add_argument("--tag", action="append", default=[])
+    ns = parser.parse_args(args)
+
+    # License gate
+    try:
+        check_entitlement()
+    except LicenseError as exc:
+        print(f"LICENSE ERROR: {exc}", flush=True)
+        import sys; sys.exit(2)
+
+    s = session.get(ns.session_id)
+
+    from specterqa_ios.journey.claude_client import ClaudeLLMClient
+    llm_client = ClaudeLLMClient()
+
+    ci_result = run_ci(
+        session=s,
+        llm_client=llm_client,
+        journeys_dir=ns.journeys_dir,
+        tag_filter=ns.tag or [],
+    )
+    print(_json.dumps(ci_result, indent=2) if isinstance(ci_result, dict) else str(ci_result))
+    import sys; sys.exit(0)
 
 
 def serve() -> None:
@@ -1362,6 +1580,13 @@ def serve() -> None:
         if flag in ("--help", "-h"):
             print(_HELP_TEXT, end="")
             sys.exit(0)
+        # SimDrive journey subcommands (SimDrive 1.0 Cycle 1)
+        if flag == "run":
+            _cmd_run(args[1:])
+            return
+        if flag == "ci":
+            _cmd_ci(args[1:])
+            return
     asyncio.run(_serve_async())
 
 

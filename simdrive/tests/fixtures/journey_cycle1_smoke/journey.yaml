@@ -1,0 +1,15 @@
+schema_version: 1
+name: cycle1_smoke
+persona: smoke_user
+target: simulator
+goals:
+  - Verify the app home screen is visible
+success_criteria:
+  - text_visible: "Home"
+budget:
+  max_steps: 5
+  max_seconds: 30
+  max_llm_calls: 3
+tags:
+  - smoke
+  - cycle1
