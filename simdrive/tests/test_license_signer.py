@@ -31,61 +31,61 @@ class TestKeypairGeneration:
     """Tests for license/keypair.py."""
 
     def test_generate_returns_signing_key(self) -> None:
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.keypair import generate_keypair
         sk, vk = generate_keypair()
         assert sk is not None
         assert vk is not None
 
     def test_signing_key_32_bytes(self) -> None:
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.keypair import generate_keypair
         sk, vk = generate_keypair()
         # pynacl SigningKey._signing_key is 32 bytes seed
         assert len(bytes(sk)) == 32
 
     def test_verify_key_32_bytes(self) -> None:
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.keypair import generate_keypair
         sk, vk = generate_keypair()
         assert len(bytes(vk)) == 32
 
     def test_signing_key_to_hex_roundtrip(self) -> None:
-        from specterqa_ios.license.keypair import generate_keypair, signing_key_to_hex, signing_key_from_hex
+        from simdrive.license.keypair import generate_keypair, signing_key_to_hex, signing_key_from_hex
         sk, _ = generate_keypair()
         hex_str = signing_key_to_hex(sk)
         sk2 = signing_key_from_hex(hex_str)
         assert bytes(sk) == bytes(sk2)
 
     def test_verify_key_to_hex_roundtrip(self) -> None:
-        from specterqa_ios.license.keypair import generate_keypair, verify_key_to_hex, verify_key_from_hex
+        from simdrive.license.keypair import generate_keypair, verify_key_to_hex, verify_key_from_hex
         _, vk = generate_keypair()
         hex_str = verify_key_to_hex(vk)
         vk2 = verify_key_from_hex(hex_str)
         assert bytes(vk) == bytes(vk2)
 
     def test_each_generate_is_unique(self) -> None:
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.keypair import generate_keypair
         sk1, _ = generate_keypair()
         sk2, _ = generate_keypair()
         assert bytes(sk1) != bytes(sk2)
 
     def test_signing_key_from_invalid_hex_raises(self) -> None:
-        from specterqa_ios.license.keypair import signing_key_from_hex
+        from simdrive.license.keypair import signing_key_from_hex
         with pytest.raises(ValueError, match="hex"):
             signing_key_from_hex("not-hex!!")
 
     def test_verify_key_from_invalid_hex_raises(self) -> None:
-        from specterqa_ios.license.keypair import verify_key_from_hex
+        from simdrive.license.keypair import verify_key_from_hex
         with pytest.raises(ValueError, match="hex"):
             verify_key_from_hex("zzz")
 
     def test_signing_key_hex_length_is_64(self) -> None:
         """Ed25519 seed is 32 bytes = 64 hex chars."""
-        from specterqa_ios.license.keypair import generate_keypair, signing_key_to_hex
+        from simdrive.license.keypair import generate_keypair, signing_key_to_hex
         sk, _ = generate_keypair()
         assert len(signing_key_to_hex(sk)) == 64
 
     def test_verify_key_hex_length_is_64(self) -> None:
         """Ed25519 public key is 32 bytes = 64 hex chars."""
-        from specterqa_ios.license.keypair import generate_keypair, verify_key_to_hex
+        from simdrive.license.keypair import generate_keypair, verify_key_to_hex
         _, vk = generate_keypair()
         assert len(verify_key_to_hex(vk)) == 64
 
@@ -99,11 +99,11 @@ class TestSigner:
 
     @pytest.fixture
     def keypair(self):
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.keypair import generate_keypair
         return generate_keypair()
 
     def test_sign_produces_two_part_key(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         key = sign_license(
             signing_key=sk,
@@ -117,7 +117,7 @@ class TestSigner:
         assert len(parts) == 2, "License key must be <payload>.<signature>"
 
     def test_payload_is_valid_json(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         key = sign_license(
@@ -136,7 +136,7 @@ class TestSigner:
 
     def test_signature_is_64_bytes(self, keypair) -> None:
         """Ed25519 signature is 64 bytes."""
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         key = sign_license(
@@ -152,7 +152,7 @@ class TestSigner:
         assert len(sig) == 64
 
     def test_key_length_approx_200_chars(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         key = sign_license(
@@ -167,7 +167,7 @@ class TestSigner:
         assert 150 <= len(key) <= 400
 
     def test_missing_tier_raises(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         with pytest.raises((ValueError, TypeError)):
             sign_license(
@@ -180,7 +180,7 @@ class TestSigner:
             )
 
     def test_invalid_tier_raises(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         with pytest.raises(ValueError, match="tier"):
             sign_license(
@@ -193,7 +193,7 @@ class TestSigner:
             )
 
     def test_negative_seats_raises(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         with pytest.raises(ValueError, match="seats"):
             sign_license(
@@ -206,7 +206,7 @@ class TestSigner:
             )
 
     def test_expires_before_issued_raises(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         with pytest.raises(ValueError, match="expires_at"):
@@ -220,7 +220,7 @@ class TestSigner:
             )
 
     def test_trial_tier_accepted(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         key = sign_license(
@@ -234,7 +234,7 @@ class TestSigner:
         assert "." in key
 
     def test_enterprise_tier_accepted(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         key = sign_license(
@@ -248,7 +248,7 @@ class TestSigner:
         assert "." in key
 
     def test_payload_contains_all_fields(self, keypair) -> None:
-        from specterqa_ios.license.signer import sign_license
+        from simdrive.license.signer import sign_license
         sk, _ = keypair
         now = int(time.time())
         exp = now + 86400 * 14
@@ -281,8 +281,8 @@ class TestSigner:
 @settings(max_examples=20)
 def test_keypair_roundtrip_property(tier: str, seats: int, email: str) -> None:
     """Property: sign then decode payload always gives back the same data."""
-    from specterqa_ios.license.keypair import generate_keypair
-    from specterqa_ios.license.signer import sign_license
+    from simdrive.license.keypair import generate_keypair
+    from simdrive.license.signer import sign_license
     sk, _ = generate_keypair()
     now = int(time.time())
     key = sign_license(
@@ -304,7 +304,7 @@ def test_keypair_roundtrip_property(tier: str, seats: int, email: str) -> None:
 @settings(max_examples=30)
 def test_b64url_encode_decode_roundtrip(s: str) -> None:
     """Property: base64url encode/decode roundtrip is lossless."""
-    from specterqa_ios.license.signer import _b64url_encode
+    from simdrive.license.signer import _b64url_encode
     encoded = _b64url_encode(s.encode())
     decoded = _b64url_decode(encoded)
     assert decoded == s.encode()

@@ -25,11 +25,11 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from specterqa_ios.journey.persona import Persona, AccessibilityNeeds
-from specterqa_ios.journey.prompt import assemble_system_prompt, assemble_user_prompt
-from specterqa_ios.journey.result import RunResult, StepRecord, CriterionEval
-from specterqa_ios.journey.runner import LLMClient, StepDecision, run_journey
-from specterqa_ios.journey.schema import Budget, Journey, SuccessCriterion
+from simdrive.journey.persona import Persona, AccessibilityNeeds
+from simdrive.journey.prompt import assemble_system_prompt, assemble_user_prompt
+from simdrive.journey.result import RunResult, StepRecord, CriterionEval
+from simdrive.journey.runner import LLMClient, StepDecision, run_journey
+from simdrive.journey.schema import Budget, Journey, SuccessCriterion
 
 
 # ── Fake helpers ──────────────────────────────────────────────────────────────
@@ -255,10 +255,10 @@ class TestRunJourneyPassed:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={"cpu_pct": 10.0}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
+            patch("simdrive.journey.runner.tool_perf", return_value={"cpu_pct": 10.0}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -280,10 +280,10 @@ class TestRunJourneyPassed:
         client = FakeLLMClient([])  # Should never be called
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={"cpu_pct": 5.0}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
+            patch("simdrive.journey.runner.tool_perf", return_value={"cpu_pct": 5.0}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -307,10 +307,10 @@ class TestRunJourneyFailed:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_EMPTY),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_EMPTY),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -338,11 +338,11 @@ class TestRunJourneyBudget:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_EMPTY),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_tap", return_value={"ok": True}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_EMPTY),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -366,11 +366,11 @@ class TestRunJourneyBudget:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_EMPTY),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_tap", return_value={"ok": True}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_EMPTY),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -393,10 +393,10 @@ class TestRunJourneyCrash:
         crashes = [{"path": "/tmp/crash.ips", "timestamp": 9999}]
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_EMPTY),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": crashes}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_EMPTY),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": crashes}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -418,17 +418,17 @@ class TestRunJourneyActToolFailed:
             StepDecision(tool="tap", args={"x": 50, "y": 50}, rationale="tap", confidence=0.9),
         ])
 
-        from specterqa_ios.errors import SimdriveError
+        from simdrive.errors import SimdriveError
 
         def _fake_tap_fail(args: dict):
             raise SimdriveError(code="target_not_found", message="no match", details={})
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_EMPTY),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_tap", side_effect=_fake_tap_fail),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_EMPTY),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_tap", side_effect=_fake_tap_fail),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -455,11 +455,11 @@ class TestRunJourneyMetrics:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_EMPTY),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_tap", return_value={"ok": True}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_EMPTY),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -482,10 +482,10 @@ class TestRunJourneyMetrics:
         artifact_dir = tmp_path / "my_artifacts"
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -512,10 +512,10 @@ class TestRunResultSerialisation:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,
@@ -536,10 +536,10 @@ class TestRunResultSerialisation:
         ])
 
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
-            patch("specterqa_ios.journey.runner.tool_perf", return_value={}),
-            patch("specterqa_ios.journey.runner.tool_crashes", return_value={"crashes": []}),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", return_value={}),
+            patch("simdrive.journey.runner.tool_observe", return_value=_OBS_WITH_HOME),
+            patch("simdrive.journey.runner.tool_perf", return_value={}),
+            patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
+            patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
             result = run_journey(
                 journey, persona, session, client,

@@ -17,8 +17,8 @@ try:
 except ImportError:
     HAS_HYPOTHESIS = False
 
-from specterqa_ios.errors import SimdriveError
-from specterqa_ios.journey.persona import (
+from simdrive.errors import SimdriveError
+from simdrive.journey.persona import (
     AccessibilityNeeds,
     Persona,
     load_persona,

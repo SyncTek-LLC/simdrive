@@ -28,7 +28,7 @@ def _make_key(sk, tier="pro", seats=4, email="test@example.com",
     issued_at is always 30 days in the past so that negative expires_offset
     values (expired keys) are still structurally valid (expires_at > issued_at).
     """
-    from specterqa_ios.license.signer import sign_license
+    from simdrive.license.signer import sign_license
     now = int(time.time())
     # issued 30 days ago so we can create both future AND past expiry keys
     issued_at = now - (86400 * 30) + issued_offset
@@ -48,7 +48,7 @@ def _make_key(sk, tier="pro", seats=4, email="test@example.com",
 
 @pytest.fixture
 def keypair():
-    from specterqa_ios.license.keypair import generate_keypair
+    from simdrive.license.keypair import generate_keypair
     return generate_keypair()
 
 
@@ -59,7 +59,7 @@ def keypair():
 class TestValidatorHappyPath:
 
     def test_valid_key_returns_payload(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
+        from simdrive.license.validator import validate_license
         sk, vk = keypair
         key = _make_key(sk)
         result = validate_license(key, verify_key=vk)
@@ -67,7 +67,7 @@ class TestValidatorHappyPath:
         assert result["seats"] == 4
 
     def test_valid_key_all_tiers(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
+        from simdrive.license.validator import validate_license
         sk, vk = keypair
         for tier in ["trial", "solo", "pro", "team", "enterprise"]:
             key = _make_key(sk, tier=tier)
@@ -75,7 +75,7 @@ class TestValidatorHappyPath:
             assert result["tier"] == tier
 
     def test_valid_key_contains_expires_at(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
+        from simdrive.license.validator import validate_license
         sk, vk = keypair
         key = _make_key(sk)
         result = validate_license(key, verify_key=vk)
@@ -86,8 +86,8 @@ class TestValidatorExpiry:
 
     def test_expired_key_raises_license_expired(self, keypair) -> None:
         """Online mode: expired key must raise immediately (no grace window)."""
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         sk, vk = keypair
         key = _make_key(sk, expires_offset=-1)  # expired 1 second ago
         # Pass server_time to trigger online mode (no grace window)
@@ -98,8 +98,8 @@ class TestValidatorExpiry:
 
     def test_expiry_exactly_now_is_expired(self, keypair) -> None:
         """Online mode: a key that expired exactly now must be rejected."""
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         sk, vk = keypair
         key = _make_key(sk, expires_offset=0)
         server_time = int(time.time())
@@ -109,7 +109,7 @@ class TestValidatorExpiry:
 
     def test_future_key_valid(self, keypair) -> None:
         """Key expiring 1 hour from now must be accepted."""
-        from specterqa_ios.license.validator import validate_license
+        from simdrive.license.validator import validate_license
         sk, vk = keypair
         key = _make_key(sk, expires_offset=3600)
         result = validate_license(key, verify_key=vk)
@@ -119,8 +119,8 @@ class TestValidatorExpiry:
 class TestValidatorTampering:
 
     def test_tampered_payload_raises_license_invalid(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         sk, vk = keypair
         key = _make_key(sk)
         payload_b64, sig_b64 = key.split(".")
@@ -135,8 +135,8 @@ class TestValidatorTampering:
         assert exc_info.value.code == "license_invalid"
 
     def test_tampered_signature_raises_license_invalid(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         sk, vk = keypair
         key = _make_key(sk)
         payload_b64, sig_b64 = key.split(".")
@@ -148,9 +148,9 @@ class TestValidatorTampering:
         assert exc_info.value.code == "license_invalid"
 
     def test_wrong_public_key_raises_license_invalid(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
+        from simdrive.license.keypair import generate_keypair
         sk, _ = keypair
         _, wrong_vk = generate_keypair()  # different keypair
         key = _make_key(sk)
@@ -159,24 +159,24 @@ class TestValidatorTampering:
         assert exc_info.value.code == "license_invalid"
 
     def test_malformed_key_no_dot_raises(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         _, vk = keypair
         with pytest.raises(LicenseError) as exc_info:
             validate_license("nodot_in_this_key", verify_key=vk)
         assert exc_info.value.code == "license_invalid"
 
     def test_empty_key_raises(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         _, vk = keypair
         with pytest.raises(LicenseError) as exc_info:
             validate_license("", verify_key=vk)
         assert exc_info.value.code == "license_invalid"
 
     def test_too_many_parts_raises(self, keypair) -> None:
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         _, vk = keypair
         with pytest.raises(LicenseError) as exc_info:
             validate_license("a.b.c", verify_key=vk)
@@ -187,8 +187,8 @@ class TestValidatorClockSkew:
 
     def test_skew_defense_uses_server_time_when_ahead(self, keypair) -> None:
         """If server time is ahead of local, use server time for expiry check."""
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         sk, vk = keypair
         # Key expires 10 seconds in the future from real now
         key = _make_key(sk, expires_offset=10)
@@ -200,7 +200,7 @@ class TestValidatorClockSkew:
 
     def test_offline_grace_7_days(self, keypair) -> None:
         """Key expired 3 days ago but offline grace (7 days) still covers it."""
-        from specterqa_ios.license.validator import validate_license
+        from simdrive.license.validator import validate_license
         sk, vk = keypair
         # Key expired 3 days ago
         key = _make_key(sk, expires_offset=-(86400 * 3))
@@ -210,8 +210,8 @@ class TestValidatorClockSkew:
 
     def test_offline_grace_exhausted_after_7_days(self, keypair) -> None:
         """Key expired 8 days ago — even with grace window, must reject."""
-        from specterqa_ios.license.validator import validate_license
-        from specterqa_ios.license.errors import LicenseError
+        from simdrive.license.validator import validate_license
+        from simdrive.license.errors import LicenseError
         sk, vk = keypair
         # Key expired 8 days ago
         key = _make_key(sk, expires_offset=-(86400 * 8))
@@ -221,7 +221,7 @@ class TestValidatorClockSkew:
 
     def test_grace_boundary_exactly_7_days(self, keypair) -> None:
         """Key expired exactly 7 days ago — boundary must still be accepted."""
-        from specterqa_ios.license.validator import validate_license
+        from simdrive.license.validator import validate_license
         sk, vk = keypair
         key = _make_key(sk, expires_offset=-(86400 * 7 - 1))  # 1 second before 7 days
         result = validate_license(key, verify_key=vk, last_known_server_time=None)

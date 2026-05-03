@@ -25,8 +25,8 @@ from __future__ import annotations
 from typing import Any
 
 # Import from the global errors module so SimdriveError is the same class
-# everywhere — callers can still catch specterqa_ios.errors.SimdriveError.
-from specterqa_ios.errors import SimdriveError
+# everywhere — callers can still catch simdrive.errors.SimdriveError.
+from simdrive.errors import SimdriveError
 
 
 # ── Component 1 — Journey schema ────────────────────────────────────────────

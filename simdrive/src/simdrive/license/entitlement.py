@@ -13,10 +13,10 @@ from typing import Optional
 
 from nacl.signing import VerifyKey
 
-from specterqa_ios.license.errors import license_not_found
-from specterqa_ios.license.trial import load_license_data
-from specterqa_ios.license.validator import validate_license
-from specterqa_ios.license.public_key import get_public_key
+from simdrive.license.errors import license_not_found
+from simdrive.license.trial import load_license_data
+from simdrive.license.validator import validate_license
+from simdrive.license.public_key import get_public_key
 
 
 _DEFAULT_LICENSE_PATH = Path.home() / ".simdrive" / "license.json"
@@ -101,7 +101,7 @@ def check_entitlement(
     try:
         data = load_license_data(license_path)
     except (json.JSONDecodeError, OSError) as exc:
-        from specterqa_ios.license.errors import license_invalid
+        from simdrive.license.errors import license_invalid
         raise license_invalid(f"could not read license file: {exc}") from exc
 
     license_key: str = data.get("license_key", "")

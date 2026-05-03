@@ -16,8 +16,8 @@ from typing import Optional
 from fastapi import HTTPException, Request, status
 from nacl.signing import VerifyKey
 
-from specterqa_ios.license.errors import LicenseError
-from specterqa_ios.license.validator import validate_license
+from simdrive.license.errors import LicenseError
+from simdrive.license.validator import validate_license
 
 
 def make_license_bearer(verify_key: VerifyKey):

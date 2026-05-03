@@ -7,6 +7,15 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [17.0.0a1] — 2026-05-02 (alpha — package rename: specterqa-ios → simdrive, brand restoration)
+
+### Changed (BREAKING)
+- **PyPI package renamed `specterqa-ios` → `simdrive`.** Public brand has been "SimDrive" since the BIS R&D round; the PyPI distribution name and Python import path now match. **Migration for existing installs:** `pip uninstall specterqa-ios && pip install simdrive`. Imports change from `from specterqa_ios.X import Y` to `from simdrive.X import Y`.
+- **Python import path renamed `specterqa_ios` → `simdrive`.**
+- **Major version bump to 17.0.0a1** signals the breaking import change (Example Reader personally notified by Chairman).
+
+---
+
 ## [16.0.0a5] — 2026-05-02 (alpha — pydantic runtime dep correctness)
 
 ### Fixed

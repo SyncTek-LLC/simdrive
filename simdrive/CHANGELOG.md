@@ -1,24 +1,11 @@
 # Changelog
 
-## 17.0.0a1 — 2026-05-01
+## [17.0.0a1] — 2026-05-02 (alpha — package rename: specterqa-ios → simdrive, brand restoration)
 
-**Brand consolidation: rename to SpecterQA for iOS.** Continuing the legacy `specterqa-ios` major-version line — 17.0 signals the complete rewrite over the abandoned 16.x branch.
-
-### Renamed
-- **PyPI package:** `simdrive` → `specterqa-ios`. Same code, new name. The `simdrive` name lives on as the internal codename — used in the binary filename, in dev branches, and in commit history; the public-facing surfaces (PyPI, README, MCP listings) all use `specterqa-ios`.
-- **Python module:** `simdrive` → `specterqa_ios`. Imports update accordingly.
-- **Console script:** both `specterqa-ios` and `simdrive` invoke the same MCP server. Existing `.mcp.json` files with `command: simdrive` keep working; new configs should prefer `command: specterqa-ios`.
-
-### Migration
-For Example Reader and other early adopters on `simdrive 0.3.0a3`:
-1. `pip install specterqa-ios==17.0.0a1`
-2. Update imports: `from simdrive` → `from specterqa_ios`
-3. Optionally update `.mcp.json` to `command: specterqa-ios` (the `simdrive` alias keeps working)
-
-A final `simdrive 0.3.0a4` deprecation stub (depending on `specterqa-ios>=17.0.0a1`) ships separately so `pip install simdrive` continues to resolve and prints a one-line migration notice.
-
-### No behavioral changes
-This release is a pure rename. All 29 MCP tools, all 117 tests, all behaviors are identical to `simdrive 0.3.0a3`. Behavioral changes will resume from 17.0.0a2.
+### Changed (BREAKING)
+- **PyPI package renamed `specterqa-ios` → `simdrive`.** Public brand has been "SimDrive" since the BIS R&D round; the PyPI distribution name and Python import path now match. **Migration for existing installs:** `pip uninstall specterqa-ios && pip install simdrive`. Imports change from `from specterqa_ios.X import Y` to `from simdrive.X import Y`.
+- **Python import path renamed `specterqa_ios` → `simdrive`.**
+- **Major version bump to 17.0.0a1** signals the breaking import change (Example Reader personally notified by Chairman).
 
 ## 0.3.0a3 — 2026-05-01
 
