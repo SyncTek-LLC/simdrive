@@ -147,18 +147,18 @@ Today: ~15 minutes for an unprepared developer. Target: **under 5 minutes.** Two
 
 ## 7. SpecterQA cutover
 
-**Decision (Chairman, 2026-05-01): SpecterQA is the public brand.** The iOS-arm PyPI rename is `simdrive` → `specterqa-ios`. The new code that was shipping as `simdrive 0.3.0a3` is now published as `specterqa-ios 17.0.0a1`, continuing the legacy `specterqa-ios` major-version line directly over the abandoned 16.x branch. simdrive lives on as the internal codename — used in the binary filename (`simdrive-input`), in dev branches, in commit history, and as the legacy console-script alias for back-compat.
+**Decision (Chairman, 2026-05-01): SpecterQA is the public brand.** The iOS-arm PyPI rename is `simdrive` → `specterqa-ios`. The new code that was shipping as `simdrive 0.3.0a3` is now published as `specterqa-ios 1.0.0a1`, continuing the legacy `specterqa-ios` major-version line directly over the abandoned 16.x branch. simdrive lives on as the internal codename — used in the binary filename (`simdrive-input`), in dev branches, in commit history, and as the legacy console-script alias for back-compat.
 
-**No yank, no soft sunset of the historical 54 releases.** The original `specterqa-ios` package (releases through 16.0.0a3) stays on PyPI — historical pins continue to resolve. New publishes from this repo go to the same `specterqa-ios` namespace at version 17.0.0a1+ — pip's resolver picks the new code naturally for unpinned installs.
+**No yank, no soft sunset of the historical 54 releases.** The original `specterqa-ios` package (releases through 16.0.0a3) stays on PyPI — historical pins continue to resolve. New publishes from this repo go to the same `specterqa-ios` namespace at version 1.0.0a1+ — pip's resolver picks the new code naturally for unpinned installs.
 
 | Date | Action |
 |---|---|
-| 2026-05-01 | Ship `specterqa-ios 17.0.0a1` to PyPI (the renamed `simdrive 0.3.0a3` codebase, no behavioral changes). |
-| 2026-05-01 | Ship `simdrive 0.3.0a4` deprecation stub: depends on `specterqa-ios>=17.0.0a1`, prints a one-line migration notice on import. So `pip install simdrive` keeps resolving and points users at the new package. |
+| 2026-05-01 | Ship `specterqa-ios 1.0.0a1` to PyPI (the renamed `simdrive 0.3.0a3` codebase, no behavioral changes). |
+| 2026-05-01 | Ship `simdrive 0.3.0a4` deprecation stub: depends on `specterqa-ios>=1.0.0a1`, prints a one-line migration notice on import. So `pip install simdrive` keeps resolving and points users at the new package. |
 | 2026-05-05 | Update README banner + repo description pointing to `specterqa-ios`. Pin a migration issue on the repo. |
 | 2026-05-15 | Last `simdrive` deprecation-stub release. From here forward, all releases ship under `specterqa-ios` only. |
 
-The legacy 16.x `specterqa-ios` line (the abandoned XCTest-based codebase under `src/specterqa/` at the repo root) is being retired in a separate follow-up commit — the new code being published as `specterqa-ios 17.0.0a1` is a complete rewrite, no migration tooling needed for users (none exist on the old code).
+The legacy 16.x `specterqa-ios` line (the abandoned XCTest-based codebase under `src/specterqa/` at the repo root) is being retired in a separate follow-up commit — the new code being published as `specterqa-ios 1.0.0a1` is a complete rewrite, no migration tooling needed for users (none exist on the old code).
 
 ---
 

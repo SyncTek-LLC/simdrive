@@ -20,7 +20,7 @@ SpecterQA is the MCP-native iOS simulator driver that AI agents and CI use to ga
 4. **Supported platforms:** macOS (Apple Silicon + Intel), Xcode + iOS Simulator. Python ≥ 3.10.
 5. **Real-device support:** read-only today (observe + logs + lifecycle). Real-device input via WebDriverAgent ships in v1.1.
 6. **License:** MIT. Permanent. The 29 MCP tools, vision-first observe, record/replay, and HID injection are all open and stay open.
-7. **Distribution:** PyPI (`specterqa-ios` namespace, currently `17.0.0a1`). Trusted Publisher OIDC — no token in the publish path.
+7. **Distribution:** PyPI (`specterqa-ios` namespace, currently `1.0.0a1`). Trusted Publisher OIDC — no token in the publish path.
 8. **Founder:** Maurice Carrier. Army veteran (82nd Airborne, Combat Infantryman Badge), two issued patents (Align Technology AR dental imaging), Computer Science, UNC Chapel Hill.
 9. **Company:** SyncTek LLC. SpecterQA is the public product brand; `simdrive` is the internal codename retained in the binary filename and dev branches.
 10. **Reference customer:** Example Reader iOS (ExampleOrg), migrated off the legacy XCTest-based driver in 5 days, three feedback rounds all closed.
@@ -66,7 +66,7 @@ All from Example Reader iOS's published v0.2.0a1 dogfood report, attribution **M
 
 > "Replays are now reliable enough to gate PRs on."
 
-(The Example Reader report predates the rename, so the words "simdrive" and "SpecterQA" appear flipped vs current branding — "simdrive 0.2.0a1" is what now ships as `specterqa-ios 17.0.0a1`. Quote unchanged for fidelity.)
+(The Example Reader report predates the rename, so the words "simdrive" and "SpecterQA" appear flipped vs current branding — "simdrive 0.2.0a1" is what now ships as `specterqa-ios 1.0.0a1`. Quote unchanged for fidelity.)
 
 ---
 

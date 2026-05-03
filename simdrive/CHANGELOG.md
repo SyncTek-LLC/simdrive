@@ -1,63 +1,60 @@
 # Changelog
 
-## [17.0.0a3] — 2026-05-02 (alpha — Cycle 2 Cloud + Cycle 3 hardening + recordings 204 fix)
+## [1.0.0a1] — 2026-05-02 (alpha — SimDrive 1.0 first alpha)
 
-### Added (Cycle 2 — Cloud API completion, commit e1cc861)
-- **R2 storage backend** — `boto3`-backed `R2Client` alongside `R2Stub` fallback (env-driven via `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`)
-- **Per-tier monthly run quotas** — Solo 50, Pro 250, Team 1000; persisted in `usage_counters` table; `POST /v1/runs/increment` enforces with 429+`Retry-After`
-- **`GET /v1/licenses/usage`** — returns `{period_start, period_end, runs_used, runs_limit, tier, percent_used}`
-- **`GET /health`** — Railway healthcheck-compatible (returns version, db_reachable, storage_backend)
-- **Auth hardening** — expired-key rejection, tampered-signature 401, missing-bearer 401, per-route required-tier checks (recordings POST is Pro+)
+This is the first alpha of the **SimDrive 1.0** line. It supersedes the
+former `specterqa-ios` 16.x line: PyPI distribution name reverted to
+`simdrive` (matching the public brand) and Python import path is now
+`from simdrive.X import Y`. **Migration for existing installs:**
+`pip uninstall specterqa-ios && pip install simdrive`.
+
+### Added — Journey runner + license + cloud foundation (Cycle 1)
+- **`run_journey` MCP tool + `simdrive run` / `simdrive ci` CLI** — agent loop with persona + journey YAML, budget enforcement, faked or real `LLMClient` (Anthropic SDK wrapper at `simdrive.journey.claude_client`)
+- **License system** — Ed25519-signed offline-verifiable keys with 7-day grace, `simdrive trial start`, `simdrive license activate`, `simdrive license status`
+- **Cloud private API skeleton** — FastAPI app with `/v1/trials`, `/v1/licenses/{activate,status}`, `/v1/recordings`, R2Stub storage
+
+### Added — LapsApp dogfood platform (Cycle 1+2+3)
+- New `LapsApp/` Xcode project at repo root: 12 feature areas (Settings, Light/Dark, Crash-Trigger, Search, OAuth-mocked, WebView reader, Activities infinite-scroll, Forms async-validation, Sheets+modals, PerfStress 1000-row, Offline mode toggle, Multi-app launcher), 5 primary tabs, 98 Swift tests
+- 20-journey YAML corpus + 3 personas under `LapsApp/.simdrive/`
+
+### Added — Cloud production-ready (Cycle 2)
+- **Real R2 storage** — boto3-backed `R2Client` (env-driven), R2Stub fallback for local dev
+- **Per-tier monthly run quotas** — Solo 50 / Pro 250 / Team 1000; `POST /v1/runs/increment` enforces with 429+`Retry-After`
+- **`GET /v1/licenses/usage`** — returns runs_used / runs_limit / percent_used / period dates
+- **`GET /health`** for Railway healthcheck
+- **Auth hardening** — expired/tampered/missing-bearer rejection paths tested; per-route required-tier gates
 - **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml, .env.example, README.md}`
-- 78 cloud tests (40 new + 38 cycle-1 intact)
 
-### Added (Cycle 3 — Production hardening, commit 7cdeb86)
-- **Observability package** `simdrive/observability/{logger, metrics, tracing}.py`
-  - `SIMDRIVE_DEBUG=1` toggles JSON-shaped structured logs
-  - Counters + histograms (`journey_runs_total`, `tap_latency_ms`, `observe_latency_ms`, `claude_call_cost_usd`)
-  - `dump_prometheus()` for Prometheus text-format export
-  - Span-context tracing for journey-step traceability
-- **Perf benchmark suite** `simdrive/tests/perf/` with 2× regression gate; baselines committed (observe p95: 2ms, tap p95: 1.5ms, step p95: 8ms)
-- **Edge-case coverage** for runner (budget exact-limit, LLM raises, mid-journey crash), validator (expiry-at-the-second, clock skew >7d, corrupted base64), recordings (oversized, malformed YAML, zero screenshots, auth-missing)
-- **Recovery: line audit** — 11 missing `Recovery:` lines added across `errors.py` constructors (`no_session`, `no_device`, `hid_unavailable`, `target_not_found`, `missing_target`, `invalid_argument`, `already_recording`, `not_recording`, `recording_not_found`, `device_input_unavailable`, `replay_drift_halt`)
-- **Docs** — `OBSERVABILITY.md`, `PERFORMANCE.md`, `RECOVERY.md` (one-stop reference for every error code + remediation step)
-- 46 observability tests + 23 edge tests + 37 recovery-copy tests + 3 perf benches = 109 new tests
-- Total Python suite at the end of cycle 3: ~386 passing
+### Added — Production hardening (Cycle 3)
+- **Observability package** `simdrive.observability.{logger, metrics, tracing}` — `SIMDRIVE_DEBUG=1` toggles JSON-shaped logs; counters + histograms (`journey_runs_total`, `tap_latency_ms`, `observe_latency_ms`, `claude_call_cost_usd`); span-context tracing
+- **Perf benchmark suite** at `simdrive/tests/perf/` with 2× regression CI gate; baselines committed
+- **Edge-case coverage** for runner, validator, recordings boundaries
+- **`Recovery:` line audit** — every error constructor across `errors.py` and per-package modules carries a copyable next-step
+- **Docs** — `OBSERVABILITY.md`, `PERFORMANCE.md`, `RECOVERY.md`
+
+### Added — Production credentials
+- **Production Ed25519 license-signing public key** injected (private key held in Chairman's secure storage; configured as `SIMDRIVE_LICENSE_PRIVATE_KEY` env var on the Railway license server)
 
 ### Fixed
-- **BUG-cloud-204-response-model:** DELETE `/recordings/{id}` raised `AssertionError: Status code 204 must not have a response body` at router init time. Recordings edge tests now run cleanly. (Pre-existing in Cycle 2's recordings.py, fixed here.)
+- `recordings.py` DELETE 204 + response-model `AssertionError` at router init (introduced and fixed in Cycle 2+3)
+- `pydantic`, `email-validator`, `pynacl` declared as runtime deps (were missing from previous pyproject)
+- Stale repo-root `pyproject.toml` removed (named the package `specterqa-ios@16.0.0a5` and shadowed the canonical `simdrive/pyproject.toml`)
 
 ### Changed
-- `pyproject.toml` runtime deps now include `boto3>=1.20`, `prometheus-client>=0.19`
-- New optional-deps group `[cloud]` for prod-server install profile
-- New dev deps: `moto[s3]>=5.0`, `pytest-benchmark>=4.0`
+- Public brand and PyPI distribution name: `specterqa-ios` → `simdrive`
+- Python import path: `from specterqa_ios.X` → `from simdrive.X`
+- Major version reset to `1.0.0a1` to match the SimDrive 1.0 launch trajectory (the 17.x line was never published to PyPI)
+- 5-tab navigation in LapsApp (Home / Activities / Search / Blog / Settings) — avoids the iOS TabView "More" overflow
 
----
+### Test totals at this alpha
+- Python: ~488 tests pass + 3 perf benchmarks with 2× regression gates
+- Swift (LapsApp): 95 unit + 3 UI = 98 tests pass on iPhone 16e iOS 26.2
+- Smoke: `scripts/smoke_journey_cycle1.py` exits 0 plain and with `SIMDRIVE_DEBUG=1`
 
-## [17.0.0a2] — 2026-05-02 (alpha — LapsApp cycle 2+3 features + journey corpus + email-validator dep)
-
-### Added
-- **LapsApp cycle 2 features (4):** OAuth login (mocked Apple/Google), WKWebView article reader, Activities list with infinite scroll, Forms with async validation
-- **LapsApp cycle 3 features (4):** Sheets+modals, PerfStress 1000-row, Offline mode toggle, Multi-app launcher (Settings/Mail/Maps via UIApplication.shared.open)
-- **20-journey YAML corpus** under `LapsApp/.simdrive/journeys/` — 17 happy-path + 3 deliberately-fail regression-detector journeys (oauth-google-cancel, dynamic-island-shows-limitation)
-- **3 personas** under `LapsApp/.simdrive/personas/` — first_time_runner, returning_user, power_user
-- **Navigation restructured to 5 primary tabs** (Home, Activities, Search, Blog, Settings) with nav-stack pushes for sub-features — avoids iOS TabView "More" overflow
-- **LapsApp test suite grew from 38 → 98 tests** (95 unit + 3 UI), all passing on iPhone 16e iOS 26.2 sim
-
-### Fixed
-- **`email-validator` declared as runtime dep.** License code uses pydantic `EmailStr` which requires email-validator; prior installs raised ImportError at module load.
-
-### Changed
-- LapsApp commit: `27ab4f2`
-
----
-
-## [17.0.0a1] — 2026-05-02 (alpha — package rename: specterqa-ios → simdrive, brand restoration)
-
-### Changed (BREAKING)
-- **PyPI package renamed `specterqa-ios` → `simdrive`.** Public brand has been "SimDrive" since the BIS R&D round; the PyPI distribution name and Python import path now match. **Migration for existing installs:** `pip uninstall specterqa-ios && pip install simdrive`. Imports change from `from specterqa_ios.X import Y` to `from simdrive.X import Y`.
-- **Python import path renamed `specterqa_ios` → `simdrive`.**
-- **Major version bump to 17.0.0a1** signals the breaking import change (Example Reader personally notified by Chairman).
+### Pending for 1.0.0 (next alphas)
+- Real-device input via WebDriverAgent (full parity scope; in-flight)
+- Stripe webhook signature verification on `/v1/licenses/activate`
+- Cycle 4 dogfood-to-perfection (5 passes including Example Reader re-validation)
 
 ## 0.3.0a3 — 2026-05-01
 
