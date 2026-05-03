@@ -18,7 +18,7 @@ import hashlib
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -206,11 +206,11 @@ def create_recordings_router(
         finally:
             db.close()
 
-    @_router.delete("/recordings/{recording_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @_router.delete("/recordings/{recording_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
     def delete_recording(
         recording_id: str,
         license_payload: dict = Depends(_auth),
-    ) -> None:
+    ) -> Response:
         """Delete a recording and all its stored objects.
 
         WHY delete storage before DB: if the DB delete fails, the storage
@@ -242,5 +242,7 @@ def create_recordings_router(
             db.commit()
         finally:
             db.close()
+
+        return Response(status_code=204)
 
     return _router
