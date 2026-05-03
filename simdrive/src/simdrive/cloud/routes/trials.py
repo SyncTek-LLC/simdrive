@@ -13,8 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-from specterqa_ios.cloud.db.models import TrialActivation, get_session
-from specterqa_ios.license.signer import sign_license
+from simdrive.cloud.db.models import TrialActivation, get_session
+from simdrive.license.signer import sign_license
 
 TRIAL_DURATION_SECONDS = 14 * 86400
 

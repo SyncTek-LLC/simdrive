@@ -5,7 +5,7 @@ recommended algorithm for offline-verifiable signed tokens (no key-escrow,
 no symmetric secret distribution needed on the client).
 
 CLI usage:
-    python -m specterqa_ios.license.keypair generate
+    python -m simdrive.license.keypair generate
 
 This writes the *private* (signing) key hex to stdout only — never to disk
 by default. The operator pipes it to a secrets manager / Railway env var.
@@ -66,10 +66,10 @@ def verify_key_from_hex(hex_str: str) -> VerifyKey:
 
 
 if __name__ == "__main__":
-    # CLI: `python -m specterqa_ios.license.keypair generate`
+    # CLI: `python -m simdrive.license.keypair generate`
     # Writes private key hex to stdout. Public key hex to stderr.
     if len(sys.argv) < 2 or sys.argv[1] != "generate":
-        print("Usage: python -m specterqa_ios.license.keypair generate", file=sys.stderr)
+        print("Usage: python -m simdrive.license.keypair generate", file=sys.stderr)
         sys.exit(1)
 
     sk, vk = generate_keypair()

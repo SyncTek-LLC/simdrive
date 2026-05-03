@@ -15,15 +15,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from specterqa_ios.errors import SimdriveError
-from specterqa_ios.journey.ci import (
+from simdrive.errors import SimdriveError
+from simdrive.journey.ci import (
     CIRunOptions,
     CIRunSummary,
     emit_junit_xml,
     run_ci,
 )
-from specterqa_ios.journey.result import CriterionEval, RunResult
-from specterqa_ios.journey.runner import StepDecision
+from simdrive.journey.result import CriterionEval, RunResult
+from simdrive.journey.runner import StepDecision
 
 
 # ── Fixture helpers ───────────────────────────────────────────────────────────
@@ -217,7 +217,7 @@ class TestRunCISingleJourneyPass:
             ),
         )
 
-        with patch("specterqa_ios.journey.ci.run_journey", side_effect=fake_run_journey):
+        with patch("simdrive.journey.ci.run_journey", side_effect=fake_run_journey):
             summary = run_ci(options)
 
         assert summary.total == 1
@@ -259,7 +259,7 @@ class TestRunCIMultipleJourneys:
             ),
         )
 
-        with patch("specterqa_ios.journey.ci.run_journey", side_effect=fake_run_journey):
+        with patch("simdrive.journey.ci.run_journey", side_effect=fake_run_journey):
             summary = run_ci(options)
 
         assert summary.total == 4
@@ -303,7 +303,7 @@ class TestRunCIPartialFailure:
             ),
         )
 
-        with patch("specterqa_ios.journey.ci.run_journey", side_effect=fake_run_journey):
+        with patch("simdrive.journey.ci.run_journey", side_effect=fake_run_journey):
             summary = run_ci(options)
 
         # Only the first journey should have run (bail_on_first_failure=True)
@@ -339,7 +339,7 @@ class TestRunCIJunitOutput:
             ),
         )
 
-        with patch("specterqa_ios.journey.ci.run_journey", side_effect=fake_run_journey):
+        with patch("simdrive.journey.ci.run_journey", side_effect=fake_run_journey):
             summary = run_ci(options)
 
         assert junit_path.exists()
@@ -376,7 +376,7 @@ class TestRunCIJunitOutput:
             ),
         )
 
-        with patch("specterqa_ios.journey.ci.run_journey", side_effect=fake_run_journey):
+        with patch("simdrive.journey.ci.run_journey", side_effect=fake_run_journey):
             run_ci(options)
 
         assert ci_summary_path.exists()

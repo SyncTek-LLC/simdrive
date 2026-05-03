@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from specterqa_ios import server
-from specterqa_ios.window import WindowBounds
+from simdrive import server
+from simdrive.window import WindowBounds
 
 
 def test_version_present():
@@ -56,7 +56,7 @@ def test_unknown_tool_raises():
 
 def test_pixel_to_screen_corners():
     """Math sanity: corner pixels of the screenshot map to corners of the window."""
-    from specterqa_ios.act import _pixels_to_screen
+    from simdrive.act import _pixels_to_screen
     bounds = WindowBounds(x=1406, y=39, width=456, height=972)
     # Top-left pixel (0, 0) → (1406, 39)
     assert _pixels_to_screen(bounds, 0, 0, 1206, 2622) == (1406, 39)
@@ -66,7 +66,7 @@ def test_pixel_to_screen_corners():
 
 
 def test_pixel_to_screen_center():
-    from specterqa_ios.act import _pixels_to_screen
+    from simdrive.act import _pixels_to_screen
     bounds = WindowBounds(x=1000, y=100, width=400, height=800)
     # Center of a 1000x2000 screenshot
     sx, sy = _pixels_to_screen(bounds, 500, 1000, 1000, 2000)
@@ -74,7 +74,7 @@ def test_pixel_to_screen_center():
 
 
 def test_pixel_to_screen_invalid_dims():
-    from specterqa_ios.act import _pixels_to_screen, ActError
+    from simdrive.act import _pixels_to_screen, ActError
     bounds = WindowBounds(x=0, y=0, width=10, height=10)
     with pytest.raises(ActError):
         _pixels_to_screen(bounds, 5, 5, 0, 100)
@@ -97,8 +97,8 @@ def test_call_tool_dispatch():
 def test_recording_schema_round_trip(tmp_path, monkeypatch):
     """A finalized recording should be readable via yaml.safe_load."""
     import yaml
-    from specterqa_ios import recorder, session
-    from specterqa_ios.sim import Device
+    from simdrive import recorder, session
+    from simdrive.sim import Device
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
 
@@ -128,7 +128,7 @@ def test_recording_schema_round_trip(tmp_path, monkeypatch):
 
 
 def test_press_key_lists_supported_keys_in_error():
-    from specterqa_ios import act
+    from simdrive import act
     # Force the cliclick path so we exercise the error message branch.
     # If pyobjc IS available, press_key tries pid backend which silently returns
     # False for unknown keys and falls through to cliclick path.
@@ -139,13 +139,13 @@ def test_press_key_lists_supported_keys_in_error():
 
 
 def test_hid_inject_binary_exists():
-    from specterqa_ios import hid_inject
+    from simdrive import hid_inject
     p = hid_inject._binary_path()
     assert p is not None and p.exists()
 
 
 def test_hid_inject_available():
-    from specterqa_ios import hid_inject
+    from simdrive import hid_inject
     assert hid_inject.available() is True
 
 
@@ -157,7 +157,7 @@ def test_session_status_reports_mode():
 
 
 def test_som_find_by_text():
-    from specterqa_ios.som import Mark, find_by_text
+    from simdrive.som import Mark, find_by_text
     marks = [
         Mark(id=1, x=0, y=0, w=100, h=20, text="Settings", confidence=0.9),
         Mark(id=2, x=0, y=30, w=100, h=20, text="Don't Allow", confidence=0.95),
@@ -171,7 +171,7 @@ def test_som_find_by_text():
 
 
 def test_som_find_by_mark_id():
-    from specterqa_ios.som import Mark, find_by_mark_id
+    from simdrive.som import Mark, find_by_mark_id
     marks = [Mark(id=1, x=0, y=0, w=10, h=10, text="a", confidence=1.0)]
     assert find_by_mark_id(marks, 1).text == "a"
     assert find_by_mark_id(marks, 99) is None
@@ -179,8 +179,8 @@ def test_som_find_by_mark_id():
 
 def test_resolve_target_xy_coords(monkeypatch, tmp_path):
     """{x, y} resolves to those literal coords; matched_mark is None for raw coords."""
-    from specterqa_ios import server, session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses
+    from simdrive.sim import Device
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
@@ -192,8 +192,8 @@ def test_resolve_target_xy_coords(monkeypatch, tmp_path):
 
 
 def test_resolve_target_xy_mark(tmp_path):
-    from specterqa_ios import server, session as ses, som
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, som
+    from simdrive.sim import Device
     target = som.Mark(id=5, x=100, y=200, w=40, h=20, text="OK", confidence=0.9)
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
@@ -207,8 +207,8 @@ def test_resolve_target_xy_mark(tmp_path):
 
 
 def test_resolve_target_xy_text(tmp_path):
-    from specterqa_ios import server, session as ses, som
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, som
+    from simdrive.sim import Device
     target = som.Mark(id=2, x=0, y=0, w=200, h=40, text="Don't Allow", confidence=0.95)
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
@@ -222,8 +222,8 @@ def test_resolve_target_xy_text(tmp_path):
 
 
 def test_resolve_target_xy_missing_raises(tmp_path):
-    from specterqa_ios import server, session as ses, errors as err
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, errors as err
+    from simdrive.sim import Device
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
@@ -234,8 +234,8 @@ def test_resolve_target_xy_missing_raises(tmp_path):
 
 
 def test_resolve_target_xy_mark_not_found(tmp_path):
-    from specterqa_ios import server, session as ses, errors as err
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, errors as err
+    from simdrive.sim import Device
     s = ses.Session(
         session_id="t", device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
         workdir=tmp_path,
@@ -247,7 +247,7 @@ def test_resolve_target_xy_mark_not_found(tmp_path):
 
 
 def test_simdrive_error_to_dict():
-    from specterqa_ios import errors as err
+    from simdrive import errors as err
     e = err.no_session("abc")
     d = e.to_dict()
     assert d["ok"] is False
@@ -256,7 +256,7 @@ def test_simdrive_error_to_dict():
 
 
 def test_no_device_error_codes():
-    from specterqa_ios import errors as err
+    from simdrive import errors as err
     e1 = err.no_device({"udid": "X"})
     assert e1.code == "no_device"
     assert "udid" in e1.details["query"]
@@ -265,8 +265,8 @@ def test_no_device_error_codes():
 def test_multi_session_isolation(tmp_path, monkeypatch):
     """Two sessions running in the same process must keep separate state."""
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
-    from specterqa_ios import session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import session as ses
+    from simdrive.sim import Device
 
     # Reset module-level session dict
     ses._SESSIONS.clear()
@@ -295,17 +295,17 @@ def test_multi_session_isolation(tmp_path, monkeypatch):
 
 def test_pasteboard_helper_call_signature():
     """Smoke-test that set_pasteboard exists with the expected signature."""
-    from specterqa_ios import sim
+    from simdrive import sim
     assert callable(sim.set_pasteboard)
 
 
 def test_chord_helper_call_signature():
-    from specterqa_ios import hid_inject
+    from simdrive import hid_inject
     assert callable(hid_inject.chord)
 
 
 def test_mark_stable_id_is_position_text_hash():
-    from specterqa_ios.som import Mark
+    from simdrive.som import Mark
     m1 = Mark(id=1, x=100, y=200, w=80, h=20, text="Borrow", confidence=1.0)
     m2 = Mark(id=99, x=103, y=205, w=80, h=20, text="Borrow", confidence=1.0)
     # Same text, position within the 20px bucket → same stable_id
@@ -316,7 +316,7 @@ def test_mark_stable_id_is_position_text_hash():
 
 
 def test_find_by_stable_id():
-    from specterqa_ios.som import Mark, find_by_stable_id
+    from simdrive.som import Mark, find_by_stable_id
     marks = [
         Mark(id=1, x=0, y=0, w=10, h=10, text="A", confidence=1.0),
         Mark(id=2, x=50, y=50, w=10, h=10, text="B", confidence=1.0),
@@ -328,7 +328,7 @@ def test_find_by_stable_id():
 
 def test_observe_writes_sidecar_json(tmp_path, monkeypatch):
     """observe() should drop a <screenshot>.json next to the PNG."""
-    from specterqa_ios import observe
+    from simdrive import observe
     from PIL import Image
     monkeypatch.setattr(observe, "sim", _stub_sim_for_observe(tmp_path))
 
@@ -358,8 +358,8 @@ def _stub_sim_for_observe(tmp_path):
 
 def test_device_input_tools_raise_on_device_target(tmp_path):
     """tap/swipe/type_text/press_key must surface device_input_unavailable when target=device."""
-    from specterqa_ios import server, session as ses, errors as err
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, errors as err
+    from simdrive.sim import Device
     ses._SESSIONS.clear()
 
     sid = "dev-only"
@@ -385,14 +385,14 @@ def test_device_input_tools_raise_on_device_target(tmp_path):
 
 
 def test_session_start_invalid_target_raises():
-    from specterqa_ios import server, errors as err
+    from simdrive import server, errors as err
     with pytest.raises(err.SimdriveError) as exc:
         server.tool_session_start({"target": "android"})
     assert exc.value.code == "invalid_argument"
 
 
 def test_device_module_imports_and_exposes_helpers():
-    from specterqa_ios import device
+    from simdrive import device
     assert callable(device.list_devices)
     assert callable(device.find_device)
     assert callable(device.screenshot)
@@ -404,8 +404,8 @@ def test_device_module_imports_and_exposes_helpers():
 
 
 def test_session_append_action_writes_jsonl(tmp_path):
-    from specterqa_ios import session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import session as ses
+    from simdrive.sim import Device
     s = ses.Session(
         session_id="aud",
         device=Device(udid="X", name="iPhone Test", os_version="26.3", state="Booted"),
@@ -425,8 +425,8 @@ def test_session_append_action_writes_jsonl(tmp_path):
 
 def test_observe_annotate_false_preserves_last_marks(tmp_path, monkeypatch):
     """observe(annotate=false) returns marks=[] but must NOT wipe the session's mark cache."""
-    from specterqa_ios import server, session as ses, observe as obs_mod, som
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, observe as obs_mod, som
+    from simdrive.sim import Device
 
     ses._SESSIONS.clear()
     sid = "preserve"
@@ -442,7 +442,7 @@ def test_observe_annotate_false_preserves_last_marks(tmp_path, monkeypatch):
     ses._SESSIONS[sid] = s
 
     # Stub observe.observe to return an Observation with empty marks.
-    from specterqa_ios.observe import Observation
+    from simdrive.observe import Observation
     fake_screenshot = tmp_path / "fake.png"
     from PIL import Image
     Image.new("RGB", (100, 200), (10, 10, 10)).save(fake_screenshot)
@@ -470,9 +470,9 @@ def test_observe_annotate_false_preserves_last_marks(tmp_path, monkeypatch):
 
 def test_recording_includes_stable_id_when_resolved_via_stable_id(tmp_path, monkeypatch):
     """tool_tap with {stable_id: ...} must record stable_id + text alongside pixel coords."""
-    from specterqa_ios import server, session as ses, recorder as rec_mod, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import server, session as ses, recorder as rec_mod, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -560,9 +560,9 @@ def _write_replay_recording(rec_dir, step_args):
 
 def test_replay_prefers_stable_id_with_pixel_fallback(tmp_path, monkeypatch):
     """Replay re-resolves stable_id against the live observe and taps the live center."""
-    from specterqa_ios import recorder as rec_mod, session as ses, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -625,9 +625,9 @@ def test_replay_prefers_stable_id_with_pixel_fallback(tmp_path, monkeypatch):
 
 def test_replay_falls_back_to_pixels_when_stable_id_missing(tmp_path, monkeypatch):
     """If the live observation lacks the stable_id, replay falls back to recorded pixels."""
-    from specterqa_ios import recorder as rec_mod, session as ses, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -682,9 +682,9 @@ def test_replay_falls_back_to_pixels_when_stable_id_missing(tmp_path, monkeypatc
 
 def test_type_text_response_shape(tmp_path, monkeypatch):
     """type_text returns ok/chars/keyboard_visible/focused_field; tap_first stable_id surfaces as focused_field."""
-    from specterqa_ios import server, session as ses, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import server, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     ses._SESSIONS.clear()
@@ -741,9 +741,9 @@ def test_type_text_response_shape(tmp_path, monkeypatch):
 
 def test_type_text_response_no_focus_when_no_tap_first(tmp_path, monkeypatch):
     """Without tap_first, focused_field is None even if keyboard is visible."""
-    from specterqa_ios import server, session as ses, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import server, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     ses._SESSIONS.clear()
@@ -802,7 +802,7 @@ def _make_grayscale_png(path, size, fill=200, top_band_height=0, top_band_fill=5
 
 def test_ssim_mask_excludes_status_bar_region(tmp_path):
     """Two images differing only in a top band: similarity rises with the band masked."""
-    from specterqa_ios import recorder as rec_mod
+    from simdrive import recorder as rec_mod
     a = tmp_path / "a.png"
     b = tmp_path / "b.png"
     # Use a 200px band on a 600-tall image (~33%) at strong contrast so the
@@ -825,9 +825,9 @@ def test_ssim_mask_excludes_status_bar_region(tmp_path):
 def test_replay_uses_yaml_ssim_masks_when_caller_doesnt_pass(tmp_path, monkeypatch):
     """A recording.yaml with ssim_masks set is used when caller passes no mask_regions."""
     import yaml as _yaml
-    from specterqa_ios import recorder as rec_mod, session as ses, act, observe as obs_mod
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
     ses._SESSIONS.clear()
@@ -892,7 +892,7 @@ def test_replay_uses_yaml_ssim_masks_when_caller_doesnt_pass(tmp_path, monkeypat
 
 
 def test_mark_stable_id_loose_is_coarser_bucket():
-    from specterqa_ios.som import Mark
+    from simdrive.som import Mark
     # Centers 30px apart, both falling inside the same 60px loose bucket but
     # different 20px tight buckets. Centers: m1=(75,75), m2=(105,105).
     # Tight buckets (cx//20, cy//20): (3,3) vs (5,5) → differ.
@@ -906,8 +906,8 @@ def test_mark_stable_id_loose_is_coarser_bucket():
 
 
 def test_resolve_target_xy_accepts_stable_id_loose(tmp_path):
-    from specterqa_ios import server, session as ses, som
-    from specterqa_ios.sim import Device
+    from simdrive import server, session as ses, som
+    from simdrive.sim import Device
     target = som.Mark(id=5, x=100, y=200, w=40, h=20, text="OK", confidence=0.9)
     s = ses.Session(
         session_id="t",
@@ -923,9 +923,9 @@ def test_resolve_target_xy_accepts_stable_id_loose(tmp_path):
 
 def test_replay_falls_back_to_stable_id_loose_when_tight_misses(tmp_path, monkeypatch):
     """Recording carries stable_id_loose; live observe lacks tight match but has loose."""
-    from specterqa_ios import recorder as rec_mod, session as ses, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -984,9 +984,9 @@ def test_replay_falls_back_to_stable_id_loose_when_tight_misses(tmp_path, monkey
 
 
 def test_tap_response_includes_step_id_when_recording(tmp_path, monkeypatch):
-    from specterqa_ios import server, session as ses, recorder as rec_mod, act, observe as obs_mod, som
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import server, session as ses, recorder as rec_mod, act, observe as obs_mod, som
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1038,8 +1038,8 @@ def test_tap_response_includes_step_id_when_recording(tmp_path, monkeypatch):
 
 
 def test_list_devices_emits_hid_supported_and_note(monkeypatch):
-    from specterqa_ios import server
-    from specterqa_ios import device as dev_mod
+    from simdrive import server
+    from simdrive import device as dev_mod
 
     fake_dev = dev_mod.RealDevice(
         udid="UDID-1234",
@@ -1063,8 +1063,8 @@ def test_list_devices_emits_hid_supported_and_note(monkeypatch):
 def test_recording_metadata_includes_version_and_session(tmp_path, monkeypatch):
     """Round-trip a recording; simdrive_version, created_by_session, tags must be present."""
     import yaml
-    from specterqa_ios import recorder, session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import recorder, session as ses
+    from simdrive.sim import Device
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1087,7 +1087,7 @@ def test_recording_metadata_includes_version_and_session(tmp_path, monkeypatch):
     yaml_path = recorder.stop(fake_session)
 
     payload = yaml.safe_load(yaml_path.read_text())
-    from specterqa_ios import __version__
+    from simdrive import __version__
     assert payload["simdrive_version"] == __version__
     assert payload["created_by_session"] == "meta-sid"
     assert payload["tags"] == []
@@ -1096,8 +1096,8 @@ def test_recording_metadata_includes_version_and_session(tmp_path, monkeypatch):
 
 def test_recording_accepts_tags(tmp_path, monkeypatch):
     import yaml
-    from specterqa_ios import recorder, session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import recorder, session as ses
+    from simdrive.sim import Device
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1124,9 +1124,9 @@ def test_recording_accepts_tags(tmp_path, monkeypatch):
 def test_replay_response_includes_halt_reason_threshold_steps_planned(tmp_path, monkeypatch):
     """A 3-step recording where step 2 drifts: response must carry halt context."""
     import yaml as _yaml
-    from specterqa_ios import recorder as rec_mod, session as ses, act, observe as obs_mod
-    from specterqa_ios.sim import Device
-    from specterqa_ios.observe import Observation
+    from simdrive import recorder as rec_mod, session as ses, act, observe as obs_mod
+    from simdrive.sim import Device
+    from simdrive.observe import Observation
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1205,10 +1205,10 @@ def test_replay_response_includes_halt_reason_threshold_steps_planned(tmp_path, 
 
 
 def _cli_subprocess_env():
-    """Make `python -m specterqa_ios.server` resolvable when running from a source checkout."""
+    """Make `python -m simdrive.server` resolvable when running from a source checkout."""
     import os
-    import specterqa_ios
-    pkg_root = Path(specterqa_ios.__file__).resolve().parent.parent  # .../src
+    import simdrive
+    pkg_root = Path(simdrive.__file__).resolve().parent.parent  # .../src
     env = os.environ.copy()
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(pkg_root) + (os.pathsep + existing if existing else "")
@@ -1218,9 +1218,9 @@ def _cli_subprocess_env():
 def test_simdrive_cli_version_flag():
     import subprocess
     import sys
-    from specterqa_ios import __version__
+    from simdrive import __version__
     res = subprocess.run(
-        [sys.executable, "-m", "specterqa_ios.server", "--version"],
+        [sys.executable, "-m", "simdrive.server", "--version"],
         capture_output=True, text=True, timeout=10.0,
         env=_cli_subprocess_env(),
     )
@@ -1233,7 +1233,7 @@ def test_simdrive_cli_help_flag():
     import subprocess
     import sys
     res = subprocess.run(
-        [sys.executable, "-m", "specterqa_ios.server", "--help"],
+        [sys.executable, "-m", "simdrive.server", "--help"],
         capture_output=True, text=True, timeout=10.0,
         env=_cli_subprocess_env(),
     )
@@ -1248,8 +1248,8 @@ def test_simdrive_cli_help_flag():
 
 def _make_session_with_app(tmp_path, sid="s-perf", bundle_id="com.example.App"):
     """Build a Session with a bundle id wired up + register it in the module dict."""
-    from specterqa_ios import session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import session as ses
+    from simdrive.sim import Device
     ses._SESSIONS.clear()
     s = ses.Session(
         session_id=sid,
@@ -1264,7 +1264,7 @@ def _make_session_with_app(tmp_path, sid="s-perf", bundle_id="com.example.App"):
 
 def _stub_perf_subproc(monkeypatch, *, pid=4242, cpu=12.5, rss_kb=204800, threads=8):
     """Patch perf._run so the perf module sees launchctl + ps output without shelling out."""
-    from specterqa_ios import perf as _perf
+    from simdrive import perf as _perf
 
     launchctl_line = f"{pid}\t0\tUIKitApplication:com.example.App[uuid]"
     ps_line = f"{cpu} {rss_kb}"
@@ -1287,7 +1287,7 @@ def _stub_perf_subproc(monkeypatch, *, pid=4242, cpu=12.5, rss_kb=204800, thread
 
 
 def test_perf_returns_cpu_memory_threads(tmp_path, monkeypatch):
-    from specterqa_ios import server
+    from simdrive import server
     s = _make_session_with_app(tmp_path)
     _stub_perf_subproc(monkeypatch, pid=999, cpu=22.5, rss_kb=153600, threads=12)
 
@@ -1300,7 +1300,7 @@ def test_perf_returns_cpu_memory_threads(tmp_path, monkeypatch):
 
 
 def test_perf_baseline_stores_on_session(tmp_path, monkeypatch):
-    from specterqa_ios import server
+    from simdrive import server
     s = _make_session_with_app(tmp_path)
     _stub_perf_subproc(monkeypatch, pid=111, cpu=10.0, rss_kb=102400, threads=5)
 
@@ -1311,7 +1311,7 @@ def test_perf_baseline_stores_on_session(tmp_path, monkeypatch):
 
 
 def test_perf_compare_severity_high_on_memory_jump(tmp_path, monkeypatch):
-    from specterqa_ios import server
+    from simdrive import server
     s = _make_session_with_app(tmp_path)
 
     # Baseline snapshot: 100 MB
@@ -1326,7 +1326,7 @@ def test_perf_compare_severity_high_on_memory_jump(tmp_path, monkeypatch):
 
 
 def test_perf_compare_severity_medium_on_cpu_jump(tmp_path, monkeypatch):
-    from specterqa_ios import server
+    from simdrive import server
     s = _make_session_with_app(tmp_path)
 
     _stub_perf_subproc(monkeypatch, pid=1, cpu=5.0, rss_kb=102400, threads=5)
@@ -1339,7 +1339,7 @@ def test_perf_compare_severity_medium_on_cpu_jump(tmp_path, monkeypatch):
 
 
 def test_memory_returns_unavailable_when_footprint_missing(tmp_path, monkeypatch):
-    from specterqa_ios import server, perf as _perf
+    from simdrive import server, perf as _perf
     s = _make_session_with_app(tmp_path)
     monkeypatch.setattr(_perf.shutil, "which", lambda name: None)
 
@@ -1349,7 +1349,7 @@ def test_memory_returns_unavailable_when_footprint_missing(tmp_path, monkeypatch
 
 
 def test_doctor_reports_checks(monkeypatch):
-    from specterqa_ios import server, diagnostics, hid_inject
+    from simdrive import server, diagnostics, hid_inject
     import subprocess as _sp
 
     def fake_run(cmd, timeout=10.0):
@@ -1375,7 +1375,7 @@ def test_doctor_reports_checks(monkeypatch):
 
 
 def test_doctor_marks_failed_check(monkeypatch):
-    from specterqa_ios import server, diagnostics, hid_inject
+    from simdrive import server, diagnostics, hid_inject
     import subprocess as _sp
 
     def fake_run(cmd, timeout=10.0):
@@ -1402,7 +1402,7 @@ def test_doctor_marks_failed_check(monkeypatch):
 
 
 def test_apps_parses_listapps_plist(tmp_path, monkeypatch):
-    from specterqa_ios import server, diagnostics
+    from simdrive import server, diagnostics
     import subprocess as _sp
     import plistlib
 
@@ -1434,7 +1434,7 @@ def test_apps_parses_listapps_plist(tmp_path, monkeypatch):
 
 
 def test_app_state_running(tmp_path, monkeypatch):
-    from specterqa_ios import server, diagnostics
+    from simdrive import server, diagnostics
     import subprocess as _sp
     s = _make_session_with_app(tmp_path)
 
@@ -1452,7 +1452,7 @@ def test_app_state_running(tmp_path, monkeypatch):
 
 
 def test_app_state_not_running(tmp_path, monkeypatch):
-    from specterqa_ios import server, diagnostics
+    from simdrive import server, diagnostics
     import subprocess as _sp
     s = _make_session_with_app(tmp_path)
 
@@ -1469,7 +1469,7 @@ def test_crashes_filters_by_session_start_time(tmp_path, monkeypatch):
     """Three .ips files with different mtimes; only the post-session-start one surfaces."""
     import os
     import json as _json
-    from specterqa_ios import server, diagnostics
+    from simdrive import server, diagnostics
 
     reports = tmp_path / "reports"
     reports.mkdir()
@@ -1499,7 +1499,7 @@ def test_crashes_filters_by_session_start_time(tmp_path, monkeypatch):
 def test_crashes_filters_by_bundle_id(tmp_path, monkeypatch):
     import os
     import json as _json
-    from specterqa_ios import server, diagnostics
+    from simdrive import server, diagnostics
 
     reports = tmp_path / "reports"
     reports.mkdir()
@@ -1530,8 +1530,8 @@ def test_crashes_filters_by_bundle_id(tmp_path, monkeypatch):
 
 def test_dismiss_first_launch_alerts_loops_until_alert_gone(tmp_path, monkeypatch):
     """First observe sees an Allow button, second observe is clean → one tap, attempts=1."""
-    from specterqa_ios import server, observe as obs_mod, act, som
-    from specterqa_ios.observe import Observation
+    from simdrive import server, observe as obs_mod, act, som
+    from simdrive.observe import Observation
     from PIL import Image
 
     s = _make_session_with_app(tmp_path, sid="alert-once")
@@ -1568,8 +1568,8 @@ def test_dismiss_first_launch_alerts_loops_until_alert_gone(tmp_path, monkeypatc
 
 def test_dismiss_first_launch_alerts_retries_on_alert_persisting(tmp_path, monkeypatch):
     """Alert visible twice in a row, then gone → retries=1 should fire two taps."""
-    from specterqa_ios import server, observe as obs_mod, act, som
-    from specterqa_ios.observe import Observation
+    from simdrive import server, observe as obs_mod, act, som
+    from simdrive.observe import Observation
     from PIL import Image
 
     s = _make_session_with_app(tmp_path, sid="alert-retry")
@@ -1608,7 +1608,7 @@ def test_dismiss_first_launch_alerts_retries_on_alert_persisting(tmp_path, monke
 
 
 def test_pre_grant_permissions_invokes_simctl_per_perm(tmp_path, monkeypatch):
-    from specterqa_ios import server, robustness
+    from simdrive import server, robustness
     import subprocess as _sp
 
     s = _make_session_with_app(tmp_path)
@@ -1633,7 +1633,7 @@ def test_pre_grant_permissions_invokes_simctl_per_perm(tmp_path, monkeypatch):
 
 
 def test_set_appearance_invokes_simctl_ui(tmp_path, monkeypatch):
-    from specterqa_ios import server, robustness
+    from simdrive import server, robustness
     import subprocess as _sp
 
     s = _make_session_with_app(tmp_path)
@@ -1652,9 +1652,9 @@ def test_set_appearance_invokes_simctl_ui(tmp_path, monkeypatch):
 
 
 def test_dismiss_sheet_calls_swipe_with_screenshot_dims(tmp_path, monkeypatch):
-    from specterqa_ios import server, act, observe as obs_mod, session as ses
-    from specterqa_ios.observe import Observation
-    from specterqa_ios.sim import Device
+    from simdrive import server, act, observe as obs_mod, session as ses
+    from simdrive.observe import Observation
+    from simdrive.sim import Device
     from PIL import Image
 
     ses._SESSIONS.clear()
@@ -1693,7 +1693,7 @@ def test_dismiss_sheet_calls_swipe_with_screenshot_dims(tmp_path, monkeypatch):
 
 def test_list_replays_returns_metadata(tmp_path, monkeypatch):
     import yaml as _yaml
-    from specterqa_ios import server, recorder
+    from simdrive import server, recorder
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
     root = recorder.recordings_root()
@@ -1721,7 +1721,7 @@ def test_list_replays_returns_metadata(tmp_path, monkeypatch):
 
 def test_validate_replay_passes_on_good_yaml(tmp_path, monkeypatch):
     import yaml as _yaml
-    from specterqa_ios import server, recorder
+    from simdrive import server, recorder
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1752,7 +1752,7 @@ def test_validate_replay_passes_on_good_yaml(tmp_path, monkeypatch):
 
 def test_validate_replay_flags_missing_screenshot(tmp_path, monkeypatch):
     import yaml as _yaml
-    from specterqa_ios import server, recorder
+    from simdrive import server, recorder
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
     root = recorder.recordings_root()
@@ -1774,7 +1774,7 @@ def test_validate_replay_flags_missing_screenshot(tmp_path, monkeypatch):
 
 def test_validate_replay_flags_unsupported_action(tmp_path, monkeypatch):
     import yaml as _yaml
-    from specterqa_ios import server, recorder
+    from simdrive import server, recorder
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1804,7 +1804,7 @@ def test_validate_replay_flags_unsupported_action(tmp_path, monkeypatch):
 def test_list_devices_emits_last_seen_and_unavailable_reason(tmp_path, monkeypatch):
     """devicectl JSON has lastConnectionDate + pairingState/tunnelState we can
     surface as last_seen and a composed unavailable_reason."""
-    from specterqa_ios import server, device
+    from simdrive import server, device
 
     fake_devs = [
         device.RealDevice(
@@ -1831,7 +1831,7 @@ def test_list_devices_emits_last_seen_and_unavailable_reason(tmp_path, monkeypat
 
 
 def test_unavailable_reason_compose():
-    from specterqa_ios.device import _unavailable_reason
+    from simdrive.device import _unavailable_reason
     assert _unavailable_reason("available", {}, {}) is None
     assert _unavailable_reason(
         "unavailable",
@@ -1849,7 +1849,7 @@ def test_unavailable_reason_compose():
 def test_get_app_version_parses_listapps(monkeypatch):
     """sim.get_app_version reads CFBundleShortVersionString from listapps output."""
     import plistlib, subprocess as _sp
-    from specterqa_ios import sim
+    from simdrive import sim
 
     plist_payload = plistlib.dumps({
         "com.example.App": {
@@ -1868,7 +1868,7 @@ def test_get_app_version_parses_listapps(monkeypatch):
 
 def test_get_app_version_falls_back_to_cfbundleversion(monkeypatch):
     import plistlib, subprocess as _sp
-    from specterqa_ios import sim
+    from simdrive import sim
 
     plist_payload = plistlib.dumps({
         "com.example.App": {"CFBundleVersion": "9.9"},
@@ -1884,8 +1884,8 @@ def test_get_app_version_falls_back_to_cfbundleversion(monkeypatch):
 def test_recording_metadata_includes_app_version(tmp_path, monkeypatch):
     """recorder.finalize() stamps the recording with the app's version when available."""
     import yaml as _yaml
-    from specterqa_ios import recorder, session as ses, sim
-    from specterqa_ios.sim import Device
+    from simdrive import recorder, session as ses, sim
+    from simdrive.sim import Device
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1917,8 +1917,8 @@ def test_recording_metadata_includes_app_version(tmp_path, monkeypatch):
 def test_recording_app_version_none_when_unavailable(tmp_path, monkeypatch):
     """When sim.get_app_version raises or returns None, recording falls through cleanly."""
     import yaml as _yaml
-    from specterqa_ios import recorder, session as ses, sim
-    from specterqa_ios.sim import Device
+    from simdrive import recorder, session as ses, sim
+    from simdrive.sim import Device
     from PIL import Image
 
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
@@ -1951,8 +1951,8 @@ def test_recording_app_version_none_when_unavailable(tmp_path, monkeypatch):
 
 def _make_session(tmp_path, sid: str, marks=None):
     """Helper for the v0.3.0a3 tests — minimal Session with a fake screenshot."""
-    from specterqa_ios import session as ses
-    from specterqa_ios.sim import Device
+    from simdrive import session as ses
+    from simdrive.sim import Device
     from PIL import Image
 
     ses._SESSIONS.clear()
@@ -1974,8 +1974,8 @@ def _make_session(tmp_path, sid: str, marks=None):
 
 def test_type_text_response_includes_injection_method_and_dispatch_succeeded(tmp_path, monkeypatch):
     """v0.3.0a3 — type_text response surfaces injection_method + dispatch_succeeded."""
-    from specterqa_ios import server, act, observe as obs_mod, som
-    from specterqa_ios.observe import Observation
+    from simdrive import server, act, observe as obs_mod, som
+    from simdrive.observe import Observation
 
     target_mark = som.Mark(id=1, x=100, y=200, w=120, h=40, text="Username", confidence=0.95)
     target_sid = target_mark.stable_id
@@ -2007,7 +2007,7 @@ def test_type_text_response_includes_injection_method_and_dispatch_succeeded(tmp
 
 def test_mark_confidence_band_high_for_real_english():
     """A clean OCR of real English text at high confidence stays high-band."""
-    from specterqa_ios.som import Mark
+    from simdrive.som import Mark
     m = Mark(id=1, x=0, y=0, w=10, h=10, text="The Dance Partner", confidence=0.95)
     assert m.confidence_band == "high"
     assert m.confidence == 0.95
@@ -2016,7 +2016,7 @@ def test_mark_confidence_band_high_for_real_english():
 
 def test_mark_confidence_band_low_for_misread_gibberish():
     """Stylized cover-art OCR misread at high engine confidence gets clamped."""
-    from specterqa_ios.som import Mark
+    from simdrive.som import Mark
     m = Mark(id=1, x=0, y=0, w=10, h=10, text="Sary of the Canadan liothest", confidence=1.0)
     assert m.confidence_band == "low"
     assert m.confidence <= 0.3
@@ -2025,14 +2025,14 @@ def test_mark_confidence_band_low_for_misread_gibberish():
 
 def test_mark_confidence_band_handles_short_tokens():
     """Short tokens always pass dictionary check — 'OK' should be high."""
-    from specterqa_ios.som import Mark
+    from simdrive.som import Mark
     m = Mark(id=1, x=0, y=0, w=10, h=10, text="OK", confidence=0.95)
     assert m.confidence_band == "high"
 
 
 def test_version_tool_returns_loaded_and_disk():
     """tool_version returns the four expected fields."""
-    from specterqa_ios import server
+    from simdrive import server
     result = server.tool_version({})
     assert result["version"] == server.__version__
     assert "loaded_at" in result
@@ -2042,7 +2042,7 @@ def test_version_tool_returns_loaded_and_disk():
 
 def test_call_tool_emits_warning_on_version_drift(monkeypatch):
     """When _check_version_drift returns a string, dispatcher injects it."""
-    from specterqa_ios import server
+    from simdrive import server
     server.session._SESSIONS.clear() if hasattr(server, "session") else None
     monkeypatch.setattr(server, "_check_version_drift", lambda: "drift detected: 0.3.0a2 vs 0.3.0a3")
     result = server.call_tool("version", {})
@@ -2051,7 +2051,7 @@ def test_call_tool_emits_warning_on_version_drift(monkeypatch):
 
 def test_call_tool_no_warning_when_versions_match(monkeypatch):
     """Default path: loaded == disk, no warning surfaces."""
-    from specterqa_ios import server
+    from simdrive import server
     monkeypatch.setattr(server, "_check_version_drift", lambda: None)
     result = server.call_tool("version", {})
     assert "_simdrive_warning" not in result
@@ -2059,7 +2059,7 @@ def test_call_tool_no_warning_when_versions_match(monkeypatch):
 
 def test_clear_field_tool_sends_cmd_a_and_delete(tmp_path, monkeypatch):
     """clear_field tool dispatches Cmd-A then delete via HID."""
-    from specterqa_ios import server, act, hid_inject
+    from simdrive import server, act, hid_inject
 
     s, _ = _make_session(tmp_path, "clearfield-1")
     chord_calls: list[tuple] = []
@@ -2076,8 +2076,8 @@ def test_clear_field_tool_sends_cmd_a_and_delete(tmp_path, monkeypatch):
 
 def test_type_text_clear_first_sends_cmd_a_delete_before_typing(tmp_path, monkeypatch):
     """clear_first=True orders chord(cmd,a) → press_key(delete) → type_text(text)."""
-    from specterqa_ios import server, act, hid_inject, observe as obs_mod, som
-    from specterqa_ios.observe import Observation
+    from simdrive import server, act, hid_inject, observe as obs_mod, som
+    from simdrive.observe import Observation
 
     target_mark = som.Mark(id=1, x=100, y=200, w=120, h=40, text="Search", confidence=0.95)
     target_sid = target_mark.stable_id
@@ -2116,7 +2116,7 @@ def test_type_text_clear_first_sends_cmd_a_delete_before_typing(tmp_path, monkey
 
 def test_find_by_text_resolves_search_via_icon_alias():
     """find_by_text(marks, 'search') resolves to a mark whose text is 'Q/'."""
-    from specterqa_ios.som import Mark, find_by_text
+    from simdrive.som import Mark, find_by_text
     glyph_mark = Mark(id=1, x=10, y=10, w=20, h=20, text="Q/", confidence=0.6)
     other = Mark(id=2, x=100, y=100, w=50, h=20, text="Library", confidence=0.95)
     found = find_by_text([glyph_mark, other], "search")
@@ -2125,7 +2125,7 @@ def test_find_by_text_resolves_search_via_icon_alias():
 
 def test_find_by_text_back_alias():
     """'<' OCR resolves to find_by_text query 'back'."""
-    from specterqa_ios.som import Mark, find_by_text
+    from simdrive.som import Mark, find_by_text
     chevron = Mark(id=1, x=10, y=10, w=20, h=20, text="<", confidence=0.7)
     found = find_by_text([chevron], "back")
     assert found is chevron
@@ -2133,6 +2133,6 @@ def test_find_by_text_back_alias():
 
 def test_find_by_text_returns_none_when_neither_exact_nor_alias_matches():
     """No exact/prefix/substring AND no alias hit → None."""
-    from specterqa_ios.som import Mark, find_by_text
+    from simdrive.som import Mark, find_by_text
     other = Mark(id=1, x=10, y=10, w=20, h=20, text="Foo", confidence=0.7)
     assert find_by_text([other], "search") is None

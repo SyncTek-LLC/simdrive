@@ -19,8 +19,8 @@ try:
 except ImportError:
     HAS_HYPOTHESIS = False
 
-from specterqa_ios.errors import SimdriveError
-from specterqa_ios.journey.schema import (
+from simdrive.errors import SimdriveError
+from simdrive.journey.schema import (
     Budget,
     DeviceSelector,
     Journey,

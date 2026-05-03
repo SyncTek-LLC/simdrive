@@ -18,7 +18,7 @@ from typing import Any, Optional
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
-from specterqa_ios.license.errors import (
+from simdrive.license.errors import (
     license_expired,
     license_invalid,
     license_offline_grace_exhausted,

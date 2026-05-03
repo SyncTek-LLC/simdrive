@@ -1,4 +1,4 @@
-SpecterQA (PyPI: specterqa-ios)
+SimDrive (PyPI: simdrive)
 Copyright 2026 SyncTek LLC
 
 Licensed under the MIT License (see LICENSE).
@@ -22,5 +22,5 @@ simdrive_input.m is derived from idb's FBSimulatorIndigoHID.m, kept under
 the original MIT license terms.
 
 No other third-party code is bundled. The bundled native helper binary
-(specterqa_ios/_bin/simdrive-input) is built from these sources at package
+(simdrive/_bin/simdrive-input) is built from these sources at package
 build time.

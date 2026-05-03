@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from specterqa_ios.journey.criteria import (
+from simdrive.journey.criteria import (
     all_passed,
     eval_cross_device_state_matches,
     eval_no_crash,
@@ -17,8 +17,8 @@ from specterqa_ios.journey.criteria import (
     evaluate_all_criteria,
     unmet_descriptions,
 )
-from specterqa_ios.journey.result import CriterionEval
-from specterqa_ios.journey.schema import SuccessCriterion
+from simdrive.journey.result import CriterionEval
+from simdrive.journey.schema import SuccessCriterion
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

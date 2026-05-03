@@ -13,7 +13,7 @@ class TestR2Stub:
 
     @pytest.fixture
     def stub(self, tmp_path: Path):
-        from specterqa_ios.cloud.storage.r2_stub import R2Stub
+        from simdrive.cloud.storage.r2_stub import R2Stub
         return R2Stub(storage_root=tmp_path)
 
     def test_put_and_get_object(self, stub) -> None:

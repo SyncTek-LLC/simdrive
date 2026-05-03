@@ -13,7 +13,7 @@ Run:
     # or (legacy alias, still works)
     simdrive
     # or
-    python -m specterqa_ios.server
+    python -m simdrive.server
 
 Add to .mcp.json:
     {
@@ -800,11 +800,11 @@ def tool_run_journey(arguments: dict) -> dict:
 
     Returns RunResult.to_dict().
     """
-    from specterqa_ios.license.entitlement import check_entitlement
-    from specterqa_ios.journey.schema import load_journey
-    from specterqa_ios.journey.persona import load_persona
-    from specterqa_ios.journey.runner import run_journey
-    from specterqa_ios.journey.claude_client import ClaudeLLMClient
+    from simdrive.license.entitlement import check_entitlement
+    from simdrive.journey.schema import load_journey
+    from simdrive.journey.persona import load_persona
+    from simdrive.journey.runner import run_journey
+    from simdrive.journey.claude_client import ClaudeLLMClient
 
     # License gate — raises LicenseError on expiry / invalid / not found.
     check_entitlement()
@@ -1474,12 +1474,12 @@ def _cmd_run(args: list[str]) -> None:
     """
     import argparse
     import json as _json
-    from specterqa_ios.license.entitlement import check_entitlement
-    from specterqa_ios.license.errors import LicenseError
-    from specterqa_ios.journey.schema import load_journey
-    from specterqa_ios.journey.persona import load_persona
-    from specterqa_ios.journey.runner import run_journey
-    from specterqa_ios.journey.claude_client import ClaudeLLMClient
+    from simdrive.license.entitlement import check_entitlement
+    from simdrive.license.errors import LicenseError
+    from simdrive.journey.schema import load_journey
+    from simdrive.journey.persona import load_persona
+    from simdrive.journey.runner import run_journey
+    from simdrive.journey.claude_client import ClaudeLLMClient
 
     parser = argparse.ArgumentParser(prog="specterqa-ios run")
     parser.add_argument("--session-id", required=True)
@@ -1536,9 +1536,9 @@ def _cmd_ci(args: list[str]) -> None:
     """
     import argparse
     import json as _json
-    from specterqa_ios.license.entitlement import check_entitlement
-    from specterqa_ios.license.errors import LicenseError
-    from specterqa_ios.journey.ci import run_ci
+    from simdrive.license.entitlement import check_entitlement
+    from simdrive.license.errors import LicenseError
+    from simdrive.journey.ci import run_ci
 
     parser = argparse.ArgumentParser(prog="specterqa-ios ci")
     parser.add_argument("--session-id", required=True)
@@ -1555,7 +1555,7 @@ def _cmd_ci(args: list[str]) -> None:
 
     s = session.get(ns.session_id)
 
-    from specterqa_ios.journey.claude_client import ClaudeLLMClient
+    from simdrive.journey.claude_client import ClaudeLLMClient
     llm_client = ClaudeLLMClient()
 
     ci_result = run_ci(

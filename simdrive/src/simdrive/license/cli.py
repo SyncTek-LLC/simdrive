@@ -19,9 +19,9 @@ from typing import Optional
 
 import requests
 
-from specterqa_ios.license.entitlement import check_entitlement
-from specterqa_ios.license.errors import LicenseError
-from specterqa_ios.license.trial import (
+from simdrive.license.entitlement import check_entitlement
+from simdrive.license.errors import LicenseError
+from simdrive.license.trial import (
     load_license_data,
     save_license_data,
     start_trial,
@@ -49,7 +49,7 @@ def cmd_trial_start(
         timeout=15,
     )
     if resp.status_code == 429:
-        from specterqa_ios.license.errors import trial_rate_limited
+        from simdrive.license.errors import trial_rate_limited
         raise trial_rate_limited(email)
     resp.raise_for_status()
 
@@ -83,8 +83,8 @@ def cmd_license_activate(
 
     Writes to license.json and verifies locally (offline-capable).
     """
-    from specterqa_ios.license.public_key import get_public_key
-    from specterqa_ios.license.validator import validate_license
+    from simdrive.license.public_key import get_public_key
+    from simdrive.license.validator import validate_license
 
     vk = get_public_key()
     payload = validate_license(key, verify_key=vk)
@@ -153,8 +153,8 @@ def cmd_license_status(
     except Exception:
         pass  # fall through to offline check
 
-    from specterqa_ios.license.public_key import get_public_key
-    from specterqa_ios.license.validator import validate_license
+    from simdrive.license.public_key import get_public_key
+    from simdrive.license.validator import validate_license
 
     try:
         payload = validate_license(

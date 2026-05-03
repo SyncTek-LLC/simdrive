@@ -9,12 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from specterqa_ios.journey.claude_client import (
+from simdrive.journey.claude_client import (
     ClaudeLLMClient,
     _compute_cost,
     _parse_decision,
 )
-from specterqa_ios.journey.runner import StepDecision
+from simdrive.journey.runner import StepDecision
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ def test_parse_decision_invalid_json():
 # ── ClaudeLLMClient ───────────────────────────────────────────────────────────
 
 
-@patch("specterqa_ios.journey.claude_client.anthropic.Anthropic")
+@patch("simdrive.journey.claude_client.anthropic.Anthropic")
 def test_client_call_returns_decision(mock_anthropic_cls):
     """Happy-path: client calls SDK and returns a parsed StepDecision."""
     fake_response = _make_response(
@@ -95,7 +95,7 @@ def test_client_call_returns_decision(mock_anthropic_cls):
     assert client.cost_usd > 0.0
 
 
-@patch("specterqa_ios.journey.claude_client.anthropic.Anthropic")
+@patch("simdrive.journey.claude_client.anthropic.Anthropic")
 def test_client_cost_accumulates(mock_anthropic_cls):
     """Cost accumulates across multiple calls."""
     fake_response = _make_response(
@@ -119,7 +119,7 @@ def test_client_cost_accumulates(mock_anthropic_cls):
     assert cost_after_2 > cost_after_1
 
 
-@patch("specterqa_ios.journey.claude_client.anthropic.Anthropic")
+@patch("simdrive.journey.claude_client.anthropic.Anthropic")
 def test_client_sdk_exception_propagates(mock_anthropic_cls):
     """SDK exceptions bubble up so runner can wrap them as claude_call_failed."""
     mock_client = MagicMock()

@@ -17,13 +17,13 @@ from typing import Optional
 
 from fastapi import FastAPI
 
-from specterqa_ios.cloud.config import CloudConfig
-from specterqa_ios.cloud.db.models import get_engine, init_db
-from specterqa_ios.cloud.routes.licenses import create_licenses_router
-from specterqa_ios.cloud.routes.recordings import create_recordings_router
-from specterqa_ios.cloud.routes.trials import create_trials_router
-from specterqa_ios.cloud.storage.r2_stub import R2Stub
-from specterqa_ios.license.keypair import (
+from simdrive.cloud.config import CloudConfig
+from simdrive.cloud.db.models import get_engine, init_db
+from simdrive.cloud.routes.licenses import create_licenses_router
+from simdrive.cloud.routes.recordings import create_recordings_router
+from simdrive.cloud.routes.trials import create_trials_router
+from simdrive.cloud.storage.r2_stub import R2Stub
+from simdrive.license.keypair import (
     signing_key_from_hex,
     verify_key_from_hex,
 )
@@ -78,7 +78,7 @@ def create_app(
         signing_key = _signing_key
     elif _verify_key is not None:
         verify_key = _verify_key
-        from specterqa_ios.license.keypair import generate_keypair
+        from simdrive.license.keypair import generate_keypair
         signing_key, _ = generate_keypair()
     else:
         verify_key = verify_key_from_hex(resolved_public_key_hex)
@@ -88,7 +88,7 @@ def create_app(
             # No private key — generate a fresh keypair (dev mode)
             # Signing will work but the verify_key won't match the
             # public_key_hex embedded in clients. Set env var in production.
-            from specterqa_ios.license.keypair import generate_keypair
+            from simdrive.license.keypair import generate_keypair
             signing_key, verify_key = generate_keypair()
 
     # Resolve DB

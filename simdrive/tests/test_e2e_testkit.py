@@ -22,7 +22,7 @@ from typing import Optional
 
 import pytest
 
-from specterqa_ios import server, sim
+from simdrive import server, sim
 
 
 TESTKIT_BUNDLE_ID = "io.synctek.specterqa.testkit"
@@ -192,7 +192,7 @@ def test_tap_by_coords_dispatches(session_id):
 
 @pytest.mark.live
 def test_tap_unresolvable_text_raises(session_id):
-    from specterqa_ios import errors as err
+    from simdrive import errors as err
     server.tool_observe({"session_id": session_id})
     with pytest.raises(err.SimdriveError) as exc:
         server.tool_tap({"session_id": session_id, "text": "definitely-not-a-real-target-xyz"})
@@ -201,7 +201,7 @@ def test_tap_unresolvable_text_raises(session_id):
 
 @pytest.mark.live
 def test_tap_missing_target_raises(session_id):
-    from specterqa_ios import errors as err
+    from simdrive import errors as err
     with pytest.raises(err.SimdriveError) as exc:
         server.tool_tap({"session_id": session_id})
     assert exc.value.code == "missing_target"
