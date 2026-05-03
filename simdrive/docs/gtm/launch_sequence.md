@@ -4,14 +4,14 @@
 **Target launch date (D0):** 2026-05-08 (the Anthropic MCP registry submission deadline in the productization plan)
 **Status:** plan of record. Each row is a discrete action with a testable deliverable.
 
-The sequence assumes `specterqa-ios 17.0.0a1` is already on PyPI. The launch is a coordinated push across MCP registries, awesome-mcp lists, the Anthropic cookbook, and a single Show HN. No paid channels. No press wire. Distribution is registry placement plus a small set of warm hand-offs to people who already cover MCP and iOS testing.
+The sequence assumes `specterqa-ios 1.0.0a1` is already on PyPI. The launch is a coordinated push across MCP registries, awesome-mcp lists, the Anthropic cookbook, and a single Show HN. No paid channels. No press wire. Distribution is registry placement plus a small set of warm hand-offs to people who already cover MCP and iOS testing.
 
 The "Owner" column uses the existing department roles. Where a row says "Maurice", the human Chairman is the operator; the agent stack drafts and stages.
 
 | Day | Action | Owner | Deliverable |
 |---|---|---|---|
-| D-7 | Cut `specterqa-ios 17.0.0a1` to a known-good tag; freeze the version unless a P0 lands | CodeAtlas + DeployAtlas | Tagged commit, PyPI release confirmed via `pip index versions specterqa-ios` |
-| D-7 | Re-run the Example Reader dogfood smoke (catalog → book detail → tab tour → typed search) against 17.0.0a1 to confirm no regression vs `simdrive 0.2.0a1` | TestAtlas | Pass/fail log written to `simdrive/dogfood/2026-05-01-relaunch-smoke.md` |
+| D-7 | Cut `specterqa-ios 1.0.0a1` to a known-good tag; freeze the version unless a P0 lands | CodeAtlas + DeployAtlas | Tagged commit, PyPI release confirmed via `pip index versions specterqa-ios` |
+| D-7 | Re-run the Example Reader dogfood smoke (catalog → book detail → tab tour → typed search) against 1.0.0a1 to confirm no regression vs `simdrive 0.2.0a1` | TestAtlas | Pass/fail log written to `simdrive/dogfood/2026-05-01-relaunch-smoke.md` |
 | D-7 | Auto-generate the README tool table from `_TOOLS`; confirm it reads "29 MCP tools" everywhere | CodeAtlas | PR merged; CI check fails on drift |
 | D-6 | Draft the Anthropic MCP registry listing copy (200-word description, install line, tool count, demo GIF reference) | MarketingAtlas | `simdrive/docs/gtm/listings/anthropic-mcp-registry.md` |
 | D-6 | Draft the `modelcontextprotocol/servers` README PR text under "Mobile / Testing" | MarketingAtlas | `simdrive/docs/gtm/listings/mcp-servers-pr.md` |
@@ -21,7 +21,7 @@ The "Owner" column uses the existing department roles. Where a row says "Maurice
 | D-5 | Draft the launch-day Twitter/X thread (5 tweets max: position, install, demo GIF, Example Reader receipt, link) | MarketingAtlas | `simdrive/docs/gtm/listings/twitter-thread.md` |
 | D-5 | Update PyPI long description to point at SpecterQA wordmark, the 29-tool count, and the Example Reader testimonial | DeployAtlas | New release-only metadata bump (no code change) |
 | D-5 | Reach out to 3 soft-launch users (target: Example Reader's Maurice + 2 from the dev-advocate list categories "MCP early adopters" and "iOS QA leads") with a "kicking the tires?" ask for D-1 | Maurice | 3 replies logged in `simdrive/docs/gtm/soft-launch-replies.md` |
-| D-4 | Open a draft GitHub release for the `v17.0.0a1` tag with full release notes (lifted from CHANGELOG, no marketing additions) | DeployAtlas | Draft visible on `gh release list --limit 5` |
+| D-4 | Open a draft GitHub release for the `v1.0.0a1` tag with full release notes (lifted from CHANGELOG, no marketing additions) | DeployAtlas | Draft visible on `gh release list --limit 5` |
 | D-4 | Schedule the Anthropic MCP registry submission for D0 09:00 PT via the registry's web form (do not submit yet) | Maurice | Submission staged; screenshot saved |
 | D-4 | Schedule the Smithery.ai submission for D0 09:00 PT | Maurice | Submission staged; screenshot saved |
 | D-3 | Draft the `anthropics/anthropic-cookbook` PR: a 30-line "Drive an iOS sim with Claude" recipe in `examples/iOS_simulator_with_specterqa.ipynb` style | MarketingAtlas + CodeAtlas | PR branch pushed to a SpecterQA-org fork; PR not yet opened |
@@ -38,7 +38,7 @@ The "Owner" column uses the existing department roles. Where a row says "Maurice
 | D0 | 09:15 PT — open the `modelcontextprotocol/servers` PR | Maurice | PR URL logged |
 | D0 | 09:30 PT — open Show HN with the title "Show HN: SpecterQA — MCP-native iOS simulator driver" | Maurice | HN URL logged; first comment a reply with the install line |
 | D0 | 09:45 PT — post the Twitter/X thread; tag `@AnthropicAI` only on tweet 1 and only because the registry submission is genuinely warm | Maurice | Tweet thread URL logged |
-| D0 | 10:00 PT — publish the GitHub release for `v17.0.0a1` (move from draft to published) | DeployAtlas | Release URL logged |
+| D0 | 10:00 PT — publish the GitHub release for `v1.0.0a1` (move from draft to published) | DeployAtlas | Release URL logged |
 | D0 | 10:00 PT — push the PyPI long-description update | DeployAtlas | New PyPI page rendered with the SpecterQA branding |
 | D0 | 10:30 PT — publish the launch blog post on synctek.io (re-uses the press kit "Background story" + a launch-day diff) | MarketingAtlas | Blog URL logged |
 | D0 | All-day — Maurice monitors HN, replies to first 10 comments within 15 minutes of arrival; no pile-on, no canned responses | Maurice | Comment-thread screenshot saved at end of day |

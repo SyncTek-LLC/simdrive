@@ -11,7 +11,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "17.0.0a1"
+    assert server.__version__ == "1.0.0a1"
 
 
 def test_tool_count_is_thirty():
@@ -356,8 +356,12 @@ def _stub_sim_for_observe(tmp_path):
     return StubSim
 
 
-def test_device_input_tools_raise_on_device_target(tmp_path):
-    """tap/swipe/type_text/press_key must surface device_input_unavailable when target=device."""
+def test_device_input_tools_raise_on_device_target(tmp_path, monkeypatch):
+    """tap/swipe/type_text/press_key/clear_field must route to WDA when target=device.
+
+    Without a bootstrapped WDA registry, they raise wda_not_bootstrapped.
+    The old device_input_unavailable code is replaced by the WDA dispatch path.
+    """
     from simdrive import server, session as ses, errors as err
     from simdrive.sim import Device
     ses._SESSIONS.clear()
@@ -368,20 +372,27 @@ def test_device_input_tools_raise_on_device_target(tmp_path):
         device=Device(udid="X", name="iPad", os_version="iPadOS 17", state="active"),
         workdir=tmp_path,
         target="device",
+        last_screenshot_w=390,
+        last_screenshot_h=844,
     )
     ses._SESSIONS[sid] = s
+
+    # No registry -> all device act tools raise wda_not_bootstrapped.
+    monkeypatch.setattr("simdrive.wda.registry.load", lambda udid: None)
 
     for fn, args in (
         (server.tool_tap, {"session_id": sid, "x": 100, "y": 100}),
         (server.tool_swipe, {"session_id": sid, "x1": 0, "y1": 0, "x2": 1, "y2": 1}),
         (server.tool_type_text, {"session_id": sid, "text": "hi"}),
         (server.tool_press_key, {"session_id": sid, "key": "home"}),
+        (server.tool_clear_field, {"session_id": sid}),
     ):
         with pytest.raises(err.SimdriveError) as exc:
             fn(args)
-        assert exc.value.code == "device_input_unavailable", (
-            f"{fn.__name__} should raise device_input_unavailable, got {exc.value.code}"
+        assert exc.value.code == "wda_not_bootstrapped", (
+            f"{fn.__name__} should raise wda_not_bootstrapped, got {exc.value.code}"
         )
+        assert "Recovery:" in exc.value.message
 
 
 def test_session_start_invalid_target_raises():
