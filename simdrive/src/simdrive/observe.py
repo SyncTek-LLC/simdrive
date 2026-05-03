@@ -9,8 +9,12 @@ from pathlib import Path
 from PIL import Image
 
 from . import sim, som
+from .observability.logger import get_logger
+from .observability.metrics import record_histogram
 from .som import Mark
 from .window import WindowBounds, get_bounds
+
+log = get_logger("simdrive.observe")
 
 
 @dataclass
@@ -59,7 +63,8 @@ def observe(
     `target` selects the backend: "simulator" (default) or "device" (real iPhone/iPad).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    ts = int(time.time() * 1000)
+    _t_start = time.time()
+    ts = int(_t_start * 1000)
     raw_path = out_dir / f"observe-{ts}.png"
     if target == "device":
         from . import device  # avoid import cost when not used
@@ -94,13 +99,22 @@ def observe(
         except Exception as exc:
             logs_text = f"<log capture failed: {exc}>"
 
+    captured_at = time.time()
+    latency_ms = (captured_at - _t_start) * 1000.0
+    record_histogram("observe_latency_ms", latency_ms)
+    log.debug(
+        "observe complete",
+        extra={"udid": udid, "latency_ms": round(latency_ms, 1),
+               "marks_count": len(marks), "target": target},
+    )
+
     obs = Observation(
         screenshot_path=raw_path,
         annotated_path=annotated_path,
         screenshot_w=w,
         screenshot_h=h,
         window_bounds=bounds,
-        captured_at=time.time(),
+        captured_at=captured_at,
         marks=marks,
         recent_logs=logs_text,
     )
