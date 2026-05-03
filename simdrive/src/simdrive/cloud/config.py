@@ -40,9 +40,12 @@ class CloudConfig:
     trial_max_per_ip_per_day: int = 5
 
     # Database
+    # WHY sqlite not sqlite+aiosqlite: the sync TestClient and sync SQLAlchemy
+    # ORM is used throughout. aiosqlite would require async routes/tests.
+    # Migration to Postgres is scoped to cycle 3.
     database_url: str = field(
         default_factory=lambda: os.environ.get(
-            "SIMDRIVE_DATABASE_URL", "sqlite+aiosqlite:///./simdrive_cloud.db"
+            "SIMDRIVE_DATABASE_URL", "sqlite:///./simdrive_cloud.db"
         )
     )
 
