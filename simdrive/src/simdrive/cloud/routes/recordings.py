@@ -14,13 +14,11 @@ upsell boundary per §3 of the engineering spec.
 from __future__ import annotations
 
 import base64
-import hashlib
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from simdrive.cloud.auth import make_license_bearer
 from simdrive.cloud.db.models import Recording, get_session

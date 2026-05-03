@@ -7,6 +7,23 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.0.0a2] — 2026-05-02 (alpha — post-WDA cleanup + audit-driven fixes)
+
+### Fixed
+- **P1: `run_ci()` call-arg mismatch in `server.py`** — API drift from cycle 1 integration; runtime error when CI journey endpoint hit
+- **P1: missing test deps in [dev]** — `anthropic`, `fastapi`, `sqlalchemy`, `hypothesis`, `moto[s3]`, `pytest-cov` were used in tests but not declared; `pip install simdrive[dev]` now collects all tests
+- **5 asserts in `journey/criteria.py`** converted to explicit `raise ValueError` (asserts get stripped under `PYTHONOPTIMIZE`)
+- **105 ruff F401/E501 errors** auto-fixed across `simdrive/src/`, `simdrive/tests/`, `scripts/`
+- **Stray `print()` calls** in `server.py` converted to logger calls
+
+### Added
+- `Python 3.13` classifier in `pyproject.toml`
+
+### Security
+- pip CVE-2026-3219 — upgrade venv pip to 26.1
+
+---
+
 ## [1.0.0a1] — 2026-05-02 (alpha — SimDrive 1.0 first alpha)
 
 This is the first alpha of the **SimDrive 1.0** line. It supersedes the

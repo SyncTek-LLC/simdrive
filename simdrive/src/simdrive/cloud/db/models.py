@@ -21,7 +21,6 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
-    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session
 

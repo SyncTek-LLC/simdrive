@@ -26,7 +26,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -45,7 +44,6 @@ from .errors import (
     wda_signing_ambiguous,
     wda_smoke_failed,
 )
-from .client import WdaClient
 
 
 # ─── constants ───────────────────────────────────────────────────────────────
@@ -318,7 +316,7 @@ def build_wda(
         f"CODE_SIGN_IDENTITY={signing_identity}",
         f"DEVELOPMENT_TEAM={team_id}",
     ]
-    print(f"[simdrive] Building WebDriverAgentRunner ...", flush=True)
+    print("[simdrive] Building WebDriverAgentRunner ...", flush=True)
     print(f"[simdrive] xcodebuild command: {' '.join(cmd)}", flush=True)
 
     with log_path.open("w", encoding="utf-8") as log_file:

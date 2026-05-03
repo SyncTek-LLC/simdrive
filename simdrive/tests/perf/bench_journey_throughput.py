@@ -82,7 +82,7 @@ def test_journey_loop_step_p95(tmp_path: Path) -> None:
     """Journey loop step p95 must not exceed 2× baseline."""
     from simdrive.journey.runner import run_journey
     from simdrive.journey.schema import Budget, Journey, SuccessCriterion
-    from simdrive.journey.persona import Persona, AccessibilityNeeds
+    from simdrive.journey.persona import Persona
 
     journey = Journey(
         schema_version=1,

@@ -16,7 +16,6 @@ Exits 0 on pass, 1 on failure.
 from __future__ import annotations
 
 import sys
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -29,7 +28,7 @@ if str(_SIMDRIVE_SRC) not in sys.path:
 
 from simdrive.journey.schema import load_journey
 from simdrive.journey.persona import load_persona
-from simdrive.journey.runner import run_journey, StepDecision, LLMClient
+from simdrive.journey.runner import run_journey, StepDecision
 
 # ── Fixture paths ─────────────────────────────────────────────────────────────
 

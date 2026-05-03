@@ -6,7 +6,6 @@ simulator is needed. JUnit XML well-formedness is verified with xml.etree.
 from __future__ import annotations
 
 import json
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional

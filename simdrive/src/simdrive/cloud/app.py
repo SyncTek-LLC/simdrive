@@ -25,13 +25,12 @@ from typing import Optional
 from fastapi import FastAPI
 
 from simdrive.cloud.config import CloudConfig
-from simdrive.cloud.db.models import Base, get_engine, init_db
+from simdrive.cloud.db.models import get_engine, init_db
 from simdrive.cloud.db.usage import UsageCounter  # noqa: F401 — ensures table is created
 from simdrive.cloud.routes.licenses import create_licenses_router
 from simdrive.cloud.routes.recordings import create_recordings_router
 from simdrive.cloud.routes.runs import create_runs_router
 from simdrive.cloud.routes.trials import create_trials_router
-from simdrive.cloud.storage.r2_stub import R2Stub
 from simdrive.license.keypair import (
     signing_key_from_hex,
     verify_key_from_hex,

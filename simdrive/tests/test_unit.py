@@ -1,7 +1,6 @@
 """Unit tests for simdrive — no live sim required."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "1.0.0a1"
+    assert server.__version__ == "1.0.0a2"
 
 
 def test_tool_count_is_thirty():
@@ -329,7 +328,6 @@ def test_find_by_stable_id():
 def test_observe_writes_sidecar_json(tmp_path, monkeypatch):
     """observe() should drop a <screenshot>.json next to the PNG."""
     from simdrive import observe
-    from PIL import Image
     monkeypatch.setattr(observe, "sim", _stub_sim_for_observe(tmp_path))
 
     out_dir = tmp_path / "obs"
@@ -1663,8 +1661,7 @@ def test_set_appearance_invokes_simctl_ui(tmp_path, monkeypatch):
 
 
 def test_dismiss_sheet_calls_swipe_with_screenshot_dims(tmp_path, monkeypatch):
-    from simdrive import server, act, observe as obs_mod, session as ses
-    from simdrive.observe import Observation
+    from simdrive import server, act, session as ses
     from simdrive.sim import Device
     from PIL import Image
 
@@ -1859,7 +1856,8 @@ def test_unavailable_reason_compose():
 
 def test_get_app_version_parses_listapps(monkeypatch):
     """sim.get_app_version reads CFBundleShortVersionString from listapps output."""
-    import plistlib, subprocess as _sp
+    import plistlib
+    import subprocess as _sp
     from simdrive import sim
 
     plist_payload = plistlib.dumps({
@@ -1878,7 +1876,8 @@ def test_get_app_version_parses_listapps(monkeypatch):
 
 
 def test_get_app_version_falls_back_to_cfbundleversion(monkeypatch):
-    import plistlib, subprocess as _sp
+    import plistlib
+    import subprocess as _sp
     from simdrive import sim
 
     plist_payload = plistlib.dumps({

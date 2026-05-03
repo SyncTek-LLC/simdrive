@@ -14,7 +14,6 @@ endpoint is constructed from R2_ACCOUNT_ID.
 """
 from __future__ import annotations
 
-import os
 import pytest
 from moto import mock_aws
 import boto3

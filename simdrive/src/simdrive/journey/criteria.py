@@ -10,7 +10,7 @@ The runner calls evaluate_all_criteria() at every step.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from .result import CriterionEval
 from .schema import SuccessCriterion
@@ -28,7 +28,8 @@ def eval_text_visible(criterion: SuccessCriterion, obs: dict) -> CriterionEval:
     observation, mimicking what a human eye would do.
     """
     target = criterion.text_visible
-    assert target is not None  # caller must pre-filter
+    if target is None:
+        raise ValueError("eval_text_visible called but criterion.text_visible is None — caller must pre-filter")
 
     marks = obs.get("marks", [])
     # Gather all visible text tokens from the SoM marks.
@@ -49,7 +50,8 @@ def eval_text_visible(criterion: SuccessCriterion, obs: dict) -> CriterionEval:
 def eval_screen_matches(criterion: SuccessCriterion, obs: dict) -> CriterionEval:
     """Check that criterion.screen_matches stable_id appears in the current marks."""
     stable_id = criterion.screen_matches
-    assert stable_id is not None
+    if stable_id is None:
+        raise ValueError("eval_screen_matches called but criterion.screen_matches is None — caller must pre-filter")
 
     marks = obs.get("marks", [])
     found = any(m.get("stable_id") == stable_id for m in marks)
@@ -74,7 +76,8 @@ def eval_perf_under(
     expected keys: cpu_pct (float), memory_mb (float).
     """
     budget = criterion.perf_under
-    assert budget is not None
+    if budget is None:
+        raise ValueError("eval_perf_under called but criterion.perf_under is None — caller must pre-filter")
 
     if perf_snapshot is None:
         return CriterionEval(
@@ -121,7 +124,8 @@ def eval_no_crash(
     crashes_since_start: list[dict],
 ) -> CriterionEval:
     """Check that no crash reports have been generated since the journey started."""
-    assert criterion.no_crash is True  # only called when no_crash=True
+    if criterion.no_crash is not True:
+        raise ValueError("eval_no_crash called but criterion.no_crash is not True — caller must pre-filter")
 
     crashed = len(crashes_since_start) > 0
     return CriterionEval(

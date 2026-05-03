@@ -10,7 +10,6 @@ registry.load() and WdaClient methods — no real device or network needed.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest

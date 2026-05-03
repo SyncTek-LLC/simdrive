@@ -21,9 +21,7 @@ from typing import Any, Literal, Optional, Protocol
 from .criteria import all_passed, evaluate_all_criteria, unmet_descriptions
 from .errors import (
     act_tool_failed,
-    claude_call_failed,
     claude_cost_cap_hit,
-    journey_budget_exceeded,
 )
 from .persona import Persona
 from .prompt import assemble_system_prompt, assemble_user_prompt
