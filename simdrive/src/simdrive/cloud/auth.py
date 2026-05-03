@@ -18,6 +18,9 @@ from nacl.signing import VerifyKey
 
 from simdrive.license.errors import LicenseError
 from simdrive.license.validator import validate_license
+from simdrive.observability.logger import get_logger
+
+log = get_logger("simdrive.cloud.auth")
 
 
 def make_license_bearer(verify_key: VerifyKey):
@@ -64,7 +67,19 @@ def make_license_bearer(verify_key: VerifyKey):
                 verify_key=verify_key,
                 last_known_server_time=int(_time.time()),
             )
+            log.debug(
+                "bearer auth accepted",
+                extra={
+                    "tier": payload.get("tier"),
+                    "customer_email": payload.get("customer_email"),
+                    "path": request.url.path,
+                },
+            )
         except LicenseError as exc:
+            log.warning(
+                "bearer auth rejected",
+                extra={"reason": exc.code, "path": request.url.path},
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=exc.message,

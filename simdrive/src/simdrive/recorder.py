@@ -15,8 +15,10 @@ from typing import Any, Optional
 import yaml
 
 from . import act, errors, observe, sim, som
+from .observability.logger import get_logger
 from .session import Session
 
+log = get_logger("simdrive.recorder")
 
 _RECORDINGS_ROOT_ENV = "SIMDRIVE_HOME"
 
@@ -104,6 +106,7 @@ def start(session: Session, name: str, tags: Optional[list[str]] = None) -> Reco
     root.mkdir(parents=True, exist_ok=True)
     rec = Recorder(name=name, session=session, root=root, tags=list(tags or []))
     session.recorder = rec
+    log.info("recording started", extra={"recording_name": name, "session_id": session.session_id})
     return rec
 
 
@@ -111,8 +114,10 @@ def stop(session: Session) -> Path:
     if session.recorder is None:
         raise errors.not_recording(session.session_id)
     rec = session.recorder
+    log.info("recording stopping", extra={"recording_name": rec.name, "session_id": session.session_id})
     yaml_path = rec.finalize()
     session.recorder = None
+    log.debug("recording finalized", extra={"yaml_path": str(yaml_path)})
     return yaml_path
 
 

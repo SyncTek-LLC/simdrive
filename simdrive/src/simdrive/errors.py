@@ -35,7 +35,10 @@ class SimdriveError(Exception):
 def no_session(session_id: str) -> SimdriveError:
     return SimdriveError(
         code="no_session",
-        message=f"unknown session_id {session_id!r}. Call session_start first.",
+        message=(
+            f"unknown session_id {session_id!r}. "
+            "Recovery: call `ios_start_session` to create a session, then retry with the returned session_id."
+        ),
         details={"session_id": session_id},
     )
 
@@ -43,7 +46,11 @@ def no_session(session_id: str) -> SimdriveError:
 def no_device(query: dict) -> SimdriveError:
     return SimdriveError(
         code="no_device",
-        message=f"no booted simulator matched {query}. Pass `device` to boot one.",
+        message=(
+            f"no booted simulator matched {query}. "
+            "Recovery: run `ios_devices` to list available simulators, then pass a matching `device` filter, "
+            "or run `xcrun simctl boot <udid>` to boot one."
+        ),
         details={"query": query},
     )
 
@@ -64,7 +71,7 @@ def hid_unavailable(reason: str) -> SimdriveError:
         code="hid_unavailable",
         message=(
             f"native HID helper unavailable: {reason}. "
-            "Reinstall simdrive (the bundled binary is required) or `cd simdrive/native && make`."
+            "Recovery: reinstall simdrive (the bundled binary is required) or `cd simdrive/native && make`."
         ),
         details={"reason": reason},
     )
@@ -75,7 +82,8 @@ def target_not_found(form: str, query: Any, available: Optional[list] = None) ->
         code="target_not_found",
         message=(
             f"no {form} match for {query!r} in last observe. "
-            f"Available: {available[:30] if available else '(none)'}"
+            f"Available: {available[:30] if available else '(none)'}. "
+            "Recovery: call `ios_observe` to refresh the screen state, then retry with a visible element."
         ),
         details={"form": form, "query": query, "available": available},
     )
@@ -84,7 +92,10 @@ def target_not_found(form: str, query: Any, available: Optional[list] = None) ->
 def missing_target() -> SimdriveError:
     return SimdriveError(
         code="missing_target",
-        message="tap target required: provide {x, y}, {mark: <id>}, or {text: <query>}",
+        message=(
+            "tap target required: provide {x, y}, {mark: <id>}, or {text: <query>}. "
+            "Recovery: call `ios_observe` to get current marks, then supply one of the above coordinate forms."
+        ),
         details={},
     )
 
@@ -92,7 +103,10 @@ def missing_target() -> SimdriveError:
 def invalid_argument(field: str, value: Any, why: str) -> SimdriveError:
     return SimdriveError(
         code="invalid_argument",
-        message=f"invalid {field}={value!r}: {why}",
+        message=(
+            f"invalid {field}={value!r}: {why}. "
+            "Recovery: check the tool's parameter schema and supply a valid value."
+        ),
         details={"field": field, "value": value, "why": why},
     )
 
@@ -100,7 +114,10 @@ def invalid_argument(field: str, value: Any, why: str) -> SimdriveError:
 def already_recording(session_id: str, name: str) -> SimdriveError:
     return SimdriveError(
         code="already_recording",
-        message=f"session {session_id} already recording {name!r}; call record_stop first.",
+        message=(
+            f"session {session_id} already recording {name!r}. "
+            "Recovery: call `ios_stop_recording` to finalize the current recording before starting a new one."
+        ),
         details={"session_id": session_id, "name": name},
     )
 
@@ -108,7 +125,10 @@ def already_recording(session_id: str, name: str) -> SimdriveError:
 def not_recording(session_id: str) -> SimdriveError:
     return SimdriveError(
         code="not_recording",
-        message=f"session {session_id} is not recording.",
+        message=(
+            f"session {session_id} is not recording. "
+            "Recovery: call `ios_start_recording` before attempting to stop or add steps to a recording."
+        ),
         details={"session_id": session_id},
     )
 
@@ -116,7 +136,10 @@ def not_recording(session_id: str) -> SimdriveError:
 def recording_not_found(name: str, path: str) -> SimdriveError:
     return SimdriveError(
         code="recording_not_found",
-        message=f"recording {name!r} not found at {path}",
+        message=(
+            f"recording {name!r} not found at {path}. "
+            "Recovery: run `ios_list_replays` to see available recordings, then retry with a valid name."
+        ),
         details={"name": name, "path": path},
     )
 
@@ -128,7 +151,9 @@ def device_input_unavailable(action: str) -> SimdriveError:
             f"'{action}' on a real device is not yet supported. simdrive v0.1.x "
             "drives observe + logs + app lifecycle on real devices, but synthetic "
             "touch/keyboard input requires WebDriverAgent. Coming in v0.2; track "
-            "in docs/REAL_DEVICE_FEASIBILITY.md."
+            "in docs/REAL_DEVICE_FEASIBILITY.md. "
+            "Recovery: switch `target` to `simulator` for now, or run `simdrive bootstrap-device <udid>` "
+            "once WDA bootstrap is available in v0.2."
         ),
         details={"action": action},
     )
@@ -137,7 +162,11 @@ def device_input_unavailable(action: str) -> SimdriveError:
 def replay_drift_halt(step_id: int, similarity: float, threshold: float) -> SimdriveError:
     return SimdriveError(
         code="replay_drift_halt",
-        message=f"replay halted at step {step_id}: similarity {similarity:.3f} below threshold {threshold:.3f}",
+        message=(
+            f"replay halted at step {step_id}: similarity {similarity:.3f} below threshold {threshold:.3f}. "
+            "Recovery: re-record the journey from the current UI state, or lower `drift_threshold` "
+            "if the UI change is cosmetic (e.g. `--drift-threshold 0.75`)."
+        ),
         details={"step_id": step_id, "similarity": similarity, "threshold": threshold},
     )
 
