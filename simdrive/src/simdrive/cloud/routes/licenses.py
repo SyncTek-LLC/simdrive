@@ -1,19 +1,22 @@
-"""License routes: activate + status.
+"""License routes: activate, status, and usage.
 
 POST /v1/licenses/activate — Stripe webhook target
 GET  /v1/licenses/status  — client status check (returns server_time for skew defense)
+GET  /v1/licenses/usage   — per-license monthly run usage + quota
 """
 from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from simdrive.cloud.db.models import LicenseActivation, get_session
+from simdrive.cloud.db.usage import get_or_create_counter, get_run_limit
+from simdrive.cloud.middleware.quotas import _month_period
 from simdrive.license.errors import LicenseError
 from simdrive.license.signer import sign_license, VALID_TIERS
 from simdrive.license.validator import validate_license
@@ -43,6 +46,15 @@ class StatusResponse(BaseModel):
     expires_at: Optional[int] = None
     server_time: int
     tier: Optional[str] = None
+
+
+class UsageResponse(BaseModel):
+    period_start: int
+    period_end: int
+    runs_used: int
+    runs_limit: int
+    tier: str
+    percent_used: float
 
 
 def create_licenses_router(signing_key, verify_key, db_engine) -> APIRouter:
@@ -109,5 +121,62 @@ def create_licenses_router(signing_key, verify_key, db_engine) -> APIRouter:
             )
         except LicenseError:
             return StatusResponse(valid=False, server_time=server_time)
+
+    @_router.get("/licenses/usage", response_model=UsageResponse)
+    def get_usage(key: str, request: Request) -> UsageResponse:
+        """Return per-license monthly run usage and quota.
+
+        This endpoint is public (key passed as query param, not Bearer header)
+        so the client can poll usage without needing to reconstruct headers.
+
+        Returns:
+          period_start — UTC unix timestamp of start of current month
+          period_end   — UTC unix timestamp of end of current month
+          runs_used    — runs consumed this month
+          runs_limit   — tier limit for this month
+          tier         — license tier
+          percent_used — (runs_used / runs_limit) * 100 rounded to 2 dp
+        """
+        server_time = int(time.time())
+        try:
+            payload = validate_license(
+                key,
+                verify_key=verify_key,
+                last_known_server_time=server_time,
+            )
+        except LicenseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=exc.message,
+            ) from exc
+
+        customer_email = payload.get("customer_email", "unknown")
+        tier = payload.get("tier", "solo")
+        run_limit = get_run_limit(tier)
+
+        db = get_session(db_engine)
+        try:
+            counter = get_or_create_counter(
+                db,
+                license_key=key,
+                customer_email=customer_email,
+                tier=tier,
+            )
+            db.commit()
+            runs_used = counter.runs_used or 0
+        finally:
+            db.close()
+
+        period_start, period_end = _month_period()
+        percent_used = round((runs_used / run_limit) * 100.0, 2) if run_limit > 0 else 0.0
+
+        return UsageResponse(
+            period_start=period_start,
+            period_end=period_end,
+            runs_used=runs_used,
+            runs_limit=run_limit,
+            tier=tier,
+            percent_used=percent_used,
+        )
 
     return _router

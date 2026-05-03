@@ -1,0 +1,20 @@
+[build]
+# Railway auto-detects Python from pyproject.toml / setup.py.
+# The simdrive package is at simdrive/ (sub-directory of the repo root).
+# Builder installs the package and its dependencies.
+builder = "nixpacks"
+buildCommand = "pip install -e '.[cloud]'"
+
+[deploy]
+# Start command for the web dyno.
+# $PORT is injected by Railway at runtime.
+startCommand = "uvicorn simdrive.cloud.app:app --host 0.0.0.0 --port $PORT"
+
+# Railway healthcheck: the /health endpoint must return 200 within
+# healthcheckTimeout seconds after deploy, or the deploy is rolled back.
+healthcheckPath = "/health"
+healthcheckTimeout = 30  # seconds
+
+# Auto-restart on crash (Railway default; explicit here for clarity)
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
