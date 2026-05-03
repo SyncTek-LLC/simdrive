@@ -84,13 +84,23 @@ def test_verify_host_tools_missing_xcrun(monkeypatch):
 
 
 def _devicectl_json(paired: str = "paired", dev_mode: str = "enabled", ddi: bool = True) -> str:
+    # Matches the real `xcrun devicectl device info details --json-output -` structure:
+    # result.connectionProperties.pairingState
+    # result.deviceProperties.{developerModeStatus, ddiServicesAvailable}
     return json.dumps({
         "result": {
-            "devices": [{
+            "connectionProperties": {
                 "pairingState": paired,
+                "tunnelState": "connected",
+            },
+            "deviceProperties": {
                 "developerModeStatus": dev_mode,
                 "ddiServicesAvailable": ddi,
-            }]
+                "osVersionNumber": "26.3.1",
+            },
+            "hardwareProperties": {
+                "marketingName": "iPhone 17 Pro Max",
+            },
         }
     })
 
