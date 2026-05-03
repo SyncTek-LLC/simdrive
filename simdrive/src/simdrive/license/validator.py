@@ -23,6 +23,9 @@ from simdrive.license.errors import (
     license_invalid,
     license_offline_grace_exhausted,
 )
+from simdrive.observability.logger import get_logger
+
+log = get_logger("simdrive.license.validator")
 
 OFFLINE_GRACE_SECONDS: int = 7 * 86400  # 7 days
 
@@ -102,11 +105,32 @@ def validate_license(
             # Offline: allow 7-day grace from expiry
             grace_deadline = expires_at + OFFLINE_GRACE_SECONDS
             if time.time() > grace_deadline:
+                log.warning(
+                    "license offline grace exhausted",
+                    extra={"expires_at": expires_at, "tier": payload.get("tier")},
+                )
                 raise license_offline_grace_exhausted(expires_at)
             # Within grace window — pass through
+            log.debug(
+                "license in offline grace window",
+                extra={"expires_at": expires_at, "tier": payload.get("tier")},
+            )
         else:
             # Online: server time is authoritative, no grace
+            log.warning(
+                "license expired",
+                extra={"expires_at": expires_at, "tier": payload.get("tier")},
+            )
             raise license_expired(expires_at)
+    else:
+        log.debug(
+            "license valid",
+            extra={
+                "tier": payload.get("tier"),
+                "expires_at": expires_at,
+                "customer_email": payload.get("customer_email"),
+            },
+        )
 
     return payload
 

@@ -16,8 +16,12 @@ import time
 from typing import Iterable, Optional
 
 from . import hid_inject, sim
+from .observability.logger import get_logger
+from .observability.metrics import record_histogram
 from .sim import cliclick_path
 from .window import WindowBounds, activate, get_bounds
+
+log = get_logger("simdrive.act")
 
 
 class ActError(RuntimeError):
@@ -80,9 +84,13 @@ def _run_cliclick(args: Iterable[str], timeout: float = 5.0) -> None:
 
 def tap(pixel_x: int, pixel_y: int, screenshot_w: int, screenshot_h: int, udid: Optional[str] = None) -> tuple[int, int]:
     """Click at screenshot-pixel coordinates. Returns the macOS screen coords used (or 0,0 for HID path)."""
+    _t0 = time.time()
     if _backend() == "hid" and udid:
         x_pt, y_pt = _pixels_to_points(udid, pixel_x, pixel_y, screenshot_w, screenshot_h)
         hid_inject.tap(udid, x_pt, y_pt)
+        _tap_latency = (time.time() - _t0) * 1000.0
+        record_histogram("tap_latency_ms", _tap_latency)
+        log.debug("tap dispatched (hid)", extra={"x": pixel_x, "y": pixel_y, "latency_ms": round(_tap_latency, 1)})
         return (0, 0)
 
     bounds = get_bounds()
@@ -90,6 +98,9 @@ def tap(pixel_x: int, pixel_y: int, screenshot_w: int, screenshot_h: int, udid: 
     activate()
     time.sleep(0.15)
     _run_cliclick([f"c:{sx},{sy}"])
+    _tap_latency = (time.time() - _t0) * 1000.0
+    record_histogram("tap_latency_ms", _tap_latency)
+    log.debug("tap dispatched (cliclick)", extra={"x": sx, "y": sy, "latency_ms": round(_tap_latency, 1)})
     return sx, sy
 
 
