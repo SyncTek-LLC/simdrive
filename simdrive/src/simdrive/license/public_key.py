@@ -16,12 +16,14 @@ from nacl.signing import VerifyKey
 from simdrive.license.keypair import verify_key_from_hex
 
 
-# ---- PLACEHOLDER: replace with real public key before launch ----
-# Generated via: python -m simdrive.license.keypair generate
+# Ed25519 license-signing public key for SimDrive 1.0.
+# Generated 2026-05-02; private key held in Chairman's 1Password under
+# "SimDrive license signing" and configured as SIMDRIVE_LICENSE_PRIVATE_KEY
+# env var on the Railway license server. DO NOT regenerate without
+# coordinated key rotation — every issued license becomes invalid.
 SIMDRIVE_PUBLIC_KEY_HEX: str = (
-    "0000000000000000000000000000000000000000000000000000000000000001"
+    "8d282e49db135b6e67dd16133bb57c436685e06c3582d28091134c4c15ce462c"
 )
-# ---- END PLACEHOLDER ----
 
 
 def get_public_key() -> VerifyKey:
