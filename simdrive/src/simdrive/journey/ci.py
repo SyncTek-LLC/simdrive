@@ -246,7 +246,7 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
             if options.session_factory is not None:
                 session = options.session_factory(journey)
             else:
-                from specterqa_ios import session as session_module  # noqa: PLC0415
+                from simdrive import session as session_module  # noqa: PLC0415
                 session = session_module.start(
                     target=journey.target,
                     app_bundle_id=journey.app_bundle_id,
@@ -274,7 +274,7 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
             # Production: the real Claude client.
             # Import lazily so tests don't need the anthropic SDK installed.
             try:
-                from specterqa_ios.journey.claude_client import ClaudeLLMClient  # noqa: PLC0415
+                from simdrive.journey.claude_client import ClaudeLLMClient  # noqa: PLC0415
                 llm_client = ClaudeLLMClient()
             except ImportError:
                 log.error("ClaudeLLMClient not available — run `pip install anthropic`")
@@ -312,7 +312,7 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
         if session is not None:
             try:
                 if options.session_factory is None:
-                    from specterqa_ios import session as session_module  # noqa: PLC0415
+                    from simdrive import session as session_module  # noqa: PLC0415
                     session_module.end(session.session_id)
                 elif hasattr(session, "_end"):
                     session._end()

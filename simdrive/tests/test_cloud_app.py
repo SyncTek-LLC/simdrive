@@ -18,14 +18,14 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def keypair():
-    from specterqa_ios.license.keypair import generate_keypair
+    from simdrive.license.keypair import generate_keypair
     return generate_keypair()
 
 
 @pytest.fixture(scope="module")
 def valid_license_key(keypair):
     """A valid Pro license key signed with the module-level keypair."""
-    from specterqa_ios.license.signer import sign_license
+    from simdrive.license.signer import sign_license
     sk, _ = keypair
     now = int(time.time())
     return sign_license(
@@ -41,7 +41,7 @@ def valid_license_key(keypair):
 @pytest.fixture(scope="module")
 def expired_license_key(keypair):
     """An expired license key."""
-    from specterqa_ios.license.signer import sign_license
+    from simdrive.license.signer import sign_license
     sk, _ = keypair
     now = int(time.time())
     return sign_license(
@@ -61,7 +61,7 @@ def app(keypair):
     Injects both signing_key and verify_key so trial/activate endpoints
     produce keys verifiable by the test verify_key.
     """
-    from specterqa_ios.cloud.app import create_app
+    from simdrive.cloud.app import create_app
     sk, vk = keypair
     application = create_app(
         _signing_key=sk,

@@ -13,10 +13,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-from specterqa_ios.cloud.db.models import LicenseActivation, get_session
-from specterqa_ios.license.errors import LicenseError
-from specterqa_ios.license.signer import sign_license, VALID_TIERS
-from specterqa_ios.license.validator import validate_license
+from simdrive.cloud.db.models import LicenseActivation, get_session
+from simdrive.license.errors import LicenseError
+from simdrive.license.signer import sign_license, VALID_TIERS
+from simdrive.license.validator import validate_license
 
 LICENSE_DURATION_SECONDS = 365 * 86400  # 1 year default; Stripe sets real expiry
 

@@ -14,9 +14,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from specterqa_ios.cloud.auth import make_license_bearer
-from specterqa_ios.cloud.db.models import Recording, get_session
-from specterqa_ios.cloud.storage.r2_stub import R2Stub
+from simdrive.cloud.auth import make_license_bearer
+from simdrive.cloud.db.models import Recording, get_session
+from simdrive.cloud.storage.r2_stub import R2Stub
 
 
 class RecordingUploadRequest(BaseModel):

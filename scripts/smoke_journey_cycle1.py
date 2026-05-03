@@ -27,9 +27,9 @@ _SIMDRIVE_SRC = _REPO / "simdrive" / "src"
 if str(_SIMDRIVE_SRC) not in sys.path:
     sys.path.insert(0, str(_SIMDRIVE_SRC))
 
-from specterqa_ios.journey.schema import load_journey
-from specterqa_ios.journey.persona import load_persona
-from specterqa_ios.journey.runner import run_journey, StepDecision, LLMClient
+from simdrive.journey.schema import load_journey
+from simdrive.journey.persona import load_persona
+from simdrive.journey.runner import run_journey, StepDecision, LLMClient
 
 # ── Fixture paths ─────────────────────────────────────────────────────────────
 
@@ -135,10 +135,10 @@ def main() -> int:
 
         # Patch the module-level tool_* references in runner so no real sim is needed.
         with (
-            patch("specterqa_ios.journey.runner.tool_observe", side_effect=_fake_observe),
-            patch("specterqa_ios.journey.runner.tool_crashes", side_effect=_fake_tool_crashes),
-            patch("specterqa_ios.journey.runner.tool_perf", side_effect=_fake_tool_perf),
-            patch("specterqa_ios.journey.runner.tool_perf_baseline", side_effect=_fake_tool_perf_baseline),
+            patch("simdrive.journey.runner.tool_observe", side_effect=_fake_observe),
+            patch("simdrive.journey.runner.tool_crashes", side_effect=_fake_tool_crashes),
+            patch("simdrive.journey.runner.tool_perf", side_effect=_fake_tool_perf),
+            patch("simdrive.journey.runner.tool_perf_baseline", side_effect=_fake_tool_perf_baseline),
         ):
             result = run_journey(
                 journey=journey,

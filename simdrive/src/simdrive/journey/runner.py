@@ -41,47 +41,47 @@ _DEFAULT_COST_CAP_USD = 5.0
 # Each falls back to the real server function when called; tests replace them.
 
 def tool_observe(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_observe as _fn
+    from simdrive.server import tool_observe as _fn
     return _fn(arguments)
 
 
 def tool_tap(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_tap as _fn
+    from simdrive.server import tool_tap as _fn
     return _fn(arguments)
 
 
 def tool_swipe(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_swipe as _fn
+    from simdrive.server import tool_swipe as _fn
     return _fn(arguments)
 
 
 def tool_type_text(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_type_text as _fn
+    from simdrive.server import tool_type_text as _fn
     return _fn(arguments)
 
 
 def tool_press_key(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_press_key as _fn
+    from simdrive.server import tool_press_key as _fn
     return _fn(arguments)
 
 
 def tool_clear_field(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_clear_field as _fn
+    from simdrive.server import tool_clear_field as _fn
     return _fn(arguments)
 
 
 def tool_perf(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_perf as _fn
+    from simdrive.server import tool_perf as _fn
     return _fn(arguments)
 
 
 def tool_perf_baseline(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_perf_baseline as _fn
+    from simdrive.server import tool_perf_baseline as _fn
     return _fn(arguments)
 
 
 def tool_crashes(arguments: dict) -> dict:  # pragma: no cover
-    from specterqa_ios.server import tool_crashes as _fn
+    from simdrive.server import tool_crashes as _fn
     return _fn(arguments)
 
 # Approximate cost per LLM call (vision, claude-3-7 range); used for
@@ -187,10 +187,10 @@ def _dispatch_action(decision: StepDecision, session_id: str) -> None:
     """Route the LLM's decision to the appropriate act tool.
 
     Uses the module-level tool_* references so tests can patch them via
-    `patch("specterqa_ios.journey.runner.tool_tap")` etc.
+    `patch("simdrive.journey.runner.tool_tap")` etc.
     All tool functions follow the same call signature: tool_*(arguments: dict) -> dict.
     """
-    import specterqa_ios.journey.runner as _self  # noqa: PLC0415 — current module
+    import simdrive.journey.runner as _self  # noqa: PLC0415 — current module
 
     args = dict(decision.args)
     args["session_id"] = session_id
@@ -211,7 +211,7 @@ def _dispatch_action(decision: StepDecision, session_id: str) -> None:
     try:
         tool_fn(args)
     except Exception as exc:
-        from specterqa_ios.errors import SimdriveError  # noqa: PLC0415
+        from simdrive.errors import SimdriveError  # noqa: PLC0415
         inner_code = exc.code if isinstance(exc, SimdriveError) else "unknown"
         raise act_tool_failed(decision.tool, inner_code, str(exc)) from exc
 
@@ -226,7 +226,7 @@ _RECORDER_DISABLED = None    # sentinel: means "skip recording entirely"
 def run_journey(
     journey: Journey,
     persona: Persona,
-    session: Any,  # specterqa_ios.session.Session — typed as Any to avoid hard dep
+    session: Any,  # simdrive.session.Session — typed as Any to avoid hard dep
     llm_client: LLMClient,
     *,
     cost_cap_usd: Optional[float] = None,
@@ -239,7 +239,7 @@ def run_journey(
     ----------
     journey:    Validated Journey model.
     persona:    Validated Persona model.
-    session:    Active specterqa_ios.session.Session.
+    session:    Active simdrive.session.Session.
     llm_client: Dependency-injected LLM client (tests use a fake).
     cost_cap_usd: Override for the default $5/run cost cap.
     artifact_dir_override: Override the artifact directory for testing.
@@ -261,7 +261,7 @@ def run_journey(
     # the import; passing _recorder_module=None skips recording entirely.
     if _recorder_module is _RECORDER_DEFAULT:
         try:
-            from specterqa_ios import recorder as _recorder_module  # noqa: PLC0415
+            from simdrive import recorder as _recorder_module  # noqa: PLC0415
         except ImportError:
             _recorder_module = None
 
