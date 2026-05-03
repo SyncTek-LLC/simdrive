@@ -307,10 +307,10 @@ def build_wda(
     log_path = wda_home / udid / "build.log"
     derived_data.mkdir(parents=True, exist_ok=True)
 
-    workspace = source_dir / "WebDriverAgent.xcworkspace"
+    project = source_dir / "WebDriverAgent.xcodeproj"
     cmd = [
         "xcodebuild",
-        "-workspace", str(workspace),
+        "-project", str(project),
         "-scheme", "WebDriverAgentRunner",
         "-destination", f"id={udid}",
         "-derivedDataPath", str(derived_data),
