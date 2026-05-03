@@ -83,7 +83,16 @@ def verify_host_tools() -> None:
 
 
 def verify_device_ready(udid: str) -> None:
-    """Parse `xcrun devicectl device info details` and assert pairing + DDI state.
+    """Parse `xcrun devicectl device info details --json-output -` and assert pairing + DDI state.
+
+    Uses the structured JSON output (--json-output -) so parsing is reliable
+    across macOS / Xcode versions regardless of bullet-point formatting changes.
+
+    JSON paths (confirmed against iPhone 17 Pro Max, iOS 26.3.1):
+      result.connectionProperties.pairingState         -> "paired"
+      result.connectionProperties.tunnelState          -> "connected"
+      result.deviceProperties.developerModeStatus      -> "enabled"
+      result.deviceProperties.ddiServicesAvailable     -> true (bool)
 
     Raises wda_device_not_ready with the list of unmet conditions.
     """
@@ -101,25 +110,22 @@ def verify_device_ready(udid: str) -> None:
     missing: list[str] = []
     try:
         data = json.loads(result.stdout)
-        # devicectl JSON envelope: {"result": {"devices": [...]}}
-        devices = (data.get("result") or {}).get("devices") or []
-        info = devices[0] if devices else {}
+        # devicectl JSON envelope: {"result": {...}} — fields are directly on result,
+        # not inside a result.devices[] array.
+        info = data.get("result") or {}
 
-        pairing = info.get("pairingState") or info.get("deviceProperties", {}).get("pairingState", "")
+        conn_props = info.get("connectionProperties") or {}
+        dev_props = info.get("deviceProperties") or {}
+
+        pairing = conn_props.get("pairingState", "")
         if pairing.lower() != "paired":
             missing.append(f"pairingState={pairing!r} (need 'paired')")
 
-        dev_mode = (
-            info.get("developerModeStatus")
-            or info.get("deviceProperties", {}).get("developerModeStatus", "")
-        )
+        dev_mode = dev_props.get("developerModeStatus", "")
         if dev_mode.lower() != "enabled":
             missing.append(f"developerModeStatus={dev_mode!r} (need 'enabled')")
 
-        ddi = (
-            info.get("ddiServicesAvailable")
-            or info.get("deviceProperties", {}).get("ddiServicesAvailable", False)
-        )
+        ddi = dev_props.get("ddiServicesAvailable", False)
         if not ddi:
             missing.append("ddiServicesAvailable=False (mount DDI by connecting device in Xcode)")
 
