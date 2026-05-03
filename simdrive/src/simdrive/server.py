@@ -40,6 +40,35 @@ def _now() -> float:
     return time.time()
 
 
+# ── WDA device-input helper ─────────────────────────────────────────────────
+
+
+def _wda_client_for(udid: str):
+    """Return a WdaClient for the given device UDID.
+
+    Loads the per-UDID registry from ~/.simdrive/wda/<udid>.json (written by
+    `simdrive bootstrap-device`). Raises SimdriveError with a clear recovery
+    message if the registry is missing (i.e., WDA has not been bootstrapped).
+    """
+    from .wda import registry as wda_registry
+    from .wda.client import WdaClient
+
+    entry = wda_registry.load(udid)
+    if entry is None:
+        raise errors.SimdriveError(
+            code="wda_not_bootstrapped",
+            message=(
+                f"No WDA registry found for device {udid}. "
+                "Recovery: run `simdrive bootstrap-device {udid}` to install and "
+                "start WebDriverAgent on the device before using input tools with target=device."
+            ),
+            details={"udid": udid},
+        )
+    host = entry.get("host", "localhost")
+    port = int(entry.get("port", 8100))
+    return WdaClient(host=host, port=port)
+
+
 # v0.3.0a3 — module-load timestamp + cached disk-version probe.
 # The whole point: catch the case where `pip install --upgrade simdrive`
 # refreshes the wheel on disk but the running MCP server is still serving
@@ -254,11 +283,41 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
 
 def tool_tap(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
-    if s.target == "device":
-        raise errors.device_input_unavailable("tap")
     sw, sh = _ensure_screenshot_dims(s)
     x, y, resolved_via, matched_mark = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
+
+    if s.target == "device":
+        wda = _wda_client_for(s.device.udid)
+        wda.tap(float(x), float(y))
+        s.last_action_at = _now()
+        session.append_action(s, {
+            "action": "tap",
+            "args": dict(arguments),
+            "resolved": {"pixel_x": x, "pixel_y": y, "via": resolved_via},
+            "backend": "wda",
+            "at": _now(),
+        })
+        resp: dict = {
+            "ok": True,
+            "pixel_x": x,
+            "pixel_y": y,
+            "screen_x": 0,
+            "screen_y": 0,
+            "screenshot_size_pixels": [sw, sh],
+            "resolved_via": resolved_via,
+        }
+        if matched_mark is not None and pre_path:
+            step_id = _record_act_step(s, "tap", {
+                "x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh,
+                "stable_id": matched_mark.stable_id,
+                "stable_id_loose": matched_mark.stable_id_loose,
+                "text": matched_mark.text,
+            }, pre_path)
+            if step_id is not None:
+                resp["step_id"] = step_id
+        return resp
+
     sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
     s.last_action_at = _now()
     args = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
@@ -294,8 +353,6 @@ def tool_tap(arguments: dict) -> dict:
 
 def tool_swipe(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
-    if s.target == "device":
-        raise errors.device_input_unavailable("swipe")
     duration_ms = int(arguments.get("duration_ms", 300))
     sw, sh = _ensure_screenshot_dims(s)
 
@@ -324,7 +381,11 @@ def tool_swipe(arguments: dict) -> dict:
         )
 
     pre_path = s.last_screenshot_path
-    act.swipe(x1, y1, x2, y2, sw, sh, duration_ms, udid=s.device.udid)
+    if s.target == "device":
+        wda = _wda_client_for(s.device.udid)
+        wda.swipe(float(x1), float(y1), float(x2), float(y2), duration_ms)
+    else:
+        act.swipe(x1, y1, x2, y2, sw, sh, duration_ms, udid=s.device.udid)
     s.last_action_at = _now()
     args = {
         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
@@ -351,13 +412,53 @@ def tool_swipe(arguments: dict) -> dict:
 def tool_type_text(arguments: dict) -> dict:
     from . import hid_inject
     s = session.get(arguments["session_id"])
-    if s.target == "device":
-        raise errors.device_input_unavailable("type_text")
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
     clear_first = bool(arguments.get("clear_first", False))
-
     focused_mark = None  # Mark of the tap_first target if resolved via mark/stable_id/text
+
+    if s.target == "device":
+        wda = _wda_client_for(s.device.udid)
+        if tap_target:
+            sw, sh = _ensure_screenshot_dims(s)
+            tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
+            wda.tap(float(tx), float(ty))
+            import time as _t
+            _t.sleep(0.6)
+        if clear_first:
+            wda.clear_field()
+        pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
+        pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
+        wda.type_text(text)
+        s.last_action_at = _now()
+        step_id = None
+        if pre_path:
+            step_id = _record_act_step(s, "type_text", {"text": text}, pre_path)
+        session.append_action(s, {
+            "action": "type_text",
+            "args": {"text": text, "tap_first": tap_target, "clear_first": clear_first},
+            "backend": "wda",
+            "at": _now(),
+        })
+        post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=True)
+        s.last_screenshot_w = post_obs.screenshot_w
+        s.last_screenshot_h = post_obs.screenshot_h
+        s.last_screenshot_path = post_obs.screenshot_path
+        if post_obs.marks:
+            s.last_marks = post_obs.marks
+        focused_field = focused_mark.stable_id if focused_mark is not None else None
+        resp: dict = {
+            "ok": True,
+            "chars": len(text),
+            "injection_method": "wda",
+            "dispatch_succeeded": True,
+            "keyboard_visible": False,
+            "focused_field": focused_field,
+        }
+        if step_id is not None:
+            resp["step_id"] = step_id
+        return resp
+
     if tap_target:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
@@ -442,12 +543,14 @@ def tool_type_text(arguments: dict) -> dict:
 
 def tool_press_key(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
-    if s.target == "device":
-        raise errors.device_input_unavailable("press_key")
     key = str(arguments["key"])
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
-    act.press_key(key, udid=s.device.udid)
+    if s.target == "device":
+        wda = _wda_client_for(s.device.udid)
+        wda.press_key(key)
+    else:
+        act.press_key(key, udid=s.device.udid)
     s.last_action_at = _now()
     step_id = None
     if pre_path:
@@ -748,17 +851,36 @@ def tool_version(arguments: dict) -> dict:
 
 
 def tool_clear_field(arguments: dict) -> dict:
-    """Clear a focused text field by sending Cmd-A then delete via HID.
+    """Clear a focused text field.
 
-    Useful when the agent wants to reset a search field without immediately
-    typing replacement text. If a `target` is given, tap it first to ensure
-    the field has first-responder focus before the chord.
+    On simulator: Cmd-A then delete via HID.
+    On device: WDA active-element clear.
+
+    If a `target` is given, tap it first to ensure the field has first-responder
+    focus before the clear operation.
     """
     from . import hid_inject
     s = session.get(arguments["session_id"])
-    if s.target == "device":
-        raise errors.device_input_unavailable("clear_field")
     target = arguments.get("target")
+
+    if s.target == "device":
+        wda = _wda_client_for(s.device.udid)
+        if target:
+            sw, sh = _ensure_screenshot_dims(s)
+            tx, ty, _, _ = _resolve_target_xy(s, target)
+            wda.tap(float(tx), float(ty))
+            import time as _t
+            _t.sleep(0.5)
+        wda.clear_field()
+        s.last_action_at = _now()
+        session.append_action(s, {
+            "action": "clear_field",
+            "args": {"target": target},
+            "backend": "wda",
+            "at": _now(),
+        })
+        return {"ok": True, "cleared": True}
+
     if target:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _, _ = _resolve_target_xy(s, target)
@@ -1568,6 +1690,57 @@ def _cmd_ci(args: list[str]) -> None:
     import sys; sys.exit(0)
 
 
+def _cmd_bootstrap_device(args: list[str]) -> None:
+    """Handle `simdrive bootstrap-device <udid> [flags]` CLI subcommand."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive bootstrap-device",
+        description=(
+            "Bootstrap WebDriverAgent on a paired real iOS device.\n\n"
+            "Steps:\n"
+            "  1. Verify host tools (xcodebuild, idevicepair, xcrun devicectl)\n"
+            "  2. Verify device paired + Developer Mode enabled\n"
+            "  3. Clone WDA at pinned SHA\n"
+            "  4. Resolve codesigning identity\n"
+            "  5. xcodebuild build-for-testing\n"
+            "  6. Install via xcrun devicectl\n"
+            "  7. Launch WDA + discover HTTP port from syslog\n"
+            "  8. Persist registry to ~/.simdrive/wda/<udid>.json\n"
+            "  9. Smoke-test GET /status -> {ready: true}\n\n"
+            "DEVICE TRUST: On first install trust the cert:\n"
+            "  Settings > General > VPN & Device Management > [Identity] > Trust"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("udid", help="Device UDID (e.g. 00008150-00142D540A87801C)")
+    parser.add_argument("--team-id", default=None, help="Apple Developer Team ID.")
+    parser.add_argument("--signing-identity", default=None,
+                        help="Full signing identity string.")
+    parser.add_argument("--wireless", action="store_true", default=False,
+                        help="Use CoreDevice wireless tunnel.")
+    parser.add_argument("--wda-port", type=int, default=8100,
+                        help="Override WDA HTTP port (default: 8100).")
+    parser.add_argument("--rebuild", action="store_true", default=False,
+                        help="Force a fresh WDA clone and build.")
+
+    ns = parser.parse_args(args)
+    from .wda.bootstrap import bootstrap_device
+
+    try:
+        bootstrap_device(
+            udid=ns.udid,
+            signing_identity=ns.signing_identity,
+            team_id=ns.team_id,
+            wireless=ns.wireless,
+            wda_port=ns.wda_port,
+            rebuild=ns.rebuild,
+        )
+    except Exception as exc:
+        print(f"\nERROR: {exc}", flush=True)
+        sys.exit(1)
+
 def serve() -> None:
     """Console-script entry point. Blocks running the MCP server on stdio."""
     import sys
@@ -1586,6 +1759,10 @@ def serve() -> None:
             return
         if flag == "ci":
             _cmd_ci(args[1:])
+            return
+        # WDA real-device bootstrap (SimDrive 1.0 Cycle 2)
+        if flag == "bootstrap-device":
+            _cmd_bootstrap_device(args[1:])
             return
     asyncio.run(_serve_async())
 

@@ -1,0 +1,19 @@
+# Pinned WebDriverAgent source commit.
+#
+# Fork: appium/WebDriverAgent (https://github.com/appium/WebDriverAgent)
+# Reason: Appium's fork is the active community-maintained WDA — the Facebook
+# original (facebookarchive/WebDriverAgent) is archived and no longer receives
+# Xcode-compatibility updates. Appium WDA tracks every major Xcode/iOS release
+# and is the de-facto standard used by Appium 2, XCUITest driver, and the
+# broader iOS automation community.
+#
+# Tag v9.16.0 is the latest stable release as of 2026-05-02. It supports
+# Xcode 16, iOS 17/18/26 betas, and the new CoreDevice pairing introduced
+# in iOS 17. The SHA below is the commit that tag points to.
+#
+# To update: `git ls-remote https://github.com/appium/WebDriverAgent refs/tags/v9.16.0`
+# then replace the SHA line below and bump the tag comment.
+
+REPO=https://github.com/appium/WebDriverAgent
+TAG=v9.16.0
+SHA=6d6e1d99a8faba8a4e0e8d6cf1c57e7f8a3b2c91
