@@ -91,7 +91,7 @@ Railway probes `GET /health` after deploy. Expected response:
 ```json
 {
   "status": "ok",
-  "version": "17.0.0a2",
+  "version": "1.0.0a1",
   "db_reachable": true,
   "storage_backend": "r2client"
 }

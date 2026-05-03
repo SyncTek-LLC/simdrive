@@ -11,7 +11,7 @@
 
 ## §1. Executive summary
 
-SpecterQA is SyncTek's MCP-native iOS simulator driver, shipping as PyPI `specterqa-ios 17.0.0a1` (29 MCP tools, ~4,118 LOC Python + ~600 LOC ObjC native HID helper). The asset to protect is the bundle: a vision-first agent-driven tool surface, a native HID-injection technique that bypasses XCTest on iOS 26, and a fast-moving dogfood relationship with one paying-attention customer (Palace iOS). The window before Anthropic, Maestro, or a YC clone closes the gap is roughly 9 months optimistic, 15 pessimistic.
+SpecterQA is SyncTek's MCP-native iOS simulator driver, shipping as PyPI `specterqa-ios 1.0.0a1` (29 MCP tools, ~4,118 LOC Python + ~600 LOC ObjC native HID helper). The asset to protect is the bundle: a vision-first agent-driven tool surface, a native HID-injection technique that bypasses XCTest on iOS 26, and a fast-moving dogfood relationship with one paying-attention customer (Palace iOS). The window before Anthropic, Maestro, or a YC clone closes the gap is roughly 9 months optimistic, 15 pessimistic.
 
 **The three most defensible IP elements:**
 
@@ -139,7 +139,7 @@ USPTO TEAS Plus: **~$250 per class per mark** self-filed; **~$500-1,500 attorney
 ### Filing strategy
 
 1. **Wordmark first.** "SpecterQA" is highest-leverage. File Section 1(a) (use in commerce) given the package is on PyPI.
-2. **First-use date.** Anchor to the `specterqa-ios 17.0.0a1` release of **2026-05-01** (PRODUCTIZATION_PLAN §7 brand cutover). The legacy 16.x `specterqa-ios` line is also `specterqa-ios` and dates further back. NEEDS COUNSEL: confirm anchor date.
+2. **First-use date.** Anchor to the `specterqa-ios 1.0.0a1` release of **2026-05-01** (PRODUCTIZATION_PLAN §7 brand cutover). The legacy 16.x `specterqa-ios` line is also `specterqa-ios` and dates further back. NEEDS COUNSEL: confirm anchor date.
 3. **Specimen of use.** PyPI listing, GitHub README, Palace dogfood report referencing "SpecterQA" all qualify. Capture dated PDFs/PNGs now.
 4. **Logo second**, within ~3 months of wordmark. **Slogan deferred** (hardest to register, lowest impact).
 
@@ -220,7 +220,7 @@ A determined competitor can clone the engine in 3-6 weeks. Question: what slows 
 
 ### The honest assessment
 
-The strongest defense is not "stop the clone" — it's "outrun the clone." A clone of `17.0.0a1` released in 6 weeks competes against `18.x` with new features, more dogfood, a Cloud product, and 3 design partners. That's the real moat.
+The strongest defense is not "stop the clone" — it's "outrun the clone." A clone of `1.0.0a1` released in 6 weeks competes against `18.x` with new features, more dogfood, a Cloud product, and 3 design partners. That's the real moat.
 
 ---
 

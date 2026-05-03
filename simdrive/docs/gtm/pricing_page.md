@@ -1,7 +1,7 @@
 # SpecterQA — Pricing
 
 **Production copy** for `synctek.io/products/specterqa/pricing/`.
-Version: 1.0 (matches `specterqa-ios 17.0.0a1` and the v1.0 sim-only roadmap).
+Version: 1.0 (matches `specterqa-ios 1.0.0a1` and the v1.0 sim-only roadmap).
 
 ---
 
