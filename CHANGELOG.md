@@ -7,6 +7,13 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [16.0.0a5] — 2026-05-02 (alpha — pydantic runtime dep correctness)
+
+### Fixed
+- **P1: `pydantic` declared as runtime dependency** (was dev-only). Journey + license packages import pydantic at module load; a fresh `pip install specterqa-ios` would `ModuleNotFoundError` without this fix.
+
+---
+
 ## [16.0.0a4] — 2026-05-02 (alpha — SimDrive 1.0 Cycle 1: journey runner + license/cloud + LapsApp scaffold)
 
 **Status:** Cycle 1 of the SimDrive 1.0 build. Three parallel coding agents
