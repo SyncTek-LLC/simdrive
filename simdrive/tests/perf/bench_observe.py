@@ -13,8 +13,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from typing import Iterator
+from unittest.mock import patch
 
 import pytest
 
@@ -54,7 +53,8 @@ def _run_observe_iterations(out_dir: Path, n: int) -> list[float]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Create a minimal 1×1 PNG in tmp so PIL can open it
-    import struct, zlib
+    import struct
+    import zlib
     def _make_1px_png(path: Path) -> None:
         """Write a valid 1×1 white PNG to `path`."""
         def _chunk(tag: bytes, data: bytes) -> bytes:

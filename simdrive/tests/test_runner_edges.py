@@ -8,16 +8,13 @@ Covers:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from simdrive.journey.persona import Persona, AccessibilityNeeds
-from simdrive.journey.result import CriterionEval, RunResult
-from simdrive.journey.runner import LLMClient, StepDecision, run_journey
+from simdrive.journey.runner import StepDecision, run_journey
 from simdrive.journey.schema import Budget, Journey, SuccessCriterion
 
 

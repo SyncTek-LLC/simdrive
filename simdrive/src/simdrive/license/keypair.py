@@ -77,5 +77,5 @@ if __name__ == "__main__":
     public_hex = verify_key_to_hex(vk)
 
     print(private_hex)  # stdout: pipe to secrets manager
-    print(f"# Public key hex (embed in public_key.py):", file=sys.stderr)
+    print("# Public key hex (embed in public_key.py):", file=sys.stderr)
     print(f"# {public_hex}", file=sys.stderr)

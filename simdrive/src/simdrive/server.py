@@ -28,12 +28,14 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Any
 
 from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
+from .observability.logger import get_logger
+
+_log = get_logger(__name__)
 
 
 def _now() -> float:
@@ -1614,7 +1616,7 @@ def _cmd_run(args: list[str]) -> None:
     try:
         check_entitlement()
     except LicenseError as exc:
-        print(f"LICENSE ERROR: {exc}", flush=True)
+        _log.error("LICENSE ERROR: %s", exc)
         import sys; sys.exit(2)
 
     journey = load_journey(ns.journey)
@@ -1635,7 +1637,7 @@ def _cmd_run(args: list[str]) -> None:
         persona_path = journey_dir / ".." / "personas" / f"{journey.persona}.yaml"
         persona_path = persona_path.resolve()
         if not persona_path.exists():
-            print(f"ERROR: persona file not found at {persona_path}. Use --persona-override <path>.")
+            _log.error("persona file not found at %s — use --persona-override <path>", persona_path)
             import sys; sys.exit(2)
         persona = load_persona(persona_path)
 
@@ -1663,7 +1665,7 @@ def _cmd_ci(args: list[str]) -> None:
     from simdrive.journey.ci import run_ci
 
     parser = argparse.ArgumentParser(prog="specterqa-ios ci")
-    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--session-id", required=False, help="(unused — CI manages sessions internally)")
     parser.add_argument("--journeys-dir", default=".simdrive/journeys")
     parser.add_argument("--tag", action="append", default=[])
     ns = parser.parse_args(args)
@@ -1672,22 +1674,18 @@ def _cmd_ci(args: list[str]) -> None:
     try:
         check_entitlement()
     except LicenseError as exc:
-        print(f"LICENSE ERROR: {exc}", flush=True)
+        _log.error("LICENSE ERROR: %s", exc)
         import sys; sys.exit(2)
 
-    s = session.get(ns.session_id)
+    from simdrive.journey.ci import CIRunOptions
 
-    from simdrive.journey.claude_client import ClaudeLLMClient
-    llm_client = ClaudeLLMClient()
-
-    ci_result = run_ci(
-        session=s,
-        llm_client=llm_client,
+    options = CIRunOptions(
         journeys_dir=ns.journeys_dir,
         tag_filter=ns.tag or [],
     )
-    print(_json.dumps(ci_result, indent=2) if isinstance(ci_result, dict) else str(ci_result))
-    import sys; sys.exit(0)
+    ci_result = run_ci(options)
+    print(_json.dumps(ci_result.to_dict(), indent=2))
+    import sys; sys.exit(ci_result.exit_code)
 
 
 def _cmd_bootstrap_device(args: list[str]) -> None:
@@ -1738,7 +1736,7 @@ def _cmd_bootstrap_device(args: list[str]) -> None:
             rebuild=ns.rebuild,
         )
     except Exception as exc:
-        print(f"\nERROR: {exc}", flush=True)
+        _log.error("bootstrap-device failed: %s", exc)
         sys.exit(1)
 
 def serve() -> None:

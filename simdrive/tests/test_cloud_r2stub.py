@@ -4,7 +4,6 @@ TDD: written before implementation.
 """
 from __future__ import annotations
 
-import os
 import pytest
 from pathlib import Path
 

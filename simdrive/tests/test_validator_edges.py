@@ -16,7 +16,7 @@ import pytest
 from nacl.signing import SigningKey
 
 from simdrive.license.errors import LicenseError
-from simdrive.license.validator import OFFLINE_GRACE_SECONDS, validate_license
+from simdrive.license.validator import validate_license
 
 
 # ── Test fixtures ─────────────────────────────────────────────────────────────

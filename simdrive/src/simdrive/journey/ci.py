@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -29,7 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .errors import ci_no_journeys_matched
-from .loader import discover_journey_paths, iter_journeys, load_persona_for_journey
+from .loader import iter_journeys, load_persona_for_journey
 from .result import RunResult
 from .runner import run_journey  # module-level import so tests can patch ci.run_journey
 from .schema import Journey
@@ -205,7 +204,7 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
             slug_filter=options.slug_filter or None,
         ):
             journey_list.append(j)
-    except Exception as exc:
+    except Exception:
         # ci_invalid_journey or ci_no_journeys_matched — re-raise so caller gets exit code 2
         raise
 
@@ -224,7 +223,6 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
         except Exception as exc:
             log.error("Failed to load persona for journey %r: %s", journey.name, exc)
             # Create an error RunResult so CI continues (or bails if bail_on_first_failure)
-            from .result import CriterionEval  # noqa: PLC0415
             err_result = RunResult(
                 outcome="error",
                 journey_name=journey.name,

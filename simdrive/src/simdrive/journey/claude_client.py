@@ -20,7 +20,7 @@ from typing import Optional
 
 import anthropic
 
-from .runner import LLMClient, StepDecision
+from .runner import StepDecision
 
 log = logging.getLogger("simdrive.journey.claude_client")
 

@@ -10,13 +10,11 @@ Validates:
 """
 from __future__ import annotations
 
-import importlib
 import io
 import json
 import logging
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 

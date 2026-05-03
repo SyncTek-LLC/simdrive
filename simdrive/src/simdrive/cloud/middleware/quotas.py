@@ -21,18 +21,14 @@ from __future__ import annotations
 import calendar
 import time
 from datetime import datetime
-from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
 from simdrive.cloud.auth import make_license_bearer
 from simdrive.cloud.db.models import get_session
 from simdrive.cloud.db.usage import (
-    TIER_RUN_LIMITS,
     get_or_create_counter,
     get_run_limit,
-    increment_runs,
-    key_fingerprint,
 )
 
 
@@ -65,7 +61,6 @@ def make_usage_checker(verify_key, db_engine):
         request: Request,
     ) -> dict:
         """Validate license key from query param and return usage info."""
-        from nacl.signing import VerifyKey
         from simdrive.license.validator import validate_license
         from simdrive.license.errors import LicenseError
 

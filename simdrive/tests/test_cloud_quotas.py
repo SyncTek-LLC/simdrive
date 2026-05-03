@@ -209,10 +209,8 @@ class TestQuotaEnforcement:
     def test_quota_exceeded_returns_429(self, keypair) -> None:
         """When runs_used >= runs_limit, next increment returns 429."""
         from simdrive.cloud.app import create_app
-        from simdrive.cloud.db.models import get_engine, init_db
         from simdrive.cloud.db.usage import UsageCounter
         from sqlalchemy.orm import Session
-        import calendar
 
         sk, vk = keypair
         fresh_app = create_app(
@@ -226,7 +224,8 @@ class TestQuotaEnforcement:
         key = _make_key(keypair, "solo", "exhaust@quota.test")
 
         # Decode the key to get customer_email
-        import base64, json as _json
+        import base64
+        import json as _json
         payload_b64 = key.split(".")[0]
         payload_b64 += "=" * (-len(payload_b64) % 4)
         payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
@@ -273,7 +272,6 @@ class TestQuotaEnforcement:
         from simdrive.cloud.app import create_app
         from simdrive.cloud.db.usage import UsageCounter
         from sqlalchemy.orm import Session
-        import calendar
 
         sk, vk = keypair
         fresh_app = create_app(
@@ -288,7 +286,8 @@ class TestQuotaEnforcement:
         fresh_client = TestClient(fresh_app)
         key = _make_key(keypair, "solo", "retry@quota.test")
 
-        import base64, json as _json
+        import base64
+        import json as _json
         payload_b64 = key.split(".")[0]
         payload_b64 += "=" * (-len(payload_b64) % 4)
         payload = _json.loads(base64.urlsafe_b64decode(payload_b64))

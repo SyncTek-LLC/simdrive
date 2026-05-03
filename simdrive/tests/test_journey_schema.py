@@ -5,7 +5,6 @@ Includes property-based tests (Hypothesis) for slug/name edge cases.
 """
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -23,8 +22,6 @@ from simdrive.errors import SimdriveError
 from simdrive.journey.schema import (
     Budget,
     DeviceSelector,
-    Journey,
-    Preconditions,
     SuccessCriterion,
     load_journey,
 )

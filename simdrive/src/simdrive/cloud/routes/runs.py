@@ -28,7 +28,6 @@ from simdrive.cloud.db.models import get_session
 from simdrive.cloud.db.usage import (
     get_or_create_counter,
     get_run_limit,
-    increment_runs,
 )
 from simdrive.cloud.middleware.quotas import _month_period
 
@@ -90,7 +89,6 @@ def create_runs_router(verify_key, db_engine) -> APIRouter:
             counter.updated_at = datetime.utcnow()
             db.commit()
 
-            import calendar as _cal
             period_start, period_end = _month_period()
             new_runs = counter.runs_used
             percent_used = round((new_runs / run_limit) * 100.0, 2) if run_limit > 0 else 0.0

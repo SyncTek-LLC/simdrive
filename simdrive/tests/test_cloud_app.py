@@ -5,9 +5,7 @@ Uses FastAPI TestClient. Covers: trials, licenses, recordings endpoints.
 """
 from __future__ import annotations
 
-import json
 import time
-import base64
 import pytest
 from fastapi.testclient import TestClient
 

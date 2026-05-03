@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 
 from simdrive.observability.tracing import Span, start_span, TraceContext
 
