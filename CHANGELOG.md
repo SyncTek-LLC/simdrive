@@ -7,6 +7,40 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [17.0.0a3] — 2026-05-02 (alpha — Cycle 2 Cloud + Cycle 3 hardening + recordings 204 fix)
+
+### Added (Cycle 2 — Cloud API completion, commit e1cc861)
+- **R2 storage backend** — `boto3`-backed `R2Client` alongside `R2Stub` fallback (env-driven via `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET`)
+- **Per-tier monthly run quotas** — Solo 50, Pro 250, Team 1000; persisted in `usage_counters` table; `POST /v1/runs/increment` enforces with 429+`Retry-After`
+- **`GET /v1/licenses/usage`** — returns `{period_start, period_end, runs_used, runs_limit, tier, percent_used}`
+- **`GET /health`** — Railway healthcheck-compatible (returns version, db_reachable, storage_backend)
+- **Auth hardening** — expired-key rejection, tampered-signature 401, missing-bearer 401, per-route required-tier checks (recordings POST is Pro+)
+- **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml, .env.example, README.md}`
+- 78 cloud tests (40 new + 38 cycle-1 intact)
+
+### Added (Cycle 3 — Production hardening, commit 7cdeb86)
+- **Observability package** `simdrive/observability/{logger, metrics, tracing}.py`
+  - `SIMDRIVE_DEBUG=1` toggles JSON-shaped structured logs
+  - Counters + histograms (`journey_runs_total`, `tap_latency_ms`, `observe_latency_ms`, `claude_call_cost_usd`)
+  - `dump_prometheus()` for Prometheus text-format export
+  - Span-context tracing for journey-step traceability
+- **Perf benchmark suite** `simdrive/tests/perf/` with 2× regression gate; baselines committed (observe p95: 2ms, tap p95: 1.5ms, step p95: 8ms)
+- **Edge-case coverage** for runner (budget exact-limit, LLM raises, mid-journey crash), validator (expiry-at-the-second, clock skew >7d, corrupted base64), recordings (oversized, malformed YAML, zero screenshots, auth-missing)
+- **Recovery: line audit** — 11 missing `Recovery:` lines added across `errors.py` constructors (`no_session`, `no_device`, `hid_unavailable`, `target_not_found`, `missing_target`, `invalid_argument`, `already_recording`, `not_recording`, `recording_not_found`, `device_input_unavailable`, `replay_drift_halt`)
+- **Docs** — `OBSERVABILITY.md`, `PERFORMANCE.md`, `RECOVERY.md` (one-stop reference for every error code + remediation step)
+- 46 observability tests + 23 edge tests + 37 recovery-copy tests + 3 perf benches = 109 new tests
+- Total Python suite at the end of cycle 3: ~386 passing
+
+### Fixed
+- **BUG-cloud-204-response-model:** DELETE `/recordings/{id}` raised `AssertionError: Status code 204 must not have a response body` at router init time. Recordings edge tests now run cleanly. (Pre-existing in Cycle 2's recordings.py, fixed here.)
+
+### Changed
+- `pyproject.toml` runtime deps now include `boto3>=1.20`, `prometheus-client>=0.19`
+- New optional-deps group `[cloud]` for prod-server install profile
+- New dev deps: `moto[s3]>=5.0`, `pytest-benchmark>=4.0`
+
+---
+
 ## [17.0.0a2] — 2026-05-02 (alpha — LapsApp cycle 2+3 features + journey corpus + email-validator dep)
 
 ### Added
