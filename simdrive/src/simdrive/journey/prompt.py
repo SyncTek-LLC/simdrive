@@ -11,7 +11,7 @@ system prefix after the first call).
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Any
 
 from .persona import Persona
 from .result import StepRecord

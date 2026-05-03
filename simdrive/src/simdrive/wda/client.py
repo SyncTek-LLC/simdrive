@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 import httpx
 
-from .errors import wda_session_lost, wda_smoke_failed
+from .errors import wda_session_lost
 from ..errors import SimdriveError
 
 

@@ -4,7 +4,6 @@ Coverage target: 100% of persona.py.
 """
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,7 +19,6 @@ except ImportError:
 from simdrive.errors import SimdriveError
 from simdrive.journey.persona import (
     AccessibilityNeeds,
-    Persona,
     load_persona,
 )
 

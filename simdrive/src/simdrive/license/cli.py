@@ -12,18 +12,15 @@ and testable without the click layer.
 from __future__ import annotations
 
 import json
-import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import requests
 
-from simdrive.license.entitlement import check_entitlement
 from simdrive.license.errors import LicenseError
 from simdrive.license.trial import (
     load_license_data,
-    save_license_data,
     start_trial,
     update_server_check_time,
 )

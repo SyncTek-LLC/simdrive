@@ -5,7 +5,6 @@ no sessions, no simulators, no LLM calls.
 """
 from __future__ import annotations
 
-import pytest
 
 from simdrive.journey.criteria import (
     all_passed,

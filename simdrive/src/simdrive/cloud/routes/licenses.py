@@ -8,17 +8,16 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
-from sqlalchemy.orm import Session
 
 from simdrive.cloud.db.models import LicenseActivation, get_session
 from simdrive.cloud.db.usage import get_or_create_counter, get_run_limit
 from simdrive.cloud.middleware.quotas import _month_period
 from simdrive.license.errors import LicenseError
-from simdrive.license.signer import sign_license, VALID_TIERS
+from simdrive.license.signer import sign_license
 from simdrive.license.validator import validate_license
 
 LICENSE_DURATION_SECONDS = 365 * 86400  # 1 year default; Stripe sets real expiry
