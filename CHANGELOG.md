@@ -7,6 +7,24 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [17.0.0a2] — 2026-05-02 (alpha — LapsApp cycle 2+3 features + journey corpus + email-validator dep)
+
+### Added
+- **LapsApp cycle 2 features (4):** OAuth login (mocked Apple/Google), WKWebView article reader, Activities list with infinite scroll, Forms with async validation
+- **LapsApp cycle 3 features (4):** Sheets+modals, PerfStress 1000-row, Offline mode toggle, Multi-app launcher (Settings/Mail/Maps via UIApplication.shared.open)
+- **20-journey YAML corpus** under `LapsApp/.simdrive/journeys/` — 17 happy-path + 3 deliberately-fail regression-detector journeys (oauth-google-cancel, dynamic-island-shows-limitation)
+- **3 personas** under `LapsApp/.simdrive/personas/` — first_time_runner, returning_user, power_user
+- **Navigation restructured to 5 primary tabs** (Home, Activities, Search, Blog, Settings) with nav-stack pushes for sub-features — avoids iOS TabView "More" overflow
+- **LapsApp test suite grew from 38 → 98 tests** (95 unit + 3 UI), all passing on iPhone 16e iOS 26.2 sim
+
+### Fixed
+- **`email-validator` declared as runtime dep.** License code uses pydantic `EmailStr` which requires email-validator; prior installs raised ImportError at module load.
+
+### Changed
+- LapsApp commit: `27ab4f2`
+
+---
+
 ## [17.0.0a1] — 2026-05-02 (alpha — package rename: specterqa-ios → simdrive, brand restoration)
 
 ### Changed (BREAKING)
