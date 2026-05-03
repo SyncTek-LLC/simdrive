@@ -1,0 +1,28 @@
+schema_version: 1
+name: onboarding-deny-all
+persona: first_time_runner
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - onboarding
+  - feature_area_1
+  - permission_deny
+
+preconditions:
+  app_state: not_running
+
+goals:
+  - Launch LapsApp with -LapsAppTestReset to ensure fresh state
+  - When push permission alert appears, tap Deny
+  - When location permission alert appears, tap Deny
+  - Verify app continues to function gracefully with all permissions denied
+  - Confirm tab bar is accessible and no crash occurs
+
+success_criteria:
+  - no_crash: true
+  - text_visible: Settings
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

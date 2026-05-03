@@ -1,0 +1,29 @@
+schema_version: 1
+name: pull-refresh-and-scroll
+persona: returning_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - activities
+  - feature_area_8
+  - pull_to_refresh
+  - infinite_scroll
+  - perf_snapshot
+
+goals:
+  - Navigate to the Activities tab (identifier tab_activities)
+  - Wait for initial 50 items to load (identifier activities_list)
+  - Perform a pull-to-refresh gesture on the list
+  - Observe the refreshed list reloads to 50 items
+  - Scroll to the bottom of the list to trigger infinite scroll
+  - Verify the load-more indicator appears (identifier activities_loadmore_trigger)
+  - Confirm additional items load (count exceeds 50)
+
+success_criteria:
+  - text_visible: Activities
+  - no_crash: true
+
+budget:
+  max_steps: 25
+  max_seconds: 180
+  max_llm_calls: 30
