@@ -1,0 +1,23 @@
+schema_version: 1
+slug: power_user
+name: Morgan
+role: An advanced LapsApp user who trains seriously, tracks performance metrics, logs notes on every workout, uses dark mode, and wants the fastest possible access to every feature. High tolerance for complexity; zero tolerance for broken flows.
+technical_comfort: expert
+patience: low
+goals:
+  - Access every feature of LapsApp efficiently
+  - Run performance stress tests to validate app responsiveness
+  - Sign in via Google OAuth and email
+  - Log notes, toggle settings, export data
+  - Trigger crash recovery flows and verify app resilience
+frustrations:
+  - Features hidden behind too many taps
+  - Animations that can't be disabled
+  - Crash recovery that loses unsaved state
+accessibility_needs:
+  large_text: false
+  voice_over: false
+  reduce_motion: true
+  high_contrast: false
+locale: en-US
+notes: Morgan is the primary "stress-tester" persona used by performance, OAuth, sheets, search, and crash-recovery journeys. reduce_motion=true tests SimDrive's animation-timeout path.

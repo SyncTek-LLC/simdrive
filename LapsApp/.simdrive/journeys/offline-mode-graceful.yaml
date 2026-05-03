@@ -1,0 +1,31 @@
+schema_version: 1
+name: offline-mode-graceful
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - offline
+  - feature_area_12
+  - network_state
+  - graceful_empty_state
+
+goals:
+  - Navigate to the Network tab (identifier tab_network)
+  - Verify Online status is shown (identifier network_status_label)
+  - Toggle the Simulate Offline switch ON (identifier network_offline_toggle)
+  - Verify status changes to Offline
+  - Observe the graceful empty state (identifier offline_empty_title)
+  - Verify cached items are still shown (identifier cached_item_0)
+  - Tap the Retry button (identifier offline_retry_button)
+  - Observe the retrying state
+  - Toggle the Simulate Offline switch OFF
+  - Verify status returns to Online
+
+success_criteria:
+  - text_visible: No Connection
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

@@ -1,0 +1,28 @@
+schema_version: 1
+name: search-clear-and-retry
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - search
+  - feature_area_4
+  - clear_field
+  - focus_durability
+
+goals:
+  - Navigate to the Search tab
+  - Type "Hike" in the search field (identifier search_field)
+  - Wait for results to appear
+  - Use clear_field to clear the search input
+  - Verify results list is empty after clear
+  - Type "Cycle" and wait for new results
+  - Confirm new results are visible
+
+success_criteria:
+  - text_visible: Weekend Ride
+  - no_crash: true
+
+budget:
+  max_steps: 25
+  max_seconds: 150
+  max_llm_calls: 30

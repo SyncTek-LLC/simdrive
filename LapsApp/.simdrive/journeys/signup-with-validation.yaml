@@ -1,0 +1,29 @@
+schema_version: 1
+name: signup-with-validation
+persona: first_time_runner
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - forms
+  - feature_area_7
+  - async_validation
+  - ssim_masking
+
+goals:
+  - Navigate to the Sign Up tab (identifier signup_screen)
+  - Type taken@lapsapp.test into the email field (identifier signup_email)
+  - Wait 600ms for the debounced validation to complete
+  - Observe the email-taken error (identifier signup_error_email)
+  - Clear the email field and type a new unique email
+  - Fill password (min 8 chars), confirm password, age, and accept terms
+  - Tap Create Account (identifier signup_submit)
+  - Verify the success state (identifier signup_success_label)
+
+success_criteria:
+  - text_visible: Account Created!
+  - no_crash: true
+
+budget:
+  max_steps: 30
+  max_seconds: 180
+  max_llm_calls: 35
