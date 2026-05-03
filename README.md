@@ -8,6 +8,12 @@ AI-driven iOS testing that records once and replays free in CI — no AI cost on
 pip install "git+https://github.com/SyncTek-LLC/specterqa-ios.git"
 ```
 
+## Install (developers)
+
+```bash
+cd simdrive && pip install -e .
+```
+
 ## Quick Start with Claude Code (MCP)
 
 ```bash
