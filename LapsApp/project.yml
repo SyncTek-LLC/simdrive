@@ -49,11 +49,22 @@ targets:
       - path: Tests/SettingsTests
       - path: Tests/AppearanceTests
       - path: Tests/SearchTests
+      - path: Tests/OAuthTests
+      - path: Tests/ReaderTests
+      - path: Tests/ActivitiesTests
+      - path: Tests/FormsTests
+      - path: Tests/SheetsTests
+      - path: Tests/PerfStressTests
+      - path: Tests/OfflineTests
+      - path: Tests/MultiAppTests
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.synctek.lapsapp.tests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/LapsApp.app/LapsApp"
         BUNDLE_LOADER: "$(TEST_HOST)"
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_ALLOWED: "NO"
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: LapsApp
 
@@ -67,5 +78,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.synctek.lapsapp.uitests
         TEST_TARGET_NAME: LapsApp
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_ALLOWED: "NO"
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: LapsApp

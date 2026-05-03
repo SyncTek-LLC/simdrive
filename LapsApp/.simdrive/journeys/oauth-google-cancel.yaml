@@ -1,0 +1,28 @@
+schema_version: 1
+name: oauth-google-cancel
+persona: returning_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - oauth
+  - feature_area_2
+  - google
+  - cancel_recovery
+  - deliberately_fails
+
+goals:
+  - Navigate to the Auth tab
+  - Tap the Sign in with Google button (identifier auth_google_button)
+  - When the mock Safari-sheet appears, tap Cancel (identifier auth_mock_sheet_cancel)
+  - Verify the error label shows User cancelled (identifier auth_error_label)
+  - Attempt to re-tap Google sign-in — this sub-step intentionally taps the wrong button to test recovery
+  - The overall journey outcome is passed-after-retry not passed-clean
+
+success_criteria:
+  - text_visible: User cancelled
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

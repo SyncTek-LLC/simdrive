@@ -1,0 +1,29 @@
+schema_version: 1
+name: dynamic-island-shows-limitation
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - sheets
+  - feature_area_6
+  - dynamic_island
+  - deliberately_fails
+  - regression_detector
+  - confirmationdialog_blind_spot
+
+goals:
+  - Navigate to the Sheets tab (identifier sheets_screen)
+  - Tap the Start Live Activity button (identifier live_activity_start)
+  - Observe that a confirmationDialog appears
+  - Attempt to tap the Start button inside the confirmationDialog
+  - This step MUST FAIL because confirmationDialog is XCTest-blind on iOS 17 and SimDrive
+    cannot reliably drive it via accessibility on all simulator configurations
+  - The journey exits non-zero with a LIMITATIONS.md cross-reference for the Dynamic Island limitation
+
+success_criteria:
+  - no_crash: true
+
+budget:
+  max_steps: 15
+  max_seconds: 90
+  max_llm_calls: 20

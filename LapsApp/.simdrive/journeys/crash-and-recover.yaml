@@ -1,0 +1,29 @@
+schema_version: 1
+name: crash-and-recover
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - crash
+  - feature_area_10
+  - crash_trigger
+  - crash_retrieval
+  - recovery
+
+goals:
+  - Navigate to the Dev tab (identifier tab_dev)
+  - Tap the Open Developer Menu button (identifier dev_menu_open)
+  - Observe the crash options are visible
+  - Tap the Crash Now menu item (identifier dev_menu_crash)
+  - Observe the app crashes (fatalError)
+  - Use ios_crashes to retrieve the crash log
+  - Relaunch the app via ios_app_relaunch
+  - Verify the app relaunches cleanly to the default tab
+
+success_criteria:
+  - no_crash: false
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

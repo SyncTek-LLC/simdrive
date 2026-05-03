@@ -4,6 +4,8 @@ import XCTest
 // are present before the crash button is tapped.
 // We deliberately DO NOT tap "dev_menu_crash" in automated CI — that kills the test runner.
 // The `crash-and-recover` SimDrive journey (journey #17) exercises the actual crash path.
+//
+// Navigation path (5-tab structure): Settings tab → Developer Menu nav link → CrashTriggerView
 final class CrashTriggerUITests: XCTestCase {
 
     var app: XCUIApplication!
@@ -18,38 +20,49 @@ final class CrashTriggerUITests: XCTestCase {
         app.terminate()
     }
 
-    // Navigate to the Dev tab and verify crash trigger button is present with correct identifier
+    // Navigate to CrashTriggerView via Settings tab → Developer Menu link
+    private func navigateToDevMenu() {
+        // Tab identifier from RootTabView
+        let settingsTab = app.tabBars.buttons.matching(identifier: "tab_settings").firstMatch
+        if !settingsTab.waitForExistence(timeout: 3) {
+            // Fallback: find by label if identifier lookup fails on this sim
+            let byLabel = app.tabBars.buttons["Settings"]
+            XCTAssertTrue(byLabel.waitForExistence(timeout: 5), "Settings tab must be accessible")
+            byLabel.tap()
+        } else {
+            settingsTab.tap()
+        }
+
+        // Tap the Developer Menu nav link (identifier from SettingsRootView)
+        let devLink = app.buttons.matching(identifier: "settings_navlink_dev").firstMatch
+        XCTAssertTrue(devLink.waitForExistence(timeout: 3), "Developer Menu nav link must be present")
+        devLink.tap()
+    }
+
+    // Navigate to the Dev menu and verify crash trigger button is present with correct identifier
     func test_devMenuCrashButton_hasAccessibilityIdentifier() {
-        // Tap the Dev tab — identifier set in RootTabView
-        let devTab = app.tabBars.buttons["Dev"]
-        XCTAssertTrue(devTab.waitForExistence(timeout: 5), "Dev tab must exist in tab bar")
-        devTab.tap()
+        navigateToDevMenu()
 
         // Verify the crash-trigger button is present
-        let crashButton = app.buttons["dev_menu_open"]
+        let crashButton = app.buttons.matching(identifier: "dev_menu_open").firstMatch
         XCTAssertTrue(crashButton.waitForExistence(timeout: 3),
                       "dev_menu_open must be present for SimDrive crash-and-recover journey")
     }
 
     // Verify the crash confirmation alert appears and can be dismissed with Cancel.
-    // Using .alert (not confirmationDialog) ensures Cancel is reachable via XCUITest's
-    // accessibility tree without relying on UIKit overlay windows.
     func test_crashAlert_appearAndCancel() {
-        let devTab = app.tabBars.buttons["Dev"]
-        XCTAssertTrue(devTab.waitForExistence(timeout: 5))
-        devTab.tap()
+        navigateToDevMenu()
 
-        let crashButton = app.buttons["dev_menu_open"]
+        let crashButton = app.buttons.matching(identifier: "dev_menu_open").firstMatch
         XCTAssertTrue(crashButton.waitForExistence(timeout: 3))
         crashButton.tap()
 
-        // Alert Cancel button should be in app.alerts
+        // Alert must appear
         let alert = app.alerts.firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 3),
                       "crash confirmation alert must appear after tapping dev_menu_open")
 
-        // Use firstMatch to avoid ambiguity when other "Cancel"-labelled elements exist
-        let cancelButton = alert.buttons.matching(identifier: "Cancel").firstMatch
+        let cancelButton = alert.buttons.matching(identifier: "dev_menu_cancel").firstMatch
         XCTAssertTrue(cancelButton.exists, "Cancel button must be in the alert")
         cancelButton.tap()
 
@@ -58,14 +71,12 @@ final class CrashTriggerUITests: XCTestCase {
                       "crash button should be visible after Cancel dismisses the alert")
     }
 
-    // Verify dev menu title and icon are rendered
+    // Verify dev menu title text is rendered
     func test_devMenuTitle_isVisible() {
-        let devTab = app.tabBars.buttons["Dev"]
-        XCTAssertTrue(devTab.waitForExistence(timeout: 5))
-        devTab.tap()
+        navigateToDevMenu()
 
-        let title = app.staticTexts["Developer Menu"]
+        let title = app.staticTexts.matching(identifier: "dev_menu_title").firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 3),
-                      "Developer Menu title must be visible")
+                      "dev_menu_title must be visible in CrashTriggerView")
     }
 }

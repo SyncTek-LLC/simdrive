@@ -1,0 +1,21 @@
+schema_version: 1
+slug: first_time_runner
+name: Casey
+role: A brand-new runner who just downloaded LapsApp for the first time. Motivated but unfamiliar with the app's features, reads prompts carefully, and follows onboarding steps as instructed.
+technical_comfort: novice
+patience: high
+goals:
+  - Complete the onboarding flow without getting stuck
+  - Sign up for an account with email
+  - Understand what the app does before exploring tabs
+frustrations:
+  - Confusing permission dialogs with unclear consequences
+  - Forms that reject valid input without explaining why
+  - Apps that require sign-in before showing any value
+accessibility_needs:
+  large_text: false
+  voice_over: false
+  reduce_motion: false
+  high_contrast: false
+locale: en-US
+notes: Casey is the persona for onboarding and sign-up journeys. Represents the "cold start" path where SimDrive must exercise alert handling and form validation without any prior app state.

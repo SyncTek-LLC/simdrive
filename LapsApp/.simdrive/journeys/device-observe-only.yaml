@@ -1,0 +1,33 @@
+schema_version: 1
+name: device-observe-only
+persona: power_user
+target: device
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - real_device
+  - feature_area_5
+  - feature_area_3
+  - feature_area_9
+  - observe_only
+  - smoke_test
+
+device_selector:
+  name: iPhone 16 Pro
+
+preconditions:
+  app_state: foreground
+
+goals:
+  - Observe the app state on a real device (observe + logs only — no taps)
+  - Capture lifecycle events and logs via ios_logs
+  - Navigate the tab bar using observe to document stable_id on real device hardware
+  - Open the blog tab and observe WKWebView rendering on real hardware (OCR only)
+  - Observe Appearance tab for real-device dark mode rendering
+
+success_criteria:
+  - no_crash: true
+
+budget:
+  max_steps: 15
+  max_seconds: 120
+  max_llm_calls: 20
