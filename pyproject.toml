@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "specterqa-ios"
-version = "16.0.0a4"
+version = "16.0.0a5"
 description = "SpecterQA iOS Simulator Driver — AI-driven iOS testing via Claude Computer Use"
 readme = "README.md"
 license = "Elastic-2.0"
@@ -32,6 +32,7 @@ dependencies = [
     "pyobjc-framework-Cocoa>=10.0",
     "pyobjc-framework-ApplicationServices>=10.0",
     "pynacl>=1.6.2",
+    "pydantic>=2.0",
 ]
 
 [project.urls]
