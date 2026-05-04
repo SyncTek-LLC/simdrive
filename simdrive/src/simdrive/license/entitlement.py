@@ -65,7 +65,7 @@ class Entitlement:
 
 
 def check_entitlement(
-    license_path: Path = _DEFAULT_LICENSE_PATH,
+    license_path: Optional[Path] = None,
     *,
     verify_key: Optional[VerifyKey] = None,
 ) -> Entitlement:
@@ -95,6 +95,8 @@ def check_entitlement(
     LicenseError(code="license_offline_grace_exhausted")
         Key expired and 7-day grace window elapsed (offline mode).
     """
+    if license_path is None:
+        license_path = _DEFAULT_LICENSE_PATH
     if not license_path.exists():
         raise license_not_found(str(license_path))
 
@@ -116,8 +118,8 @@ def check_entitlement(
     )
 
     return Entitlement(
-        tier=payload["tier"],
-        seats=payload["seats"],
-        expires_at=payload["expires_at"],
-        customer_email=payload["customer_email"],
+        tier=payload.get("tier", "trial"),
+        seats=payload.get("seats", 1),
+        expires_at=payload.get("expires_at", 0),
+        customer_email=payload.get("customer_email", payload.get("subject", "")),
     )

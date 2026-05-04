@@ -10,7 +10,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "1.0.0a2"
+    assert server.__version__ == "1.0.0a3"
 
 
 def test_tool_count_is_thirty():
@@ -1234,7 +1234,7 @@ def test_simdrive_cli_version_flag():
         env=_cli_subprocess_env(),
     )
     assert res.returncode == 0, f"stdout={res.stdout!r} stderr={res.stderr!r}"
-    assert res.stdout.startswith("specterqa-ios ")
+    assert res.stdout.startswith("simdrive ")
     assert __version__ in res.stdout
 
 
