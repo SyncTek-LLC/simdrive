@@ -7,7 +7,7 @@ name = "simdrive"
 version = "1.0.0a2"
 description = "SimDrive — MCP-native iOS simulator driver. Vision-first, agent-driven."
 readme = "README.md"
-license = "MIT"
+license = "Elastic-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 authors = [
