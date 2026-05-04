@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simdrive"
-version = "1.0.0a3"
+version = "1.0.0a4"
 description = "SimDrive — MCP-native iOS simulator driver. Vision-first, agent-driven."
 readme = "README.md"
 license = "Elastic-2.0"
@@ -47,6 +47,9 @@ Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
 
 [project.optional-dependencies]
 ssim = ["scikit-image>=0.22"]
+claude = [
+    "anthropic>=0.30",
+]
 dev = [
     "anthropic>=0.30",
     "fastapi>=0.115",
