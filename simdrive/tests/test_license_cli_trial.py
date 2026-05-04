@@ -7,9 +7,14 @@ Three failure stacks:
       no offline-dev fallback
 
 TDD: written BEFORE the fix. All tests must FAIL on current code.
+
+INIT-2026-544 update: tool_run_journey is now async after the MCP sampling
+refactor.  test_run_journey_works_with_offline_dev_license updated to use
+asyncio.run() when calling tool_run_journey.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -196,8 +201,10 @@ class TestTrialOfflineDev:
         #   (a) some non-LicenseError (e.g. no_session / missing journey file) — PASS
         #   (b) a plain return dict — PASS
         #   (c) LicenseError — FAIL (this is the bug)
+        #
+        # INIT-2026-544: tool_run_journey is now async — wrap with asyncio.run().
         try:
-            result = server.tool_run_journey({"session_id": "fake-sess-001"})
+            result = asyncio.run(server.tool_run_journey({"session_id": "fake-sess-001"}))
             # If it returned a dict, license gate passed (other error in result is fine)
         except LicenseError as exc:
             pytest.fail(

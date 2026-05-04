@@ -10,9 +10,14 @@ at model selection time. If usage is unavailable we fall back to the
 ``_APPROX_COST_PER_CALL_USD`` estimate defined in runner.py.
 
 Model: ``claude-opus-4-7`` (most capable, per BusinessAtlas memory).
+
+INIT-2026-544: call() is now async, wrapping the blocking SDK call in
+asyncio.to_thread() so the event loop is not blocked during the Anthropic
+API call.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -100,7 +105,7 @@ class ClaudeLLMClient:
 
     # ── LLMClient Protocol ────────────────────────────────────────────────────
 
-    def call(
+    async def call(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -111,6 +116,9 @@ class ClaudeLLMClient:
         If ``screenshot_path`` is provided the image is loaded and sent as a
         vision block before the text prompt. The model is instructed to return
         a single JSON object.
+
+        INIT-2026-544: The blocking Anthropic SDK call is now wrapped in
+        asyncio.to_thread() so the coroutine does not block the event loop.
         """
         messages: list[dict] = []
 
@@ -139,7 +147,8 @@ class ClaudeLLMClient:
         messages.append({"role": "user", "content": user_content})
 
         try:
-            response = self._client.messages.create(
+            response = await asyncio.to_thread(
+                self._client.messages.create,
                 model=self._model,
                 max_tokens=self._max_tokens,
                 system=system_prompt,

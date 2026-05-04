@@ -10,6 +10,7 @@ fake client without any real Claude API call.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -106,11 +107,16 @@ class StepDecision:
 class LLMClient(Protocol):
     """Protocol for the vision LLM used by the runner.
 
-    The production implementation calls claude-3-7-sonnet or equivalent.
+    The production implementation calls claude-3-7-sonnet or equivalent via
+    the Anthropic SDK (ClaudeLLMClient) or via MCP sampling (MCPSamplingLLMClient).
     Tests substitute a fake client that returns scripted StepDecision objects.
+
+    INIT-2026-544: call() is now an async def so the runner can await both
+    ClaudeLLMClient (wraps blocking SDK in asyncio.to_thread) and
+    MCPSamplingLLMClient (natively async via session.create_message).
     """
 
-    def call(
+    async def call(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -221,7 +227,7 @@ _RECORDER_DEFAULT = object()  # sentinel: means "load the real recorder"
 _RECORDER_DISABLED = None    # sentinel: means "skip recording entirely"
 
 
-def run_journey(
+async def run_journey(
     journey: Journey,
     persona: Persona,
     session: Any,  # simdrive.session.Session — typed as Any to avoid hard dep
@@ -398,11 +404,11 @@ def run_journey(
             budget_remaining=budget_remaining,
         )
 
-        # LLM vision call.
+        # LLM vision call (async — works for both ClaudeLLMClient and MCPSamplingLLMClient).
         screenshot_path = obs_dict.get("screenshot_path")
         step_start = time.time()
         try:
-            decision = llm_client.call(
+            decision = await llm_client.call(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 screenshot_path=screenshot_path,

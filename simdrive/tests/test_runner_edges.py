@@ -7,6 +7,7 @@ Covers:
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Optional
@@ -70,7 +71,7 @@ class _ScriptedLLM:
         self._idx = 0
         self.cost_usd = 0.0
 
-    def call(
+    async def call(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -91,7 +92,7 @@ class _RaisingLLM:
         self._exc = exc
         self.cost_usd = 0.0
 
-    def call(self, *args, **kwargs) -> StepDecision:
+    async def call(self, *args, **kwargs) -> StepDecision:
         raise self._exc
 
 
@@ -132,11 +133,11 @@ class TestBudgetExhaustion:
         patcher_obs, patcher_perf, patcher_crashes, patcher_baseline = _patch_tools_no_criteria_met()
         with patcher_obs, patcher_perf, patcher_crashes, patcher_baseline:
             with patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}):
-                result = run_journey(
+                result = asyncio.run(run_journey(
                     journey, persona, session, llm,
                     artifact_dir_override=tmp_path,
                     _recorder_module=None,
-                )
+                ))
 
         assert result.outcome == "budget_exceeded"
         assert result.steps_executed == 3
@@ -157,11 +158,11 @@ class TestBudgetExhaustion:
         patcher_obs, patcher_perf, patcher_crashes, patcher_baseline = _patch_tools_no_criteria_met()
         with patcher_obs, patcher_perf, patcher_crashes, patcher_baseline:
             with patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}):
-                result = run_journey(
+                result = asyncio.run(run_journey(
                     journey, persona, session, llm,
                     artifact_dir_override=tmp_path,
                     _recorder_module=None,
-                )
+                ))
 
         assert result.outcome == "budget_exceeded"
         assert result.llm_calls == 2
@@ -179,11 +180,11 @@ class TestLLMUnparseableJSON:
 
         patcher_obs, patcher_perf, patcher_crashes, patcher_baseline = _patch_tools_no_criteria_met()
         with patcher_obs, patcher_perf, patcher_crashes, patcher_baseline:
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, llm,
                 artifact_dir_override=tmp_path,
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "error"
         assert result.failure_reason is not None
@@ -200,11 +201,11 @@ class TestLLMUnparseableJSON:
 
         patcher_obs, patcher_perf, patcher_crashes, patcher_baseline = _patch_tools_no_criteria_met()
         with patcher_obs, patcher_perf, patcher_crashes, patcher_baseline:
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, llm,
                 artifact_dir_override=tmp_path,
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "error"
 
@@ -235,11 +236,11 @@ class TestMidJourneyCrashDetection:
             patch("simdrive.journey.runner.tool_crashes", return_value=crashes_with_crash),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value=perf),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, llm,
                 artifact_dir_override=tmp_path,
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "crashed"
         assert result.failure_reason is not None
@@ -263,11 +264,11 @@ class TestMidJourneyCrashDetection:
             patch("simdrive.journey.runner.tool_crashes", return_value=crashes_with_crash),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value=perf),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, llm,
                 artifact_dir_override=tmp_path,
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "crashed"
         # The crash path or "unknown" should appear in failure_reason
