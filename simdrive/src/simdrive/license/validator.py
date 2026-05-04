@@ -7,6 +7,8 @@ Design decisions:
   "now" to defend against local clock backdating attacks.
 - Offline grace: if last_known_server_time is None (fully offline), allow
   7-day window past expiry before hard-rejecting. This matches the spec.
+- Dev key: licenses signed with DEV_SIGNING_KEY are accepted but MUST have
+  subject="dev-trial"; the dev key cannot forge enterprise/pro licenses.
 """
 from __future__ import annotations
 
@@ -29,11 +31,23 @@ log = get_logger("simdrive.license.validator")
 
 OFFLINE_GRACE_SECONDS: int = 7 * 86400  # 7 days
 
+# Subject value required for dev-key-signed licenses.
+_DEV_TRIAL_SUBJECT: str = "dev-trial"
+
 
 def _b64url_decode(s: str) -> bytes:
     """Decode URL-safe base64 with automatic padding."""
     s += "=" * (-len(s) % 4)
     return base64.urlsafe_b64decode(s)
+
+
+def _try_verify(verify_key: VerifyKey, payload_b64: str, sig_bytes: bytes) -> bool:
+    """Return True if the signature is valid for the given key, False otherwise."""
+    try:
+        verify_key.verify(payload_b64.encode("ascii"), sig_bytes)
+        return True
+    except Exception:
+        return False
 
 
 def validate_license(
@@ -44,12 +58,16 @@ def validate_license(
 ) -> dict[str, Any]:
     """Validate a license key and return its payload dict.
 
+    Accepts licenses signed by either:
+    - The production verify key (``verify_key`` parameter, any subject).
+    - The embedded dev verify key (DEV_VERIFY_KEY_HEX, ONLY for subject="dev-trial").
+
     Parameters
     ----------
     key:
         The license key string in ``<payload_b64url>.<signature_b64url>`` format.
     verify_key:
-        The Ed25519 VerifyKey (public key) to verify against.
+        The Ed25519 VerifyKey (production public key) to verify against.
     last_known_server_time:
         Unix timestamp from the most recent /v1/licenses/status response.
         Pass None when offline. Used for clock-skew defense.
@@ -80,13 +98,26 @@ def validate_license(
 
     payload_b64, sig_b64 = parts
 
-    # ---- 2. Verify Ed25519 signature ----
+    # ---- 2. Verify Ed25519 signature (prod key first, then dev key) ----
     try:
         sig_bytes = _b64url_decode(sig_b64)
-        payload_message = payload_b64.encode("ascii")
-        verify_key.verify(payload_message, sig_bytes)
-    except (BadSignatureError, Exception) as exc:
-        raise license_invalid(f"signature verification failed: {exc}") from exc
+    except Exception as exc:
+        raise license_invalid(f"signature base64 decode failed: {exc}") from exc
+
+    signed_by_prod = _try_verify(verify_key, payload_b64, sig_bytes)
+    signed_by_dev = False
+
+    if not signed_by_prod:
+        # Try the embedded dev key as a fallback
+        try:
+            from simdrive.license.public_key import get_dev_verify_key
+            dev_vk = get_dev_verify_key()
+            signed_by_dev = _try_verify(dev_vk, payload_b64, sig_bytes)
+        except Exception:
+            pass
+
+    if not signed_by_prod and not signed_by_dev:
+        raise license_invalid("signature verification failed: invalid signature")
 
     # ---- 3. Decode payload ----
     try:
@@ -95,7 +126,17 @@ def validate_license(
     except Exception as exc:
         raise license_invalid(f"payload decode failed: {exc}") from exc
 
-    # ---- 4. Expiry check with clock-skew defense ----
+    # ---- 4. Dev-key subject enforcement ----
+    if signed_by_dev and not signed_by_prod:
+        subject = payload.get("subject", "")
+        if subject != _DEV_TRIAL_SUBJECT:
+            raise license_invalid(
+                f"dev-key-signed license must have subject={_DEV_TRIAL_SUBJECT!r}; "
+                f"got {subject!r}. Dev key cannot forge non-trial licenses."
+            )
+        log.debug("license validated via dev key (offline trial)", extra={"subject": subject})
+
+    # ---- 5. Expiry check with clock-skew defense ----
     expires_at: int = payload.get("expires_at", 0)
     effective_now = _effective_now(last_known_server_time)
 
@@ -128,7 +169,7 @@ def validate_license(
             extra={
                 "tier": payload.get("tier"),
                 "expires_at": expires_at,
-                "customer_email": payload.get("customer_email"),
+                "customer_email": payload.get("customer_email", ""),
             },
         )
 

@@ -2,16 +2,18 @@
 
 Subcommands:
   simdrive trial start --email <email>
+  simdrive trial start --email <email> --offline-dev
   simdrive license activate <key>
   simdrive license status
 
-These functions are called by server.py / the CLI entry point (Atlas wires
-them into the click group during integration). Each function is standalone
-and testable without the click layer.
+These functions are called by server.py / the CLI entry point. Each
+function is standalone and testable without the click layer.
 """
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -29,30 +31,109 @@ _DEFAULT_LICENSE_PATH = Path.home() / ".simdrive" / "license.json"
 _DEFAULT_SERVER_URL = "https://cloud.simdrive.dev"
 
 
+def _issue_dev_license(email: str) -> tuple[str, int]:
+    """Self-issue a 14-day offline dev trial license using the embedded dev signing key.
+
+    Returns (license_key_str, expires_at_unix_ts).
+    The license is signed by DEV_SIGNING_KEY and only validates when the
+    payload contains subject='dev-trial'. The validator enforces this.
+    """
+    from simdrive.license.public_key import get_dev_signing_key
+
+    sk = get_dev_signing_key()
+    expires_at = int(time.time()) + 14 * 86400
+
+    payload: dict = {
+        "subject": "dev-trial",
+        "tier": "trial",
+        "seats": 1,
+        "customer_email": email,
+        "issued_at": int(time.time()),
+        "expires_at": expires_at,
+    }
+
+    payload_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    ).rstrip(b"=").decode("ascii")
+
+    signed = sk.sign(payload_b64.encode("ascii"))
+    # nacl SignedMessage: first 64 bytes are signature, rest is message
+    sig_bytes = bytes(signed.signature)
+    sig_b64 = base64.urlsafe_b64encode(sig_bytes).rstrip(b"=").decode("ascii")
+
+    key = f"{payload_b64}.{sig_b64}"
+    return key, expires_at
+
+
 def cmd_trial_start(
     email: str,
     *,
     server_url: str = _DEFAULT_SERVER_URL,
     license_path: Path = _DEFAULT_LICENSE_PATH,
+    offline_dev: bool = False,
 ) -> dict:
-    """Start a 14-day trial via the license server.
+    """Start a 14-day trial — cloud or offline-dev.
+
+    Parameters
+    ----------
+    email:
+        User's email address.
+    server_url:
+        License server base URL (default: https://cloud.simdrive.dev).
+    license_path:
+        Where to write license.json (default: ~/.simdrive/license.json).
+    offline_dev:
+        When True (or env SIMDRIVE_OFFLINE_DEV=1), skip the cloud call and
+        self-issue a local dev trial using the embedded dev signing key.
+        When False: attempt cloud; on network failure raise LicenseError
+        (code="cloud_unreachable") — does NOT silently fall back to offline.
 
     Returns a dict with: key, expires_at, message.
-    Raises on network error or rate-limit (LicenseError).
+    Raises LicenseError on network error (offline_dev=False) or rate-limit.
     """
-    resp = requests.post(
-        f"{server_url}/v1/trials",
-        json={"email": email},
-        timeout=15,
-    )
+    # Honour SIMDRIVE_OFFLINE_DEV env var
+    if os.environ.get("SIMDRIVE_OFFLINE_DEV") == "1":
+        offline_dev = True
+
+    if offline_dev:
+        key, expires_at = _issue_dev_license(email)
+        start_trial(
+            email=email,
+            license_key=key,
+            expires_at=expires_at,
+            license_path=license_path,
+        )
+        return {
+            "key": key,
+            "expires_at": expires_at,
+            "message": (
+                f"Offline dev trial activated for {email}. "
+                f"Expires in 14 days (at {expires_at}). "
+                "Run `simdrive license show` to verify."
+            ),
+        }
+
+    # Cloud path
+    from simdrive.license.errors import cloud_unreachable, trial_rate_limited
+
+    try:
+        resp = requests.post(
+            f"{server_url}/v1/trials",
+            json={"email": email},
+            timeout=15,
+        )
+    except requests.exceptions.ConnectionError as exc:
+        raise cloud_unreachable(str(exc)) from exc
+    except requests.exceptions.Timeout as exc:
+        raise cloud_unreachable(f"request timed out: {exc}") from exc
+
     if resp.status_code == 429:
-        from simdrive.license.errors import trial_rate_limited
         raise trial_rate_limited(email)
     resp.raise_for_status()
 
     data = resp.json()
-    key: str = data["key"]
-    expires_at: int = data["expires_at"]
+    key = data["key"]
+    expires_at = data["expires_at"]
 
     start_trial(
         email=email,
