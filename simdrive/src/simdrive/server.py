@@ -1,4 +1,4 @@
-"""SpecterQA for iOS MCP server. (Internal codename: simdrive.)
+"""simdrive — MCP-native iOS simulator driver, MCP server.
 
 Exposes the MCP tool surface to any compatible host (Claude, Cline, etc.):
 
@@ -9,8 +9,6 @@ Exposes the MCP tool surface to any compatible host (Claude, Cline, etc.):
   Utility:    logs
 
 Run:
-    specterqa-ios
-    # or (legacy alias, still works)
     simdrive
     # or
     python -m simdrive.server
@@ -18,7 +16,7 @@ Run:
 Add to .mcp.json:
     {
       "mcpServers": {
-        "specterqa-ios": { "command": "specterqa-ios" }
+        "simdrive": { "command": "simdrive" }
       }
     }
 """
@@ -94,7 +92,7 @@ def _disk_version() -> str | None:
         return _DISK_VERSION_CACHE["version"]  # type: ignore[return-value]
     try:
         import importlib.metadata as _md
-        v = _md.version("specterqa-ios")
+        v = _md.version("simdrive")
     except Exception:
         v = None
     _DISK_VERSION_CACHE["version"] = v
@@ -1563,18 +1561,22 @@ async def _serve_async() -> None:
 
 
 _HELP_TEXT = """\
-specterqa-ios — SpecterQA for iOS MCP server. (codename: simdrive)
+simdrive — MCP-native iOS simulator driver
 
-Usage: specterqa-ios (no args)   Run as MCP server on stdio.
-       specterqa-ios --version
-       specterqa-ios --help
+Usage: simdrive (no args)   Run as MCP server on stdio.
+       simdrive --version
+       simdrive --help
 
 SimDrive journey subcommands:
-  specterqa-ios run  --session-id <id> --journey <path> [--persona-override <path>]
-                     [--budget-override max_steps=N,max_seconds=N,max_llm_calls=N]
-  specterqa-ios ci   --session-id <id> [--journeys-dir <path>] [--tag <tag>...]
+  simdrive run  --session-id <id> --journey <path> [--persona-override <path>]
+                [--budget-override max_steps=N,max_seconds=N,max_llm_calls=N]
+  simdrive ci   --session-id <id> [--journeys-dir <path>] [--tag <tag>...]
 
-Aliases: `simdrive` and `simdrive-mcp` invoke the same server.
+Trial / license subcommands:
+  simdrive trial start --email <you@example.com>
+  simdrive trial start --email <you@example.com> --offline-dev
+  simdrive license show
+  simdrive license path
 """
 
 
@@ -1739,28 +1741,132 @@ def _cmd_bootstrap_device(args: list[str]) -> None:
         _log.error("bootstrap-device failed: %s", exc)
         sys.exit(1)
 
+
+def _cmd_trial(args: list[str]) -> None:
+    """Handle `simdrive trial <subcommand> ...` CLI subcommand."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(prog="simdrive trial")
+    sub = parser.add_subparsers(dest="subcmd")
+
+    start_p = sub.add_parser("start", help="Activate a 14-day free trial.")
+    start_p.add_argument("--email", required=True, help="Your email address.")
+    start_p.add_argument(
+        "--offline-dev",
+        action="store_true",
+        default=False,
+        help=(
+            "Self-issue a local dev trial (no network required). "
+            "The license is signed with the embedded dev key and valid for 14 days."
+        ),
+    )
+    start_p.add_argument(
+        "--license-path",
+        default=None,
+        help="Override the license.json path (default: ~/.simdrive/license.json).",
+    )
+
+    ns = parser.parse_args(args)
+    if ns.subcmd is None:
+        parser.print_help()
+        sys.exit(1)
+
+    from pathlib import Path as _Path
+    from simdrive.license.cli import cmd_trial_start, _DEFAULT_LICENSE_PATH
+    from simdrive.license.errors import LicenseError
+
+    license_path = _Path(ns.license_path) if ns.license_path else _DEFAULT_LICENSE_PATH
+
+    try:
+        result = cmd_trial_start(
+            ns.email,
+            offline_dev=ns.offline_dev,
+            license_path=license_path,
+        )
+        print(result["message"])
+        sys.exit(0)
+    except LicenseError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Unexpected error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_license(args: list[str]) -> None:
+    """Handle `simdrive license <subcommand> ...` CLI subcommand."""
+    import argparse
+    import sys
+    import time as _time
+
+    parser = argparse.ArgumentParser(prog="simdrive license")
+    sub = parser.add_subparsers(dest="subcmd")
+    sub.add_parser("show", help="Show current license details.")
+    sub.add_parser("path", help="Print the resolved license.json path.")
+
+    ns = parser.parse_args(args)
+    if ns.subcmd is None:
+        parser.print_help()
+        sys.exit(1)
+
+    from simdrive.license.entitlement import check_entitlement, _DEFAULT_LICENSE_PATH
+    from simdrive.license.errors import LicenseError
+
+    if ns.subcmd == "path":
+        print(str(_DEFAULT_LICENSE_PATH))
+        sys.exit(0)
+
+    # show
+    try:
+        ent = check_entitlement()
+        now = int(_time.time())
+        days_left = max(0, (ent.expires_at - now) // 86400)
+        print(
+            f"subject:    {ent.customer_email}\n"
+            f"tier:       {ent.tier}\n"
+            f"expires_at: {ent.expires_at}\n"
+            f"days_left:  {days_left}"
+        )
+        sys.exit(0)
+    except LicenseError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        sys.exit(1)
+
+
+# Subcommand dispatch registry — maps the first CLI argument to its handler.
+_SUBCOMMANDS: dict = {
+    "run": _cmd_run,
+    "ci": _cmd_ci,
+    "bootstrap-device": _cmd_bootstrap_device,
+    "trial": _cmd_trial,
+    "license": _cmd_license,
+}
+
+
 def serve() -> None:
-    """Console-script entry point. Blocks running the MCP server on stdio."""
+    """Console-script entry point. Blocks running the MCP server on stdio.
+
+    Subcommand dispatch via _SUBCOMMANDS registry:
+      "run"              → _cmd_run
+      "ci"               → _cmd_ci
+      "bootstrap-device" → _cmd_bootstrap_device
+      "trial"            → _cmd_trial
+      "license"          → _cmd_license
+    """
     import sys
     args = sys.argv[1:]
     if args:
         flag = args[0]
         if flag in ("--version", "-V"):
-            print(f"specterqa-ios {__version__}")
+            print(f"simdrive {__version__}")
             sys.exit(0)
         if flag in ("--help", "-h"):
             print(_HELP_TEXT, end="")
             sys.exit(0)
-        # SimDrive journey subcommands (SimDrive 1.0 Cycle 1)
-        if flag == "run":
-            _cmd_run(args[1:])
-            return
-        if flag == "ci":
-            _cmd_ci(args[1:])
-            return
-        # WDA real-device bootstrap (SimDrive 1.0 Cycle 2)
-        if flag == "bootstrap-device":
-            _cmd_bootstrap_device(args[1:])
+        handler = _SUBCOMMANDS.get(flag)
+        if handler is not None:
+            handler(args[1:])
             return
     asyncio.run(_serve_async())
 

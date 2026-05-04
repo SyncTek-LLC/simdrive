@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0a3] — 2026-05-04
+
+### Fixed
+- **`run_journey` license gate (P0):** Wired `simdrive trial` and `simdrive license` subcommands into the CLI dispatcher (previously `cmd_trial_start` was defined but unreachable). Added `--offline-dev` flag (and `SIMDRIVE_OFFLINE_DEV=1` env var) that issues a 14-day Ed25519-signed local dev license without contacting `cloud.simdrive.dev`. Cloud unreachable now raises a clear `LicenseError(code="cloud_unreachable")` with a recovery hint pointing to `--offline-dev`. Dogfooders are no longer blocked when cloud infra is offline.
+- **`version` drift false positive (P1):** `_disk_version()` was reading `importlib.metadata.version("specterqa-ios")` (old wheel name from before the rename) and triggering `_simdrive_warning` on every tool response. Changed to `simdrive`. The drift detector now compares apples to apples.
+- **`tool_run_journey` contract divergence (P1):** `LicenseError` now inherits from `SimdriveError`, so the MCP server's existing exception wrapper catches it and returns a proper `{ok: false, error: {code, message, details}}` envelope instead of wrapping it as a generic `internal` error. Direct-Python and MCP callers now see the same shape.
+- **Stale rename strings (P2):** Swept `ios_observe` → `observe`, `ios_start_session` → `start_session`, `ios_devices` → `devices`, `ios_stop_recording` → `stop_recording`, `ios_start_recording` → `start_recording`, `ios_list_replays` → `list_replays` across error recovery messages. Replaced `_HELP_TEXT` banner `"specterqa-ios — SpecterQA for iOS MCP server. (codename: simdrive)"` with `"simdrive — MCP-native iOS simulator driver"`. `--version` now prints `simdrive <version>`. Module docstrings drop the "(Internal codename: simdrive.)" framing.
+
+### Added
+- **`simdrive trial start`** subcommand: `simdrive trial start --email <e> [--offline-dev] [--license-path <p>]`
+- **`simdrive license show`** / **`simdrive license path`** subcommands.
+- **`SIMDRIVE_OFFLINE_DEV=1`** env var for sandboxed/CI use.
+- **Dev Ed25519 keypair** embedded in package (`license/public_key.py:DEV_VERIFY_KEY_HEX` + `DEV_SIGNING_KEY_HEX`). Validator only accepts dev-key-signed licenses with `subject == "dev-trial"` — dev key cannot self-issue prod licenses.
+
+### Source
+Reported by Maurice Carrier (Palace iOS), 2026-05-04 dogfood report. INIT-2026-543.
+
+---
+
 ## [1.0.0a2] — 2026-05-02 (alpha — post-WDA cleanup + audit-driven fixes)
 
 ### Fixed

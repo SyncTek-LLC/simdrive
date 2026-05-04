@@ -149,7 +149,7 @@ def act_tool_failed(tool_name: str, inner_code: str, inner_message: str) -> Simd
         code="act_tool_failed",
         message=(
             f"Action tool {tool_name!r} failed during journey execution: {inner_message}. "
-            "Recovery: check the journey step's target exists on screen (use `ios_observe` to verify)."
+            "Recovery: check the journey step's target exists on screen (use `observe` to verify)."
         ),
         details={"tool_name": tool_name, "inner_code": inner_code, "inner_message": inner_message},
     )

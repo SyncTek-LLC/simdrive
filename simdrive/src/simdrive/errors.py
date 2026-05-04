@@ -37,7 +37,7 @@ def no_session(session_id: str) -> SimdriveError:
         code="no_session",
         message=(
             f"unknown session_id {session_id!r}. "
-            "Recovery: call `ios_start_session` to create a session, then retry with the returned session_id."
+            "Recovery: call `start_session` to create a session, then retry with the returned session_id."
         ),
         details={"session_id": session_id},
     )
@@ -48,7 +48,7 @@ def no_device(query: dict) -> SimdriveError:
         code="no_device",
         message=(
             f"no booted simulator matched {query}. "
-            "Recovery: run `ios_devices` to list available simulators, then pass a matching `device` filter, "
+            "Recovery: run `devices` to list available simulators, then pass a matching `device` filter, "
             "or run `xcrun simctl boot <udid>` to boot one."
         ),
         details={"query": query},
@@ -83,7 +83,7 @@ def target_not_found(form: str, query: Any, available: Optional[list] = None) ->
         message=(
             f"no {form} match for {query!r} in last observe. "
             f"Available: {available[:30] if available else '(none)'}. "
-            "Recovery: call `ios_observe` to refresh the screen state, then retry with a visible element."
+            "Recovery: call `observe` to refresh the screen state, then retry with a visible element."
         ),
         details={"form": form, "query": query, "available": available},
     )
@@ -94,7 +94,7 @@ def missing_target() -> SimdriveError:
         code="missing_target",
         message=(
             "tap target required: provide {x, y}, {mark: <id>}, or {text: <query>}. "
-            "Recovery: call `ios_observe` to get current marks, then supply one of the above coordinate forms."
+            "Recovery: call `observe` to get current marks, then supply one of the above coordinate forms."
         ),
         details={},
     )
@@ -116,7 +116,7 @@ def already_recording(session_id: str, name: str) -> SimdriveError:
         code="already_recording",
         message=(
             f"session {session_id} already recording {name!r}. "
-            "Recovery: call `ios_stop_recording` to finalize the current recording before starting a new one."
+            "Recovery: call `stop_recording` to finalize the current recording before starting a new one."
         ),
         details={"session_id": session_id, "name": name},
     )
@@ -127,7 +127,7 @@ def not_recording(session_id: str) -> SimdriveError:
         code="not_recording",
         message=(
             f"session {session_id} is not recording. "
-            "Recovery: call `ios_start_recording` before attempting to stop or add steps to a recording."
+            "Recovery: call `start_recording` before attempting to stop or add steps to a recording."
         ),
         details={"session_id": session_id},
     )
@@ -138,7 +138,7 @@ def recording_not_found(name: str, path: str) -> SimdriveError:
         code="recording_not_found",
         message=(
             f"recording {name!r} not found at {path}. "
-            "Recovery: run `ios_list_replays` to see available recordings, then retry with a valid name."
+            "Recovery: run `list_replays` to see available recordings, then retry with a valid name."
         ),
         details={"name": name, "path": path},
     )
