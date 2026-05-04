@@ -184,6 +184,12 @@ class TestMCPPathNoAnthropicImport:
         that is ACCEPTABLE — we care only that anthropic is not the failure.
         """
         restore = self._mask_anthropic()
+        # Snapshot every simdrive.* module that exists BEFORE we nuke them.
+        # The finally block will restore this snapshot so later tests continue
+        # patching the same module objects they imported at collection time.
+        _simdrive_snapshot: dict = {
+            k: v for k, v in sys.modules.items() if k.startswith("simdrive")
+        }
         try:
             # Force re-import of relevant modules.
             mods_to_remove = [k for k in sys.modules if k.startswith("simdrive")]
@@ -193,10 +199,11 @@ class TestMCPPathNoAnthropicImport:
 
             import simdrive.server as server_mod
 
+            import asyncio as _asyncio
             try:
-                # Call with a fake session_id.  Will fail, but must NOT fail
-                # because of a missing anthropic import.
-                server_mod.tool_run_journey({"session_id": "fake-mcp-test"})
+                # tool_run_journey is async — must be awaited.  Will fail, but
+                # must NOT fail because of a missing anthropic import.
+                _asyncio.run(server_mod.tool_run_journey({"session_id": "fake-mcp-test"}))
             except ModuleNotFoundError as exc:
                 if "anthropic" in str(exc).lower():
                     pytest.fail(
@@ -214,7 +221,12 @@ class TestMCPPathNoAnthropicImport:
 
         finally:
             restore()
-            # Re-import simdrive fresh so other tests are not affected by the mask.
-            mods_to_remove = [k for k in sys.modules if k.startswith("simdrive")]
-            for mod in mods_to_remove:
-                sys.modules.pop(mod, None)
+            # Remove any simdrive.* entries that were freshly imported under the
+            # mask (they are stale / partial-init'd without a real anthropic).
+            for k in list(sys.modules):
+                if k.startswith("simdrive"):
+                    sys.modules.pop(k, None)
+            # Restore the pre-test simdrive module objects so that later tests'
+            # mock.patch() calls target the same module objects they imported at
+            # collection time (e.g. simdrive.journey.runner.tool_observe).
+            sys.modules.update(_simdrive_snapshot)

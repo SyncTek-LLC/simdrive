@@ -47,6 +47,9 @@ Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
 
 [project.optional-dependencies]
 ssim = ["scikit-image>=0.22"]
+claude = [
+    "anthropic>=0.30",
+]
 dev = [
     "anthropic>=0.30",
     "fastapi>=0.115",

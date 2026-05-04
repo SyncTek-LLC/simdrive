@@ -1681,7 +1681,20 @@ def _cmd_run(args: list[str]) -> None:
     from simdrive.journey.schema import load_journey
     from simdrive.journey.persona import load_persona
     from simdrive.journey.runner import run_journey
-    from simdrive.journey.claude_client import ClaudeLLMClient
+    try:
+        from simdrive.journey.claude_client import ClaudeLLMClient
+    except ModuleNotFoundError as exc:
+        if "anthropic" in str(exc):
+            import sys as _sys
+            print(
+                "ERROR: `simdrive run` requires the [claude] optional extra.\n"
+                "Install with: pip install simdrive[claude]\n"
+                "Or use the MCP server: run `simdrive` (no args) and let your MCP "
+                "client (Claude Code, etc.) drive run_journey via sampling.",
+                file=_sys.stderr,
+            )
+            _sys.exit(2)
+        raise
 
     parser = argparse.ArgumentParser(prog="specterqa-ios run")
     parser.add_argument("--session-id", required=True)
