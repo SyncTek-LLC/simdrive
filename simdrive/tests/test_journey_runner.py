@@ -17,6 +17,7 @@ Tests cover:
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Optional
 from unittest.mock import MagicMock, patch
@@ -66,14 +67,19 @@ def _make_session(session_id: str = "test-session-001") -> MagicMock:
 
 
 class FakeLLMClient:
-    """Scripted LLM client that returns a predetermined sequence of decisions."""
+    """Scripted LLM client that returns a predetermined sequence of decisions.
+
+    INIT-2026-544: call() converted to async def so it satisfies the new
+    async LLMClient Protocol after the MCP sampling refactor.  All assertions
+    and scripted-decision logic are unchanged.
+    """
 
     def __init__(self, decisions: list[StepDecision]):
         self._decisions = list(decisions)
         self._idx = 0
         self._cost = 0.0
 
-    def call(
+    async def call(
         self,
         system_prompt: str,
         user_prompt: str,
@@ -256,11 +262,11 @@ class TestRunJourneyPassed:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run1",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "passed"
         assert result.journey_name == "test-journey"
@@ -281,11 +287,11 @@ class TestRunJourneyPassed:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run2",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "passed"
         assert result.llm_calls == 0
@@ -308,11 +314,11 @@ class TestRunJourneyFailed:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run_fail",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "failed"
         assert "app is broken" in (result.failure_reason or "")
@@ -340,11 +346,11 @@ class TestRunJourneyBudget:
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
             patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run_budget",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "budget_exceeded"
 
@@ -368,11 +374,11 @@ class TestRunJourneyBudget:
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
             patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run_llm_budget",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "budget_exceeded"
 
@@ -394,11 +400,11 @@ class TestRunJourneyCrash:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": crashes}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run_crash",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "crashed"
 
@@ -426,11 +432,11 @@ class TestRunJourneyActToolFailed:
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
             patch("simdrive.journey.runner.tool_tap", side_effect=_fake_tap_fail),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run_act_fail",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.outcome == "error"
 
@@ -457,11 +463,11 @@ class TestRunJourneyMetrics:
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
             patch("simdrive.journey.runner.tool_tap", return_value={"ok": True}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "run_metrics",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.llm_calls == 3
         assert result.duration_seconds > 0
@@ -483,11 +489,11 @@ class TestRunJourneyMetrics:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=artifact_dir,
                 _recorder_module=None,
-            )
+            ))
 
         assert artifact_dir.exists()
         assert (artifact_dir / "summary.json").exists()
@@ -513,11 +519,11 @@ class TestRunResultSerialisation:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "serial_test",
                 _recorder_module=None,
-            )
+            ))
 
         d = result.to_dict()
         json_str = json.dumps(d)  # must not raise
@@ -537,10 +543,10 @@ class TestRunResultSerialisation:
             patch("simdrive.journey.runner.tool_crashes", return_value={"crashes": []}),
             patch("simdrive.journey.runner.tool_perf_baseline", return_value={}),
         ):
-            result = run_journey(
+            result = asyncio.run(run_journey(
                 journey, persona, session, client,
                 artifact_dir_override=tmp_path / "pass_prop",
                 _recorder_module=None,
-            )
+            ))
 
         assert result.passed is True

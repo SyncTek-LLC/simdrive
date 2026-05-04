@@ -23,15 +23,37 @@ Add to .mcp.json:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from pathlib import Path
+from typing import Optional
 
 from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
 from .observability.logger import get_logger
+
+
+# ── MCP session holder (INIT-2026-544) ──────────────────────────────────────
+# Populated by _serve_async when the MCP server starts so that async tool
+# handlers (e.g. tool_run_journey) can retrieve the active ServerSession.
+_MCP_SERVER: Optional[object] = None
+
+
+def _get_current_mcp_session():
+    """Return the active MCP ServerSession or None.
+
+    Safe to call from any tool handler. Returns None when there is no live
+    MCP context (e.g. unit tests or CLI calls).
+    """
+    if _MCP_SERVER is None:
+        return None
+    try:
+        return _MCP_SERVER.request_context.session  # type: ignore[union-attr]
+    except (LookupError, AttributeError):
+        return None
 
 _log = get_logger(__name__)
 
@@ -906,11 +928,15 @@ def tool_clear_field(arguments: dict) -> dict:
 # ─── SimDrive 1.0 — Journey runner MCP tool ──────────────────────────── #
 
 
-def tool_run_journey(arguments: dict) -> dict:
-    """Execute a YAML journey against a running session.
+async def tool_run_journey(arguments: dict) -> dict:
+    """Execute a YAML journey against a running session via MCP sampling.
 
     Requires a valid license (calls check_entitlement() — raises LicenseError
     when the license is absent/expired/invalid).
+
+    Uses MCPSamplingLLMClient — the connected MCP client (Claude Code, Cline,
+    etc.) provides the LLM and credentials via session.create_message().  The
+    anthropic package is NOT required for this code path.
 
     Parameters
     ----------
@@ -926,10 +952,24 @@ def tool_run_journey(arguments: dict) -> dict:
     from simdrive.journey.schema import load_journey
     from simdrive.journey.persona import load_persona
     from simdrive.journey.runner import run_journey
-    from simdrive.journey.claude_client import ClaudeLLMClient
+    from simdrive.journey.mcp_sampling_client import MCPSamplingLLMClient
 
     # License gate — raises LicenseError on expiry / invalid / not found.
     check_entitlement()
+
+    # Acquire the MCP session for sampling — required on the MCP path.
+    mcp_session = _get_current_mcp_session()
+    if mcp_session is None:
+        raise errors.SimdriveError(
+            code="mcp_sampling_unavailable",
+            message=(
+                "tool_run_journey via MCP requires a connected MCP client that "
+                "supports sampling (e.g. Claude Code). For standalone use, run "
+                "`simdrive run path/to/journey.yaml` after "
+                "`pip install simdrive[claude]`."
+            ),
+            details={},
+        )
 
     session_id = arguments["session_id"]
     s = session.get(session_id)
@@ -947,9 +987,9 @@ def tool_run_journey(arguments: dict) -> dict:
                 setattr(journey.budget, key, int(budget_override[key]))
 
     persona = load_persona(persona_path)
-    llm_client = ClaudeLLMClient()
+    llm_client = MCPSamplingLLMClient(mcp_session)
 
-    result = run_journey(
+    result = await run_journey(
         journey=journey,
         persona=persona,
         session=s,
@@ -1502,13 +1542,43 @@ def list_tools() -> list[dict]:
 
 
 def call_tool(name: str, arguments: dict) -> dict:
+    """Sync tool dispatcher — for non-MCP callers (CLI smokes, direct test calls).
+
+    Does NOT support async handlers. Use call_tool_async inside the MCP event loop.
+    """
     for t in _TOOLS:
         if t["name"] == name:
-            result = t["handler"](arguments or {})
+            handler = t["handler"]
+            if inspect.iscoroutinefunction(handler):
+                raise RuntimeError(
+                    f"Tool '{name}' has an async handler — use call_tool_async "
+                    "inside an async context (MCP server) instead of call_tool."
+                )
+            result = handler(arguments or {})
             # v0.3.0a3 — inject `_simdrive_warning` side-channel field when the
             # running server is stale relative to the on-disk wheel. Doesn't
             # replace the tool result, just rides along so the agent sees it
             # on every tool call after a `pip install --upgrade`.
+            warning = _check_version_drift()
+            if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
+                result["_simdrive_warning"] = warning
+            return result
+    raise ValueError(f"unknown tool: {name}")
+
+
+async def call_tool_async(name: str, arguments: dict) -> dict:
+    """Async-aware tool dispatcher — supports both sync and coroutine handlers.
+
+    Used by the MCP server's _call_tool handler so async tools (like
+    tool_run_journey after INIT-2026-544) are properly awaited.
+    """
+    for t in _TOOLS:
+        if t["name"] == name:
+            handler = t["handler"]
+            if inspect.iscoroutinefunction(handler):
+                result = await handler(arguments or {})
+            else:
+                result = handler(arguments or {})
             warning = _check_version_drift()
             if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
                 result["_simdrive_warning"] = warning
@@ -1521,11 +1591,17 @@ def call_tool(name: str, arguments: dict) -> dict:
 
 async def _serve_async() -> None:
     """Run as an MCP stdio server."""
+    global _MCP_SERVER
+
     from mcp.server import Server
     from mcp.server.stdio import stdio_server
     import mcp.types as mtypes
 
     server: Server = Server("simdrive")
+
+    # Populate the module-level holder so tool_run_journey can acquire the
+    # active ServerSession via _get_current_mcp_session().
+    _MCP_SERVER = server
 
     @server.list_tools()
     async def _list_tools() -> list[mtypes.Tool]:
@@ -1541,7 +1617,7 @@ async def _serve_async() -> None:
     @server.call_tool()
     async def _call_tool(name: str, arguments: dict | None) -> list[mtypes.TextContent | mtypes.ImageContent]:
         try:
-            result = call_tool(name, arguments or {})
+            result = await call_tool_async(name, arguments or {})
         except errors.SimdriveError as exc:
             return [mtypes.TextContent(type="text", text=json.dumps(exc.to_dict()))]
         except Exception as exc:  # last-resort catch-all → wrap as 'internal' code
@@ -1605,7 +1681,20 @@ def _cmd_run(args: list[str]) -> None:
     from simdrive.journey.schema import load_journey
     from simdrive.journey.persona import load_persona
     from simdrive.journey.runner import run_journey
-    from simdrive.journey.claude_client import ClaudeLLMClient
+    try:
+        from simdrive.journey.claude_client import ClaudeLLMClient
+    except ModuleNotFoundError as exc:
+        if "anthropic" in str(exc):
+            import sys as _sys
+            print(
+                "ERROR: `simdrive run` requires the [claude] optional extra.\n"
+                "Install with: pip install simdrive[claude]\n"
+                "Or use the MCP server: run `simdrive` (no args) and let your MCP "
+                "client (Claude Code, etc.) drive run_journey via sampling.",
+                file=_sys.stderr,
+            )
+            _sys.exit(2)
+        raise
 
     parser = argparse.ArgumentParser(prog="specterqa-ios run")
     parser.add_argument("--session-id", required=True)
@@ -1647,7 +1736,7 @@ def _cmd_run(args: list[str]) -> None:
     s = session.get(ns.session_id)
 
     llm_client = ClaudeLLMClient()
-    result = run_journey(journey=journey, persona=persona, session=s, llm_client=llm_client)
+    result = asyncio.run(run_journey(journey=journey, persona=persona, session=s, llm_client=llm_client))
 
     print(_json.dumps(result.to_dict(), indent=2))
     import sys

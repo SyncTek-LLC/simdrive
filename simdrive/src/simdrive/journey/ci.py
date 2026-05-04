@@ -19,6 +19,7 @@ Public surface:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -291,9 +292,9 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
                     break
                 continue
 
-        # Run the journey.
+        # Run the journey — run_journey is async after INIT-2026-544.
         try:
-            result = run_journey(journey, persona, session, llm_client)
+            result = asyncio.run(run_journey(journey, persona, session, llm_client))
         except Exception as exc:
             result = RunResult(
                 outcome="error",

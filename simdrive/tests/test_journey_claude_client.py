@@ -1,9 +1,14 @@
 """Unit tests for journey/claude_client.py.
 
 All tests use a mocked anthropic.Anthropic client — no real API calls are made.
+
+INIT-2026-544: ClaudeLLMClient.call is now async (wraps blocking SDK call in
+asyncio.to_thread).  All tests that call client.call() directly are updated
+to use asyncio.run() so they exercise the new async interface.
 """
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -73,7 +78,10 @@ def test_parse_decision_invalid_json():
 
 @patch("simdrive.journey.claude_client.anthropic.Anthropic")
 def test_client_call_returns_decision(mock_anthropic_cls):
-    """Happy-path: client calls SDK and returns a parsed StepDecision."""
+    """Happy-path: client calls SDK and returns a parsed StepDecision.
+
+    INIT-2026-544: call() is now async — use asyncio.run() to invoke it.
+    """
     fake_response = _make_response(
         '{"tool": "swipe", "args": {"direction": "up"}, "rationale": "scroll", "confidence": 0.8}',
         input_tokens=200,
@@ -84,11 +92,11 @@ def test_client_call_returns_decision(mock_anthropic_cls):
     mock_anthropic_cls.return_value = mock_client
 
     client = ClaudeLLMClient(api_key="test-key")
-    decision = client.call(
+    decision = asyncio.run(client.call(
         system_prompt="You are a test agent.",
         user_prompt="What should I do?",
         screenshot_path=None,
-    )
+    ))
 
     assert isinstance(decision, StepDecision)
     assert decision.tool == "swipe"
@@ -97,7 +105,10 @@ def test_client_call_returns_decision(mock_anthropic_cls):
 
 @patch("simdrive.journey.claude_client.anthropic.Anthropic")
 def test_client_cost_accumulates(mock_anthropic_cls):
-    """Cost accumulates across multiple calls."""
+    """Cost accumulates across multiple calls.
+
+    INIT-2026-544: call() is now async — use asyncio.run() to invoke it.
+    """
     fake_response = _make_response(
         '{"tool": "done", "args": {}, "rationale": "done", "confidence": 1.0}',
         input_tokens=100,
@@ -110,22 +121,26 @@ def test_client_cost_accumulates(mock_anthropic_cls):
     client = ClaudeLLMClient(api_key="test-key")
     assert client.cost_usd == 0.0
 
-    client.call("system", "user1", None)
+    asyncio.run(client.call("system", "user1", None))
     cost_after_1 = client.cost_usd
     assert cost_after_1 > 0.0
 
-    client.call("system", "user2", None)
+    asyncio.run(client.call("system", "user2", None))
     cost_after_2 = client.cost_usd
     assert cost_after_2 > cost_after_1
 
 
 @patch("simdrive.journey.claude_client.anthropic.Anthropic")
 def test_client_sdk_exception_propagates(mock_anthropic_cls):
-    """SDK exceptions bubble up so runner can wrap them as claude_call_failed."""
+    """SDK exceptions bubble up so runner can wrap them as claude_call_failed.
+
+    INIT-2026-544: call() is now async — use asyncio.run() to invoke it.
+    asyncio.to_thread propagates exceptions from the thread back to the caller.
+    """
     mock_client = MagicMock()
     mock_client.messages.create.side_effect = RuntimeError("network error")
     mock_anthropic_cls.return_value = mock_client
 
     client = ClaudeLLMClient(api_key="test-key")
     with pytest.raises(RuntimeError, match="network error"):
-        client.call("system", "user", None)
+        asyncio.run(client.call("system", "user", None))
