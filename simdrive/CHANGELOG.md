@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0a4] — 2026-05-04
+
+### Changed (BREAKING for direct journey-runner consumers)
+- **`run_journey` is now `async`** and **`LLMClient.call` is now `async`**. Direct API consumers must `await run_journey(...)` (or wrap with `asyncio.run(...)`). The standalone `simdrive run` and `simdrive ci` CLIs handle this internally — no user-visible change for CLI users.
+- **`ClaudeLLMClient.call` is now `async`** and wraps the blocking Anthropic SDK call in `asyncio.to_thread(...)`.
+
+### Added
+- **`MCPSamplingLLMClient`** (`simdrive.journey.mcp_sampling_client`) — new LLM client that delegates to the connected MCP client via `session.create_message(...)`. simdrive's MCP `tool_run_journey` now uses this — **no `ANTHROPIC_API_KEY` required when called via MCP** (Claude Code, Cline, or any sampling-capable MCP client supplies its own LLM and credentials).
+- **`SimdriveError(code="mcp_sampling_unavailable")`** raised when `tool_run_journey` is invoked outside an MCP context (e.g. an MCP client that doesn't support sampling). Recovery hint points to `simdrive run` standalone CLI.
+
+### Fixed
+- **MCP flow no longer requires an Anthropic API key.** All 31 MCP tools, including `run_journey`, work with `pip install simdrive` (no extras) when the driving agent supports MCP sampling. Per Chairman directive 2026-05-04.
+
+### Packaging
+- `anthropic>=0.30` confirmed in `[project.optional-dependencies]` only. `pip install simdrive` (no extras) works for MCP. `pip install simdrive[claude]` adds the Anthropic SDK for the standalone `simdrive run` / `simdrive ci` CLI paths.
+
+### Source
+INIT-2026-544. Architectural follow-up to 1.0.0a3 (INIT-2026-543) — agent-first per Chairman directive.
+
+---
+
 ## [1.0.0a3] — 2026-05-04
 
 ### Fixed
