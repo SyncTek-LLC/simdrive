@@ -1,7 +1,10 @@
 """License-domain error codes.
 
-These are standalone error classes for the license package.
-Atlas: add these codes to the global errors.py during integration:
+LicenseError inherits from SimdriveError so the MCP wrapper's
+``except errors.SimdriveError`` clause automatically handles it and
+preserves the structured error envelope (code, message, details).
+
+Error codes surfaced here:
   - license_invalid
   - license_expired
   - license_offline_grace_exhausted
@@ -9,20 +12,24 @@ Atlas: add these codes to the global errors.py during integration:
   - trial_already_used
   - license_not_found
   - trial_rate_limited
+  - cloud_unreachable
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
+from simdrive.errors import SimdriveError
+
 
 @dataclass
-class LicenseError(Exception):
+class LicenseError(SimdriveError):
     """Raised for all license validation failures.
 
-    WHY separate from SimdriveError: the license package is importable
-    independently of the full simdrive stack; avoiding circular imports
-    and keeping the package self-contained.
+    Inherits from SimdriveError so the MCP tool wrapper's
+    ``except errors.SimdriveError`` clause catches it automatically,
+    preserving the structured error envelope rather than wrapping it as
+    code="internal".
     """
 
     code: str
@@ -111,9 +118,23 @@ def license_not_found(path: str) -> LicenseError:
         message=(
             f"No license file found at {path!r}. "
             "Recovery: run `simdrive trial start --email <you@example.com>` "
-            "to begin a 14-day free trial."
+            "(cloud) or `simdrive trial start --email <you@example.com> --offline-dev` "
+            "(local, no network required) to begin a 14-day free trial."
         ),
         details={"path": path},
+    )
+
+
+def cloud_unreachable(detail: str) -> LicenseError:
+    return LicenseError(
+        code="cloud_unreachable",
+        message=(
+            f"Could not reach the license server: {detail}. "
+            "Recovery: check your network connection, or use "
+            "`simdrive trial start --email <you@example.com> --offline-dev` "
+            "to self-issue a local dev trial without network access."
+        ),
+        details={"detail": detail},
     )
 
 
