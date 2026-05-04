@@ -15,6 +15,13 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - **5 asserts in `journey/criteria.py`** converted to explicit `raise ValueError` (asserts get stripped under `PYTHONOPTIMIZE`)
 - **105 ruff F401/E501 errors** auto-fixed across `simdrive/src/`, `simdrive/tests/`, `scripts/`
 - **Stray `print()` calls** in `server.py` converted to logger calls
+- License metadata aligned to Elastic-2.0: pyproject.toml previously
+  declared `license = "MIT"` but `simdrive/LICENSE` was MIT and root
+  `LICENSE` was Elastic-2.0 — three files in three states. Standardized
+  on Elastic License 2.0 across pyproject, simdrive/LICENSE, and root
+  LICENSE. SimDrive 1.0 ships as a commercial product: free for
+  personal/internal use, prohibits offering as a competing managed
+  service. (LapsApp at repo root remains separately MIT-licensed.)
 
 ### Added
 - `Python 3.13` classifier in `pyproject.toml`
