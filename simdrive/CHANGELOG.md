@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0a6] — 2026-05-04
+
+### Documentation
+- **README front-door rewrite.** First 200 lines now lead with: one-line summary, 30-second `--offline-dev` quickstart, agent-first MCP framing, key differentiators. The "what is this" question now answers itself in the first scroll.
+- **Known limitations + workarounds section.** Documents four behaviors observed in the 1.0.0a2 Palace dogfood: `type_text` first-character drop (workaround: `tap_first`), SSIM threshold advisory vs `structural_checks` (the actual regression gate), `dismiss_sheet` system-sheets-only limitation (workaround: `swipe` for SwiftUI half-sheets), `set_appearance` respring caveat.
+- **`docs/LIMITATIONS.md` extended** with full detail on all four dogfood-observed limitations.
+- **Migration note** (`docs/MIGRATION.md`) for users landing from `specterqa-ios` references: tool name mapping, PyPI history, new 1.0 additions.
+
+### Packaging / metadata
+- PyPI `description`, `keywords`, and `classifiers` audited for **agent-discoverability**. The agent-first MCP framing now surfaces in package metadata so MCP clients scanning for "iOS automation" can find simdrive.
+- Added keywords: `automation`, `xcuitest`, `appium-alternative`, `ai-testing`, `sampling`, `xcode`.
+- Added classifier: `Topic :: System :: Testing`.
+- Updated `description` to lead with "MCP-native iOS simulator + real-device automation. Agent-first" framing.
+
+### Added
+- `tests/test_readme_quickstart.py` — regression test pinning quickstart commands' presence in README first 100 lines, and absence of stale/misleading strings.
+
+### Source
+INIT-2026-546. Closes the polish loop after 1.0.0a3 (dogfood fixes), 1.0.0a4 (MCP sampling), 1.0.0a5 (httpx defensive pin).
+
+---
+
 ## [1.0.0a5] — 2026-05-04
 
 ### Fixed (defensive)
