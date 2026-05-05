@@ -10,7 +10,7 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "1.0.0a4"
+    assert server.__version__ == "1.0.0a5"
 
 
 def test_tool_count_is_thirty():
