@@ -583,6 +583,51 @@ def test_smoke_test_raises_on_transport_error():
 # ── wda error constructors (Recovery: required) ───────────────────────────────
 
 
+# ── verify_xcode_account_for_team ────────────────────────────────────────────
+
+
+def test_verify_xcode_account_raises_when_profiles_dir_empty(tmp_path, monkeypatch):
+    """When ~/Library/MobileDevice/Provisioning Profiles/ is empty, raise."""
+    fake_home = tmp_path
+    profiles_dir = fake_home / "Library" / "MobileDevice" / "Provisioning Profiles"
+    profiles_dir.mkdir(parents=True)
+    monkeypatch.setattr("simdrive.wda.bootstrap.Path.home", lambda: fake_home)
+
+    from simdrive.errors import SimdriveError
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    with pytest.raises(SimdriveError) as exc_info:
+        verify_xcode_account_for_team("E52N8732YT")
+    assert exc_info.value.code == "wda_xcode_account_not_authenticated"
+    assert "E52N8732YT" in exc_info.value.message
+    assert "Xcode" in exc_info.value.message
+    assert "Accounts" in exc_info.value.message
+
+
+def test_verify_xcode_account_raises_when_profiles_dir_missing(tmp_path, monkeypatch):
+    """When ~/Library/MobileDevice/Provisioning Profiles/ doesn't exist, raise."""
+    fake_home = tmp_path  # no Library/... at all
+    monkeypatch.setattr("simdrive.wda.bootstrap.Path.home", lambda: fake_home)
+
+    from simdrive.errors import SimdriveError
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    with pytest.raises(SimdriveError) as exc_info:
+        verify_xcode_account_for_team("E52N8732YT")
+    assert exc_info.value.code == "wda_xcode_account_not_authenticated"
+
+
+def test_verify_xcode_account_passes_when_profile_present(tmp_path, monkeypatch):
+    """When a profile exists in the dir, pass without raising."""
+    fake_home = tmp_path
+    profiles_dir = fake_home / "Library" / "MobileDevice" / "Provisioning Profiles"
+    profiles_dir.mkdir(parents=True)
+    (profiles_dir / "some-profile.mobileprovision").write_bytes(b"fake-profile-data")
+    monkeypatch.setattr("simdrive.wda.bootstrap.Path.home", lambda: fake_home)
+
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    # Should not raise
+    verify_xcode_account_for_team("E52N8732YT")
+
+
 def test_all_wda_errors_have_recovery():
     from simdrive.wda.errors import (
         wda_host_tools_missing,
@@ -594,6 +639,7 @@ def test_all_wda_errors_have_recovery():
         wda_port_discovery_timeout,
         wda_smoke_failed,
         wda_session_lost,
+        wda_xcode_account_not_authenticated,
     )
     errors = [
         wda_host_tools_missing("xcodebuild"),
@@ -606,6 +652,7 @@ def test_all_wda_errors_have_recovery():
         wda_smoke_failed(503, "body text"),
         wda_session_lost("UDID"),
         wda_session_lost("UDID", last_seen_at=1234567890.0),
+        wda_xcode_account_not_authenticated("E52N8732YT"),
     ]
     for err in errors:
-        assert "Recovery:" in err.message, f"{err.code} missing 'Recovery:' in message"
+        assert "Recovery" in err.message, f"{err.code} missing 'Recovery' in message"

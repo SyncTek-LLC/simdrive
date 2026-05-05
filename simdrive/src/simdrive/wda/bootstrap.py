@@ -52,6 +52,7 @@ from .errors import (
     wda_port_discovery_timeout,
     wda_signing_ambiguous,
     wda_smoke_failed,
+    wda_xcode_account_not_authenticated,
 )
 
 
@@ -359,6 +360,26 @@ def resolve_signing_identity(
 
     # Still ambiguous — raise with the full list.
     raise wda_signing_ambiguous([i["name"] for i in identities])
+
+
+# ─── Xcode account verification ──────────────────────────────────────────────
+
+
+def verify_xcode_account_for_team(team_id: str) -> None:
+    """Verify Xcode has an authenticated Apple ID account for the given team_id.
+
+    Raises wda_xcode_account_not_authenticated when:
+      - ~/Library/MobileDevice/Provisioning Profiles/ is empty (no cached profiles), OR
+      - ~/Library/MobileDevice/Provisioning Profiles/ does not exist at all.
+
+    The codesigning identity in keychain is necessary but not sufficient. xcodebuild
+    needs an Xcode Account session (Settings → Accounts) to call back to Apple's
+    Developer Portal for profile downloads. The keychain has certs; Xcode's account
+    storage has the auth tokens for the portal. They're separate.
+    """
+    profiles_dir = Path.home() / "Library" / "MobileDevice" / "Provisioning Profiles"
+    if not profiles_dir.exists() or not any(profiles_dir.iterdir()):
+        raise wda_xcode_account_not_authenticated(team_id)
 
 
 # ─── xcodebuild ──────────────────────────────────────────────────────────────
@@ -682,6 +703,12 @@ def bootstrap_device(
     resolved_identity, resolved_team = resolve_signing_identity(signing_identity, team_id)
     print(f"[simdrive] Signing identity: {resolved_identity}", flush=True)
     print(f"[simdrive] Team ID:          {resolved_team}", flush=True)
+
+    # 4b. Xcode account check — must happen BEFORE xcodebuild so we surface the
+    # "No Account for Team" error with actionable recovery instead of xcodebuild's
+    # terse message. Certs in keychain ≠ Xcode Account session for portal access.
+    verify_xcode_account_for_team(resolved_team)
+    print("[simdrive] Xcode account check passed (provisioning profiles present).", flush=True)
 
     # Trust guidance before install (device screen may prompt).
     _print_trust_guidance(resolved_team)

@@ -136,6 +136,36 @@ def wda_smoke_failed(http_status: int, body: str) -> SimdriveError:
     )
 
 
+def wda_xcode_account_not_authenticated(team_id: str) -> SimdriveError:
+    """Raised when Xcode has no Apple ID account session for the given team_id.
+
+    The codesigning certificate in the keychain is necessary but not sufficient.
+    xcodebuild's -allowProvisioningUpdates needs an Xcode Account session
+    (Settings → Accounts) to call back to Apple's Developer Portal for profile
+    downloads. The keychain has certs; Xcode's account storage has the auth tokens.
+    They are separate state.
+    """
+    from pathlib import Path
+    profiles_dir = str(Path.home() / "Library" / "MobileDevice" / "Provisioning Profiles")
+    return SimdriveError(
+        code="wda_xcode_account_not_authenticated",
+        message=(
+            f"Xcode is not signed in to an Apple ID for team {team_id!r}. "
+            f"`xcodebuild -allowProvisioningUpdates` needs an Xcode Account session "
+            f"to download provisioning profiles from Apple's Developer Portal. "
+            f"The codesigning certificate in your keychain is not enough on its own. "
+            f"\n\n"
+            f"Recovery (one-time, ~30 seconds):\n"
+            f"  1. Open Xcode.app\n"
+            f"  2. ⌘, (Cmd+Comma) → Accounts tab\n"
+            f"  3. Click + → Apple ID → sign in with the Apple ID for team {team_id}\n"
+            f"  4. Enter your password + 2FA when prompted\n"
+            f"  5. Re-run `simdrive bootstrap-device <udid> --team-id {team_id}`"
+        ),
+        details={"team_id": team_id, "profiles_dir": profiles_dir},
+    )
+
+
 def wda_session_lost(udid: str, last_seen_at: Optional[float] = None) -> SimdriveError:
     """Raised at runtime when the WDA tunnel drops mid-journey."""
     seen_msg = f" (last seen at {last_seen_at:.0f})" if last_seen_at is not None else ""
