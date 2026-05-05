@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simdrive"
-version = "1.0.0a4"
+version = "1.0.0a5"
 description = "SimDrive — MCP-native iOS simulator driver. Vision-first, agent-driven."
 readme = "README.md"
 license = "Elastic-2.0"
@@ -30,6 +30,7 @@ dependencies = [
     "Pillow>=10.0",
     "boto3>=1.20",
     "email-validator>=2.0",
+    "httpx<1.0",  # defensive: mcp 1.27.0 has unbounded httpx>=0.27.1; pip --pre picks httpx 1.0.dev3 which breaks httpx-sse. Remove once upstream mcp pins its own upper bound. (INIT-2026-545)
     "mcp>=1.0",
     "prometheus-client>=0.19",
     "pyobjc-framework-Quartz>=10.0",

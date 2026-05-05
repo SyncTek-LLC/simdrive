@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0a5] — 2026-05-04
+
+### Fixed (defensive)
+- **Pin `httpx<1.0` to defend against `mcp` ecosystem pre-release leak.** The published `mcp==1.27.0` declares `httpx>=0.27.1` with no upper bound. `pip install --pre simdrive` would resolve to `httpx 1.0.dev3` (a real pre-release on PyPI) which breaks `httpx-sse` and the MCP transport layer. Caught by DeployAtlas pre-publish smoke for 1.0.0a4 (INIT-2026-544). Pin removable once upstream `mcp` adds its own upper bound.
+
+### Added
+- Regression test `tests/test_packaging_deps.py::test_httpx_pinned_below_1_0` so this defensive pin can't be silently removed.
+
+### Source
+INIT-2026-545. Defensive follow-up to 1.0.0a4 from DeployAtlas's smoke.
+
+---
+
 ## [1.0.0a4] — 2026-05-04
 
 ### Changed (BREAKING for direct journey-runner consumers)
