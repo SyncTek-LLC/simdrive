@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simdrive"
-version = "1.0.0a5"
-description = "SimDrive — MCP-native iOS simulator driver. Vision-first, agent-driven."
+version = "1.0.0a6"
+description = "MCP-native iOS simulator + real-device automation. Agent-first: your MCP client drives via 31 vision-first tools — simdrive does not require an API key."
 readme = "README.md"
 license = "Elastic-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -13,7 +13,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "SyncTek LLC", email = "info@synctek.io"},
 ]
-keywords = ["ios", "simulator", "mcp", "claude", "testing", "qa", "agent", "anthropic"]
+keywords = ["ios", "simulator", "mcp", "claude", "testing", "qa", "agent", "anthropic", "automation", "xcuitest", "appium-alternative", "ai-testing", "sampling", "xcode"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -25,6 +25,7 @@ classifiers = [
     "Operating System :: MacOS",
     "Topic :: Software Development :: Testing",
     "Topic :: Software Development :: Quality Assurance",
+    "Topic :: System :: Testing",
 ]
 dependencies = [
     "Pillow>=10.0",
