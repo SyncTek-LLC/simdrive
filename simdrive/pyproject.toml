@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simdrive"
-version = "1.0.0a6"
+version = "1.0.0a7"
 description = "MCP-native iOS simulator + real-device automation. Agent-first: your MCP client drives via 31 vision-first tools — simdrive does not require an API key."
 readme = "README.md"
 license = "Elastic-2.0"
@@ -83,7 +83,7 @@ simdrive-mcp = "simdrive.server:serve"
 where = ["src"]
 
 [tool.setuptools.package-data]
-simdrive = ["_bin/simdrive-input"]
+simdrive = ["_bin/simdrive-input", "wda/PINNED_SHA.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

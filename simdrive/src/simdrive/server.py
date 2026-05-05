@@ -998,6 +998,73 @@ async def tool_run_journey(arguments: dict) -> dict:
     return result.to_dict()
 
 
+def tool_load_journey(arguments: dict) -> dict:
+    """Load and parse a journey YAML, return its data so the agent can drive primitives directly.
+
+    Use case: the agent in your MCP host reads the journey definition, then
+    drives each step using existing primitives (observe / tap / type_text / etc.)
+    — no LLM call inside simdrive, no API key needed, no MCP sampling required.
+
+    This replaces the former `run_journey` MCP tool which required
+    `sampling/createMessage` support (not implemented in Claude Code and most
+    MCP clients). The agent-first workflow is now:
+      1. tool_load_journey → get journey goals + success_criteria + budget
+      2. tool_session_start → get session_id
+      3. tool_observe → see the screen
+      4. tool_tap / tool_type_text / tool_swipe → interact
+      5. Repeat until success_criteria are met or budget exhausted
+
+    Parameters
+    ----------
+    path:         Absolute path to the journey YAML file.
+    persona_path: Optional absolute path to the persona YAML file.
+
+    Returns dict with:
+      ok:       True
+      journey:  name, goals, success_criteria (as dicts), budget, target, tags
+      persona:  slug, name, role, technical_comfort, patience, goals (or null)
+    """
+    from simdrive.journey.schema import load_journey
+
+    path = arguments["path"]
+    persona_path = arguments.get("persona_path")
+
+    journey = load_journey(Path(path))
+
+    journey_data: dict = {
+        "name": journey.name,
+        "persona": journey.persona,
+        "target": journey.target,
+        "goals": journey.goals,
+        "success_criteria": [sc.model_dump() for sc in journey.success_criteria],
+        "budget": journey.budget.model_dump(),
+        "tags": journey.tags,
+        "app_bundle_id": journey.app_bundle_id,
+        "replay_id": journey.replay_id,
+    }
+
+    persona_data = None
+    if persona_path:
+        from simdrive.journey.persona import load_persona
+        persona = load_persona(Path(persona_path))
+        persona_data = {
+            "slug": persona.slug,
+            "name": persona.name,
+            "role": persona.role,
+            "technical_comfort": persona.technical_comfort,
+            "patience": persona.patience,
+            "goals": persona.goals,
+            "frustrations": persona.frustrations,
+            "locale": persona.locale,
+        }
+
+    return {
+        "ok": True,
+        "journey": journey_data,
+        "persona": persona_data,
+    }
+
+
 # ----------------------------- MCP wiring ------------------------------- #
 
 
@@ -1489,49 +1556,43 @@ _TOOLS: list[dict] = [
         },
         "handler": tool_clear_field,
     },
-    # ── SimDrive 1.0 — Journey runner ───────────────────────────────────
+    # ── SimDrive 1.0 — Journey loader (agent-first, no API key required) ──
     {
-        "name": "run_journey",
+        "name": "load_journey",
         "description": (
-            "Execute a YAML-defined AI journey against an active session. "
-            "The runner drives Claude to interact with the iOS simulator step-by-step "
-            "until all success criteria are met or the budget is exhausted. "
-            "Requires a valid license (trial or paid). "
-            "Returns: outcome (passed/failed/budget_exceeded/crashed/error), "
-            "steps_executed, llm_calls, llm_cost_usd, duration_seconds, "
-            "success_criteria, artifact_dir, failure_reason."
+            "Load and parse a journey YAML, returning its goals, success criteria, "
+            "budget, and persona data as structured JSON. "
+            "\n\n"
+            "AGENT-FIRST WORKFLOW (no API key needed, no MCP sampling required):\n"
+            "  1. load_journey → get journey goals + success_criteria + budget\n"
+            "  2. session_start → start a simulator or device session\n"
+            "  3. observe → see the current screen\n"
+            "  4. tap / type_text / swipe → interact with the app\n"
+            "  5. Repeat observe → act until success_criteria are met\n"
+            "\n"
+            "The agent in your MCP host (Claude Code, Cline, etc.) drives the loop "
+            "using simdrive primitives. simdrive does not make any LLM calls.\n"
+            "\n"
+            "Note: tool_run_journey is available as a standalone CLI command "
+            "(`simdrive run path/to/journey.yaml`) for hosts that support MCP sampling, "
+            "but it is not exposed as an MCP tool because most MCP clients (including "
+            "Claude Code) do not implement sampling/createMessage."
         ),
         "inputSchema": {
             "type": "object",
-            "required": ["session_id", "journey_path", "persona_path"],
+            "required": ["path"],
             "properties": {
-                "session_id": {
-                    "type": "string",
-                    "description": "Active session ID from session_start.",
-                },
-                "journey_path": {
+                "path": {
                     "type": "string",
                     "description": "Absolute path to the journey YAML file.",
                 },
                 "persona_path": {
                     "type": "string",
-                    "description": "Absolute path to the persona YAML file.",
-                },
-                "budget_override": {
-                    "type": "object",
-                    "description": (
-                        "Optional overrides for the journey budget. "
-                        "Keys: max_steps (int), max_seconds (int), max_llm_calls (int)."
-                    ),
-                    "properties": {
-                        "max_steps": {"type": "integer"},
-                        "max_seconds": {"type": "integer"},
-                        "max_llm_calls": {"type": "integer"},
-                    },
+                    "description": "Optional absolute path to the persona YAML file.",
                 },
             },
         },
-        "handler": tool_run_journey,
+        "handler": tool_load_journey,
     },
 ]
 

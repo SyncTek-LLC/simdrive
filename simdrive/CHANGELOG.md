@@ -1,5 +1,96 @@
 # Changelog
 
+## [1.0.0a7] — 2026-05-05
+
+### Fixed — WDA real-device bootstrap (6 bugs, INIT-2026-547)
+
+All 6 bugs identified in the live-validation report are resolved in `simdrive/wda/bootstrap.py`:
+
+**Bug 1 — `resolve_signing_identity` now filters by team_id before raising ambiguity.**
+When multiple "Apple Development" certificates exist in the keychain and `--team-id` is supplied,
+the function now filters to the matching certificate before raising `wda_signing_ambiguous`.
+This handles the common case of two Apple Development certs (one per team/machine).
+
+**Bug 2 — Hardware UDID vs CoreDevice UUID separation.**
+`bootstrap_device()` now resolves the hardware UDID separately via
+`xcrun devicectl device info details --json-output - | hardwareProperties.udid`.
+The CoreDevice pairing UUID is used only for `devicectl` commands;
+the hardware UDID is used for `xcodebuild -destination id=...`.
+On iOS 17+ these are different identifiers for the same device.
+
+**Bug 3 — Correct `CODE_SIGN_IDENTITY` form for automatic signing.**
+`build_wda()` now uses the generic form (`CODE_SIGN_IDENTITY="Apple Development"`,
+`CODE_SIGN_STYLE=Automatic`, `DEVELOPMENT_TEAM=<team-id>`) plus `-allowProvisioningUpdates`
+instead of the full certificate string, which conflicted with the WDA project's
+automatic signing setting.
+
+**Bug 4 — `-Wreserved-identifier` compile errors suppressed.**
+WDA v9.9.0's `PrivateHeaders/XCTest/CDStructures.h` and `XCTestCase.h` use `_XCT*`
+identifiers that fail under clang's `-Weverything` with `-Wreserved-identifier=error`
+in Xcode 16. Fixed by passing `OTHER_CFLAGS="-Wno-reserved-identifier"` to xcodebuild.
+
+**Bugs 5+6 — WDA launched via `xcodebuild test-without-building` (not devicectl).**
+`devicectl device console` does not exist in Xcode 16. `devicectl device process launch`
+crashes WDA immediately (it's an XCTest bundle, not a plain app).
+The correct mechanism is `xcodebuild test-without-building -xctestrun <path> -destination id=<hw-udid>`.
+WDA announces `ServerURLHere->http://<ip>:<port><-ServerURLHere` to xcodebuild's stdout
+within ~5 seconds. The `_SERVER_URL_RE` regex now captures both host (group 1) and port (group 2).
+The device's WiFi IP (not `localhost`) is persisted to the registry as both `host` and `ip`.
+The registry schema is extended with `ip`, `hardware_udid`, and `coredevice_uuid` fields.
+
+### Changed — MCP surface: `tool_load_journey` replaces `run_journey`
+
+**`run_journey` removed from MCP `_TOOLS` registry.**
+The `tool_run_journey` function stays in the codebase (used by `simdrive run` / `simdrive ci`
+standalone CLIs), but is no longer registered as an MCP tool. Reason: `sampling/createMessage`
+is not implemented by Claude Code or most MCP clients, making `run_journey` unusable as an
+MCP tool on the dominant host. The 1.0.0a4 claim "no API key needed via MCP" was false
+for most deployments.
+
+**`load_journey` added to MCP `_TOOLS` registry.**
+Returns parsed YAML journey data (goals, success_criteria, budget, target, persona) so the
+agent in the MCP host can drive the interaction loop using existing primitives
+(`observe`, `tap`, `type_text`, `swipe`, etc.) — no LLM call inside simdrive,
+no API key needed, no MCP sampling required. This makes the 1.0.0a4 agent-first claim
+actually true on every MCP client.
+
+The agent-first workflow is now:
+1. `load_journey` → get journey goals + success_criteria + budget
+2. `session_start` → start a simulator or device session
+3. `observe` → see the current screen
+4. `tap` / `type_text` / `swipe` → interact with the app
+5. Repeat until success criteria are met
+
+### Fixed — Packaging
+
+`wda/PINNED_SHA.txt` is now declared in `[tool.setuptools.package-data]`.
+Without this entry, `pip install simdrive` excluded the file from the wheel and
+`simdrive bootstrap-device` raised `FileNotFoundError` when reading the pinned WDA SHA.
+
+### Tests
+
+New and updated tests covering all 6 WDA bugs plus the architectural change:
+
+- `test_wda_bootstrap.py` — 10 new tests: `test_resolve_signing_identity_filters_by_team_id`,
+  `test_bootstrap_resolves_hardware_udid_via_devicectl`, `test_resolve_hardware_udid_falls_back_*`,
+  `test_build_wda_uses_correct_signing_flags`, `test_launch_uses_xcodebuild_test_without_building`,
+  `test_port_discovery_parses_serverurlhere_from_xcodebuild_stdout`,
+  `test_server_url_regex_captures_host_and_port` (group 1=host, group 2=port).
+  Updated existing regex tests for new 2-group capture.
+- `test_mcp_path_no_anthropic.py` — 2 new tests: `test_run_journey_not_in_mcp_tools`,
+  `test_load_journey_in_mcp_tools`.
+- `test_packaging_deps.py` — 2 new tests: `test_pinned_sha_in_package_data`,
+  `test_no_path_file_data_undeclared`.
+- `tests/test_tool_load_journey.py` (NEW) — 6 tests: happy path, with persona, field completeness,
+  missing path, bad path, and `test_load_journey_no_anthropic_import`.
+
+### Source
+
+INIT-2026-547. First release with WDA real-device bootstrap correctly implemented.
+536 unit tests pass; 0 failures.
+
+---
+
 ## [1.0.0a6] — 2026-05-04
 
 ### Documentation

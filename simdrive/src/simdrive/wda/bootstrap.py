@@ -10,17 +10,26 @@ Algorithm overview:
   3. Clone WDA at pinned SHA into ~/.simdrive/wda/<udid>/source/
   4. Resolve signing identity from keychain or explicit flags
   5. xcodebuild build-for-testing (streams stdout)
-  6. Install via xcrun devicectl device install app
-  7. Launch WDA + tail syslog for ServerURLHere port announcement (15 s)
-  8. Persist ~/.simdrive/wda/<udid>.json registry
+  6. Launch WDA via xcodebuild test-without-building (correct XCTest mechanism)
+  7. Tail xcodebuild stdout for ServerURLHere port announcement (60 s)
+  8. Persist ~/.simdrive/wda/<udid>.json registry (with both ip and port)
   9. Smoke GET /status → {value: {ready: true}}
  10. Print "WDA ready" summary with any manual Trust prompts
+
+Bug fixes (INIT-2026-547):
+  Bug 1 — resolve_signing_identity now filters by team_id before raising ambiguity.
+  Bug 2 — hardware UDID resolved via devicectl; coredevice UUID used only for devicectl cmds.
+  Bug 3 — CODE_SIGN_IDENTITY="Apple Development" + CODE_SIGN_STYLE=Automatic + -allowProvisioningUpdates.
+  Bug 4 — OTHER_CFLAGS="-Wno-reserved-identifier" prevents clang -Wreserved-identifier errors.
+  Bug 5+6 — WDA launched via xcodebuild test-without-building (not devicectl device process launch).
+             Port + IP captured from xcodebuild stdout (WDA announces WiFi IP, not localhost).
 
 All subprocess.run calls are direct (not wrapped) so tests can patch via
 unittest.mock.patch("simdrive.wda.bootstrap.subprocess.run").
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -50,14 +59,16 @@ from .errors import (
 
 _PINNED_SHA_FILE = Path(__file__).parent / "PINNED_SHA.txt"
 
-# How long to tail syslog waiting for the ServerURLHere announcement.
-_PORT_DISCOVERY_TIMEOUT_S = 15
+# How long to tail xcodebuild stdout waiting for the ServerURLHere announcement.
+_PORT_DISCOVERY_TIMEOUT_S = 60
 
 # WDA default port (user may override via --wda-port).
 _WDA_DEFAULT_PORT = 8100
 
-# Pattern emitted by WDA when it binds its HTTP listener.
-_SERVER_URL_RE = re.compile(r"ServerURLHere->http://[^:]+:(\d+)<-")
+# Pattern emitted by WDA when it binds its HTTP listener (xcodebuild stdout).
+# Captures both host/IP (group 1) and port (group 2).
+# Example: ServerURLHere->http://192.168.1.26:8100<-ServerURLHere
+_SERVER_URL_RE = re.compile(r"ServerURLHere->http://([^:]+):(\d+)<-")
 
 # WDA bundle identifier (Appium fork default, matches xcodebuild scheme).
 _WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
@@ -134,6 +145,57 @@ def verify_device_ready(udid: str) -> None:
 
     if missing:
         raise wda_device_not_ready(udid, missing)
+
+
+# ─── Hardware UDID resolution (Bug 2) ────────────────────────────────────────
+
+
+def resolve_hardware_udid(coredevice_uuid: str) -> str:
+    """Resolve the hardware UDID from a CoreDevice pairing UUID.
+
+    On iOS 17+ / Xcode 16+, `xcrun devicectl` commands accept the CoreDevice
+    pairing UUID, but `xcodebuild -destination id=...` requires the hardware
+    UDID. These are different identifiers for the same physical device.
+
+    Parses `xcrun devicectl device info details --device <uuid> --json-output -`
+    and extracts result.hardwareProperties.udid.
+
+    Returns the hardware UDID string. Falls back to coredevice_uuid if the JSON
+    field cannot be read (e.g. older Xcode — where the UDIDs may be the same).
+    """
+    result = subprocess.run(
+        ["xcrun", "devicectl", "device", "info", "details",
+         "--device", coredevice_uuid, "--json-output", "-"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        # Can't resolve — fall back to the supplied UUID and let xcodebuild
+        # handle any mismatch.
+        print(
+            f"[simdrive] Warning: could not resolve hardware UDID via devicectl "
+            f"(exit {result.returncode}); using coredevice UUID for xcodebuild.",
+            flush=True,
+        )
+        return coredevice_uuid
+
+    try:
+        data = json.loads(result.stdout)
+        hw_udid = data["result"]["hardwareProperties"]["udid"]
+        if hw_udid:
+            print(f"[simdrive] Hardware UDID: {hw_udid}", flush=True)
+            return hw_udid
+    except (json.JSONDecodeError, KeyError, TypeError):
+        pass
+
+    print(
+        "[simdrive] Warning: hardwareProperties.udid not found in devicectl output; "
+        "using coredevice UUID for xcodebuild.",
+        flush=True,
+    )
+    return coredevice_uuid
 
 
 # ─── WDA clone ───────────────────────────────────────────────────────────────
@@ -250,7 +312,12 @@ def resolve_signing_identity(
     Resolution order:
       1. If --signing-identity supplied, use it (extract team_id if absent).
       2. Else parse keychain; if exactly one identity → use it.
-      3. Else raise wda_signing_ambiguous / wda_no_signing_identity.
+      3. If team_id supplied, filter identities to those matching team_id.
+      4. Else raise wda_signing_ambiguous / wda_no_signing_identity.
+
+    Bug 1 fix: when multiple certs exist and team_id is supplied, filter by
+    team_id before raising ambiguity. This handles the common case of having
+    two "Apple Development" certs (e.g. one per machine) with different team IDs.
     """
     result = subprocess.run(
         ["security", "find-identity", "-v", "-p", "codesigning"],
@@ -278,6 +345,14 @@ def resolve_signing_identity(
     # Multiple identities — filter to Apple Development / iPhone Developer certs
     # and prefer the ones that contain "Apple Development".
     apple_dev = [i for i in identities if "Apple Development" in i["name"]]
+
+    # Bug 1 fix: when team_id is supplied, filter Apple Dev certs by team_id first.
+    if team_id and apple_dev:
+        team_filtered = [i for i in apple_dev if i["team_id"] == team_id]
+        if len(team_filtered) == 1:
+            identity = team_filtered[0]
+            return identity["name"], team_id
+
     if len(apple_dev) == 1:
         identity = apple_dev[0]
         return identity["name"], team_id or identity["team_id"]
@@ -290,19 +365,25 @@ def resolve_signing_identity(
 
 
 def build_wda(
-    udid: str,
+    coredevice_uuid: str,
     source_dir: Path,
-    signing_identity: str,
     team_id: str,
+    hardware_udid: str,
 ) -> Path:
     """Run xcodebuild build-for-testing for WebDriverAgentRunner.
 
     Streams stdout live (so the user can see progress). Returns the derived
     data path. Raises wda_build_failed with the log path on non-zero exit.
+
+    Bug 3 fix: uses CODE_SIGN_IDENTITY="Apple Development" + CODE_SIGN_STYLE=Automatic
+               instead of the full certificate string, and passes -allowProvisioningUpdates.
+    Bug 4 fix: passes OTHER_CFLAGS="-Wno-reserved-identifier" to suppress clang
+               -Wreserved-identifier errors in WDA v9.9.0 PrivateHeaders on Xcode 16.
+    Bug 2 fix: uses hardware_udid for xcodebuild -destination (not coredevice UUID).
     """
     wda_home = Path(os.environ.get("WDA_REGISTRY_DIR", Path.home() / ".simdrive" / "wda"))
-    derived_data = wda_home / udid / "derived"
-    log_path = wda_home / udid / "build.log"
+    derived_data = wda_home / coredevice_uuid / "derived"
+    log_path = wda_home / coredevice_uuid / "build.log"
     derived_data.mkdir(parents=True, exist_ok=True)
 
     project = source_dir / "WebDriverAgent.xcodeproj"
@@ -310,11 +391,17 @@ def build_wda(
         "xcodebuild",
         "-project", str(project),
         "-scheme", "WebDriverAgentRunner",
-        "-destination", f"id={udid}",
+        "-destination", f"id={hardware_udid}",
         "-derivedDataPath", str(derived_data),
         "build-for-testing",
-        f"CODE_SIGN_IDENTITY={signing_identity}",
+        # Bug 3 fix: generic signing form — no full cert string
+        "CODE_SIGN_IDENTITY=Apple Development",
+        "CODE_SIGN_STYLE=Automatic",
         f"DEVELOPMENT_TEAM={team_id}",
+        # Bug 4 fix: suppress -Wreserved-identifier in WDA v9.9.0 PrivateHeaders
+        "OTHER_CFLAGS=-Wno-reserved-identifier",
+        # Bug 3 fix: allow Xcode to update provisioning profiles automatically
+        "-allowProvisioningUpdates",
     ]
     print("[simdrive] Building WebDriverAgentRunner ...", flush=True)
     print(f"[simdrive] xcodebuild command: {' '.join(cmd)}", flush=True)
@@ -347,7 +434,6 @@ def _find_wda_app_bundle(derived_data: Path) -> Optional[Path]:
         "Build/Products/*-iphoneos/WebDriverAgentRunner*.app",
         "Build/Products/*-iphoneos/*.xctrunner",
     ]
-    import glob
     for pat in patterns:
         matches = glob.glob(str(derived_data / pat))
         if matches:
@@ -355,11 +441,29 @@ def _find_wda_app_bundle(derived_data: Path) -> Optional[Path]:
     return None
 
 
-def install_wda(udid: str, derived_data: Path) -> str:
+def _find_xctestrun(derived_data: Path) -> Optional[Path]:
+    """Find the .xctestrun file produced by xcodebuild build-for-testing.
+
+    xcodebuild writes:
+      <derived>/Build/Products/WebDriverAgentRunner_iphoneos*.xctestrun
+    """
+    matches = glob.glob(str(derived_data / "Build/Products/WebDriverAgentRunner_iphoneos*.xctestrun"))
+    if matches:
+        return Path(matches[0])
+    # Fallback: any .xctestrun in Build/Products
+    matches = glob.glob(str(derived_data / "Build/Products/*.xctestrun"))
+    if matches:
+        return Path(matches[0])
+    return None
+
+
+def install_wda(coredevice_uuid: str, derived_data: Path) -> str:
     """Install the WDA app bundle via xcrun devicectl.
 
     Returns the bundle identifier of the installed app.
     Raises wda_install_failed on non-zero exit.
+
+    Uses coredevice_uuid (not hardware UDID) for devicectl commands.
     """
     app_bundle = _find_wda_app_bundle(derived_data)
     if app_bundle is None:
@@ -368,10 +472,21 @@ def install_wda(udid: str, derived_data: Path) -> str:
             "Run with --rebuild to trigger a fresh build."
         )
 
-    print(f"[simdrive] Installing {app_bundle.name} on device {udid} ...", flush=True)
+    # Uninstall any old WDA to avoid signing/team conflicts.
+    print(f"[simdrive] Uninstalling old WDA (if present) from device {coredevice_uuid} ...", flush=True)
+    subprocess.run(
+        ["xcrun", "devicectl", "device", "uninstall", "app",
+         "--device", coredevice_uuid, "--bundle-id", _WDA_BUNDLE_ID],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,  # Non-zero is OK — WDA may not be installed yet
+    )
+
+    print(f"[simdrive] Installing {app_bundle.name} on device {coredevice_uuid} ...", flush=True)
     result = subprocess.run(
         ["xcrun", "devicectl", "device", "install", "app",
-         "--device", udid, str(app_bundle)],
+         "--device", coredevice_uuid, str(app_bundle)],
         capture_output=True,
         text=True,
         timeout=120,
@@ -384,80 +499,88 @@ def install_wda(udid: str, derived_data: Path) -> str:
     return _WDA_BUNDLE_ID
 
 
-# ─── launch + port discovery ─────────────────────────────────────────────────
+# ─── launch + port discovery (Bug 5+6) ───────────────────────────────────────
 
 
-def _tail_console_for_port(udid: str, timeout_s: float) -> Optional[int]:
-    """Tail the device console for the WDA ServerURLHere announcement.
+def launch_and_discover_port(
+    coredevice_uuid: str,
+    derived_data: Path,
+    hardware_udid: str,
+    bundle_id: str = _WDA_BUNDLE_ID,
+    wda_port: int = _WDA_DEFAULT_PORT,
+) -> tuple[str, int]:
+    """Launch WDA via xcodebuild test-without-building and discover host+port.
 
-    Spawns `xcrun devicectl device console --device <udid>` in the background
-    and scans its stdout for the magic pattern for up to timeout_s seconds.
-    Returns the port integer, or None on timeout.
+    Bug 5+6 fix:
+    - devicectl device console does not exist in Xcode 16.
+    - devicectl device process launch crashes WDA (it's an XCTest bundle).
+    - Correct mechanism: xcodebuild test-without-building -xctestrun <path>
+    - WDA announces "ServerURLHere->http://<ip>:<port><-" to xcodebuild stdout.
+    - The IP is the device's WiFi IP (NOT localhost) — captured from the announcement.
+
+    Returns (host, port) where host is the device's WiFi IP.
+    Raises wda_port_discovery_timeout if WDA doesn't announce within _PORT_DISCOVERY_TIMEOUT_S.
     """
-    port: Optional[int] = None
-    deadline = time.monotonic() + timeout_s
+    xctestrun = _find_xctestrun(derived_data)
+    if xctestrun is None:
+        raise wda_port_discovery_timeout(
+            coredevice_uuid,
+        )
 
+    print(f"[simdrive] Using xctestrun: {xctestrun}", flush=True)
+    print(
+        f"[simdrive] Launching WDA via xcodebuild test-without-building "
+        f"(target hardware UDID: {hardware_udid}) ...",
+        flush=True,
+    )
+
+    cmd = [
+        "xcodebuild", "test-without-building",
+        "-xctestrun", str(xctestrun),
+        "-destination", f"id={hardware_udid}",
+    ]
+
+    # Spawn xcodebuild in background; tail its stdout for the ServerURLHere line.
     proc = subprocess.Popen(
-        ["xcrun", "devicectl", "device", "console", "--device", udid],
+        cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
         text=True,
     )
 
+    host: Optional[str] = None
+    port: Optional[int] = None
+    deadline = time.monotonic() + _PORT_DISCOVERY_TIMEOUT_S
+
     def _reader() -> None:
-        nonlocal port
+        nonlocal host, port
         assert proc.stdout is not None
         for line in proc.stdout:
             m = _SERVER_URL_RE.search(line)
             if m:
-                port = int(m.group(1))
+                host = m.group(1)
+                port = int(m.group(2))
                 break
             if time.monotonic() > deadline:
                 break
 
     t = threading.Thread(target=_reader, daemon=True)
     t.start()
-    t.join(timeout=timeout_s + 1.0)
-    proc.terminate()
-    try:
-        proc.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    return port
+    t.join(timeout=_PORT_DISCOVERY_TIMEOUT_S + 2.0)
 
+    if host is None or port is None:
+        # Kill the xcodebuild process before raising.
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        raise wda_port_discovery_timeout(coredevice_uuid)
 
-def launch_and_discover_port(
-    udid: str,
-    bundle_id: str = _WDA_BUNDLE_ID,
-    wda_port: int = _WDA_DEFAULT_PORT,
-    tunnel_host: str = "",
-) -> tuple[str, int]:
-    """Launch WDA on the device and discover the port it bound to.
-
-    Returns (host, port). host is the tunnel_host if supplied, else 'localhost'.
-    Raises wda_port_discovery_timeout if WDA doesn't announce within 15s.
-    """
-    host = tunnel_host or "localhost"
-
-    # Launch the WDA test runner process on the device.
-    print(f"[simdrive] Launching WDA ({bundle_id}) on device {udid} ...", flush=True)
-    subprocess.run(
-        ["xcrun", "devicectl", "device", "process", "launch",
-         "--device", udid, bundle_id],
-        capture_output=True,
-        text=True,
-        check=False,  # non-zero is acceptable — WDA may already be running
-        timeout=30,
-    )
-
-    print(f"[simdrive] Waiting for WDA port announcement (up to {_PORT_DISCOVERY_TIMEOUT_S}s) ...", flush=True)
-    discovered = _tail_console_for_port(udid, _PORT_DISCOVERY_TIMEOUT_S)
-
-    if discovered is None:
-        raise wda_port_discovery_timeout(udid)
-
-    print(f"[simdrive] WDA listening on {host}:{discovered}", flush=True)
-    return host, discovered
+    # xcodebuild process stays running in background (WDA server is alive as long as it runs).
+    # The caller is responsible for the session lifecycle; we do NOT kill it here.
+    print(f"[simdrive] WDA listening on http://{host}:{port}", flush=True)
+    return host, port
 
 
 # ─── smoke test ──────────────────────────────────────────────────────────────
@@ -467,6 +590,7 @@ def smoke_test(host: str, port: int) -> None:
     """GET http://<host>:<port>/status and assert {value: {ready: true}}.
 
     Raises wda_smoke_failed on mismatch or HTTP error.
+    host is the device's WiFi IP (captured from WDA's ServerURLHere announcement).
     """
     url = f"http://{host}:{port}/status"
     print(f"[simdrive] Smoke testing WDA at {url} ...", flush=True)
@@ -493,29 +617,27 @@ def smoke_test(host: str, port: int) -> None:
 # ─── user-facing Trust guidance ──────────────────────────────────────────────
 
 
-def _print_trust_guidance(signing_identity: str) -> None:
+def _print_trust_guidance(team_id: str) -> None:
     """Print the device-side Trust prompt instructions to stdout.
 
     Called before install so the user knows to watch their device screen.
-    This text is the copyable guidance spec'd in the prompt.
     """
     print("", flush=True)
     print("=" * 72, flush=True)
     print("DEVICE ACTION MAY BE REQUIRED", flush=True)
     print("=" * 72, flush=True)
     print(
-        f"If this is the first time installing a build signed with:\n"
-        f"  {signing_identity}\n"
+        f"If this is the first time installing a build signed with team {team_id}:\n"
         f"\n"
         f"iOS will show an 'Untrusted Developer' alert on the device.\n"
         f"To trust the certificate:\n"
         f"\n"
         f"  Settings → General → VPN & Device Management\n"
-        f"    → {signing_identity}\n"
+        f"    → Your developer certificate\n"
         f"    → Trust\n"
         f"\n"
         f"After tapping Trust, re-run:\n"
-        f"  simdrive bootstrap-device <udid> --rebuild\n",
+        f"  simdrive bootstrap-device <udid> --team-id {team_id}\n",
         flush=True,
     )
     print("=" * 72, flush=True)
@@ -535,6 +657,9 @@ def bootstrap_device(
 ) -> dict:
     """Full WDA bootstrap sequence. Prints progress to stdout.
 
+    udid: CoreDevice pairing UUID (as shown by `xcrun devicectl list devices`).
+          The hardware UDID for xcodebuild is resolved automatically via devicectl.
+
     Returns the registry dict that was persisted to ~/.simdrive/wda/<udid>.json.
     All steps raise a typed SimdriveError subclass on failure.
     """
@@ -546,6 +671,10 @@ def bootstrap_device(
     verify_device_ready(udid)
     print("[simdrive] Device ready (paired, Developer Mode, DDI).", flush=True)
 
+    # 2b. Resolve hardware UDID (Bug 2 fix).
+    # udid here is the CoreDevice pairing UUID; xcodebuild needs the hardware UDID.
+    hardware_udid = resolve_hardware_udid(udid)
+
     # 3. Clone WDA
     source_dir = clone_wda(udid, rebuild=rebuild)
 
@@ -555,35 +684,35 @@ def bootstrap_device(
     print(f"[simdrive] Team ID:          {resolved_team}", flush=True)
 
     # Trust guidance before install (device screen may prompt).
-    _print_trust_guidance(resolved_identity)
+    _print_trust_guidance(resolved_team)
 
-    # 5. Build
-    derived_data = build_wda(udid, source_dir, resolved_identity, resolved_team)
+    # 5. Build (Bug 2, 3, 4 fixes applied inside build_wda)
+    derived_data = build_wda(udid, source_dir, resolved_team, hardware_udid)
 
-    # 6. Install
+    # 6. Install (uses coredevice UUID for devicectl)
     bundle_id = install_wda(udid, derived_data)
 
-    # 7. Launch + port discovery
-    # For wireless/CoreDevice tunnel use the well-known tunnel IPv6 address if
-    # provided via env; otherwise fall back to localhost which works for USB.
-    tunnel_host = os.environ.get("WDA_TUNNEL_HOST", "")
-    host, port = launch_and_discover_port(udid, bundle_id, wda_port, tunnel_host)
+    # 7. Launch + port discovery (Bug 5+6 fix: xcodebuild test-without-building)
+    host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
 
-    # 8. Persist registry
+    # 8. Persist registry (includes both ip and port — Bug 6 fix)
     import time as _time
     entry = {
         "wda_bundle_id": bundle_id,
         "install_path": str(_find_wda_app_bundle(derived_data) or ""),
         "last_built_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         "host": host,
+        "ip": host,   # explicit ip field for device WiFi address
         "port": port,
         "signing_identity": resolved_identity,
         "team_id": resolved_team,
+        "hardware_udid": hardware_udid,
+        "coredevice_uuid": udid,
     }
     registry_path = registry.save(udid, entry)
     print(f"[simdrive] Registry written to {registry_path}", flush=True)
 
-    # 9. Smoke test
+    # 9. Smoke test using the device's WiFi IP
     smoke_test(host, port)
 
     # 10. Success summary
@@ -591,10 +720,11 @@ def bootstrap_device(
     print("=" * 72, flush=True)
     print("WDA READY", flush=True)
     print("=" * 72, flush=True)
-    print(f"  Device UDID:      {udid}", flush=True)
+    print(f"  CoreDevice UUID:  {udid}", flush=True)
+    print(f"  Hardware UDID:    {hardware_udid}", flush=True)
     print(f"  WDA endpoint:     http://{host}:{port}", flush=True)
     print(f"  Bundle ID:        {bundle_id}", flush=True)
-    print(f"  Signing identity: {resolved_identity}", flush=True)
+    print(f"  Team ID:          {resolved_team}", flush=True)
     print(f"  Registry:         {registry_path}", flush=True)
     print("", flush=True)
     print("Next step: start a simdrive session with target=device:", flush=True)

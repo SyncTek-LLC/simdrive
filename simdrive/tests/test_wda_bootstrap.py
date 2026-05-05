@@ -270,6 +270,27 @@ def test_resolve_raises_ambiguous():
     assert len(exc.value.details["identities"]) == 2
 
 
+# Bug 1 fix: when team_id supplied and multiple Apple Dev certs exist, filter by team_id.
+def test_resolve_signing_identity_filters_by_team_id():
+    """When 2 Apple Development certs exist + team_id supplied, returns the matching one."""
+    from simdrive.wda.bootstrap import resolve_signing_identity
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=TWO_IDENTITY_OUTPUT)
+        name, team = resolve_signing_identity(team_id="E52N8732YT")
+    assert "Maurice" in name
+    assert team == "E52N8732YT"
+
+
+def test_resolve_signing_identity_filters_by_team_id_second():
+    """When 2 Apple Development certs exist + team_id for the second, returns the second."""
+    from simdrive.wda.bootstrap import resolve_signing_identity
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=TWO_IDENTITY_OUTPUT)
+        name, team = resolve_signing_identity(team_id="36Z53T97PH")
+    assert "Personal" in name
+    assert team == "36Z53T97PH"
+
+
 def test_resolve_auto_selects_when_one_apple_dev_among_many():
     """If there are mixed cert types but exactly one 'Apple Development', auto-select it."""
     mixed = (
@@ -283,6 +304,171 @@ def test_resolve_auto_selects_when_one_apple_dev_among_many():
         name, team = resolve_signing_identity()
     assert "Maurice" in name
     assert team == "E52N8732YT"
+
+
+# ── Bug 2: hardware UDID resolution ──────────────────────────────────────────
+
+
+_DEVICECTL_HW_JSON = json.dumps({
+    "result": {
+        "hardwareProperties": {
+            "udid": "00008130-001A2B3C4D5E6F70",
+            "marketingName": "iPhone 17 Pro Max",
+        }
+    }
+})
+
+
+def test_bootstrap_resolves_hardware_udid_via_devicectl():
+    """resolve_hardware_udid calls devicectl device info details --json-output - and parses hardwareProperties.udid."""
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=_DEVICECTL_HW_JSON)
+        from simdrive.wda.bootstrap import resolve_hardware_udid
+        hw_udid = resolve_hardware_udid("31471BBD-6889-5DAC-9497-BCD565AB1CD6")
+    assert hw_udid == "00008130-001A2B3C4D5E6F70"
+    # Verify the command included --json-output -
+    call_args = mock_run.call_args[0][0]
+    assert "--json-output" in call_args
+    assert "-" in call_args
+
+
+def test_resolve_hardware_udid_falls_back_on_nonzero():
+    """When devicectl exits non-zero, falls back to the supplied coredevice UUID."""
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="device not found")
+        from simdrive.wda.bootstrap import resolve_hardware_udid
+        result = resolve_hardware_udid("FALLBACK-UUID")
+    assert result == "FALLBACK-UUID"
+
+
+def test_resolve_hardware_udid_falls_back_on_missing_field():
+    """When JSON lacks hardwareProperties.udid, falls back to the supplied UUID."""
+    empty_json = json.dumps({"result": {"hardwareProperties": {}}})
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=empty_json)
+        from simdrive.wda.bootstrap import resolve_hardware_udid
+        result = resolve_hardware_udid("FALLBACK-UUID-2")
+    assert result == "FALLBACK-UUID-2"
+
+
+# ── Bug 3: correct signing flags ──────────────────────────────────────────────
+
+
+def test_build_wda_uses_correct_signing_flags(tmp_path):
+    """build_wda uses CODE_SIGN_IDENTITY=Apple Development + CODE_SIGN_STYLE=Automatic + -allowProvisioningUpdates + OTHER_CFLAGS."""
+    source_dir = tmp_path / "source"
+    (source_dir / "WebDriverAgent.xcodeproj").mkdir(parents=True)
+
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        from simdrive.wda.bootstrap import build_wda
+        build_wda(
+            coredevice_uuid="TEST-UUID",
+            source_dir=source_dir,
+            team_id="E52N8732YT",
+            hardware_udid="00008130-001A2B3C4D5E6F70",
+        )
+
+    call_args = mock_run.call_args[0][0]
+    cmd_str = " ".join(call_args)
+    # Bug 3 fix assertions
+    assert "CODE_SIGN_IDENTITY=Apple Development" in cmd_str
+    assert "CODE_SIGN_STYLE=Automatic" in cmd_str
+    assert "DEVELOPMENT_TEAM=E52N8732YT" in cmd_str
+    assert "-allowProvisioningUpdates" in cmd_str
+    # Bug 4 fix assertion
+    assert "OTHER_CFLAGS=-Wno-reserved-identifier" in cmd_str
+    # Bug 2 fix: xcodebuild uses hardware UDID, not coredevice UUID
+    assert "id=00008130-001A2B3C4D5E6F70" in cmd_str
+
+
+# ── Bug 5+6: xcodebuild test-without-building launch ─────────────────────────
+
+
+def test_launch_uses_xcodebuild_test_without_building(tmp_path):
+    """launch_and_discover_port spawns xcodebuild test-without-building, NOT devicectl."""
+    # Create a fake xctestrun file
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    wda_output = (
+        "Test Suite started\n"
+        "ServerURLHere->http://192.168.1.26:8100<-ServerURLHere\n"
+    )
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        import io
+        mock_proc = MagicMock()
+        mock_proc.stdout = io.StringIO(wda_output)
+        mock_popen.return_value = mock_proc
+
+        from simdrive.wda.bootstrap import launch_and_discover_port
+        host, port = launch_and_discover_port(
+            coredevice_uuid="TEST-UUID",
+            derived_data=tmp_path,
+            hardware_udid="HW-UDID-123",
+        )
+
+    assert host == "192.168.1.26"
+    assert port == 8100
+
+    # Verify xcodebuild test-without-building was called (NOT devicectl)
+    popen_cmd = mock_popen.call_args[0][0]
+    assert "xcodebuild" in popen_cmd
+    assert "test-without-building" in popen_cmd
+    assert "-xctestrun" in popen_cmd
+    assert "devicectl" not in " ".join(popen_cmd)
+
+
+def test_port_discovery_parses_serverurlhere_from_xcodebuild_stdout(tmp_path):
+    """Port discovery correctly parses the IP and port from xcodebuild stdout."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    # Test with a different IP/port combination
+    wda_output = "ServerURLHere->http://10.0.0.5:9200<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        import io
+        mock_proc = MagicMock()
+        mock_proc.stdout = io.StringIO(wda_output)
+        mock_popen.return_value = mock_proc
+
+        from simdrive.wda.bootstrap import launch_and_discover_port
+        host, port = launch_and_discover_port(
+            coredevice_uuid="TEST-UUID",
+            derived_data=tmp_path,
+            hardware_udid="HW-UDID-456",
+        )
+
+    assert host == "10.0.0.5"
+    assert port == 9200
+
+
+def test_server_url_regex_captures_host_and_port():
+    """_SERVER_URL_RE captures both host (group 1) and port (group 2)."""
+    from simdrive.wda.bootstrap import _SERVER_URL_RE
+
+    line = "ServerURLHere->http://192.168.1.26:8100<-ServerURLHere"
+    m = _SERVER_URL_RE.search(line)
+    assert m is not None
+    assert m.group(1) == "192.168.1.26"
+    assert m.group(2) == "8100"
+
+
+def test_server_url_regex_captures_localhost():
+    """_SERVER_URL_RE works with localhost too."""
+    from simdrive.wda.bootstrap import _SERVER_URL_RE
+
+    line = "2026-05-02 12:00:01 ServerURLHere->http://localhost:8100<-"
+    m = _SERVER_URL_RE.search(line)
+    assert m is not None
+    assert m.group(1) == "localhost"
+    assert m.group(2) == "8100"
 
 
 # ── _parse_pinned_sha ─────────────────────────────────────────────────────────
@@ -303,7 +489,9 @@ def test_server_url_regex_matches():
     line = "2026-05-02 12:00:01 ServerURLHere->http://localhost:8100<-"
     m = _SERVER_URL_RE.search(line)
     assert m is not None
-    assert m.group(1) == "8100"
+    # group(1) = host, group(2) = port
+    assert m.group(1) == "localhost"
+    assert m.group(2) == "8100"
 
 
 def test_server_url_regex_no_match():
@@ -316,7 +504,8 @@ def test_server_url_regex_with_ip():
     line = "ServerURLHere->http://192.168.1.5:9100<-"
     m = _SERVER_URL_RE.search(line)
     assert m is not None
-    assert m.group(1) == "9100"
+    assert m.group(1) == "192.168.1.5"
+    assert m.group(2) == "9100"
 
 
 # ── smoke_test ────────────────────────────────────────────────────────────────
