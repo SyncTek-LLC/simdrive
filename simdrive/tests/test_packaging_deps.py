@@ -204,6 +204,27 @@ def _extract_toplevel_third_party(py_file: Path) -> list[str]:
 # Tests
 # ---------------------------------------------------------------------------
 
+def _load_project_dependencies() -> list[str]:
+    """
+    Return the raw dependency strings from [project.dependencies].
+    Used by regression tests that need to inspect the raw spec (e.g. version pins).
+    """
+    text = PYPROJECT_PATH.read_text()
+    m = re.search(r"\[project\]\s*.*?dependencies\s*=\s*\[([^\]]*)\]", text, re.DOTALL)
+    if not m:
+        raise ValueError("Could not find [project] dependencies in pyproject.toml")
+    block = m.group(1)
+    deps: list[str] = []
+    for line in block.splitlines():
+        line = line.strip().strip('",').strip("',")
+        # Strip inline comments
+        line = line.split("#")[0].strip()
+        if not line:
+            continue
+        deps.append(line)
+    return deps
+
+
 def test_declared_deps_contains_requests() -> None:
     """
     Test 1: requests must appear in [project.dependencies].
@@ -251,4 +272,24 @@ def test_all_toplevel_imports_declared() -> None:
         "(these crash on a clean `pip install simdrive`):\n"
         + "\n".join(undeclared)
         + "\n\nAdd the missing dist names to [project.dependencies] in pyproject.toml."
+    )
+
+
+def test_httpx_pinned_below_1_0() -> None:
+    """httpx must be pinned <1.0.
+
+    REASON: mcp 1.27.0 declares `httpx>=0.27.1` with no upper bound. With
+    `pip install --pre`, the resolver picks `httpx 1.0.dev3` (a real
+    pre-release on PyPI), which breaks `httpx-sse` and the MCP transport
+    layer. Until upstream mcp adds an upper bound, simdrive must defend
+    its users with a top-level pin. Caught by DeployAtlas pre-publish
+    smoke for 1.0.0a4 (INIT-2026-544).
+    """
+    deps = _load_project_dependencies()
+    httpx_specs = [d for d in deps if d.startswith("httpx")]
+    assert httpx_specs, "httpx not declared in [project.dependencies]"
+    spec = httpx_specs[0]
+    assert "<1.0" in spec or "<1," in spec or "<2" in spec, (
+        f"httpx must be pinned below 1.0; got {spec!r}. "
+        f"Reason: mcp 1.27.0 unbounded httpx>=0.27.1 + pip --pre = httpx 1.0.dev3 = breaks httpx-sse."
     )
