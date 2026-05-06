@@ -445,6 +445,69 @@ def test_build_wda_uses_correct_signing_flags(tmp_path):
     assert "id=00008130-001A2B3C4D5E6F70" in cmd_str
 
 
+# ── B4: FAILED-before-SUCCEEDED retry classification ─────────────────────────
+
+
+def test_classify_build_log_emits_info_on_recoverable_retry(caplog):
+    """B4: when the build log contains FAILED then SUCCEEDED, emit one INFO line
+    explaining the recoverable -allowProvisioningUpdates round-trip and keep
+    the FAILED token at DEBUG (so log scrapers don't panic).
+    """
+    log_text = (
+        "=== BUILD TARGET WebDriverAgentRunner ===\n"
+        "** BUILD FAILED **\n"
+        "Provisioning profile not found, fetching ...\n"
+        "** BUILD SUCCEEDED **\n"
+    )
+    import logging
+    from simdrive.wda.bootstrap import _classify_build_log
+
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.bootstrap"):
+        _classify_build_log(log_text)
+
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records == [], f"unexpected ERROR-level records: {error_records}"
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_records) == 1, f"expected exactly one INFO record, got {info_records}"
+    assert "provisioning" in info_records[0].getMessage().lower()
+    assert "expected" in info_records[0].getMessage().lower()
+
+
+def test_classify_build_log_silent_on_clean_success(caplog):
+    """B4: a log with only SUCCEEDED (no FAILED) emits nothing — we never want
+    to spam INFO when there was no retry to explain."""
+    log_text = (
+        "=== BUILD TARGET WebDriverAgentRunner ===\n"
+        "** BUILD SUCCEEDED **\n"
+    )
+    import logging
+    from simdrive.wda.bootstrap import _classify_build_log
+
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.bootstrap"):
+        _classify_build_log(log_text)
+
+    assert caplog.records == []
+
+
+def test_classify_build_log_silent_when_failed_after_succeeded(caplog):
+    """B4: SUCCEEDED then FAILED later (e.g. a follow-up phase) is NOT the
+    recoverable retry pattern — don't emit the calming INFO."""
+    log_text = (
+        "** BUILD SUCCEEDED **\n"
+        "Some later phase\n"
+        "** BUILD FAILED **\n"
+    )
+    import logging
+    from simdrive.wda.bootstrap import _classify_build_log
+
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.bootstrap"):
+        _classify_build_log(log_text)
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert info_records == []
+
+
 # ── Bug 5+6: xcodebuild test-without-building launch ─────────────────────────
 
 

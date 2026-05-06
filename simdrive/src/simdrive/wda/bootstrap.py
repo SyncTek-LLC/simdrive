@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 import shutil
@@ -41,6 +42,8 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+
+_LOG = logging.getLogger("simdrive.wda.bootstrap")
 
 from . import registry
 from .errors import (
@@ -560,6 +563,14 @@ def build_wda(
     Bug 4 fix: passes OTHER_CFLAGS="-Wno-reserved-identifier" to suppress clang
                -Wreserved-identifier errors in WDA v9.9.0 PrivateHeaders on Xcode 16.
     Bug 2 fix: uses hardware_udid for xcodebuild -destination (not coredevice UUID).
+
+    B4 (FAILED-before-SUCCEEDED retry): the very first build that touches a new
+    team often emits a single `** BUILD FAILED **` line before xcodebuild
+    fetches the provisioning profile via -allowProvisioningUpdates and
+    immediately retries to a `** BUILD SUCCEEDED **`. The overall returncode is
+    zero. Naive log scrapers panic on the FAILED token. When we detect that
+    pattern we emit a single calming INFO line so users + downstream tooling
+    don't misread the recoverable retry as a real failure.
     """
     wda_home = Path(os.environ.get("WDA_REGISTRY_DIR", Path.home() / ".simdrive" / "wda"))
     derived_data = wda_home / coredevice_uuid / "derived"
@@ -598,8 +609,42 @@ def build_wda(
     if proc.returncode != 0:
         raise wda_build_failed(str(log_path))
 
+    # B4: the first invocation against a new team often logs `** BUILD FAILED **`
+    # before -allowProvisioningUpdates fetches the profile and the retry hits
+    # `** BUILD SUCCEEDED **`. Returncode is 0; the log just looks scary.
+    try:
+        _classify_build_log(log_path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        pass
+
     print(f"[simdrive] Build succeeded. Derived data: {derived_data}", flush=True)
     return derived_data
+
+
+_BUILD_FAILED_RE = re.compile(r"\*\*\s*BUILD FAILED\s*\*\*", re.IGNORECASE)
+_BUILD_SUCCEEDED_RE = re.compile(r"\*\*\s*BUILD SUCCEEDED\s*\*\*", re.IGNORECASE)
+
+
+def _classify_build_log(log_text: str) -> None:
+    """Distinguish the recoverable FAILED→SUCCEEDED retry from a real failure.
+
+    Called only when xcodebuild's overall returncode is 0. If the log shows a
+    BUILD FAILED line followed (later in the same stream) by a BUILD SUCCEEDED
+    line, the whole sequence was the -allowProvisioningUpdates round-trip:
+    log the FAILED tokens at DEBUG and emit a single INFO line so naive log
+    scrapers don't misread the retry as a fatal error.
+    """
+    failed = _BUILD_FAILED_RE.search(log_text)
+    if not failed:
+        return
+    succeeded = _BUILD_SUCCEEDED_RE.search(log_text, pos=failed.end())
+    if not succeeded:
+        return
+    _LOG.debug("xcodebuild emitted BUILD FAILED before BUILD SUCCEEDED (recoverable retry)")
+    _LOG.info(
+        "First attempt failed pending provisioning fetch; retry succeeded after "
+        "-allowProvisioningUpdates round-trip (expected)."
+    )
 
 
 # ─── install ─────────────────────────────────────────────────────────────────
