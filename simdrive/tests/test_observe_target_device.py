@@ -118,8 +118,10 @@ def test_observe_target_device_return_shape(tmp_path):
     assert result["annotated_path"] is None
 
 
-def test_observe_target_device_screenshot_b64_is_valid_png(tmp_path):
-    """screenshot_b64 in the result must decode to a valid PNG."""
+def test_observe_target_device_omits_screenshot_b64_by_default(tmp_path):
+    """Default observe response must NOT include screenshot_b64 — the 101k-char
+    payload overflows the MCP token budget. screenshot_path is returned, so
+    callers that need raw bytes can read the file."""
     _make_device_session(tmp_path)
 
     mock_client = MagicMock()
@@ -131,6 +133,28 @@ def test_observe_target_device_screenshot_b64_is_valid_png(tmp_path):
 
         from simdrive.server import tool_observe
         result = tool_observe({"session_id": "obstest"})
+
+    assert "screenshot_b64" not in result, (
+        "screenshot_b64 must be opt-in via include_screenshot_b64=True; "
+        "default response must omit it to stay within MCP token budget."
+    )
+    assert "screenshot_path" in result
+
+
+def test_observe_target_device_includes_screenshot_b64_when_requested(tmp_path):
+    """When include_screenshot_b64=True, screenshot_b64 must be included and
+    decode to a valid PNG."""
+    _make_device_session(tmp_path)
+
+    mock_client = MagicMock()
+    mock_client.screenshot_any.return_value = _ONE_PX_PNG
+
+    with patch("simdrive.wda.registry.load", return_value=_registry_entry()), \
+         patch("simdrive.wda.client.WdaClient") as mock_cls:
+        mock_cls.return_value = mock_client
+
+        from simdrive.server import tool_observe
+        result = tool_observe({"session_id": "obstest", "include_screenshot_b64": True})
 
     assert "screenshot_b64" in result
     decoded = base64.b64decode(result["screenshot_b64"])
