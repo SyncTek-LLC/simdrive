@@ -162,11 +162,11 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
             from . import device as _device_mod
             _device_mod.launch_app(hardware_udid, app_bundle_id)
         except Exception as exc:
-            raise errors.no_device({
-                "target": "device",
-                "udid": udid,
-                "launch_failed": str(exc),
-            })
+            raise errors.device_launch_failed(
+                udid=udid,
+                bundle_id=app_bundle_id,
+                reason=str(exc),
+            )
 
     # Open a default WDA session so the input verbs (tap/swipe/type_text/
     # press_key) work immediately. Without this, every input call returns
