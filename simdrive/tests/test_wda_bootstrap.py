@@ -445,6 +445,75 @@ def test_build_wda_uses_correct_signing_flags(tmp_path):
     assert "id=00008130-001A2B3C4D5E6F70" in cmd_str
 
 
+# ── D8: device + os metadata extraction ─────────────────────────────────────
+
+
+def test_extract_device_metadata_from_status_real_device():
+    """D8: pulls os.version from a real-device WDA /status payload."""
+    from simdrive.wda.bootstrap import extract_device_metadata_from_status
+
+    status = {
+        "value": {
+            "build": {"productBundleIdentifier": "com.facebook.WebDriverAgentRunner"},
+            "ios": {"ip": "192.168.1.26"},
+            "os": {"name": "iOS", "version": "26.3.1", "sdkVersion": "26.3"},
+            "ready": True,
+            "sessionId": None,
+        }
+    }
+    meta = extract_device_metadata_from_status(status)
+    assert meta == {"os_version": "26.3.1"}
+
+
+def test_extract_device_metadata_from_status_handles_missing_os():
+    """D8: missing fields default to empty string (no KeyError)."""
+    from simdrive.wda.bootstrap import extract_device_metadata_from_status
+
+    assert extract_device_metadata_from_status({}) == {"os_version": ""}
+    assert extract_device_metadata_from_status({"value": {"ready": True}}) == {"os_version": ""}
+
+
+def test_fetch_device_name_via_devicectl_returns_name():
+    """D8: parses result.deviceProperties.name from devicectl JSON."""
+    from simdrive.wda.bootstrap import fetch_device_name_via_devicectl
+    payload = json.dumps({
+        "result": {
+            "deviceProperties": {"name": "Moes Max", "osVersionNumber": "26.3.1"},
+            "hardwareProperties": {"marketingName": "iPhone 17 Pro Max"},
+        }
+    })
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=payload)
+        assert fetch_device_name_via_devicectl("UDID-X") == "Moes Max"
+
+
+def test_fetch_device_name_via_devicectl_returns_empty_on_failure():
+    """D8: returns "" on any devicectl error so callers can fall back cleanly."""
+    from simdrive.wda.bootstrap import fetch_device_name_via_devicectl
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        assert fetch_device_name_via_devicectl("UDID-X") == ""
+
+
+def test_smoke_test_returns_status_body_for_metadata_capture():
+    """D8: smoke_test must return the parsed body so bootstrap_device can pull
+    os_version out of /status without re-fetching."""
+    import httpx as _httpx
+    body = {"value": {"ready": True, "os": {"version": "26.3.1"}}}
+    with patch("simdrive.wda.bootstrap.httpx") as mock_httpx:
+        mock_resp = MagicMock()
+        mock_resp.is_success = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = body
+        mock_httpx.get.return_value = mock_resp
+        mock_httpx.TransportError = _httpx.TransportError
+
+        from simdrive.wda.bootstrap import smoke_test
+        returned = smoke_test("192.168.1.26", 8100)
+
+    assert returned == body
+
+
 # ── B4: FAILED-before-SUCCEEDED retry classification ─────────────────────────
 
 
@@ -1021,8 +1090,10 @@ def test_wda_up_relaunches_from_registry_without_rebuild(tmp_path):
 
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen, \
          patch("simdrive.wda.bootstrap.smoke_test") as mock_smoke, \
-         patch("simdrive.wda.bootstrap.build_wda") as mock_build:
+         patch("simdrive.wda.bootstrap.build_wda") as mock_build, \
+         patch("simdrive.wda.bootstrap.fetch_device_name_via_devicectl", return_value=""):
         mock_popen.side_effect = _fake_popen("TEST-UP-UUID", wda_output)
+        mock_smoke.return_value = {"value": {"ready": True, "os": {"version": "26.3.1"}}}
 
         from simdrive.wda.bootstrap import wda_up
         entry = wda_up("TEST-UP-UUID")
@@ -1032,6 +1103,43 @@ def test_wda_up_relaunches_from_registry_without_rebuild(tmp_path):
     mock_smoke.assert_called_once()
     assert entry["host"] == "192.168.1.99"
     assert entry["port"] == 8100
+    # D8: wda-up refreshes os_version from /status when present.
+    assert entry["os_version"] == "26.3.1"
+
+
+def test_wda_up_writes_device_name_when_devicectl_succeeds(tmp_path):
+    """D8: when devicectl returns the device name, wda_up persists it to the
+    registry so the next session.start() picks it up automatically."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    from simdrive.wda import registry
+    registry.save("TEST-D8-UUID", {
+        "wda_bundle_id": "com.facebook.WebDriverAgentRunner.xctrunner",
+        "derived_data": str(tmp_path),
+        "xctestrun_path": str(xctestrun),
+        "hardware_udid": "HW-D8",
+        "host": "192.168.1.50",
+        "port": 8100,
+        "team_id": "TEAMD8",
+    })
+
+    wda_output = "ServerURLHere->http://192.168.1.50:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen, \
+         patch("simdrive.wda.bootstrap.smoke_test") as mock_smoke, \
+         patch("simdrive.wda.bootstrap.fetch_device_name_via_devicectl", return_value="Moes Max"):
+        mock_popen.side_effect = _fake_popen("TEST-D8-UUID", wda_output)
+        mock_smoke.return_value = {"value": {"ready": True, "os": {"version": "26.3.1"}}}
+
+        from simdrive.wda.bootstrap import wda_up
+        wda_up("TEST-D8-UUID")
+
+    persisted = registry.load("TEST-D8-UUID")
+    assert persisted["device_name"] == "Moes Max"
+    assert persisted["os_version"] == "26.3.1"
 
 
 def test_wda_up_raises_when_no_registry_entry(tmp_path):

@@ -180,6 +180,51 @@ def test_start_device_session_raises_when_no_udid():
     assert exc_info.value.code == "no_device"
 
 
+# ── D8: device_name + os_version from registry ───────────────────────────────
+
+
+def test_start_device_session_populates_device_name_and_os_version_from_registry(wda_registry_dir):
+    """D8: when the registry entry has device_name + os_version, the
+    tool_session_start response populates them (instead of the legacy
+    "Real Device" / "" defaults)."""
+    entry = dict(FAKE_REGISTRY)
+    entry["device_name"] = "Moes Max"
+    entry["os_version"] = "26.3.1"
+    _write_registry(wda_registry_dir, entry=entry)
+
+    mock_wda = MagicMock()
+    mock_wda.status.return_value = {"value": {"ready": True}}
+    with patch("simdrive.wda.client.WdaClient", return_value=mock_wda):
+        from simdrive import server
+        result = server.tool_session_start({
+            "udid": FAKE_UDID,
+            "target": "device",
+        })
+
+    assert result["device"] == "Moes Max"
+    assert result["os_version"] == "26.3.1"
+
+
+def test_start_device_session_falls_back_when_metadata_missing(wda_registry_dir):
+    """D8 backward compat: a registry entry missing device_name/os_version
+    (e.g. left over from a7) must still produce a session — falling back to
+    'Real Device' and '' instead of raising KeyError."""
+    # FAKE_REGISTRY is the legacy shape (no device_name / os_version).
+    _write_registry(wda_registry_dir)
+
+    mock_wda = MagicMock()
+    mock_wda.status.return_value = {"value": {"ready": True}}
+    with patch("simdrive.wda.client.WdaClient", return_value=mock_wda):
+        from simdrive import server
+        result = server.tool_session_start({
+            "udid": FAKE_UDID,
+            "target": "device",
+        })
+
+    assert result["device"] == "Real Device"
+    assert result["os_version"] == ""
+
+
 # ── D2: default WDA session opened during _start_device ───────────────────────
 
 
