@@ -425,6 +425,25 @@ def test_build_wda_uses_correct_signing_flags(tmp_path):
 # ── Bug 5+6: xcodebuild test-without-building launch ─────────────────────────
 
 
+def _fake_popen(udid: str, wda_output: str):
+    """Build a Popen side_effect that writes wda_output into the per-UDID log file
+    (where the daemonized launch_and_discover_port tails for the ServerURLHere line)
+    and returns a mock process.
+    """
+    from simdrive.wda.bootstrap import _log_path
+
+    def _side_effect(cmd, *args, **kwargs):  # noqa: ARG001
+        log_path = _log_path(udid)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(wda_output, encoding="utf-8")
+        proc = MagicMock()
+        proc.pid = 4242
+        proc.poll.return_value = None
+        return proc
+
+    return _side_effect
+
+
 def test_launch_uses_xcodebuild_test_without_building(tmp_path):
     """launch_and_discover_port spawns xcodebuild test-without-building, NOT devicectl."""
     # Create a fake xctestrun file
@@ -439,10 +458,7 @@ def test_launch_uses_xcodebuild_test_without_building(tmp_path):
     )
 
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(wda_output)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-UUID", wda_output)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         host, port = launch_and_discover_port(
@@ -473,10 +489,7 @@ def test_port_discovery_parses_serverurlhere_from_xcodebuild_stdout(tmp_path):
     wda_output = "ServerURLHere->http://10.0.0.5:9200<-ServerURLHere\n"
 
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(wda_output)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-UUID", wda_output)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         host, port = launch_and_discover_port(
@@ -742,10 +755,7 @@ def test_port_discovery_raises_device_locked_on_unlock_message(tmp_path):
 
     from simdrive.errors import SimdriveError
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(fake_lines)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-LOCKED-UUID", fake_lines)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         with pytest.raises(SimdriveError) as exc_info:
@@ -774,10 +784,7 @@ def test_port_discovery_raises_device_locked_on_device_is_locked_phrase(tmp_path
 
     from simdrive.errors import SimdriveError
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(fake_lines)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-LOCKED-UUID-2", fake_lines)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         with pytest.raises(SimdriveError) as exc_info:
@@ -798,3 +805,143 @@ def test_locked_device_regex_matches_unlock_message():
     assert _LOCKED_DEVICE_RE.search("the device is locked.") is not None
     assert _LOCKED_DEVICE_RE.search("DEVICE IS LOCKED") is not None  # case-insensitive
     assert _LOCKED_DEVICE_RE.search("ServerURLHere->http://192.168.1.1:8100<-") is None  # no match on success
+
+
+# ── B3: daemonization, wda-up, wda-down ──────────────────────────────────────
+
+
+def test_launch_passes_start_new_session_true(tmp_path):
+    """B3: Popen must be invoked with start_new_session=True so the xcodebuild
+    subprocess is detached from the bootstrap CLI's process group and survives
+    the CLI exiting (otherwise SIGHUP cascade kills WDA)."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    (products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun").write_text("<dict/>")
+
+    wda_output = "ServerURLHere->http://192.168.1.50:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        mock_popen.side_effect = _fake_popen("TEST-DAEMON-UUID", wda_output)
+
+        from simdrive.wda.bootstrap import launch_and_discover_port
+        launch_and_discover_port(
+            coredevice_uuid="TEST-DAEMON-UUID",
+            derived_data=tmp_path,
+            hardware_udid="HW-DAEMON",
+        )
+
+    kwargs = mock_popen.call_args.kwargs
+    assert kwargs.get("start_new_session") is True
+
+
+def test_launch_writes_pidfile_and_log(tmp_path):
+    """B3: launch_and_discover_port writes a pidfile + log next to the registry."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    (products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun").write_text("<dict/>")
+
+    wda_output = "ServerURLHere->http://192.168.1.50:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        mock_popen.side_effect = _fake_popen("TEST-PIDFILE-UUID", wda_output)
+
+        from simdrive.wda.bootstrap import launch_and_discover_port, _pid_path, _log_path
+        launch_and_discover_port(
+            coredevice_uuid="TEST-PIDFILE-UUID",
+            derived_data=tmp_path,
+            hardware_udid="HW-PIDFILE",
+        )
+
+    assert _pid_path("TEST-PIDFILE-UUID").exists()
+    assert _pid_path("TEST-PIDFILE-UUID").read_text().strip() == "4242"
+    assert _log_path("TEST-PIDFILE-UUID").exists()
+
+
+def test_wda_up_relaunches_from_registry_without_rebuild(tmp_path):
+    """wda_up reads the registry entry and re-launches WDA without rebuilding."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    from simdrive.wda import registry
+    registry.save("TEST-UP-UUID", {
+        "wda_bundle_id": "com.facebook.WebDriverAgentRunner.xctrunner",
+        "derived_data": str(tmp_path),
+        "xctestrun_path": str(xctestrun),
+        "hardware_udid": "HW-UP",
+        "host": "192.168.1.99",
+        "ip": "192.168.1.99",
+        "port": 8100,
+        "team_id": "TEAMUP",
+    })
+
+    wda_output = "ServerURLHere->http://192.168.1.99:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen, \
+         patch("simdrive.wda.bootstrap.smoke_test") as mock_smoke, \
+         patch("simdrive.wda.bootstrap.build_wda") as mock_build:
+        mock_popen.side_effect = _fake_popen("TEST-UP-UUID", wda_output)
+
+        from simdrive.wda.bootstrap import wda_up
+        entry = wda_up("TEST-UP-UUID")
+
+    # Should NOT have called build_wda — that's the whole point of wda-up.
+    mock_build.assert_not_called()
+    mock_smoke.assert_called_once()
+    assert entry["host"] == "192.168.1.99"
+    assert entry["port"] == 8100
+
+
+def test_wda_up_raises_when_no_registry_entry(tmp_path):
+    """wda_up raises wda_not_bootstrapped if no registry entry exists."""
+    from simdrive.errors import SimdriveError
+    from simdrive.wda.bootstrap import wda_up
+
+    with pytest.raises(SimdriveError) as exc_info:
+        wda_up("UNKNOWN-UUID")
+    assert exc_info.value.code == "wda_not_bootstrapped"
+
+
+def test_wda_down_kills_process_via_pidfile(tmp_path):
+    """wda_down reads the pidfile and SIGTERMs the recorded PID."""
+    from simdrive.wda.bootstrap import _pid_path, wda_down
+
+    pid_file = _pid_path("TEST-DOWN-UUID")
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text("9999", encoding="utf-8")
+
+    with patch("simdrive.wda.bootstrap.os.kill") as mock_kill:
+        result = wda_down("TEST-DOWN-UUID")
+
+    import signal
+    mock_kill.assert_called_once_with(9999, signal.SIGTERM)
+    assert result is True
+    assert not pid_file.exists()  # pidfile cleaned up
+
+
+def test_wda_down_returns_false_when_no_pidfile(tmp_path):
+    """wda_down is a no-op (returns False) when the pidfile is missing."""
+    from simdrive.wda.bootstrap import wda_down
+
+    assert wda_down("MISSING-UUID") is False
+
+
+def test_wda_down_handles_already_dead_process(tmp_path):
+    """wda_down survives ProcessLookupError when the PID is stale."""
+    from simdrive.wda.bootstrap import _pid_path, wda_down
+
+    pid_file = _pid_path("TEST-STALE-UUID")
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text("12345", encoding="utf-8")
+
+    with patch("simdrive.wda.bootstrap.os.kill", side_effect=ProcessLookupError()):
+        result = wda_down("TEST-STALE-UUID")
+
+    assert result is False
+    assert not pid_file.exists()  # pidfile still cleaned up
+
+
+# Real-device coverage: the daemonization survives a real `simdrive bootstrap-device`
+# CLI exit. Covered by the dogfood script against Moes Max (see
+# simdrive/docs/DOGFOOD_FEEDBACK_*.md).
