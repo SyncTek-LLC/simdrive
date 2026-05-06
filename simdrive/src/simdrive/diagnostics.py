@@ -2,16 +2,62 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from . import hid_inject
 
 
 def _run(cmd: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def _devicectl_info_json(subcommand: str, udid: str, timeout: float = 30.0) -> dict:
+    """Run `xcrun devicectl device info <subcommand>` and return parsed JSON.
+
+    devicectl writes JSON only to a file (not stdout), per its --json-output
+    contract. We use a temp file and clean up.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+        json_path = tf.name
+    try:
+        argv = [
+            "xcrun", "devicectl", "device", "info", subcommand,
+            "--device", udid,
+            "--json-output", json_path,
+            "--quiet",
+        ]
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        if res.returncode != 0:
+            raise RuntimeError(
+                f"devicectl device info {subcommand} failed: "
+                f"{(res.stderr or res.stdout).strip()}"
+            )
+        try:
+            with open(json_path) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"devicectl {subcommand} JSON unreadable: {exc}") from exc
+    finally:
+        try:
+            os.unlink(json_path)
+        except OSError:
+            pass
+
+
+def _file_url_to_path(url: str) -> str:
+    """Translate a `file:///...` URL (with %xx escapes) into a filesystem path."""
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    if parsed.scheme != "file":
+        return url
+    return unquote(parsed.path)
 
 
 # ----------------------------- doctor ---------------------------------- #
@@ -123,7 +169,61 @@ def app_state(udid: str, bundle_id: str) -> dict:
     return {"state": "not-running", "bundle_id": bundle_id, "pid": None}
 
 
+# --------------------- app_state — device path ------------------------ #
+
+
+def app_state_device(udid: str, bundle_id: str) -> dict:
+    """Device equivalent of app_state: query devicectl for installed-app URL,
+    then scan the running-process list for an executable URL under that bundle.
+
+    Returns the same shape as the simulator path:
+      {state, bundle_id, pid}
+    where state is "running" / "not-running". (We can't reliably tell
+    foreground vs background from devicectl's process list, so emit "running"
+    rather than the simulator-specific "foreground".)
+    """
+    apps_data = _devicectl_info_json("apps", udid)
+    bundle_url = ""
+    for a in apps_data.get("result", {}).get("apps", []) or []:
+        if a.get("bundleIdentifier") == bundle_id:
+            bundle_url = a.get("url") or ""
+            break
+    if not bundle_url:
+        return {"state": "not-running", "bundle_id": bundle_id, "pid": None}
+
+    procs_data = _devicectl_info_json("processes", udid)
+    for p in procs_data.get("result", {}).get("runningProcesses", []) or []:
+        exe = p.get("executable") or ""
+        if exe.startswith(bundle_url):
+            try:
+                pid = int(p.get("processIdentifier") or 0) or None
+            except (TypeError, ValueError):
+                pid = None
+            return {"state": "running", "bundle_id": bundle_id, "pid": pid}
+    return {"state": "not-running", "bundle_id": bundle_id, "pid": None}
+
+
 # ------------------------------- apps ---------------------------------- #
+
+
+def list_apps_device(udid: str) -> list[dict]:
+    """Device equivalent of list_apps: query devicectl and normalize to the
+    simulator schema (bundle_id, name, version, path).
+    """
+    data = _devicectl_info_json("apps", udid)
+    out: list[dict] = []
+    for a in data.get("result", {}).get("apps", []) or []:
+        bundle_id = a.get("bundleIdentifier") or ""
+        if not bundle_id:
+            continue
+        out.append({
+            "bundle_id": bundle_id,
+            "name": a.get("name") or "",
+            "version": a.get("version") or a.get("bundleVersion") or "",
+            "path": _file_url_to_path(a.get("url") or ""),
+        })
+    out.sort(key=lambda a: a["name"].lower())
+    return out
 
 
 def list_apps(udid: str) -> list[dict]:

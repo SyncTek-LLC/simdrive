@@ -142,6 +142,11 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
 
     wda = WdaClient(host=host, port=port)
 
+    # Confirm WDA is reachable before we open a session — surfaces tunnel
+    # issues with a clear wda_unreachable error instead of a confusing
+    # session-open failure downstream.
+    wda.status()
+
     # Build a Device stub that is compatible with the Session dataclass.
     # os_version is not stored in the registry; use a sentinel so the shape
     # is correct (primitives only read device.udid).
@@ -157,11 +162,18 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
             from . import device as _device_mod
             _device_mod.launch_app(hardware_udid, app_bundle_id)
         except Exception as exc:
-            raise errors.no_device({
-                "target": "device",
-                "udid": udid,
-                "launch_failed": str(exc),
-            })
+            raise errors.device_launch_failed(
+                udid=udid,
+                bundle_id=app_bundle_id,
+                reason=str(exc),
+            )
+
+    # Open a default WDA session so the input verbs (tap/swipe/type_text/
+    # press_key) work immediately. Without this, every input call returns
+    # wda_session_not_open. When app_bundle_id is provided the session is
+    # scoped to that app; otherwise WDA returns a session that targets the
+    # current foreground app / home screen.
+    wda.open_session(app_bundle_id)
 
     sid = secrets.token_urlsafe(8)
     workdir = _workroot() / "sessions" / sid

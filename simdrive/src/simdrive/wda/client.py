@@ -111,20 +111,18 @@ class WdaClient:
         """GET /status → raw WDA status dict."""
         return self._request("GET", "/status")
 
-    def open_session(self, bundle_id: str) -> str:
+    def open_session(self, bundle_id: Optional[str]) -> str:
         """POST /session → WDA session_id.
 
-        WDA accepts an XCUITest capabilities dict; the only required field is
-        bundleId. Returns the string session_id for subsequent calls.
+        WDA accepts an XCUITest capabilities dict. When ``bundle_id`` is
+        provided, the session is scoped to that app. When ``bundle_id`` is
+        None, no bundleId capability is sent — WDA returns a sessionId that
+        lets callers tap/swipe at the home screen / current foreground app.
         """
-        body = {
-            "capabilities": {
-                "alwaysMatch": {
-                    "bundleId": bundle_id,
-                    "shouldWaitForQuiescence": False,
-                }
-            }
-        }
+        always: dict[str, Any] = {"shouldWaitForQuiescence": False}
+        if bundle_id:
+            always["bundleId"] = bundle_id
+        body = {"capabilities": {"alwaysMatch": always}}
         resp = self._request("POST", "/session", json=body)
         # WDA wraps everything in {value: {sessionId: ...}}.
         sid = (resp.get("value") or {}).get("sessionId") or resp.get("sessionId")
