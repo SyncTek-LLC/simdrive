@@ -237,6 +237,17 @@ class WdaClient:
         b64 = (resp.get("value") or "")
         return base64.b64decode(b64)
 
+    def screenshot_any(self) -> bytes:
+        """GET /screenshot → raw PNG bytes (no open session required).
+
+        WDA exposes a top-level /screenshot route that works without a
+        session.  Used by tool_observe on target=device paths where we
+        need a screenshot but have not (and need not) open an app session.
+        """
+        resp = self._request("GET", "/screenshot")
+        b64 = (resp.get("value") or "")
+        return base64.b64decode(b64)
+
     def delete_session(self) -> None:
         """DELETE /session/<id> — close the WDA session."""
         if not self._session_id:

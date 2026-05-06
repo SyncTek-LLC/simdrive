@@ -35,6 +35,7 @@ class Session:
     recorder: Optional["Recorder"] = None  # set by recorder.py to avoid import cycle
     perf_baselines: dict = field(default_factory=dict)  # label -> snapshot dict (for perf_compare)
     started_at: float = field(default_factory=time.time)  # used by `crashes` to filter .ips by mtime
+    wda_client: Optional[object] = None  # WdaClient instance for target="device" sessions
 
 
 def _workroot() -> Path:
@@ -115,22 +116,52 @@ def start(
 
 
 def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
-    """Start a real-device session. Touch input is unavailable in v0.2.x; observe + logs only."""
-    from . import device  # local import to avoid hard requirement when target=simulator
+    """Start a real-device WDA session.
+
+    Reads the WDA registry entry written by ``simdrive bootstrap-device`` to
+    discover the host:port where WebDriverAgent is serving, then creates a
+    Session pointing at that endpoint.  Never calls ``devicectl list`` — the
+    registry is the single source of truth for device connectivity once WDA has
+    been bootstrapped.
+    """
+    from .wda import registry as wda_registry
+    from .wda.client import WdaClient
+    from .wda.errors import wda_not_bootstrapped
+
     if not udid:
         raise errors.no_device({"target": "device", "any_booted": True})
-    rd = device.find_device(udid)
-    if not rd:
-        raise errors.no_device({"target": "device", "udid": udid})
-    # Treat the real device as a Device for type compatibility
-    d = Device(udid=rd.udid, name=rd.name, os_version=rd.model, state="active")
+
+    entry = wda_registry.load(udid)
+    if entry is None:
+        raise wda_not_bootstrapped(udid)
+
+    host = entry.get("host") or entry.get("ip") or "localhost"
+    port = int(entry.get("port", 8100))
+    hardware_udid = entry.get("hardware_udid") or udid
+    device_name = entry.get("device_name", "Real Device")
+
+    wda = WdaClient(host=host, port=port)
+
+    # Build a Device stub that is compatible with the Session dataclass.
+    # os_version is not stored in the registry; use a sentinel so the shape
+    # is correct (primitives only read device.udid).
+    d = Device(
+        udid=udid,           # coredevice UUID — matches the registry filename
+        name=device_name,
+        os_version=entry.get("os_version", ""),
+        state="active",
+    )
 
     if app_bundle_id:
         try:
-            device.launch_app(rd.udid, app_bundle_id)
-        except device.DeviceError as exc:
-            raise errors.no_device({"target": "device", "udid": udid,
-                                    "launch_failed": str(exc)})
+            from . import device as _device_mod
+            _device_mod.launch_app(hardware_udid, app_bundle_id)
+        except Exception as exc:
+            raise errors.no_device({
+                "target": "device",
+                "udid": udid,
+                "launch_failed": str(exc),
+            })
 
     sid = secrets.token_urlsafe(8)
     workdir = _workroot() / "sessions" / sid
@@ -141,6 +172,7 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
         workdir=workdir,
         app_bundle_id=app_bundle_id,
         target="device",
+        wda_client=wda,
     )
     _SESSIONS[sid] = s
     return s

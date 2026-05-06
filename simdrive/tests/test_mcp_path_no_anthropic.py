@@ -230,3 +230,28 @@ class TestMCPPathNoAnthropicImport:
             # mock.patch() calls target the same module objects they imported at
             # collection time (e.g. simdrive.journey.runner.tool_observe).
             sys.modules.update(_simdrive_snapshot)
+
+    def test_run_journey_not_in_mcp_tools(self):
+        """run_journey must NOT be in _TOOLS registry (removed in 1.0.0a7).
+
+        Rationale: most MCP clients (including Claude Code) do not implement
+        sampling/createMessage, making run_journey unusable as an MCP tool.
+        The agent-first workflow uses tool_load_journey instead.
+        """
+        import simdrive.server as server_mod
+        tool_names = [t["name"] for t in server_mod._TOOLS]
+        assert "run_journey" not in tool_names, (
+            "'run_journey' is still registered in _TOOLS. "
+            "It was removed in 1.0.0a7 because most MCP clients do not implement "
+            "sampling/createMessage. The agent-first workflow uses 'load_journey' instead."
+        )
+
+    def test_load_journey_in_mcp_tools(self):
+        """load_journey must be in _TOOLS registry (added in 1.0.0a7)."""
+        import simdrive.server as server_mod
+        tool_names = [t["name"] for t in server_mod._TOOLS]
+        assert "load_journey" in tool_names, (
+            "'load_journey' is NOT registered in _TOOLS. "
+            "It was added in 1.0.0a7 to replace run_journey for agent-first workflows "
+            "where the MCP client does not implement sampling/createMessage."
+        )
