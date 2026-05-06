@@ -330,20 +330,43 @@ def test_resolve_signing_identity_returns_none_for_personal_team_empty_keychain(
     assert result_team == "B3HE38966G"
 
 
-def test_resolve_signing_identity_ambiguous_when_team_has_multiple_certs():
-    """When team_id matches multiple certs in keychain (rare), raise ambiguous."""
-    from simdrive.errors import SimdriveError
+def test_resolve_signing_identity_picks_newest_when_team_has_multiple_certs(monkeypatch):
+    """B2: When team_id matches multiple certs, pick the most-recently-issued one
+    instead of raising ambiguous. All matches share team_id so they are
+    equivalent for codesigning; the older cert is typically expired or revoked.
+    """
     two_same_team = (
         '1) AABBCCDDEEFF00112233445566778899AABBCCDD "Apple Development: alice@example.com (AAAAAAAAAA)"\n'
         '2) 1122334455667788990011223344556677889900 "Apple Development: alice-old@example.com (AAAAAAAAAA)"\n'
         "    2 valid identities found\n"
     )
+
+    def _stub_not_before(name: str):
+        # Newer cert wins; older entry's name has "alice-old" and is from 2024.
+        if "alice-old" in name:
+            return "2024-01-15T00:00:00"
+        return "2026-04-30T00:00:00"
+
+    monkeypatch.setattr("simdrive.wda.bootstrap._cert_not_before", _stub_not_before)
+
     with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=two_same_team)
         from simdrive.wda.bootstrap import resolve_signing_identity
-        with pytest.raises(SimdriveError) as exc_info:
-            resolve_signing_identity(team_id="AAAAAAAAAA")
-    assert exc_info.value.code == "wda_signing_ambiguous"
+        name, team = resolve_signing_identity(team_id="AAAAAAAAAA")
+
+    assert "alice@example.com" in name and "alice-old" not in name
+    assert team == "AAAAAAAAAA"
+
+
+def test_pick_newest_identity_falls_back_when_no_dates(monkeypatch):
+    """B2: If openssl/security can't resolve dates for any cert, fall back to
+    the first entry (deterministic, matches pre-B2 behaviour)."""
+    monkeypatch.setattr("simdrive.wda.bootstrap._cert_not_before", lambda _: None)
+
+    from simdrive.wda.bootstrap import _pick_newest_identity
+    a = {"sha1": "AAA", "name": "Apple Development: A (TEAM000001)", "team_id": "TEAM000001"}
+    b = {"sha1": "BBB", "name": "Apple Development: B (TEAM000001)", "team_id": "TEAM000001"}
+    assert _pick_newest_identity([a, b]) is a
 
 
 # ── Bug 2: hardware UDID resolution ──────────────────────────────────────────
@@ -422,7 +445,158 @@ def test_build_wda_uses_correct_signing_flags(tmp_path):
     assert "id=00008130-001A2B3C4D5E6F70" in cmd_str
 
 
+# ── D8: device + os metadata extraction ─────────────────────────────────────
+
+
+def test_extract_device_metadata_from_status_real_device():
+    """D8: pulls os.version from a real-device WDA /status payload."""
+    from simdrive.wda.bootstrap import extract_device_metadata_from_status
+
+    status = {
+        "value": {
+            "build": {"productBundleIdentifier": "com.facebook.WebDriverAgentRunner"},
+            "ios": {"ip": "192.168.1.26"},
+            "os": {"name": "iOS", "version": "26.3.1", "sdkVersion": "26.3"},
+            "ready": True,
+            "sessionId": None,
+        }
+    }
+    meta = extract_device_metadata_from_status(status)
+    assert meta == {"os_version": "26.3.1"}
+
+
+def test_extract_device_metadata_from_status_handles_missing_os():
+    """D8: missing fields default to empty string (no KeyError)."""
+    from simdrive.wda.bootstrap import extract_device_metadata_from_status
+
+    assert extract_device_metadata_from_status({}) == {"os_version": ""}
+    assert extract_device_metadata_from_status({"value": {"ready": True}}) == {"os_version": ""}
+
+
+def test_fetch_device_name_via_devicectl_returns_name():
+    """D8: parses result.deviceProperties.name from devicectl JSON."""
+    from simdrive.wda.bootstrap import fetch_device_name_via_devicectl
+    payload = json.dumps({
+        "result": {
+            "deviceProperties": {"name": "Moes Max", "osVersionNumber": "26.3.1"},
+            "hardwareProperties": {"marketingName": "iPhone 17 Pro Max"},
+        }
+    })
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=payload)
+        assert fetch_device_name_via_devicectl("UDID-X") == "Moes Max"
+
+
+def test_fetch_device_name_via_devicectl_returns_empty_on_failure():
+    """D8: returns "" on any devicectl error so callers can fall back cleanly."""
+    from simdrive.wda.bootstrap import fetch_device_name_via_devicectl
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+        assert fetch_device_name_via_devicectl("UDID-X") == ""
+
+
+def test_smoke_test_returns_status_body_for_metadata_capture():
+    """D8: smoke_test must return the parsed body so bootstrap_device can pull
+    os_version out of /status without re-fetching."""
+    import httpx as _httpx
+    body = {"value": {"ready": True, "os": {"version": "26.3.1"}}}
+    with patch("simdrive.wda.bootstrap.httpx") as mock_httpx:
+        mock_resp = MagicMock()
+        mock_resp.is_success = True
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = body
+        mock_httpx.get.return_value = mock_resp
+        mock_httpx.TransportError = _httpx.TransportError
+
+        from simdrive.wda.bootstrap import smoke_test
+        returned = smoke_test("192.168.1.26", 8100)
+
+    assert returned == body
+
+
+# ── B4: FAILED-before-SUCCEEDED retry classification ─────────────────────────
+
+
+def test_classify_build_log_emits_info_on_recoverable_retry(caplog):
+    """B4: when the build log contains FAILED then SUCCEEDED, emit one INFO line
+    explaining the recoverable -allowProvisioningUpdates round-trip and keep
+    the FAILED token at DEBUG (so log scrapers don't panic).
+    """
+    log_text = (
+        "=== BUILD TARGET WebDriverAgentRunner ===\n"
+        "** BUILD FAILED **\n"
+        "Provisioning profile not found, fetching ...\n"
+        "** BUILD SUCCEEDED **\n"
+    )
+    import logging
+    from simdrive.wda.bootstrap import _classify_build_log
+
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.bootstrap"):
+        _classify_build_log(log_text)
+
+    error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_records == [], f"unexpected ERROR-level records: {error_records}"
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(info_records) == 1, f"expected exactly one INFO record, got {info_records}"
+    assert "provisioning" in info_records[0].getMessage().lower()
+    assert "expected" in info_records[0].getMessage().lower()
+
+
+def test_classify_build_log_silent_on_clean_success(caplog):
+    """B4: a log with only SUCCEEDED (no FAILED) emits nothing — we never want
+    to spam INFO when there was no retry to explain."""
+    log_text = (
+        "=== BUILD TARGET WebDriverAgentRunner ===\n"
+        "** BUILD SUCCEEDED **\n"
+    )
+    import logging
+    from simdrive.wda.bootstrap import _classify_build_log
+
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.bootstrap"):
+        _classify_build_log(log_text)
+
+    assert caplog.records == []
+
+
+def test_classify_build_log_silent_when_failed_after_succeeded(caplog):
+    """B4: SUCCEEDED then FAILED later (e.g. a follow-up phase) is NOT the
+    recoverable retry pattern — don't emit the calming INFO."""
+    log_text = (
+        "** BUILD SUCCEEDED **\n"
+        "Some later phase\n"
+        "** BUILD FAILED **\n"
+    )
+    import logging
+    from simdrive.wda.bootstrap import _classify_build_log
+
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.bootstrap"):
+        _classify_build_log(log_text)
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert info_records == []
+
+
 # ── Bug 5+6: xcodebuild test-without-building launch ─────────────────────────
+
+
+def _fake_popen(udid: str, wda_output: str):
+    """Build a Popen side_effect that writes wda_output into the per-UDID log file
+    (where the daemonized launch_and_discover_port tails for the ServerURLHere line)
+    and returns a mock process.
+    """
+    from simdrive.wda.bootstrap import _log_path
+
+    def _side_effect(cmd, *args, **kwargs):  # noqa: ARG001
+        log_path = _log_path(udid)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(wda_output, encoding="utf-8")
+        proc = MagicMock()
+        proc.pid = 4242
+        proc.poll.return_value = None
+        return proc
+
+    return _side_effect
 
 
 def test_launch_uses_xcodebuild_test_without_building(tmp_path):
@@ -439,10 +613,7 @@ def test_launch_uses_xcodebuild_test_without_building(tmp_path):
     )
 
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(wda_output)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-UUID", wda_output)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         host, port = launch_and_discover_port(
@@ -473,10 +644,7 @@ def test_port_discovery_parses_serverurlhere_from_xcodebuild_stdout(tmp_path):
     wda_output = "ServerURLHere->http://10.0.0.5:9200<-ServerURLHere\n"
 
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(wda_output)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-UUID", wda_output)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         host, port = launch_and_discover_port(
@@ -657,15 +825,22 @@ def test_verify_xcode_account_raises_when_account_list_empty(monkeypatch):
     assert exc_info.value.code == "wda_xcode_account_not_authenticated"
 
 
-def test_verify_xcode_account_passes_when_account_signed_in(monkeypatch):
-    """When defaults shows at least one identifier, pass without raising."""
+def test_verify_xcode_account_passes_when_team_bound(monkeypatch):
+    """B1: When defaults output names the requested team_id, pass without raising.
+
+    Real-world shape — Xcode persists each Apple ID account with its team
+    bindings serialised under a `teamIDs` array (or `teamID` key for the
+    primary team). The team id we require must appear inside that structure.
+    """
     def fake_run(args, **kwargs):
         from subprocess import CompletedProcess
-        # Real-world output shape from `defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists`
         stdout = """{
     "IDE.Identifiers.Prod" =     (
                 {
             identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+            teamIDs = (
+                "E52N8732YT"
+            );
         }
     );
 }
@@ -674,8 +849,56 @@ def test_verify_xcode_account_passes_when_account_signed_in(monkeypatch):
     monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
 
     from simdrive.wda.bootstrap import verify_xcode_account_for_team
-    # Should not raise
     verify_xcode_account_for_team("E52N8732YT")
+
+
+def test_verify_xcode_account_raises_when_only_other_teams_signed_in(monkeypatch):
+    """B1: Account signed in for a *different* team must not pass — old code
+    used a substring grep on `"identifier"` and false-positived here.
+    """
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        stdout = """{
+    "IDE.Identifiers.Prod" =     (
+                {
+            identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+            teamIDs = (
+                "OTHERTEAM1"
+            );
+        }
+    );
+}
+"""
+        return CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
+
+    from simdrive.errors import SimdriveError
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    with pytest.raises(SimdriveError) as exc_info:
+        verify_xcode_account_for_team("E52N8732YT")
+    assert exc_info.value.code == "wda_xcode_account_not_authenticated"
+
+
+def test_verify_xcode_account_passes_with_paid_team_kv_form(monkeypatch):
+    """B1: paid Developer Program accounts persist the team via `teamID = "..."`.
+    Match that form too, not just the array form.
+    """
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        stdout = """{
+    "IDE.Identifiers.Prod" =     (
+                {
+            identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+            DVTDeveloperAccountTeamID = "PAIDTEAM12";
+        }
+    );
+}
+"""
+        return CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
+
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    verify_xcode_account_for_team("PAIDTEAM12")
 
 
 def test_all_wda_errors_have_recovery():
@@ -742,10 +965,7 @@ def test_port_discovery_raises_device_locked_on_unlock_message(tmp_path):
 
     from simdrive.errors import SimdriveError
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(fake_lines)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-LOCKED-UUID", fake_lines)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         with pytest.raises(SimdriveError) as exc_info:
@@ -774,10 +994,7 @@ def test_port_discovery_raises_device_locked_on_device_is_locked_phrase(tmp_path
 
     from simdrive.errors import SimdriveError
     with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
-        import io
-        mock_proc = MagicMock()
-        mock_proc.stdout = io.StringIO(fake_lines)
-        mock_popen.return_value = mock_proc
+        mock_popen.side_effect = _fake_popen("TEST-LOCKED-UUID-2", fake_lines)
 
         from simdrive.wda.bootstrap import launch_and_discover_port
         with pytest.raises(SimdriveError) as exc_info:
@@ -798,3 +1015,182 @@ def test_locked_device_regex_matches_unlock_message():
     assert _LOCKED_DEVICE_RE.search("the device is locked.") is not None
     assert _LOCKED_DEVICE_RE.search("DEVICE IS LOCKED") is not None  # case-insensitive
     assert _LOCKED_DEVICE_RE.search("ServerURLHere->http://192.168.1.1:8100<-") is None  # no match on success
+
+
+# ── B3: daemonization, wda-up, wda-down ──────────────────────────────────────
+
+
+def test_launch_passes_start_new_session_true(tmp_path):
+    """B3: Popen must be invoked with start_new_session=True so the xcodebuild
+    subprocess is detached from the bootstrap CLI's process group and survives
+    the CLI exiting (otherwise SIGHUP cascade kills WDA)."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    (products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun").write_text("<dict/>")
+
+    wda_output = "ServerURLHere->http://192.168.1.50:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        mock_popen.side_effect = _fake_popen("TEST-DAEMON-UUID", wda_output)
+
+        from simdrive.wda.bootstrap import launch_and_discover_port
+        launch_and_discover_port(
+            coredevice_uuid="TEST-DAEMON-UUID",
+            derived_data=tmp_path,
+            hardware_udid="HW-DAEMON",
+        )
+
+    kwargs = mock_popen.call_args.kwargs
+    assert kwargs.get("start_new_session") is True
+
+
+def test_launch_writes_pidfile_and_log(tmp_path):
+    """B3: launch_and_discover_port writes a pidfile + log next to the registry."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    (products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun").write_text("<dict/>")
+
+    wda_output = "ServerURLHere->http://192.168.1.50:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        mock_popen.side_effect = _fake_popen("TEST-PIDFILE-UUID", wda_output)
+
+        from simdrive.wda.bootstrap import launch_and_discover_port, _pid_path, _log_path
+        launch_and_discover_port(
+            coredevice_uuid="TEST-PIDFILE-UUID",
+            derived_data=tmp_path,
+            hardware_udid="HW-PIDFILE",
+        )
+
+    assert _pid_path("TEST-PIDFILE-UUID").exists()
+    assert _pid_path("TEST-PIDFILE-UUID").read_text().strip() == "4242"
+    assert _log_path("TEST-PIDFILE-UUID").exists()
+
+
+def test_wda_up_relaunches_from_registry_without_rebuild(tmp_path):
+    """wda_up reads the registry entry and re-launches WDA without rebuilding."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    from simdrive.wda import registry
+    registry.save("TEST-UP-UUID", {
+        "wda_bundle_id": "com.facebook.WebDriverAgentRunner.xctrunner",
+        "derived_data": str(tmp_path),
+        "xctestrun_path": str(xctestrun),
+        "hardware_udid": "HW-UP",
+        "host": "192.168.1.99",
+        "ip": "192.168.1.99",
+        "port": 8100,
+        "team_id": "TEAMUP",
+    })
+
+    wda_output = "ServerURLHere->http://192.168.1.99:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen, \
+         patch("simdrive.wda.bootstrap.smoke_test") as mock_smoke, \
+         patch("simdrive.wda.bootstrap.build_wda") as mock_build, \
+         patch("simdrive.wda.bootstrap.fetch_device_name_via_devicectl", return_value=""):
+        mock_popen.side_effect = _fake_popen("TEST-UP-UUID", wda_output)
+        mock_smoke.return_value = {"value": {"ready": True, "os": {"version": "26.3.1"}}}
+
+        from simdrive.wda.bootstrap import wda_up
+        entry = wda_up("TEST-UP-UUID")
+
+    # Should NOT have called build_wda — that's the whole point of wda-up.
+    mock_build.assert_not_called()
+    mock_smoke.assert_called_once()
+    assert entry["host"] == "192.168.1.99"
+    assert entry["port"] == 8100
+    # D8: wda-up refreshes os_version from /status when present.
+    assert entry["os_version"] == "26.3.1"
+
+
+def test_wda_up_writes_device_name_when_devicectl_succeeds(tmp_path):
+    """D8: when devicectl returns the device name, wda_up persists it to the
+    registry so the next session.start() picks it up automatically."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    from simdrive.wda import registry
+    registry.save("TEST-D8-UUID", {
+        "wda_bundle_id": "com.facebook.WebDriverAgentRunner.xctrunner",
+        "derived_data": str(tmp_path),
+        "xctestrun_path": str(xctestrun),
+        "hardware_udid": "HW-D8",
+        "host": "192.168.1.50",
+        "port": 8100,
+        "team_id": "TEAMD8",
+    })
+
+    wda_output = "ServerURLHere->http://192.168.1.50:8100<-ServerURLHere\n"
+
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen, \
+         patch("simdrive.wda.bootstrap.smoke_test") as mock_smoke, \
+         patch("simdrive.wda.bootstrap.fetch_device_name_via_devicectl", return_value="Moes Max"):
+        mock_popen.side_effect = _fake_popen("TEST-D8-UUID", wda_output)
+        mock_smoke.return_value = {"value": {"ready": True, "os": {"version": "26.3.1"}}}
+
+        from simdrive.wda.bootstrap import wda_up
+        wda_up("TEST-D8-UUID")
+
+    persisted = registry.load("TEST-D8-UUID")
+    assert persisted["device_name"] == "Moes Max"
+    assert persisted["os_version"] == "26.3.1"
+
+
+def test_wda_up_raises_when_no_registry_entry(tmp_path):
+    """wda_up raises wda_not_bootstrapped if no registry entry exists."""
+    from simdrive.errors import SimdriveError
+    from simdrive.wda.bootstrap import wda_up
+
+    with pytest.raises(SimdriveError) as exc_info:
+        wda_up("UNKNOWN-UUID")
+    assert exc_info.value.code == "wda_not_bootstrapped"
+
+
+def test_wda_down_kills_process_via_pidfile(tmp_path):
+    """wda_down reads the pidfile and SIGTERMs the recorded PID."""
+    from simdrive.wda.bootstrap import _pid_path, wda_down
+
+    pid_file = _pid_path("TEST-DOWN-UUID")
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text("9999", encoding="utf-8")
+
+    with patch("simdrive.wda.bootstrap.os.kill") as mock_kill:
+        result = wda_down("TEST-DOWN-UUID")
+
+    import signal
+    mock_kill.assert_called_once_with(9999, signal.SIGTERM)
+    assert result is True
+    assert not pid_file.exists()  # pidfile cleaned up
+
+
+def test_wda_down_returns_false_when_no_pidfile(tmp_path):
+    """wda_down is a no-op (returns False) when the pidfile is missing."""
+    from simdrive.wda.bootstrap import wda_down
+
+    assert wda_down("MISSING-UUID") is False
+
+
+def test_wda_down_handles_already_dead_process(tmp_path):
+    """wda_down survives ProcessLookupError when the PID is stale."""
+    from simdrive.wda.bootstrap import _pid_path, wda_down
+
+    pid_file = _pid_path("TEST-STALE-UUID")
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text("12345", encoding="utf-8")
+
+    with patch("simdrive.wda.bootstrap.os.kill", side_effect=ProcessLookupError()):
+        result = wda_down("TEST-STALE-UUID")
+
+    assert result is False
+    assert not pid_file.exists()  # pidfile still cleaned up
+
+
+# Real-device coverage: the daemonization survives a real `simdrive bootstrap-device`
+# CLI exit. Covered by the dogfood script against Moes Max (see
+# simdrive/docs/DOGFOOD_FEEDBACK_*.md).

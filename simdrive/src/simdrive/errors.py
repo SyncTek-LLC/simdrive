@@ -55,6 +55,19 @@ def no_device(query: dict) -> SimdriveError:
     )
 
 
+def device_launch_failed(udid: str, bundle_id: str, reason: str) -> SimdriveError:
+    return SimdriveError(
+        code="device_launch_failed",
+        message=(
+            f"failed to launch {bundle_id!r} on device {udid}: {reason}. "
+            "Recovery: verify the device is paired and unlocked; run "
+            "`xcrun devicectl list devices` to confirm visibility, and "
+            "`xcrun devicectl device info apps --device <udid>` to confirm the app is installed."
+        ),
+        details={"udid": udid, "bundle_id": bundle_id, "reason": reason},
+    )
+
+
 def sim_unhealthy(udid: str, reason: str) -> SimdriveError:
     return SimdriveError(
         code="sim_unhealthy",

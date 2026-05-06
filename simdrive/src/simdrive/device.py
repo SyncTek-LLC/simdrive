@@ -221,7 +221,7 @@ def install_app(udid: str, app_path: Path) -> None:
 def launch_app(udid: str, bundle_id: str) -> int:
     res = subprocess.run(
         ["xcrun", "devicectl", "device", "process", "launch",
-         "--device", udid, "--start-stopped=false", bundle_id,
+         "--device", udid, bundle_id,
          "--json-output", "/dev/stdout"],
         capture_output=True, text=True, timeout=30.0, check=False,
     )

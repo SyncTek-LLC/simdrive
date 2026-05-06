@@ -110,6 +110,32 @@ def test_open_session_raises_if_no_session_id():
     assert "Recovery:" in exc.value.message
 
 
+def test_open_session_without_bundle_id_omits_bundle_capability():
+    """open_session(None) — used for app-less device sessions — must POST a
+    capabilities body that does NOT include bundleId. WDA returns a sessionId
+    that lets the agent tap/swipe at the home screen / current foreground app."""
+    captured = {}
+
+    def _handler(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            content=json.dumps({"value": {"sessionId": "no-app-sid"}}).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    from simdrive.wda.client import WdaClient
+    client = WdaClient(host="localhost", port=8100)
+    client._replace_transport(httpx.MockTransport(_handler))
+    sid = client.open_session(None)
+
+    assert sid == "no-app-sid"
+    always = captured["body"]["capabilities"]["alwaysMatch"]
+    assert "bundleId" not in always, (
+        f"open_session(None) must omit bundleId; got alwaysMatch={always!r}"
+    )
+
+
 # ── tap ──────────────────────────────────────────────────────────────────────
 
 

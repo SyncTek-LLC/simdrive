@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 import shutil
@@ -42,6 +43,8 @@ from typing import Optional
 
 import httpx
 
+_LOG = logging.getLogger("simdrive.wda.bootstrap")
+
 from . import registry
 from .errors import (
     wda_build_failed,
@@ -50,6 +53,7 @@ from .errors import (
     wda_host_tools_missing,
     wda_install_failed,
     wda_no_signing_identity,
+    wda_not_bootstrapped,
     wda_port_discovery_timeout,
     wda_signing_ambiguous,
     wda_smoke_failed,
@@ -79,6 +83,24 @@ _LOCKED_DEVICE_RE = re.compile(r"Unlock .+ to Continue|device is locked", re.IGN
 
 # WDA bundle identifier (Appium fork default, matches xcodebuild scheme).
 _WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
+
+
+# ─── daemon paths ────────────────────────────────────────────────────────────
+
+
+def _wda_home() -> Path:
+    """Return the per-UDID WDA state directory (override via WDA_REGISTRY_DIR)."""
+    return Path(os.environ.get("WDA_REGISTRY_DIR", Path.home() / ".simdrive" / "wda"))
+
+
+def _log_path(udid: str) -> Path:
+    """Path of the per-UDID xcodebuild stdout/stderr log."""
+    return _wda_home() / f"{udid}.log"
+
+
+def _pid_path(udid: str) -> Path:
+    """Path of the per-UDID WDA daemon pidfile."""
+    return _wda_home() / f"{udid}.pid"
 
 
 # ─── host-tool verification ───────────────────────────────────────────────────
@@ -310,6 +332,61 @@ def _parse_identities(output: str) -> list[dict]:
     return result
 
 
+def _cert_not_before(name: str) -> Optional[str]:
+    """Return the cert's `notBefore` date as a sortable string, or None.
+
+    Shells out to ``security find-certificate -c <name> -p`` (PEM) → openssl
+    ``x509 -noout -startdate`` (e.g. ``notBefore=Apr  9 12:34:56 2026 GMT``).
+    The raw string is returned and we sort lexicographically with a small
+    parse fallback — month names sort wrong as plain text, so the parse
+    fallback below converts to ISO-8601 when openssl's output is recognised.
+    """
+    pem = subprocess.run(
+        ["security", "find-certificate", "-c", name, "-p"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if pem.returncode != 0 or not pem.stdout:
+        return None
+    info = subprocess.run(
+        ["openssl", "x509", "-noout", "-startdate"],
+        input=pem.stdout, capture_output=True, text=True, timeout=10, check=False,
+    )
+    if info.returncode != 0 or not info.stdout:
+        return None
+    line = info.stdout.strip()
+    # Expect: "notBefore=Apr  9 12:34:56 2026 GMT"
+    prefix = "notBefore="
+    if not line.startswith(prefix):
+        return None
+    raw = line[len(prefix):].strip()
+    try:
+        from datetime import datetime
+        # openssl emits with double-space day padding for single-digit days.
+        dt = datetime.strptime(raw, "%b %d %H:%M:%S %Y %Z")
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return raw  # opaque sort key — better than dropping the entry
+
+
+def _pick_newest_identity(identities: list[dict]) -> dict:
+    """Return the most-recently-issued identity from ``identities``.
+
+    Queries each cert's notBefore date via ``security find-certificate`` +
+    ``openssl x509 -noout -startdate``. Identities whose date can't be
+    resolved sort to the bottom; if no dates are resolvable we return the
+    first entry (preserves previous deterministic behaviour).
+    """
+    dated: list[tuple[str, dict]] = []
+    for ident in identities:
+        d = _cert_not_before(ident["name"])
+        if d is not None:
+            dated.append((d, ident))
+    if not dated:
+        return identities[0]
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    return dated[0][1]
+
+
 def resolve_signing_identity(
     signing_identity: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -321,7 +398,10 @@ def resolve_signing_identity(
       2. If team_id is supplied:
          a. Filter keychain identities to those matching team_id.
          b. Exactly one match → return it + team_id.
-         c. Multiple matches (rare) → raise wda_signing_ambiguous.
+         c. Multiple matches → pick the most-recently-issued cert (B2). All
+            matches share team_id and are therefore equivalent for codesigning
+            purposes; picking the newest avoids spurious ambiguity errors for
+            users who accumulate certs across machine refreshes.
          d. Zero matches → return (None, team_id). This is the Apple Personal
             Team case: a free Apple ID team has no cert in the keychain yet, but
             xcodebuild's -allowProvisioningUpdates will download one on demand
@@ -365,7 +445,13 @@ def resolve_signing_identity(
         if len(matching) == 1:
             return matching[0]["name"], team_id
         if len(matching) > 1:
-            raise wda_signing_ambiguous([i["name"] for i in matching])
+            # B2: all matches share team_id, so they're equivalent for
+            # codesigning purposes — picking the newest "Apple Development"
+            # cert is safe (older ones may be revoked). Falling through to
+            # ambiguity here would block bootstraps for users who routinely
+            # accumulate certs (e.g. machine refreshes).
+            picked = _pick_newest_identity(matching)
+            return picked["name"], team_id
         # Zero matches: Apple Personal Team case (or new paid team with no local cert).
         # Return (None, team_id) — xcodebuild + -allowProvisioningUpdates will
         # download a cert on demand when an Xcode Account is signed in for this team.
@@ -394,17 +480,20 @@ def resolve_signing_identity(
 
 
 def verify_xcode_account_for_team(team_id: str) -> None:
-    """Verify Xcode has at least one Apple Account signed in.
+    """Verify Xcode has an Apple Account bound to ``team_id``.
 
-    A signed-in account is necessary for `xcodebuild -allowProvisioningUpdates` to
-    download provisioning profiles from Apple's Developer Portal. The codesigning
-    cert in the keychain is necessary but not sufficient — Xcode's account session
-    is separate state, stored in com.apple.dt.Xcode preferences.
+    A signed-in account is necessary for ``xcodebuild -allowProvisioningUpdates``
+    to download provisioning profiles from Apple's Developer Portal. The
+    codesigning cert in the keychain is necessary but not sufficient — Xcode's
+    account session is separate state, stored in com.apple.dt.Xcode preferences.
 
-    We can't easily verify the account is for the SPECIFIC team_id without parsing
-    private Xcode internals; what we can verify is whether ANY account exists. If
-    none does, the build will fail at xcodebuild time with the same "No Account
-    for Team" message — better to fail fast here with actionable guidance.
+    Implementation (B1): we parse the
+    ``DVTDeveloperAccountManagerAppleIDLists`` plist and look for ``team_id``
+    explicitly inside it. The previous substring grep for ``"identifier"``
+    passed even when the only signed-in account was bound to a different team
+    (the literal token "identifier" appears in any non-empty entry). We now
+    require the team id itself to appear in the plist; absent that, raise
+    ``wda_xcode_account_not_authenticated``.
     """
     result = subprocess.run(
         ["defaults", "read", "com.apple.dt.Xcode", "DVTDeveloperAccountManagerAppleIDLists"],
@@ -415,9 +504,44 @@ def verify_xcode_account_for_team(team_id: str) -> None:
     # defaults exits non-zero when the key doesn't exist (no account ever signed in)
     if result.returncode != 0:
         raise wda_xcode_account_not_authenticated(team_id)
-    # Account list exists but might be an empty dict — check for any identifier
-    if "identifier" not in result.stdout:
+
+    # ``defaults read`` emits old-style plist text. plistlib only accepts XML or
+    # binary plists, so parse via a string scan that matches the actual team
+    # binding. The plist serialises team membership as nested entries that
+    # include lines like ``teamID = "ABC1234567";`` (paid teams) or
+    # ``teamIDs = ( "ABC1234567" )`` (account list payload). Match either.
+    stdout = result.stdout
+    if not stdout.strip() or stdout.strip() in ("{\n}", "{}", "(\n)", "()"):
         raise wda_xcode_account_not_authenticated(team_id)
+
+    if not _xcode_account_output_has_team(stdout, team_id):
+        raise wda_xcode_account_not_authenticated(team_id)
+
+
+def _xcode_account_output_has_team(stdout: str, team_id: str) -> bool:
+    """Return True if ``team_id`` appears as a real team binding in ``stdout``.
+
+    Looks for the team id as a quoted token associated with one of the team
+    keys Xcode emits: ``teamID``, ``teamIDs``, ``DVTDeveloperAccountTeamID``,
+    or as a quoted entry in a ``teamIDs = ( ... )`` array. A bare substring
+    match would false-positive on UUIDs and identifier strings that happen to
+    contain the same 10 chars; we require either the key/value pair form or
+    the array-element form to be present.
+    """
+    if not team_id:
+        return False
+    # Form 1: `teamID = "ABCDEF1234";` or `DVTDeveloperAccountTeamID = "ABCDEF1234";`
+    kv = re.compile(
+        r'(?:teamID|teamIDs|DVTDeveloperAccountTeamID)\s*=\s*"' + re.escape(team_id) + r'"',
+        re.IGNORECASE,
+    )
+    if kv.search(stdout):
+        return True
+    # Form 2: array element inside a `teamIDs = ( "X", "Y" )` block.
+    array_block = re.search(r"teamIDs\s*=\s*\(([^)]*)\)", stdout, re.IGNORECASE | re.DOTALL)
+    if array_block and re.search(r'"' + re.escape(team_id) + r'"', array_block.group(1)):
+        return True
+    return False
 
 
 # ─── xcodebuild ──────────────────────────────────────────────────────────────
@@ -439,6 +563,14 @@ def build_wda(
     Bug 4 fix: passes OTHER_CFLAGS="-Wno-reserved-identifier" to suppress clang
                -Wreserved-identifier errors in WDA v9.9.0 PrivateHeaders on Xcode 16.
     Bug 2 fix: uses hardware_udid for xcodebuild -destination (not coredevice UUID).
+
+    B4 (FAILED-before-SUCCEEDED retry): the very first build that touches a new
+    team often emits a single `** BUILD FAILED **` line before xcodebuild
+    fetches the provisioning profile via -allowProvisioningUpdates and
+    immediately retries to a `** BUILD SUCCEEDED **`. The overall returncode is
+    zero. Naive log scrapers panic on the FAILED token. When we detect that
+    pattern we emit a single calming INFO line so users + downstream tooling
+    don't misread the recoverable retry as a real failure.
     """
     wda_home = Path(os.environ.get("WDA_REGISTRY_DIR", Path.home() / ".simdrive" / "wda"))
     derived_data = wda_home / coredevice_uuid / "derived"
@@ -477,8 +609,42 @@ def build_wda(
     if proc.returncode != 0:
         raise wda_build_failed(str(log_path))
 
+    # B4: the first invocation against a new team often logs `** BUILD FAILED **`
+    # before -allowProvisioningUpdates fetches the profile and the retry hits
+    # `** BUILD SUCCEEDED **`. Returncode is 0; the log just looks scary.
+    try:
+        _classify_build_log(log_path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        pass
+
     print(f"[simdrive] Build succeeded. Derived data: {derived_data}", flush=True)
     return derived_data
+
+
+_BUILD_FAILED_RE = re.compile(r"\*\*\s*BUILD FAILED\s*\*\*", re.IGNORECASE)
+_BUILD_SUCCEEDED_RE = re.compile(r"\*\*\s*BUILD SUCCEEDED\s*\*\*", re.IGNORECASE)
+
+
+def _classify_build_log(log_text: str) -> None:
+    """Distinguish the recoverable FAILED→SUCCEEDED retry from a real failure.
+
+    Called only when xcodebuild's overall returncode is 0. If the log shows a
+    BUILD FAILED line followed (later in the same stream) by a BUILD SUCCEEDED
+    line, the whole sequence was the -allowProvisioningUpdates round-trip:
+    log the FAILED tokens at DEBUG and emit a single INFO line so naive log
+    scrapers don't misread the retry as a fatal error.
+    """
+    failed = _BUILD_FAILED_RE.search(log_text)
+    if not failed:
+        return
+    succeeded = _BUILD_SUCCEEDED_RE.search(log_text, pos=failed.end())
+    if not succeeded:
+        return
+    _LOG.debug("xcodebuild emitted BUILD FAILED before BUILD SUCCEEDED (recoverable retry)")
+    _LOG.info(
+        "First attempt failed pending provisioning fetch; retry succeeded after "
+        "-allowProvisioningUpdates round-trip (expected)."
+    )
 
 
 # ─── install ─────────────────────────────────────────────────────────────────
@@ -599,35 +765,48 @@ def launch_and_discover_port(
         "-destination", f"id={hardware_udid}",
     ]
 
-    # Spawn xcodebuild in background; tail its stdout for the ServerURLHere line.
+    log_file = _log_path(coredevice_uuid)
+    pid_file = _pid_path(coredevice_uuid)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = log_file.open("w", encoding="utf-8")
+
+    # start_new_session detaches xcodebuild from this CLI's process group so it
+    # survives bootstrap-device exiting (otherwise SIGHUP cascade kills WDA — B3).
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
+        stdout=log_fh,
         stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
         text=True,
+        start_new_session=True,
     )
+    pid_file.write_text(str(proc.pid), encoding="utf-8")
 
     host: Optional[str] = None
     port: Optional[int] = None
     device_locked: bool = False
     deadline = time.monotonic() + _PORT_DISCOVERY_TIMEOUT_S
 
-    def _reader() -> None:
+    def _tail_log() -> None:
         nonlocal host, port, device_locked
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            m = _SERVER_URL_RE.search(line)
-            if m:
-                host = m.group(1)
-                port = int(m.group(2))
-                break
-            if _LOCKED_DEVICE_RE.search(line):
-                device_locked = True
-                break
-            if time.monotonic() > deadline:
-                break
+        with log_file.open("r", encoding="utf-8") as fh:
+            while time.monotonic() < deadline:
+                line = fh.readline()
+                if not line:
+                    if proc.poll() is not None:
+                        return
+                    time.sleep(0.1)
+                    continue
+                m = _SERVER_URL_RE.search(line)
+                if m:
+                    host = m.group(1)
+                    port = int(m.group(2))
+                    return
+                if _LOCKED_DEVICE_RE.search(line):
+                    device_locked = True
+                    return
 
-    t = threading.Thread(target=_reader, daemon=True)
+    t = threading.Thread(target=_tail_log, daemon=True)
     t.start()
     t.join(timeout=_PORT_DISCOVERY_TIMEOUT_S + 2.0)
 
@@ -638,23 +817,31 @@ def launch_and_discover_port(
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        log_fh.close()
+        try:
+            pid_file.unlink()
+        except FileNotFoundError:
+            pass
         if device_locked:
             raise wda_device_locked(coredevice_uuid)
         raise wda_port_discovery_timeout(coredevice_uuid)
 
-    # xcodebuild process stays running in background (WDA server is alive as long as it runs).
-    # The caller is responsible for the session lifecycle; we do NOT kill it here.
+    # xcodebuild keeps running in its own session; WDA stays alive after this
+    # process exits. Teardown via `simdrive wda-down <udid>`.
     print(f"[simdrive] WDA listening on http://{host}:{port}", flush=True)
+    print(f"[simdrive] WDA log:  {log_file}", flush=True)
+    print(f"[simdrive] WDA pid:  {pid_file} ({proc.pid})", flush=True)
     return host, port
 
 
 # ─── smoke test ──────────────────────────────────────────────────────────────
 
 
-def smoke_test(host: str, port: int) -> None:
+def smoke_test(host: str, port: int) -> dict:
     """GET http://<host>:<port>/status and assert {value: {ready: true}}.
 
-    Raises wda_smoke_failed on mismatch or HTTP error.
+    Returns the parsed status body so callers can extract OS / device info
+    (D8). Raises wda_smoke_failed on mismatch or HTTP error.
     host is the device's WiFi IP (captured from WDA's ServerURLHere announcement).
     """
     url = f"http://{host}:{port}/status"
@@ -677,6 +864,58 @@ def smoke_test(host: str, port: int) -> None:
         raise wda_smoke_failed(resp.status_code, json.dumps(body))
 
     print("[simdrive] WDA smoke test passed — ready=True.", flush=True)
+    return body
+
+
+# ─── D8: device metadata extraction from WDA /status + devicectl ────────────
+
+
+def extract_device_metadata_from_status(status_body: dict) -> dict:
+    """Pull device_name + os_version out of a WDA /status payload.
+
+    Appium WDA v9.9.0 status response (real device) typically contains:
+        {
+          "value": {
+            "build": {...},
+            "ios": {"ip": "192.168.x.y"},
+            "os":  {"name": "iOS", "version": "26.3.1", "sdkVersion": "..."},
+            "ready": true
+          }
+        }
+
+    Device name (the user-visible "Moes Max") is NOT in /status — it lives in
+    devicectl's deviceProperties.name. Callers should layer the devicectl
+    lookup on top via fetch_device_name_via_devicectl().
+
+    Returns a dict with the keys actually populated; missing fields default to
+    "" so callers get a stable shape.
+    """
+    value = (status_body or {}).get("value") or {}
+    os_block = value.get("os") or {}
+    ios_block = value.get("ios") or {}
+    os_version = os_block.get("version") or ios_block.get("version") or ""
+    return {"os_version": str(os_version) if os_version else ""}
+
+
+def fetch_device_name_via_devicectl(udid: str) -> str:
+    """Return the user-visible device name (e.g. "Moes Max") via devicectl.
+
+    devicectl JSON path: result.deviceProperties.name. Returns "" on any
+    failure so callers can fall back to a sentinel without a try/except.
+    """
+    result = subprocess.run(
+        ["xcrun", "devicectl", "device", "info", "details",
+         "--device", udid, "--json-output", "-"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    try:
+        data = json.loads(result.stdout)
+        name = data.get("result", {}).get("deviceProperties", {}).get("name", "")
+        return str(name) if name else ""
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return ""
 
 
 # ─── user-facing Trust guidance ──────────────────────────────────────────────
@@ -772,11 +1011,21 @@ def bootstrap_device(
     # 7. Launch + port discovery (Bug 5+6 fix: xcodebuild test-without-building)
     host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
 
-    # 8. Persist registry (includes both ip and port — Bug 6 fix)
+    # 8. Smoke test using the device's WiFi IP — pulls /status which carries
+    # os.version (D8). Run before persisting so the registry write captures
+    # the current OS / device-name fields in a single operation.
+    status_body = smoke_test(host, port)
+    metadata = extract_device_metadata_from_status(status_body)
+    device_name = fetch_device_name_via_devicectl(udid)
+
+    # 9. Persist registry (includes both ip and port — Bug 6 fix; D8 adds
+    # device_name + os_version so tool_session_start can populate them.)
     import time as _time
     entry = {
         "wda_bundle_id": bundle_id,
         "install_path": str(_find_wda_app_bundle(derived_data) or ""),
+        "derived_data": str(derived_data),
+        "xctestrun_path": str(_find_xctestrun(derived_data) or ""),
         "last_built_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         "host": host,
         "ip": host,   # explicit ip field for device WiFi address
@@ -785,12 +1034,11 @@ def bootstrap_device(
         "team_id": resolved_team,
         "hardware_udid": hardware_udid,
         "coredevice_uuid": udid,
+        "device_name": device_name,
+        "os_version": metadata.get("os_version", ""),
     }
     registry_path = registry.save(udid, entry)
     print(f"[simdrive] Registry written to {registry_path}", flush=True)
-
-    # 9. Smoke test using the device's WiFi IP
-    smoke_test(host, port)
 
     # 10. Success summary
     print("", flush=True)
@@ -809,3 +1057,79 @@ def bootstrap_device(
     print("=" * 72, flush=True)
 
     return entry
+
+
+# ─── companion daemon controls (B3) ──────────────────────────────────────────
+
+
+def wda_up(udid: str) -> dict:
+    """Re-launch a previously-bootstrapped WDA daemon for ``udid``.
+
+    Reads ``~/.simdrive/wda/<udid>.json`` to recover the cached xctestrun and
+    hardware UDID; skips the build/install steps. Use after a phone reboot or
+    after ``simdrive wda-down`` to bring WDA back without a full bootstrap.
+
+    Raises ``wda_not_bootstrapped`` if the registry entry is absent or the
+    cached xctestrun is missing.
+    """
+    entry = registry.load(udid)
+    if entry is None:
+        raise wda_not_bootstrapped(udid)
+
+    xctestrun = entry.get("xctestrun_path") or ""
+    hardware_udid = entry.get("hardware_udid")
+    derived_data_str = entry.get("derived_data") or ""
+    if not xctestrun or not Path(xctestrun).exists() or not hardware_udid:
+        raise wda_not_bootstrapped(udid)
+
+    bundle_id = entry.get("wda_bundle_id", _WDA_BUNDLE_ID)
+    derived_data = Path(derived_data_str) if derived_data_str else Path(xctestrun).parent.parent.parent
+    wda_port = int(entry.get("port") or _WDA_DEFAULT_PORT)
+
+    host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
+
+    entry["host"] = host
+    entry["ip"] = host
+    entry["port"] = port
+    # D8: refresh device_name / os_version on re-up so post-reboot OS upgrades
+    # land in the registry without a full re-bootstrap.
+    status_body = smoke_test(host, port)
+    metadata = extract_device_metadata_from_status(status_body)
+    if metadata.get("os_version"):
+        entry["os_version"] = metadata["os_version"]
+    name = fetch_device_name_via_devicectl(udid)
+    if name:
+        entry["device_name"] = name
+    registry.save(udid, entry)
+    print(f"[simdrive] WDA back up on http://{host}:{port}", flush=True)
+    return entry
+
+
+def wda_down(udid: str) -> bool:
+    """SIGTERM the running WDA daemon for ``udid`` (read PID from pidfile).
+
+    Returns True if a process was signalled, False if no pidfile/process found.
+    Removes the pidfile on success.
+    """
+    pid_file = _pid_path(udid)
+    if not pid_file.exists():
+        print(f"[simdrive] No WDA pidfile at {pid_file} — nothing to stop.", flush=True)
+        return False
+
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pid_file.unlink(missing_ok=True)
+        return False
+
+    import signal
+    try:
+        os.kill(pid, signal.SIGTERM)
+        print(f"[simdrive] Sent SIGTERM to WDA daemon pid={pid}", flush=True)
+        signalled = True
+    except ProcessLookupError:
+        print(f"[simdrive] WDA daemon pid={pid} already gone.", flush=True)
+        signalled = False
+
+    pid_file.unlink(missing_ok=True)
+    return signalled
