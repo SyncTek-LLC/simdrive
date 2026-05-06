@@ -6,6 +6,11 @@
 
 - **Pre-flight Xcode account detection.** `bootstrap-device` now checks whether Xcode is signed in to an Apple ID for the supplied `--team-id` before invoking xcodebuild. When ~/Library/MobileDevice/Provisioning Profiles/ is empty, raises `wda_xcode_account_not_authenticated` with a 5-step recovery message (Xcode → Settings → Accounts → +). Replaces xcodebuild's terse "No Account for Team" error with actionable guidance.
 
+### Improved
+
+- **WDA port discovery timeout extended from 15s to 60s.** First-launch xcodebuild test-without-building can take 30s+ on real devices; 15s was too aggressive.
+- **Locked-device detection.** When xcodebuild reports "Unlock \<device\> to Continue", bootstrap now raises `wda_device_locked` with explicit recovery steps (unlock + optionally extend Auto-Lock) instead of the generic `wda_port_discovery_timeout`.
+
 ### Fixed — WDA real-device bootstrap (6 bugs, INIT-2026-547)
 
 All 6 bugs identified in the live-validation report are resolved in `simdrive/wda/bootstrap.py`:

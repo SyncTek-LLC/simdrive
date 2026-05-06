@@ -107,15 +107,32 @@ def wda_install_failed(stderr: str) -> SimdriveError:
 
 
 def wda_port_discovery_timeout(udid: str) -> SimdriveError:
-    """Raised when the syslog does not emit the ServerURLHere pattern within 15s."""
+    """Raised when xcodebuild stdout does not emit the ServerURLHere pattern within the timeout."""
     return SimdriveError(
         code="wda_port_discovery_timeout",
         message=(
-            f"WDA on device {udid} did not advertise its port within 15 s. "
+            f"WDA on device {udid} did not advertise its port within the discovery window. "
             "Recovery: check device console (`xcrun devicectl device console --device <udid>`) "
             "for WDA crash or signing errors; ensure the WDA bundle is correctly installed "
             "(`xcrun devicectl device info apps --device <udid>`); "
             "run `simdrive bootstrap-device <udid> --rebuild` to force a clean install."
+        ),
+        details={"udid": udid},
+    )
+
+
+def wda_device_locked(udid: str) -> SimdriveError:
+    """Raised when xcodebuild reports the device is locked during WDA launch."""
+    return SimdriveError(
+        code="wda_device_locked",
+        message=(
+            f"Device {udid} is locked. xcodebuild cannot launch WebDriverAgentRunner "
+            f"on a locked iOS device — iOS blocks code execution until the user authenticates.\n"
+            f"\n"
+            f"Recovery:\n"
+            f"  1. Unlock {udid} with the passcode (or Face ID / Touch ID).\n"
+            f"  2. Optional: extend Auto-Lock (Settings → Display → Auto-Lock) to give the test ~60s to launch.\n"
+            f"  3. Re-run `simdrive bootstrap-device {udid} ...`"
         ),
         details={"udid": udid},
     )

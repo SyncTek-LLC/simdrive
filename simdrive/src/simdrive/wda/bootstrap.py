@@ -45,6 +45,7 @@ import httpx
 from . import registry
 from .errors import (
     wda_build_failed,
+    wda_device_locked,
     wda_device_not_ready,
     wda_host_tools_missing,
     wda_install_failed,
@@ -70,6 +71,11 @@ _WDA_DEFAULT_PORT = 8100
 # Captures both host/IP (group 1) and port (group 2).
 # Example: ServerURLHere->http://192.168.1.26:8100<-ServerURLHere
 _SERVER_URL_RE = re.compile(r"ServerURLHere->http://([^:]+):(\d+)<-")
+
+# Pattern emitted by xcodebuild when the target device is locked.
+# Example: Error Domain=com.apple.dt.deviceprep Code=-3 "Unlock Moes Max to Continue"
+# Example: Xcode cannot launch WebDriverAgentRunner on <device> because the device is locked.
+_LOCKED_DEVICE_RE = re.compile(r"Unlock .+ to Continue|device is locked", re.IGNORECASE)
 
 # WDA bundle identifier (Appium fork default, matches xcodebuild scheme).
 _WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
@@ -603,16 +609,20 @@ def launch_and_discover_port(
 
     host: Optional[str] = None
     port: Optional[int] = None
+    device_locked: bool = False
     deadline = time.monotonic() + _PORT_DISCOVERY_TIMEOUT_S
 
     def _reader() -> None:
-        nonlocal host, port
+        nonlocal host, port, device_locked
         assert proc.stdout is not None
         for line in proc.stdout:
             m = _SERVER_URL_RE.search(line)
             if m:
                 host = m.group(1)
                 port = int(m.group(2))
+                break
+            if _LOCKED_DEVICE_RE.search(line):
+                device_locked = True
                 break
             if time.monotonic() > deadline:
                 break
@@ -621,13 +631,15 @@ def launch_and_discover_port(
     t.start()
     t.join(timeout=_PORT_DISCOVERY_TIMEOUT_S + 2.0)
 
-    if host is None or port is None:
+    if device_locked or host is None or port is None:
         # Kill the xcodebuild process before raising.
         proc.terminate()
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        if device_locked:
+            raise wda_device_locked(coredevice_uuid)
         raise wda_port_discovery_timeout(coredevice_uuid)
 
     # xcodebuild process stays running in background (WDA server is alive as long as it runs).

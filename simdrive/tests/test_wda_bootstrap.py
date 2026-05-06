@@ -690,6 +690,7 @@ def test_all_wda_errors_have_recovery():
         wda_smoke_failed,
         wda_session_lost,
         wda_xcode_account_not_authenticated,
+        wda_device_locked,
     )
     errors = [
         wda_host_tools_missing("xcodebuild"),
@@ -703,6 +704,97 @@ def test_all_wda_errors_have_recovery():
         wda_session_lost("UDID"),
         wda_session_lost("UDID", last_seen_at=1234567890.0),
         wda_xcode_account_not_authenticated("E52N8732YT"),
+        wda_device_locked("UDID"),
     ]
     for err in errors:
         assert "Recovery" in err.message, f"{err.code} missing 'Recovery' in message"
+
+
+# ── port discovery timeout constant ──────────────────────────────────────────
+
+
+def test_port_discovery_timeout_constant_is_60():
+    """Guard against accidental regression of the timeout back below 60s."""
+    from simdrive.wda.bootstrap import _PORT_DISCOVERY_TIMEOUT_S
+    assert _PORT_DISCOVERY_TIMEOUT_S == 60, (
+        f"_PORT_DISCOVERY_TIMEOUT_S should be 60 (real-device xcodebuild preflight "
+        f"takes 20-40s on first launch); got {_PORT_DISCOVERY_TIMEOUT_S}"
+    )
+
+
+# ── locked-device detection ───────────────────────────────────────────────────
+
+
+def test_port_discovery_raises_device_locked_on_unlock_message(tmp_path):
+    """When xcodebuild stdout contains 'Unlock <name> to Continue', raise wda_device_locked."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    fake_lines = (
+        "Command line invocation:\n"
+        "    xcodebuild test-without-building ...\n"
+        "[MT] Run Destination Preflight: The destination is not ready.\n"
+        'Error Domain=com.apple.dt.deviceprep Code=-3 "Unlock Moes Max to Continue" UserInfo=...\n'
+        "[MT] Run Destination Preflight: Waiting for the destination to become ready.\n"
+    )
+
+    from simdrive.errors import SimdriveError
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        import io
+        mock_proc = MagicMock()
+        mock_proc.stdout = io.StringIO(fake_lines)
+        mock_popen.return_value = mock_proc
+
+        from simdrive.wda.bootstrap import launch_and_discover_port
+        with pytest.raises(SimdriveError) as exc_info:
+            launch_and_discover_port(
+                coredevice_uuid="TEST-LOCKED-UUID",
+                derived_data=tmp_path,
+                hardware_udid="HW-UDID-LOCKED",
+            )
+
+    assert exc_info.value.code == "wda_device_locked"
+    assert "Unlock" in exc_info.value.message
+    assert "passcode" in exc_info.value.message.lower()
+    assert exc_info.value.details["udid"] == "TEST-LOCKED-UUID"
+
+
+def test_port_discovery_raises_device_locked_on_device_is_locked_phrase(tmp_path):
+    """When xcodebuild stdout contains 'device is locked', raise wda_device_locked."""
+    products_dir = tmp_path / "Build" / "Products"
+    products_dir.mkdir(parents=True)
+    xctestrun = products_dir / "WebDriverAgentRunner_iphoneos26.3.xctestrun"
+    xctestrun.write_text("<dict/>")
+
+    fake_lines = (
+        "Xcode cannot launch WebDriverAgentRunner on Moes Max because the device is locked.\n"
+    )
+
+    from simdrive.errors import SimdriveError
+    with patch("simdrive.wda.bootstrap.subprocess.Popen") as mock_popen:
+        import io
+        mock_proc = MagicMock()
+        mock_proc.stdout = io.StringIO(fake_lines)
+        mock_popen.return_value = mock_proc
+
+        from simdrive.wda.bootstrap import launch_and_discover_port
+        with pytest.raises(SimdriveError) as exc_info:
+            launch_and_discover_port(
+                coredevice_uuid="TEST-LOCKED-UUID-2",
+                derived_data=tmp_path,
+                hardware_udid="HW-UDID-LOCKED-2",
+            )
+
+    assert exc_info.value.code == "wda_device_locked"
+
+
+def test_locked_device_regex_matches_unlock_message():
+    """_LOCKED_DEVICE_RE matches xcodebuild's 'Unlock <device> to Continue' pattern."""
+    from simdrive.wda.bootstrap import _LOCKED_DEVICE_RE
+
+    assert _LOCKED_DEVICE_RE.search('Error Domain=com.apple.dt.deviceprep Code=-3 "Unlock Moes Max to Continue"') is not None
+    assert _LOCKED_DEVICE_RE.search("the device is locked.") is not None
+    assert _LOCKED_DEVICE_RE.search("DEVICE IS LOCKED") is not None  # case-insensitive
+    assert _LOCKED_DEVICE_RE.search("ServerURLHere->http://192.168.1.1:8100<-") is None  # no match on success
