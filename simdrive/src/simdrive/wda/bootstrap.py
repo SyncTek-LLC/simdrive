@@ -837,10 +837,11 @@ def launch_and_discover_port(
 # ─── smoke test ──────────────────────────────────────────────────────────────
 
 
-def smoke_test(host: str, port: int) -> None:
+def smoke_test(host: str, port: int) -> dict:
     """GET http://<host>:<port>/status and assert {value: {ready: true}}.
 
-    Raises wda_smoke_failed on mismatch or HTTP error.
+    Returns the parsed status body so callers can extract OS / device info
+    (D8). Raises wda_smoke_failed on mismatch or HTTP error.
     host is the device's WiFi IP (captured from WDA's ServerURLHere announcement).
     """
     url = f"http://{host}:{port}/status"
@@ -863,6 +864,58 @@ def smoke_test(host: str, port: int) -> None:
         raise wda_smoke_failed(resp.status_code, json.dumps(body))
 
     print("[simdrive] WDA smoke test passed — ready=True.", flush=True)
+    return body
+
+
+# ─── D8: device metadata extraction from WDA /status + devicectl ────────────
+
+
+def extract_device_metadata_from_status(status_body: dict) -> dict:
+    """Pull device_name + os_version out of a WDA /status payload.
+
+    Appium WDA v9.9.0 status response (real device) typically contains:
+        {
+          "value": {
+            "build": {...},
+            "ios": {"ip": "192.168.x.y"},
+            "os":  {"name": "iOS", "version": "26.3.1", "sdkVersion": "..."},
+            "ready": true
+          }
+        }
+
+    Device name (the user-visible "Moes Max") is NOT in /status — it lives in
+    devicectl's deviceProperties.name. Callers should layer the devicectl
+    lookup on top via fetch_device_name_via_devicectl().
+
+    Returns a dict with the keys actually populated; missing fields default to
+    "" so callers get a stable shape.
+    """
+    value = (status_body or {}).get("value") or {}
+    os_block = value.get("os") or {}
+    ios_block = value.get("ios") or {}
+    os_version = os_block.get("version") or ios_block.get("version") or ""
+    return {"os_version": str(os_version) if os_version else ""}
+
+
+def fetch_device_name_via_devicectl(udid: str) -> str:
+    """Return the user-visible device name (e.g. "Moes Max") via devicectl.
+
+    devicectl JSON path: result.deviceProperties.name. Returns "" on any
+    failure so callers can fall back to a sentinel without a try/except.
+    """
+    result = subprocess.run(
+        ["xcrun", "devicectl", "device", "info", "details",
+         "--device", udid, "--json-output", "-"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    try:
+        data = json.loads(result.stdout)
+        name = data.get("result", {}).get("deviceProperties", {}).get("name", "")
+        return str(name) if name else ""
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        return ""
 
 
 # ─── user-facing Trust guidance ──────────────────────────────────────────────
@@ -958,7 +1011,15 @@ def bootstrap_device(
     # 7. Launch + port discovery (Bug 5+6 fix: xcodebuild test-without-building)
     host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
 
-    # 8. Persist registry (includes both ip and port — Bug 6 fix)
+    # 8. Smoke test using the device's WiFi IP — pulls /status which carries
+    # os.version (D8). Run before persisting so the registry write captures
+    # the current OS / device-name fields in a single operation.
+    status_body = smoke_test(host, port)
+    metadata = extract_device_metadata_from_status(status_body)
+    device_name = fetch_device_name_via_devicectl(udid)
+
+    # 9. Persist registry (includes both ip and port — Bug 6 fix; D8 adds
+    # device_name + os_version so tool_session_start can populate them.)
     import time as _time
     entry = {
         "wda_bundle_id": bundle_id,
@@ -973,12 +1034,11 @@ def bootstrap_device(
         "team_id": resolved_team,
         "hardware_udid": hardware_udid,
         "coredevice_uuid": udid,
+        "device_name": device_name,
+        "os_version": metadata.get("os_version", ""),
     }
     registry_path = registry.save(udid, entry)
     print(f"[simdrive] Registry written to {registry_path}", flush=True)
-
-    # 9. Smoke test using the device's WiFi IP
-    smoke_test(host, port)
 
     # 10. Success summary
     print("", flush=True)
@@ -1031,8 +1091,16 @@ def wda_up(udid: str) -> dict:
     entry["host"] = host
     entry["ip"] = host
     entry["port"] = port
+    # D8: refresh device_name / os_version on re-up so post-reboot OS upgrades
+    # land in the registry without a full re-bootstrap.
+    status_body = smoke_test(host, port)
+    metadata = extract_device_metadata_from_status(status_body)
+    if metadata.get("os_version"):
+        entry["os_version"] = metadata["os_version"]
+    name = fetch_device_name_via_devicectl(udid)
+    if name:
+        entry["device_name"] = name
     registry.save(udid, entry)
-    smoke_test(host, port)
     print(f"[simdrive] WDA back up on http://{host}:{port}", flush=True)
     return entry
 
