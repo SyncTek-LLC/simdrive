@@ -330,20 +330,43 @@ def test_resolve_signing_identity_returns_none_for_personal_team_empty_keychain(
     assert result_team == "B3HE38966G"
 
 
-def test_resolve_signing_identity_ambiguous_when_team_has_multiple_certs():
-    """When team_id matches multiple certs in keychain (rare), raise ambiguous."""
-    from simdrive.errors import SimdriveError
+def test_resolve_signing_identity_picks_newest_when_team_has_multiple_certs(monkeypatch):
+    """B2: When team_id matches multiple certs, pick the most-recently-issued one
+    instead of raising ambiguous. All matches share team_id so they are
+    equivalent for codesigning; the older cert is typically expired or revoked.
+    """
     two_same_team = (
         '1) AABBCCDDEEFF00112233445566778899AABBCCDD "Apple Development: alice@example.com (AAAAAAAAAA)"\n'
         '2) 1122334455667788990011223344556677889900 "Apple Development: alice-old@example.com (AAAAAAAAAA)"\n'
         "    2 valid identities found\n"
     )
+
+    def _stub_not_before(name: str):
+        # Newer cert wins; older entry's name has "alice-old" and is from 2024.
+        if "alice-old" in name:
+            return "2024-01-15T00:00:00"
+        return "2026-04-30T00:00:00"
+
+    monkeypatch.setattr("simdrive.wda.bootstrap._cert_not_before", _stub_not_before)
+
     with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout=two_same_team)
         from simdrive.wda.bootstrap import resolve_signing_identity
-        with pytest.raises(SimdriveError) as exc_info:
-            resolve_signing_identity(team_id="AAAAAAAAAA")
-    assert exc_info.value.code == "wda_signing_ambiguous"
+        name, team = resolve_signing_identity(team_id="AAAAAAAAAA")
+
+    assert "alice@example.com" in name and "alice-old" not in name
+    assert team == "AAAAAAAAAA"
+
+
+def test_pick_newest_identity_falls_back_when_no_dates(monkeypatch):
+    """B2: If openssl/security can't resolve dates for any cert, fall back to
+    the first entry (deterministic, matches pre-B2 behaviour)."""
+    monkeypatch.setattr("simdrive.wda.bootstrap._cert_not_before", lambda _: None)
+
+    from simdrive.wda.bootstrap import _pick_newest_identity
+    a = {"sha1": "AAA", "name": "Apple Development: A (TEAM000001)", "team_id": "TEAM000001"}
+    b = {"sha1": "BBB", "name": "Apple Development: B (TEAM000001)", "team_id": "TEAM000001"}
+    assert _pick_newest_identity([a, b]) is a
 
 
 # ── Bug 2: hardware UDID resolution ──────────────────────────────────────────

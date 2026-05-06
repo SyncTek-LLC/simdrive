@@ -329,6 +329,61 @@ def _parse_identities(output: str) -> list[dict]:
     return result
 
 
+def _cert_not_before(name: str) -> Optional[str]:
+    """Return the cert's `notBefore` date as a sortable string, or None.
+
+    Shells out to ``security find-certificate -c <name> -p`` (PEM) → openssl
+    ``x509 -noout -startdate`` (e.g. ``notBefore=Apr  9 12:34:56 2026 GMT``).
+    The raw string is returned and we sort lexicographically with a small
+    parse fallback — month names sort wrong as plain text, so the parse
+    fallback below converts to ISO-8601 when openssl's output is recognised.
+    """
+    pem = subprocess.run(
+        ["security", "find-certificate", "-c", name, "-p"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if pem.returncode != 0 or not pem.stdout:
+        return None
+    info = subprocess.run(
+        ["openssl", "x509", "-noout", "-startdate"],
+        input=pem.stdout, capture_output=True, text=True, timeout=10, check=False,
+    )
+    if info.returncode != 0 or not info.stdout:
+        return None
+    line = info.stdout.strip()
+    # Expect: "notBefore=Apr  9 12:34:56 2026 GMT"
+    prefix = "notBefore="
+    if not line.startswith(prefix):
+        return None
+    raw = line[len(prefix):].strip()
+    try:
+        from datetime import datetime
+        # openssl emits with double-space day padding for single-digit days.
+        dt = datetime.strptime(raw, "%b %d %H:%M:%S %Y %Z")
+        return dt.strftime("%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return raw  # opaque sort key — better than dropping the entry
+
+
+def _pick_newest_identity(identities: list[dict]) -> dict:
+    """Return the most-recently-issued identity from ``identities``.
+
+    Queries each cert's notBefore date via ``security find-certificate`` +
+    ``openssl x509 -noout -startdate``. Identities whose date can't be
+    resolved sort to the bottom; if no dates are resolvable we return the
+    first entry (preserves previous deterministic behaviour).
+    """
+    dated: list[tuple[str, dict]] = []
+    for ident in identities:
+        d = _cert_not_before(ident["name"])
+        if d is not None:
+            dated.append((d, ident))
+    if not dated:
+        return identities[0]
+    dated.sort(key=lambda pair: pair[0], reverse=True)
+    return dated[0][1]
+
+
 def resolve_signing_identity(
     signing_identity: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -340,7 +395,10 @@ def resolve_signing_identity(
       2. If team_id is supplied:
          a. Filter keychain identities to those matching team_id.
          b. Exactly one match → return it + team_id.
-         c. Multiple matches (rare) → raise wda_signing_ambiguous.
+         c. Multiple matches → pick the most-recently-issued cert (B2). All
+            matches share team_id and are therefore equivalent for codesigning
+            purposes; picking the newest avoids spurious ambiguity errors for
+            users who accumulate certs across machine refreshes.
          d. Zero matches → return (None, team_id). This is the Apple Personal
             Team case: a free Apple ID team has no cert in the keychain yet, but
             xcodebuild's -allowProvisioningUpdates will download one on demand
@@ -384,7 +442,13 @@ def resolve_signing_identity(
         if len(matching) == 1:
             return matching[0]["name"], team_id
         if len(matching) > 1:
-            raise wda_signing_ambiguous([i["name"] for i in matching])
+            # B2: all matches share team_id, so they're equivalent for
+            # codesigning purposes — picking the newest "Apple Development"
+            # cert is safe (older ones may be revoked). Falling through to
+            # ambiguity here would block bootstraps for users who routinely
+            # accumulate certs (e.g. machine refreshes).
+            picked = _pick_newest_identity(matching)
+            return picked["name"], team_id
         # Zero matches: Apple Personal Team case (or new paid team with no local cert).
         # Return (None, team_id) — xcodebuild + -allowProvisioningUpdates will
         # download a cert on demand when an Xcode Account is signed in for this team.
