@@ -32,6 +32,7 @@ def _collect_constructors(module) -> list[tuple[str, callable]]:
 _CORE_CONSTRUCTORS = [
     ("no_session", lambda: _errors.no_session("sess-001")),
     ("no_device", lambda: _errors.no_device({"name": "iPhone 16"})),
+    ("device_launch_failed", lambda: _errors.device_launch_failed("udid-001", "com.example.App", "boom")),
     ("sim_unhealthy", lambda: _errors.sim_unhealthy("udid-001", "shutdown loop")),
     ("hid_unavailable", lambda: _errors.hid_unavailable("binary not found")),
     ("target_not_found", lambda: _errors.target_not_found("mark", "login_button")),
