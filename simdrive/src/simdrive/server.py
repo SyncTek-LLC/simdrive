@@ -791,11 +791,14 @@ def tool_doctor(arguments: dict) -> dict:
 def tool_app_state(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
+    if s.target == "device":
+        return diagnostics.app_state_device(s.device.udid, bundle_id)
     return diagnostics.app_state(s.device.udid, bundle_id)
 
 
 def tool_apps(arguments: dict) -> dict:
     udid = arguments.get("udid")
+    target = "simulator"
     if not udid:
         sid = arguments.get("session_id")
         if not sid:
@@ -805,6 +808,9 @@ def tool_apps(arguments: dict) -> dict:
             )
         s = session.get(sid)
         udid = s.device.udid
+        target = s.target
+    if target == "device":
+        return {"apps": diagnostics.list_apps_device(udid)}
     return {"apps": diagnostics.list_apps(udid)}
 
 
