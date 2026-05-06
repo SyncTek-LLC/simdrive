@@ -7,6 +7,103 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.0.0a8] — 2026-05-06 (alpha — device session usable on real hardware)
+
+First end-to-end real-device dogfood (`a7`, iPhone 17 Pro Max "Moes Max",
+iOS 26.3.1, 2026-05-06) catalogued 12 device-session bugs in
+`simdrive/docs/DOGFOOD_FEEDBACK_2026_05_06_MOES_MAX.md`. a8 fixes 11 of
+12; the twelfth (D6, empty `idevicesyslog` output) ships as
+investigation-only because the original simctl diagnosis was wrong and
+the right fix differs by root cause — see
+`simdrive/docs/D6_LOGS_INVESTIGATION.md`.
+
+**Net effect:** a7 = "WDA bootstraps but MCP can't drive it"; a8 = "MCP
+device session is usable end-to-end". Suite went 678 → 711 passed.
+
+### Fixed — priority unlock (turns "unusable" into "usable")
+- **D3** `device.launch_app` no longer passes `--start-stopped=false` —
+  modern devicectl rejected the flag, blocking every `session_start`
+  with `app_bundle_id`.
+- **D2** `session_start target=device` now opens a default WDA test
+  session unconditionally (with or without `app_bundle_id`); input verbs
+  no longer hit `wda_session_not_open`.
+- **D1** `observe` gates `screenshot_b64` behind a new
+  `include_screenshot_b64` param (default `false`). The unconditional
+  101k-char b64 payload was overflowing the MCP token budget on real
+  devices. `screenshot_path` is still returned by default.
+
+### Fixed — daemonization
+- **B3** `bootstrap-device` now passes `start_new_session=True` to the
+  xcodebuild Popen and redirects stdout/stderr to
+  `~/.simdrive/wda/<udid>.log`; PID written to
+  `~/.simdrive/wda/<udid>.pid`. WDA survives bootstrap exit; users no
+  longer need a manual `nohup` workaround.
+- **B3** new CLI: `simdrive wda-up <udid>` (relaunch from registry
+  without rebuilding) and `simdrive wda-down <udid>` (SIGTERM via
+  pidfile).
+
+### Fixed — simctl-leak cluster (device sessions stop using simctl)
+- **D4** Device-launch failure raises `device_launch_failed` with a
+  devicectl-aware recovery hint instead of `no_device` with a simctl
+  hint.
+- **D5** `tool_apps` for `target=device` now queries
+  `xcrun devicectl device info apps --device <udid> --json-output -`
+  instead of returning `{apps: []}` from a simctl-only call.
+- **D7** `tool_app_state` for `target=device` now queries
+  `xcrun devicectl device info processes ...` instead of leaking
+  simctl's "Invalid device" error string.
+- New helper `simdrive.diagnostics._devicectl_info_json` underlies both.
+
+### Fixed — bootstrap polish
+- **B1** `verify_xcode_account_for_team(team_id)` now scans the parsed
+  plist output of `defaults read com.apple.dt.Xcode
+  DVTDeveloperAccountManagerAppleIDLists` for an actual team binding
+  (`teamID`/`teamIDs`/`DVTDeveloperAccountTeamID`) instead of grepping
+  for the literal substring `"identifier"` (which matched any non-empty
+  account list and let bootstraps proceed when no account was bound to
+  the requested team).
+- **B2** When multiple Apple Development certs share the requested
+  `team_id`, the most-recently-issued cert is auto-picked instead of
+  raising `wda_signing_ambiguous`. Ambiguity is still raised when
+  `team_id` was not provided.
+- **B4** When `xcodebuild build-for-testing` emits a `BUILD FAILED`
+  before its `-allowProvisioningUpdates` retry succeeds, the FAILED line
+  is logged at DEBUG with a single INFO-level summary
+  ("First attempt failed pending provisioning fetch; retry succeeded
+  …expected"). Stops scaring users on first-run bootstraps.
+
+### Fixed — session metadata
+- **D8** `bootstrap-device` now captures device name from
+  `xcrun devicectl device info details` and iOS version from WDA
+  `/status`; `~/.simdrive/wda/<udid>.json` carries `device_name` and
+  `os_version` keys; `tool_session_start` returns these instead of
+  `device: "Real Device"`, `os_version: ""`.
+
+### Investigated (not fixed — gated to a9)
+- **D6** `tool_logs` returns empty on real devices. The original a7
+  report blamed simctl, but the device path actually uses
+  `idevicesyslog`. Five candidate root causes ranked
+  (1s-warmup-too-short → broken brew binary → over-aggressive predicate
+  → DEVNULL'd stderr → Developer Mode regression) in
+  `simdrive/docs/D6_LOGS_INVESTIGATION.md`. a9 will pick the right fix
+  after Lyrasis dogfood captures `idevicesyslog -u <udid> 2>&1` against
+  Palace on a real device.
+
+### Tests
+- 33 new tests across the four fix waves (1.0.0a7 baseline 678 →
+  1.0.0a8 711 passing, 1 skipped).
+- D5/D7 verified live against an iPad on iOS 26 / Xcode 26 (devicectl
+  JSON shape confirmed).
+
+### Known
+- CHANGELOG history for a3 → a7 not yet backfilled (gap pre-dates a8).
+- Pre-existing iOS 26 simulator TextField-focus timing flake in
+  `test_e2e_testkit.py::test_type_text_followed_by_submit_produces_result`
+  can intermittently fail on busy hosts; passes on isolated rerun and
+  full suite re-runs.
+
+---
+
 ## [1.0.0a2] — 2026-05-02 (alpha — post-WDA cleanup + audit-driven fixes)
 
 ### Fixed
