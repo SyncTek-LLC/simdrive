@@ -50,6 +50,7 @@ from .errors import (
     wda_host_tools_missing,
     wda_install_failed,
     wda_no_signing_identity,
+    wda_not_bootstrapped,
     wda_port_discovery_timeout,
     wda_signing_ambiguous,
     wda_smoke_failed,
@@ -79,6 +80,24 @@ _LOCKED_DEVICE_RE = re.compile(r"Unlock .+ to Continue|device is locked", re.IGN
 
 # WDA bundle identifier (Appium fork default, matches xcodebuild scheme).
 _WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
+
+
+# ─── daemon paths ────────────────────────────────────────────────────────────
+
+
+def _wda_home() -> Path:
+    """Return the per-UDID WDA state directory (override via WDA_REGISTRY_DIR)."""
+    return Path(os.environ.get("WDA_REGISTRY_DIR", Path.home() / ".simdrive" / "wda"))
+
+
+def _log_path(udid: str) -> Path:
+    """Path of the per-UDID xcodebuild stdout/stderr log."""
+    return _wda_home() / f"{udid}.log"
+
+
+def _pid_path(udid: str) -> Path:
+    """Path of the per-UDID WDA daemon pidfile."""
+    return _wda_home() / f"{udid}.pid"
 
 
 # ─── host-tool verification ───────────────────────────────────────────────────
@@ -599,35 +618,48 @@ def launch_and_discover_port(
         "-destination", f"id={hardware_udid}",
     ]
 
-    # Spawn xcodebuild in background; tail its stdout for the ServerURLHere line.
+    log_file = _log_path(coredevice_uuid)
+    pid_file = _pid_path(coredevice_uuid)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = log_file.open("w", encoding="utf-8")
+
+    # start_new_session detaches xcodebuild from this CLI's process group so it
+    # survives bootstrap-device exiting (otherwise SIGHUP cascade kills WDA — B3).
     proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
+        stdout=log_fh,
         stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
         text=True,
+        start_new_session=True,
     )
+    pid_file.write_text(str(proc.pid), encoding="utf-8")
 
     host: Optional[str] = None
     port: Optional[int] = None
     device_locked: bool = False
     deadline = time.monotonic() + _PORT_DISCOVERY_TIMEOUT_S
 
-    def _reader() -> None:
+    def _tail_log() -> None:
         nonlocal host, port, device_locked
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            m = _SERVER_URL_RE.search(line)
-            if m:
-                host = m.group(1)
-                port = int(m.group(2))
-                break
-            if _LOCKED_DEVICE_RE.search(line):
-                device_locked = True
-                break
-            if time.monotonic() > deadline:
-                break
+        with log_file.open("r", encoding="utf-8") as fh:
+            while time.monotonic() < deadline:
+                line = fh.readline()
+                if not line:
+                    if proc.poll() is not None:
+                        return
+                    time.sleep(0.1)
+                    continue
+                m = _SERVER_URL_RE.search(line)
+                if m:
+                    host = m.group(1)
+                    port = int(m.group(2))
+                    return
+                if _LOCKED_DEVICE_RE.search(line):
+                    device_locked = True
+                    return
 
-    t = threading.Thread(target=_reader, daemon=True)
+    t = threading.Thread(target=_tail_log, daemon=True)
     t.start()
     t.join(timeout=_PORT_DISCOVERY_TIMEOUT_S + 2.0)
 
@@ -638,13 +670,20 @@ def launch_and_discover_port(
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+        log_fh.close()
+        try:
+            pid_file.unlink()
+        except FileNotFoundError:
+            pass
         if device_locked:
             raise wda_device_locked(coredevice_uuid)
         raise wda_port_discovery_timeout(coredevice_uuid)
 
-    # xcodebuild process stays running in background (WDA server is alive as long as it runs).
-    # The caller is responsible for the session lifecycle; we do NOT kill it here.
+    # xcodebuild keeps running in its own session; WDA stays alive after this
+    # process exits. Teardown via `simdrive wda-down <udid>`.
     print(f"[simdrive] WDA listening on http://{host}:{port}", flush=True)
+    print(f"[simdrive] WDA log:  {log_file}", flush=True)
+    print(f"[simdrive] WDA pid:  {pid_file} ({proc.pid})", flush=True)
     return host, port
 
 
@@ -777,6 +816,8 @@ def bootstrap_device(
     entry = {
         "wda_bundle_id": bundle_id,
         "install_path": str(_find_wda_app_bundle(derived_data) or ""),
+        "derived_data": str(derived_data),
+        "xctestrun_path": str(_find_xctestrun(derived_data) or ""),
         "last_built_at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
         "host": host,
         "ip": host,   # explicit ip field for device WiFi address
@@ -809,3 +850,71 @@ def bootstrap_device(
     print("=" * 72, flush=True)
 
     return entry
+
+
+# ─── companion daemon controls (B3) ──────────────────────────────────────────
+
+
+def wda_up(udid: str) -> dict:
+    """Re-launch a previously-bootstrapped WDA daemon for ``udid``.
+
+    Reads ``~/.simdrive/wda/<udid>.json`` to recover the cached xctestrun and
+    hardware UDID; skips the build/install steps. Use after a phone reboot or
+    after ``simdrive wda-down`` to bring WDA back without a full bootstrap.
+
+    Raises ``wda_not_bootstrapped`` if the registry entry is absent or the
+    cached xctestrun is missing.
+    """
+    entry = registry.load(udid)
+    if entry is None:
+        raise wda_not_bootstrapped(udid)
+
+    xctestrun = entry.get("xctestrun_path") or ""
+    hardware_udid = entry.get("hardware_udid")
+    derived_data_str = entry.get("derived_data") or ""
+    if not xctestrun or not Path(xctestrun).exists() or not hardware_udid:
+        raise wda_not_bootstrapped(udid)
+
+    bundle_id = entry.get("wda_bundle_id", _WDA_BUNDLE_ID)
+    derived_data = Path(derived_data_str) if derived_data_str else Path(xctestrun).parent.parent.parent
+    wda_port = int(entry.get("port") or _WDA_DEFAULT_PORT)
+
+    host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
+
+    entry["host"] = host
+    entry["ip"] = host
+    entry["port"] = port
+    registry.save(udid, entry)
+    smoke_test(host, port)
+    print(f"[simdrive] WDA back up on http://{host}:{port}", flush=True)
+    return entry
+
+
+def wda_down(udid: str) -> bool:
+    """SIGTERM the running WDA daemon for ``udid`` (read PID from pidfile).
+
+    Returns True if a process was signalled, False if no pidfile/process found.
+    Removes the pidfile on success.
+    """
+    pid_file = _pid_path(udid)
+    if not pid_file.exists():
+        print(f"[simdrive] No WDA pidfile at {pid_file} — nothing to stop.", flush=True)
+        return False
+
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pid_file.unlink(missing_ok=True)
+        return False
+
+    import signal
+    try:
+        os.kill(pid, signal.SIGTERM)
+        print(f"[simdrive] Sent SIGTERM to WDA daemon pid={pid}", flush=True)
+        signalled = True
+    except ProcessLookupError:
+        print(f"[simdrive] WDA daemon pid={pid} already gone.", flush=True)
+        signalled = False
+
+    pid_file.unlink(missing_ok=True)
+    return signalled

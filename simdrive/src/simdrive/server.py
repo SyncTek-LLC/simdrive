@@ -1941,6 +1941,56 @@ def _cmd_bootstrap_device(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _cmd_wda_up(args: list[str]) -> None:
+    """Handle `simdrive wda-up <udid>` — re-launch a bootstrapped WDA daemon."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive wda-up",
+        description=(
+            "Re-launch a previously-bootstrapped WDA daemon without rebuilding.\n"
+            "Reads ~/.simdrive/wda/<udid>.json for the cached xctestrun path."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("udid", help="Device UDID previously passed to bootstrap-device.")
+
+    ns = parser.parse_args(args)
+    from .wda.bootstrap import wda_up
+
+    try:
+        wda_up(ns.udid)
+    except Exception as exc:
+        _log.error("wda-up failed: %s", exc)
+        sys.exit(1)
+
+
+def _cmd_wda_down(args: list[str]) -> None:
+    """Handle `simdrive wda-down <udid>` — SIGTERM the running WDA daemon."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive wda-down",
+        description=(
+            "SIGTERM the WDA daemon for the given UDID (PID from pidfile).\n"
+            "Use after a session, or before re-running bootstrap-device."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("udid", help="Device UDID previously passed to bootstrap-device.")
+
+    ns = parser.parse_args(args)
+    from .wda.bootstrap import wda_down
+
+    try:
+        wda_down(ns.udid)
+    except Exception as exc:
+        _log.error("wda-down failed: %s", exc)
+        sys.exit(1)
+
+
 def _cmd_trial(args: list[str]) -> None:
     """Handle `simdrive trial <subcommand> ...` CLI subcommand."""
     import argparse
@@ -2038,6 +2088,8 @@ _SUBCOMMANDS: dict = {
     "run": _cmd_run,
     "ci": _cmd_ci,
     "bootstrap-device": _cmd_bootstrap_device,
+    "wda-up": _cmd_wda_up,
+    "wda-down": _cmd_wda_down,
     "trial": _cmd_trial,
     "license": _cmd_license,
 }
@@ -2050,6 +2102,8 @@ def serve() -> None:
       "run"              → _cmd_run
       "ci"               → _cmd_ci
       "bootstrap-device" → _cmd_bootstrap_device
+      "wda-up"           → _cmd_wda_up
+      "wda-down"         → _cmd_wda_down
       "trial"            → _cmd_trial
       "license"          → _cmd_license
     """
