@@ -183,6 +183,23 @@ def wda_xcode_account_not_authenticated(team_id: str) -> SimdriveError:
     )
 
 
+def wda_not_bootstrapped(udid: str) -> SimdriveError:
+    """Raised when no WDA registry entry exists for the given device UDID.
+
+    The user must run ``simdrive bootstrap-device <udid>`` first to build and
+    install WebDriverAgent on the device and write the registry entry.
+    """
+    return SimdriveError(
+        code="wda_not_bootstrapped",
+        message=(
+            f"No WDA registry entry for device {udid}. "
+            f"Run `simdrive bootstrap-device {udid} --team-id <id>` first to install "
+            f"and launch WebDriverAgent on this device before starting a real-device session."
+        ),
+        details={"udid": udid},
+    )
+
+
 def wda_session_lost(udid: str, last_seen_at: Optional[float] = None) -> SimdriveError:
     """Raised at runtime when the WDA tunnel drops mid-journey."""
     seen_msg = f" (last seen at {last_seen_at:.0f})" if last_seen_at is not None else ""

@@ -145,7 +145,8 @@ def _check_version_drift() -> str | None:
 def tool_session_start(arguments: dict) -> dict:
     device_name = arguments.get("device") or arguments.get("device_name")
     os_version = arguments.get("os_version")
-    udid = arguments.get("udid")
+    # Accept both "udid" (schema name) and "device_udid" (common alias used by live callers).
+    udid = arguments.get("udid") or arguments.get("device_udid")
     app_bundle_id = arguments.get("app_bundle_id")
     target = arguments.get("target", "simulator")
     if target not in ("simulator", "device"):
@@ -1082,7 +1083,8 @@ _TOOLS: list[dict] = [
                 "target": {"type": "string", "enum": ["simulator", "device"], "default": "simulator", "description": "'simulator' (default) or 'device' for a real iPhone/iPad. Real-device sessions support observe + logs + app lifecycle; tap/swipe/type_text/press_key require WebDriverAgent (v0.2 roadmap)."},
                 "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
-                "udid": {"type": "string", "description": "Simulator UDID, or real-device UDID when target='device'."},
+                "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
+                "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
                 "app_bundle_id": {"type": "string", "description": "Optional bundle id to launch after boot, e.g. 'com.apple.Preferences'."},
             },
         },
