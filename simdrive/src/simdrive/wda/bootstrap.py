@@ -307,18 +307,35 @@ def _parse_identities(output: str) -> list[dict]:
 def resolve_signing_identity(
     signing_identity: Optional[str] = None,
     team_id: Optional[str] = None,
-) -> tuple[str, str]:
+) -> tuple[Optional[str], Optional[str]]:
     """Return (signing_identity, team_id) to use for xcodebuild.
 
     Resolution order:
-      1. If --signing-identity supplied, use it (extract team_id if absent).
-      2. Else parse keychain; if exactly one identity → use it.
-      3. If team_id supplied, filter identities to those matching team_id.
-      4. Else raise wda_signing_ambiguous / wda_no_signing_identity.
+      1. If signing_identity is supplied directly, use it + extract team_id.
+      2. If team_id is supplied:
+         a. Filter keychain identities to those matching team_id.
+         b. Exactly one match → return it + team_id.
+         c. Multiple matches (rare) → raise wda_signing_ambiguous.
+         d. Zero matches → return (None, team_id). This is the Apple Personal
+            Team case: a free Apple ID team has no cert in the keychain yet, but
+            xcodebuild's -allowProvisioningUpdates will download one on demand
+            when the Xcode Account is signed in for that team.
+      3. No team_id, no signing_identity → exactly one keychain cert: use it.
+      4. Multiple certs, no team_id → raise wda_signing_ambiguous.
+
+    Returns:
+      (signing_identity_string_or_None, team_id_string_or_None)
+      When signing_identity_string is None, the caller passes the generic
+      CODE_SIGN_IDENTITY="Apple Development" and lets xcodebuild fetch a cert
+      via -allowProvisioningUpdates.
 
     Bug 1 fix: when multiple certs exist and team_id is supplied, filter by
     team_id before raising ambiguity. This handles the common case of having
     two "Apple Development" certs (e.g. one per machine) with different team IDs.
+
+    Personal Team fix: when team_id is supplied but no cert matches (e.g.
+    B3HE38966G — a free Apple ID personal team), return (None, team_id) instead
+    of raising ambiguous. xcodebuild downloads the cert via -allowProvisioningUpdates.
     """
     result = subprocess.run(
         ["security", "find-identity", "-v", "-p", "codesigning"],
@@ -329,34 +346,39 @@ def resolve_signing_identity(
     )
     identities = _parse_identities(result.stdout)
 
+    # Branch 1: explicit signing_identity overrides everything.
     if signing_identity:
-        # Caller supplied explicit identity; just extract team_id if not also supplied.
         if not team_id:
             tm = _TEAM_ID_RE.search(signing_identity)
             team_id = tm.group(1) if tm else ""
         return signing_identity, team_id
 
+    # Branch 2: team_id supplied → filter keychain certs by team_id.
+    if team_id:
+        matching = [i for i in identities if i["team_id"] == team_id]
+        if len(matching) == 1:
+            return matching[0]["name"], team_id
+        if len(matching) > 1:
+            raise wda_signing_ambiguous([i["name"] for i in matching])
+        # Zero matches: Apple Personal Team case (or new paid team with no local cert).
+        # Return (None, team_id) — xcodebuild + -allowProvisioningUpdates will
+        # download a cert on demand when an Xcode Account is signed in for this team.
+        return None, team_id
+
+    # Branch 3+4: no team_id, no signing_identity → fall back to keychain enumeration.
     if not identities:
         raise wda_no_signing_identity()
 
     if len(identities) == 1:
         identity = identities[0]
-        return identity["name"], team_id or identity["team_id"]
+        return identity["name"], identity["team_id"] or None
 
-    # Multiple identities — filter to Apple Development / iPhone Developer certs
-    # and prefer the ones that contain "Apple Development".
+    # Multiple identities — filter to Apple Development certs.
     apple_dev = [i for i in identities if "Apple Development" in i["name"]]
-
-    # Bug 1 fix: when team_id is supplied, filter Apple Dev certs by team_id first.
-    if team_id and apple_dev:
-        team_filtered = [i for i in apple_dev if i["team_id"] == team_id]
-        if len(team_filtered) == 1:
-            identity = team_filtered[0]
-            return identity["name"], team_id
 
     if len(apple_dev) == 1:
         identity = apple_dev[0]
-        return identity["name"], team_id or identity["team_id"]
+        return identity["name"], identity["team_id"] or None
 
     # Still ambiguous — raise with the full list.
     raise wda_signing_ambiguous([i["name"] for i in identities])
@@ -711,7 +733,13 @@ def bootstrap_device(
 
     # 4. Signing identity
     resolved_identity, resolved_team = resolve_signing_identity(signing_identity, team_id)
-    print(f"[simdrive] Signing identity: {resolved_identity}", flush=True)
+    # resolved_identity may be None for Apple Personal Team (no cert in keychain yet);
+    # xcodebuild will download one via -allowProvisioningUpdates.
+    print(
+        f"[simdrive] Signing identity: "
+        f"{resolved_identity or '(none — xcodebuild will fetch via -allowProvisioningUpdates)'}",
+        flush=True,
+    )
     print(f"[simdrive] Team ID:          {resolved_team}", flush=True)
 
     # 4b. Xcode account check — must happen BEFORE xcodebuild so we surface the

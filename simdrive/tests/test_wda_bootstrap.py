@@ -306,6 +306,46 @@ def test_resolve_auto_selects_when_one_apple_dev_among_many():
     assert team == "E52N8732YT"
 
 
+# Personal Team fix: when team_id has no matching cert, return (None, team_id).
+def test_resolve_signing_identity_returns_none_for_personal_team():
+    """When team_id has no matching cert in keychain (Apple Personal Team case),
+    return (None, team_id) so xcodebuild can use -allowProvisioningUpdates to
+    fetch a cert at build time."""
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=TWO_IDENTITY_OUTPUT)
+        from simdrive.wda.bootstrap import resolve_signing_identity
+        # B3HE38966G is not in TWO_IDENTITY_OUTPUT (which has E52N8732YT and 36Z53T97PH)
+        result_identity, result_team = resolve_signing_identity(team_id="B3HE38966G")
+    assert result_identity is None
+    assert result_team == "B3HE38966G"
+
+
+def test_resolve_signing_identity_returns_none_for_personal_team_empty_keychain():
+    """When team_id supplied but keychain has zero certs at all, also return (None, team_id)."""
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="   0 valid identities found\n")
+        from simdrive.wda.bootstrap import resolve_signing_identity
+        result_identity, result_team = resolve_signing_identity(team_id="B3HE38966G")
+    assert result_identity is None
+    assert result_team == "B3HE38966G"
+
+
+def test_resolve_signing_identity_ambiguous_when_team_has_multiple_certs():
+    """When team_id matches multiple certs in keychain (rare), raise ambiguous."""
+    from simdrive.errors import SimdriveError
+    two_same_team = (
+        '1) AABBCCDDEEFF00112233445566778899AABBCCDD "Apple Development: alice@example.com (AAAAAAAAAA)"\n'
+        '2) 1122334455667788990011223344556677889900 "Apple Development: alice-old@example.com (AAAAAAAAAA)"\n'
+        "    2 valid identities found\n"
+    )
+    with patch("simdrive.wda.bootstrap.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=two_same_team)
+        from simdrive.wda.bootstrap import resolve_signing_identity
+        with pytest.raises(SimdriveError) as exc_info:
+            resolve_signing_identity(team_id="AAAAAAAAAA")
+    assert exc_info.value.code == "wda_signing_ambiguous"
+
+
 # ── Bug 2: hardware UDID resolution ──────────────────────────────────────────
 
 
