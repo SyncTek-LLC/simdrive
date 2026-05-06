@@ -413,17 +413,20 @@ def resolve_signing_identity(
 
 
 def verify_xcode_account_for_team(team_id: str) -> None:
-    """Verify Xcode has at least one Apple Account signed in.
+    """Verify Xcode has an Apple Account bound to ``team_id``.
 
-    A signed-in account is necessary for `xcodebuild -allowProvisioningUpdates` to
-    download provisioning profiles from Apple's Developer Portal. The codesigning
-    cert in the keychain is necessary but not sufficient — Xcode's account session
-    is separate state, stored in com.apple.dt.Xcode preferences.
+    A signed-in account is necessary for ``xcodebuild -allowProvisioningUpdates``
+    to download provisioning profiles from Apple's Developer Portal. The
+    codesigning cert in the keychain is necessary but not sufficient — Xcode's
+    account session is separate state, stored in com.apple.dt.Xcode preferences.
 
-    We can't easily verify the account is for the SPECIFIC team_id without parsing
-    private Xcode internals; what we can verify is whether ANY account exists. If
-    none does, the build will fail at xcodebuild time with the same "No Account
-    for Team" message — better to fail fast here with actionable guidance.
+    Implementation (B1): we parse the
+    ``DVTDeveloperAccountManagerAppleIDLists`` plist and look for ``team_id``
+    explicitly inside it. The previous substring grep for ``"identifier"``
+    passed even when the only signed-in account was bound to a different team
+    (the literal token "identifier" appears in any non-empty entry). We now
+    require the team id itself to appear in the plist; absent that, raise
+    ``wda_xcode_account_not_authenticated``.
     """
     result = subprocess.run(
         ["defaults", "read", "com.apple.dt.Xcode", "DVTDeveloperAccountManagerAppleIDLists"],
@@ -434,9 +437,44 @@ def verify_xcode_account_for_team(team_id: str) -> None:
     # defaults exits non-zero when the key doesn't exist (no account ever signed in)
     if result.returncode != 0:
         raise wda_xcode_account_not_authenticated(team_id)
-    # Account list exists but might be an empty dict — check for any identifier
-    if "identifier" not in result.stdout:
+
+    # ``defaults read`` emits old-style plist text. plistlib only accepts XML or
+    # binary plists, so parse via a string scan that matches the actual team
+    # binding. The plist serialises team membership as nested entries that
+    # include lines like ``teamID = "ABC1234567";`` (paid teams) or
+    # ``teamIDs = ( "ABC1234567" )`` (account list payload). Match either.
+    stdout = result.stdout
+    if not stdout.strip() or stdout.strip() in ("{\n}", "{}", "(\n)", "()"):
         raise wda_xcode_account_not_authenticated(team_id)
+
+    if not _xcode_account_output_has_team(stdout, team_id):
+        raise wda_xcode_account_not_authenticated(team_id)
+
+
+def _xcode_account_output_has_team(stdout: str, team_id: str) -> bool:
+    """Return True if ``team_id`` appears as a real team binding in ``stdout``.
+
+    Looks for the team id as a quoted token associated with one of the team
+    keys Xcode emits: ``teamID``, ``teamIDs``, ``DVTDeveloperAccountTeamID``,
+    or as a quoted entry in a ``teamIDs = ( ... )`` array. A bare substring
+    match would false-positive on UUIDs and identifier strings that happen to
+    contain the same 10 chars; we require either the key/value pair form or
+    the array-element form to be present.
+    """
+    if not team_id:
+        return False
+    # Form 1: `teamID = "ABCDEF1234";` or `DVTDeveloperAccountTeamID = "ABCDEF1234";`
+    kv = re.compile(
+        r'(?:teamID|teamIDs|DVTDeveloperAccountTeamID)\s*=\s*"' + re.escape(team_id) + r'"',
+        re.IGNORECASE,
+    )
+    if kv.search(stdout):
+        return True
+    # Form 2: array element inside a `teamIDs = ( "X", "Y" )` block.
+    array_block = re.search(r"teamIDs\s*=\s*\(([^)]*)\)", stdout, re.IGNORECASE | re.DOTALL)
+    if array_block and re.search(r'"' + re.escape(team_id) + r'"', array_block.group(1)):
+        return True
+    return False
 
 
 # ─── xcodebuild ──────────────────────────────────────────────────────────────
