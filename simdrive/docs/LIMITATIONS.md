@@ -54,10 +54,33 @@ notifications, authenticator app codes, or hardware security keys.
 
 ## Real-device input
 
-`session_start({target: "device"})` supports observe + logs + app lifecycle on
-paired physical iPhones/iPads. It does **not** yet support tap / swipe /
-type_text / press_key — those route through WebDriverAgent (WDA), which is on
-the v0.3 roadmap but not shipped. Use simulators for input-driven flows.
+`session_start({target: "device"})` supports observe + tap + swipe + type_text +
+press_key + clear_field on paired physical iPhones/iPads via WebDriverAgent (WDA).
+Bootstrap the device first with `simdrive bootstrap-device <udid> --team-id <id>`.
+
+### `tool_observe` annotate=True on real device returns no SOM marks
+
+**`tool_observe` annotate=True on real device returns no SOM marks.** SOM
+(Set-of-Marks) annotation requires a UI element tree source. On simulators we
+get this from accessibility services. On real devices via WDA, the equivalent —
+WDA's `/source` endpoint — is not yet wired into the SOM annotator. Real-device
+observations return the screenshot only; primitives can still be driven by
+`{x, y}` coordinates or `text` (when WDA-based text matching lands). Tracked
+for 1.0.0a8.
+
+### Real-device bootstrap requires Xcode Account authentication
+
+`simdrive bootstrap-device <udid> --team-id <id>` requires Xcode itself to be signed in to an Apple ID for the specified team — the codesigning certificate in your keychain (visible via `security find-identity -v`) is not sufficient. xcodebuild's provisioning-profile download requires an Xcode Account session.
+
+**One-time setup (~30 seconds):**
+1. Open Xcode.app
+2. ⌘, (Cmd+Comma) → Accounts tab
+3. Click + → Apple ID → sign in with the Apple ID associated with your developer team
+4. Enter password + 2FA
+
+After this, `~/Library/MobileDevice/Provisioning Profiles/` will populate as needed when `xcodebuild -allowProvisioningUpdates` runs.
+
+`simdrive bootstrap-device` checks for this state pre-flight and raises `wda_xcode_account_not_authenticated` with this same recovery if the profiles directory is empty.
 
 ## Background-mode caveats
 

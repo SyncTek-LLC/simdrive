@@ -107,15 +107,32 @@ def wda_install_failed(stderr: str) -> SimdriveError:
 
 
 def wda_port_discovery_timeout(udid: str) -> SimdriveError:
-    """Raised when the syslog does not emit the ServerURLHere pattern within 15s."""
+    """Raised when xcodebuild stdout does not emit the ServerURLHere pattern within the timeout."""
     return SimdriveError(
         code="wda_port_discovery_timeout",
         message=(
-            f"WDA on device {udid} did not advertise its port within 15 s. "
+            f"WDA on device {udid} did not advertise its port within the discovery window. "
             "Recovery: check device console (`xcrun devicectl device console --device <udid>`) "
             "for WDA crash or signing errors; ensure the WDA bundle is correctly installed "
             "(`xcrun devicectl device info apps --device <udid>`); "
             "run `simdrive bootstrap-device <udid> --rebuild` to force a clean install."
+        ),
+        details={"udid": udid},
+    )
+
+
+def wda_device_locked(udid: str) -> SimdriveError:
+    """Raised when xcodebuild reports the device is locked during WDA launch."""
+    return SimdriveError(
+        code="wda_device_locked",
+        message=(
+            f"Device {udid} is locked. xcodebuild cannot launch WebDriverAgentRunner "
+            f"on a locked iOS device — iOS blocks code execution until the user authenticates.\n"
+            f"\n"
+            f"Recovery:\n"
+            f"  1. Unlock {udid} with the passcode (or Face ID / Touch ID).\n"
+            f"  2. Optional: extend Auto-Lock (Settings → Display → Auto-Lock) to give the test ~60s to launch.\n"
+            f"  3. Re-run `simdrive bootstrap-device {udid} ...`"
         ),
         details={"udid": udid},
     )
@@ -133,6 +150,53 @@ def wda_smoke_failed(http_status: int, body: str) -> SimdriveError:
             "and retry. If the problem persists run `simdrive bootstrap-device <udid> --rebuild`."
         ),
         details={"http_status": http_status, "body": body},
+    )
+
+
+def wda_xcode_account_not_authenticated(team_id: str) -> SimdriveError:
+    """Raised when Xcode has no Apple ID account session for the given team_id.
+
+    The codesigning certificate in the keychain is necessary but not sufficient.
+    xcodebuild's -allowProvisioningUpdates needs an Xcode Account session
+    (Settings → Accounts) to call back to Apple's Developer Portal for profile
+    downloads. The keychain has certs; Xcode's account storage has the auth tokens.
+    They are separate state.
+    """
+    from pathlib import Path
+    profiles_dir = str(Path.home() / "Library" / "MobileDevice" / "Provisioning Profiles")
+    return SimdriveError(
+        code="wda_xcode_account_not_authenticated",
+        message=(
+            f"Xcode is not signed in to an Apple ID for team {team_id!r}. "
+            f"`xcodebuild -allowProvisioningUpdates` needs an Xcode Account session "
+            f"to download provisioning profiles from Apple's Developer Portal. "
+            f"The codesigning certificate in your keychain is not enough on its own. "
+            f"\n\n"
+            f"Recovery (one-time, ~30 seconds):\n"
+            f"  1. Open Xcode.app\n"
+            f"  2. ⌘, (Cmd+Comma) → Accounts tab\n"
+            f"  3. Click + → Apple ID → sign in with the Apple ID for team {team_id}\n"
+            f"  4. Enter your password + 2FA when prompted\n"
+            f"  5. Re-run `simdrive bootstrap-device <udid> --team-id {team_id}`"
+        ),
+        details={"team_id": team_id, "profiles_dir": profiles_dir},
+    )
+
+
+def wda_not_bootstrapped(udid: str) -> SimdriveError:
+    """Raised when no WDA registry entry exists for the given device UDID.
+
+    The user must run ``simdrive bootstrap-device <udid>`` first to build and
+    install WebDriverAgent on the device and write the registry entry.
+    """
+    return SimdriveError(
+        code="wda_not_bootstrapped",
+        message=(
+            f"No WDA registry entry for device {udid}. "
+            f"Run `simdrive bootstrap-device {udid} --team-id <id>` first to install "
+            f"and launch WebDriverAgent on this device before starting a real-device session."
+        ),
+        details={"udid": udid},
     )
 
 
