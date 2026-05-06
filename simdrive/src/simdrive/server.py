@@ -239,7 +239,7 @@ def tool_observe(arguments: dict) -> dict:
         # WDA's /source endpoint into the SOM annotator; tracked for 1.0.0a8.
         s.last_action_at = _now()
 
-        return {
+        result = {
             "screenshot_path": str(screenshot_path),
             "annotated_path": None,
             "screenshot_size_pixels": [w, h],
@@ -247,11 +247,14 @@ def tool_observe(arguments: dict) -> dict:
             "captured_at": _now(),
             "marks": [],
             "recent_logs": None,
-            # Extra fields for device path — callers that need raw bytes don't
-            # have to re-read the file.
-            "screenshot_b64": base64.b64encode(png_bytes).decode("ascii"),
             "target": "device",
         }
+        # screenshot_b64 is opt-in: a 101k-char inline payload overflows the
+        # MCP token budget for typical screens. Callers that need raw bytes
+        # read screenshot_path from disk.
+        if bool(arguments.get("include_screenshot_b64", False)):
+            result["screenshot_b64"] = base64.b64encode(png_bytes).decode("ascii")
+        return result
 
     obs = observe.observe(
         s.device.udid,
@@ -1174,6 +1177,7 @@ _TOOLS: list[dict] = [
                 "capture_logs": {"type": "boolean", "default": False, "description": "Include a tail of recent simulator logs."},
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
+                "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
             },
         },
         "handler": tool_observe,
