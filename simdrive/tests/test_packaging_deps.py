@@ -275,6 +275,61 @@ def test_all_toplevel_imports_declared() -> None:
     )
 
 
+def test_pinned_sha_in_package_data() -> None:
+    """wda/PINNED_SHA.txt must be declared in [tool.setuptools.package-data].
+
+    Without this entry, `pip install simdrive` omits PINNED_SHA.txt from the
+    wheel and `simdrive bootstrap-device` fails with FileNotFoundError when it
+    tries to read the pinned WDA SHA.
+    """
+    text = PYPROJECT_PATH.read_text()
+    m = re.search(r"\[tool\.setuptools\.package-data\](.*?)(?=\n\[|\Z)", text, re.DOTALL)
+    assert m is not None, "Could not find [tool.setuptools.package-data] in pyproject.toml"
+    block = m.group(1)
+    assert "wda/PINNED_SHA.txt" in block, (
+        "'wda/PINNED_SHA.txt' is missing from [tool.setuptools.package-data]. "
+        "Without this declaration, the file is excluded from the wheel and "
+        "`simdrive bootstrap-device` raises FileNotFoundError."
+    )
+
+
+def test_no_path_file_data_undeclared() -> None:
+    """Every Path(__file__).parent / X reference in src/simdrive/ should have X declared in package-data.
+
+    Scans source files for the pattern `Path(__file__).parent / "..."` (or similar)
+    and checks the quoted filename appears in [tool.setuptools.package-data].
+    This catches future additions of data files that are read via __file__ but
+    not declared in pyproject.toml.
+    """
+    text = PYPROJECT_PATH.read_text()
+    pkg_data_match = re.search(
+        r"\[tool\.setuptools\.package-data\](.*?)(?=\n\[|\Z)", text, re.DOTALL
+    )
+    pkg_data_block = pkg_data_match.group(1) if pkg_data_match else ""
+
+    # Collect all Path(__file__).parent / "..." references
+    file_refs: list[tuple[Path, str]] = []
+    for py_file in sorted(SRC_ROOT.rglob("*.py")):
+        src = py_file.read_text(encoding="utf-8", errors="replace")
+        # Match: Path(__file__).parent / "something" or / 'something'
+        for m_ref in re.finditer(r'Path\(__file__\)\.parent\s*/\s*["\']([^"\']+)["\']', src):
+            file_refs.append((py_file, m_ref.group(1)))
+
+    undeclared: list[str] = []
+    for py_file, ref in file_refs:
+        # Check if this data file reference appears in package-data
+        if ref not in pkg_data_block:
+            rel = py_file.relative_to(SIMDRIVE_ROOT)
+            undeclared.append(f"  {rel}: Path(__file__).parent / {ref!r} not in package-data")
+
+    assert not undeclared, (
+        "Found Path(__file__).parent / 'X' references where X is not declared in "
+        "[tool.setuptools.package-data]:\n"
+        + "\n".join(undeclared)
+        + "\n\nAdd the missing entries to [tool.setuptools.package-data] in pyproject.toml."
+    )
+
+
 def test_httpx_pinned_below_1_0() -> None:
     """httpx must be pinned <1.0.
 
