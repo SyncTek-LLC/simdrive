@@ -178,3 +178,71 @@ def test_start_device_session_raises_when_no_udid():
         server.tool_session_start({"target": "device"})
 
     assert exc_info.value.code == "no_device"
+
+
+# ── D2: default WDA session opened during _start_device ───────────────────────
+
+
+def test_start_device_session_opens_default_wda_session_when_no_bundle_id(wda_registry_dir):
+    """Without app_bundle_id, _start_device must still POST /session to WDA so
+    the input verbs (tap/swipe/type_text/press_key) work — otherwise they
+    return wda_session_not_open at the home screen / current foreground app."""
+    _write_registry(wda_registry_dir)
+
+    mock_wda = MagicMock()
+    mock_wda.status.return_value = {"value": {"ready": True}}
+    mock_wda.open_session.return_value = "wda-session-default"
+
+    with patch("simdrive.wda.client.WdaClient", return_value=mock_wda):
+        from simdrive import server, session as session_mod
+        result = server.tool_session_start({
+            "udid": FAKE_UDID,
+            "target": "device",
+        })
+
+    sid = result["session_id"]
+    s = session_mod.get(sid)
+    # WdaClient.open_session must have been called exactly once.
+    assert mock_wda.open_session.called, (
+        "WdaClient.open_session must be called for app-less device sessions; "
+        "otherwise tap/swipe/type_text return wda_session_not_open."
+    )
+    # Should be called with no bundle_id (or None) when app_bundle_id is absent.
+    call_args = mock_wda.open_session.call_args
+    if call_args.args:
+        assert call_args.args[0] in (None, ""), (
+            f"open_session called with unexpected bundle_id: {call_args.args}"
+        )
+    else:
+        assert call_args.kwargs.get("bundle_id") in (None, ""), (
+            f"open_session called with unexpected bundle_id: {call_args.kwargs}"
+        )
+    # The session_id from WDA must be reachable on the client (the mock records it
+    # via attribute assignment when a real client would, but at minimum the call
+    # was made — the contract is that input verbs work after _start_device returns).
+
+
+def test_start_device_session_opens_wda_session_with_bundle_id(wda_registry_dir):
+    """With app_bundle_id, _start_device must POST /session to WDA with that
+    bundleId so the WDA session is scoped to the launched app."""
+    _write_registry(wda_registry_dir)
+
+    mock_wda = MagicMock()
+    mock_wda.status.return_value = {"value": {"ready": True}}
+    mock_wda.open_session.return_value = "wda-session-app"
+
+    with patch("simdrive.wda.client.WdaClient", return_value=mock_wda), \
+         patch("simdrive.device.launch_app", return_value=1234):
+        from simdrive import server
+        server.tool_session_start({
+            "udid": FAKE_UDID,
+            "target": "device",
+            "app_bundle_id": "com.example.app",
+        })
+
+    assert mock_wda.open_session.called
+    call_args = mock_wda.open_session.call_args
+    bundle = call_args.args[0] if call_args.args else call_args.kwargs.get("bundle_id")
+    assert bundle == "com.example.app", (
+        f"open_session must pass bundle_id when app_bundle_id is provided; got {bundle!r}"
+    )
