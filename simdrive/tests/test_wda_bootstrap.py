@@ -670,15 +670,22 @@ def test_verify_xcode_account_raises_when_account_list_empty(monkeypatch):
     assert exc_info.value.code == "wda_xcode_account_not_authenticated"
 
 
-def test_verify_xcode_account_passes_when_account_signed_in(monkeypatch):
-    """When defaults shows at least one identifier, pass without raising."""
+def test_verify_xcode_account_passes_when_team_bound(monkeypatch):
+    """B1: When defaults output names the requested team_id, pass without raising.
+
+    Real-world shape — Xcode persists each Apple ID account with its team
+    bindings serialised under a `teamIDs` array (or `teamID` key for the
+    primary team). The team id we require must appear inside that structure.
+    """
     def fake_run(args, **kwargs):
         from subprocess import CompletedProcess
-        # Real-world output shape from `defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists`
         stdout = """{
     "IDE.Identifiers.Prod" =     (
                 {
             identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+            teamIDs = (
+                "E52N8732YT"
+            );
         }
     );
 }
@@ -687,8 +694,56 @@ def test_verify_xcode_account_passes_when_account_signed_in(monkeypatch):
     monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
 
     from simdrive.wda.bootstrap import verify_xcode_account_for_team
-    # Should not raise
     verify_xcode_account_for_team("E52N8732YT")
+
+
+def test_verify_xcode_account_raises_when_only_other_teams_signed_in(monkeypatch):
+    """B1: Account signed in for a *different* team must not pass — old code
+    used a substring grep on `"identifier"` and false-positived here.
+    """
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        stdout = """{
+    "IDE.Identifiers.Prod" =     (
+                {
+            identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+            teamIDs = (
+                "OTHERTEAM1"
+            );
+        }
+    );
+}
+"""
+        return CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
+
+    from simdrive.errors import SimdriveError
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    with pytest.raises(SimdriveError) as exc_info:
+        verify_xcode_account_for_team("E52N8732YT")
+    assert exc_info.value.code == "wda_xcode_account_not_authenticated"
+
+
+def test_verify_xcode_account_passes_with_paid_team_kv_form(monkeypatch):
+    """B1: paid Developer Program accounts persist the team via `teamID = "..."`.
+    Match that form too, not just the array form.
+    """
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        stdout = """{
+    "IDE.Identifiers.Prod" =     (
+                {
+            identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+            DVTDeveloperAccountTeamID = "PAIDTEAM12";
+        }
+    );
+}
+"""
+        return CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
+
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    verify_xcode_account_for_team("PAIDTEAM12")
 
 
 def test_all_wda_errors_have_recovery():
