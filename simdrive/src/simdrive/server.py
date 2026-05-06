@@ -23,6 +23,7 @@ Add to .mcp.json:
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
 import time
@@ -210,6 +211,48 @@ def tool_session_status(arguments: dict) -> dict:
 def tool_observe(arguments: dict) -> dict:
     sid = arguments["session_id"]
     s = session.get(sid)
+
+    if s.target == "device":
+        # Route through WDA /screenshot (no session required) instead of
+        # idevicescreenshot — CoreDevice UUIDs are not recognized by
+        # idevicescreenshot, causing "No device found" errors.
+        # Matches the target=device routing pattern used by tool_tap/tool_swipe/etc.
+        from PIL import Image
+        import io
+
+        wda = _wda_client_for(s.device.udid)
+        png_bytes = wda.screenshot_any()
+
+        obs_dir = s.workdir / "observations"
+        obs_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(_now() * 1000)
+        screenshot_path = obs_dir / f"observe-{ts}.png"
+        screenshot_path.write_bytes(png_bytes)
+
+        with Image.open(io.BytesIO(png_bytes)) as im:
+            w, h = im.size
+
+        s.last_screenshot_w = w
+        s.last_screenshot_h = h
+        s.last_screenshot_path = screenshot_path
+        # marks=[] for now — SOM annotation on real device requires wiring
+        # WDA's /source endpoint into the SOM annotator; tracked for 1.0.0a8.
+        s.last_action_at = _now()
+
+        return {
+            "screenshot_path": str(screenshot_path),
+            "annotated_path": None,
+            "screenshot_size_pixels": [w, h],
+            "window_bounds_macos": None,
+            "captured_at": _now(),
+            "marks": [],
+            "recent_logs": None,
+            # Extra fields for device path — callers that need raw bytes don't
+            # have to re-read the file.
+            "screenshot_b64": base64.b64encode(png_bytes).decode("ascii"),
+            "target": "device",
+        }
+
     obs = observe.observe(
         s.device.udid,
         s.workdir / "observations",

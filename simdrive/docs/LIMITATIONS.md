@@ -54,10 +54,19 @@ notifications, authenticator app codes, or hardware security keys.
 
 ## Real-device input
 
-`session_start({target: "device"})` supports observe + logs + app lifecycle on
-paired physical iPhones/iPads. It does **not** yet support tap / swipe /
-type_text / press_key — those route through WebDriverAgent (WDA), which is on
-the v0.3 roadmap but not shipped. Use simulators for input-driven flows.
+`session_start({target: "device"})` supports observe + tap + swipe + type_text +
+press_key + clear_field on paired physical iPhones/iPads via WebDriverAgent (WDA).
+Bootstrap the device first with `simdrive bootstrap-device <udid> --team-id <id>`.
+
+### `tool_observe` annotate=True on real device returns no SOM marks
+
+**`tool_observe` annotate=True on real device returns no SOM marks.** SOM
+(Set-of-Marks) annotation requires a UI element tree source. On simulators we
+get this from accessibility services. On real devices via WDA, the equivalent —
+WDA's `/source` endpoint — is not yet wired into the SOM annotator. Real-device
+observations return the screenshot only; primitives can still be driven by
+`{x, y}` coordinates or `text` (when WDA-based text matching lands). Tracked
+for 1.0.0a8.
 
 ### Real-device bootstrap requires Xcode Account authentication
 
