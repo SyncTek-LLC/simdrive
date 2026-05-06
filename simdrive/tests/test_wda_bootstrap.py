@@ -586,12 +586,12 @@ def test_smoke_test_raises_on_transport_error():
 # ── verify_xcode_account_for_team ────────────────────────────────────────────
 
 
-def test_verify_xcode_account_raises_when_profiles_dir_empty(tmp_path, monkeypatch):
-    """When ~/Library/MobileDevice/Provisioning Profiles/ is empty, raise."""
-    fake_home = tmp_path
-    profiles_dir = fake_home / "Library" / "MobileDevice" / "Provisioning Profiles"
-    profiles_dir.mkdir(parents=True)
-    monkeypatch.setattr("simdrive.wda.bootstrap.Path.home", lambda: fake_home)
+def test_verify_xcode_account_raises_when_defaults_key_missing(monkeypatch):
+    """When `defaults read` returns non-zero (key doesn't exist), raise."""
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        return CompletedProcess(args=args, returncode=1, stdout="", stderr="The domain/default pair does not exist")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
 
     from simdrive.errors import SimdriveError
     from simdrive.wda.bootstrap import verify_xcode_account_for_team
@@ -603,10 +603,12 @@ def test_verify_xcode_account_raises_when_profiles_dir_empty(tmp_path, monkeypat
     assert "Accounts" in exc_info.value.message
 
 
-def test_verify_xcode_account_raises_when_profiles_dir_missing(tmp_path, monkeypatch):
-    """When ~/Library/MobileDevice/Provisioning Profiles/ doesn't exist, raise."""
-    fake_home = tmp_path  # no Library/... at all
-    monkeypatch.setattr("simdrive.wda.bootstrap.Path.home", lambda: fake_home)
+def test_verify_xcode_account_raises_when_account_list_empty(monkeypatch):
+    """When defaults returns a list with no identifiers, raise."""
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        return CompletedProcess(args=args, returncode=0, stdout="{\n}\n", stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
 
     from simdrive.errors import SimdriveError
     from simdrive.wda.bootstrap import verify_xcode_account_for_team
@@ -615,13 +617,21 @@ def test_verify_xcode_account_raises_when_profiles_dir_missing(tmp_path, monkeyp
     assert exc_info.value.code == "wda_xcode_account_not_authenticated"
 
 
-def test_verify_xcode_account_passes_when_profile_present(tmp_path, monkeypatch):
-    """When a profile exists in the dir, pass without raising."""
-    fake_home = tmp_path
-    profiles_dir = fake_home / "Library" / "MobileDevice" / "Provisioning Profiles"
-    profiles_dir.mkdir(parents=True)
-    (profiles_dir / "some-profile.mobileprovision").write_bytes(b"fake-profile-data")
-    monkeypatch.setattr("simdrive.wda.bootstrap.Path.home", lambda: fake_home)
+def test_verify_xcode_account_passes_when_account_signed_in(monkeypatch):
+    """When defaults shows at least one identifier, pass without raising."""
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        # Real-world output shape from `defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists`
+        stdout = """{
+    "IDE.Identifiers.Prod" =     (
+                {
+            identifier = "5AB0A02E-3F17-4098-932D-7F19CDBF16FA";
+        }
+    );
+}
+"""
+        return CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
 
     from simdrive.wda.bootstrap import verify_xcode_account_for_team
     # Should not raise

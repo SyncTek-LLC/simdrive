@@ -366,19 +366,29 @@ def resolve_signing_identity(
 
 
 def verify_xcode_account_for_team(team_id: str) -> None:
-    """Verify Xcode has an authenticated Apple ID account for the given team_id.
+    """Verify Xcode has at least one Apple Account signed in.
 
-    Raises wda_xcode_account_not_authenticated when:
-      - ~/Library/MobileDevice/Provisioning Profiles/ is empty (no cached profiles), OR
-      - ~/Library/MobileDevice/Provisioning Profiles/ does not exist at all.
+    A signed-in account is necessary for `xcodebuild -allowProvisioningUpdates` to
+    download provisioning profiles from Apple's Developer Portal. The codesigning
+    cert in the keychain is necessary but not sufficient — Xcode's account session
+    is separate state, stored in com.apple.dt.Xcode preferences.
 
-    The codesigning identity in keychain is necessary but not sufficient. xcodebuild
-    needs an Xcode Account session (Settings → Accounts) to call back to Apple's
-    Developer Portal for profile downloads. The keychain has certs; Xcode's account
-    storage has the auth tokens for the portal. They're separate.
+    We can't easily verify the account is for the SPECIFIC team_id without parsing
+    private Xcode internals; what we can verify is whether ANY account exists. If
+    none does, the build will fail at xcodebuild time with the same "No Account
+    for Team" message — better to fail fast here with actionable guidance.
     """
-    profiles_dir = Path.home() / "Library" / "MobileDevice" / "Provisioning Profiles"
-    if not profiles_dir.exists() or not any(profiles_dir.iterdir()):
+    result = subprocess.run(
+        ["defaults", "read", "com.apple.dt.Xcode", "DVTDeveloperAccountManagerAppleIDLists"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # defaults exits non-zero when the key doesn't exist (no account ever signed in)
+    if result.returncode != 0:
+        raise wda_xcode_account_not_authenticated(team_id)
+    # Account list exists but might be an empty dict — check for any identifier
+    if "identifier" not in result.stdout:
         raise wda_xcode_account_not_authenticated(team_id)
 
 
@@ -708,7 +718,7 @@ def bootstrap_device(
     # "No Account for Team" error with actionable recovery instead of xcodebuild's
     # terse message. Certs in keychain ≠ Xcode Account session for portal access.
     verify_xcode_account_for_team(resolved_team)
-    print("[simdrive] Xcode account check passed (provisioning profiles present).", flush=True)
+    print("[simdrive] Xcode account check passed (Apple Account signed in).", flush=True)
 
     # Trust guidance before install (device screen may prompt).
     _print_trust_guidance(resolved_team)
