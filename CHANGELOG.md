@@ -7,6 +7,93 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.0.0a9] — 2026-05-11 (alpha — recording state contracts)
+
+Closes a class of replay failure where a divergent app state silently
+executed dozens of blind taps. Implements the **recording state contract**
+proposed by the Palace dogfood team
+(`simdrive/docs/FEATURE_REQUEST_STATE_CONTRACT_2026_05_11.md`): every
+recording now carries a `requires:` block captured automatically at
+`record_start` and verified at replay step −1.
+
+**The bug a9 closes:** in the Palace a8 dogfood, a replay of the
+SAML-signin recording against a fresh-install state (with a notifications
+permission alert visible at step 0) silently executed 23 taps at SSIM
+0.014, reporting `ok: true`. First tap meant for "Add Library" actually
+hit "Don't Allow"; the remaining 22 landed on arbitrary UI. Drift detection
+was post hoc — by the time the user knew, the app had been touched 23
+times. Third occurrence of this failure mode against Palace; a9 closes it
+at the schema level so individual projects no longer have to invent local
+workarounds.
+
+### Added — state contract on recordings
+
+- **`requires:` schema** in recording YAML. Captured, not authored. Three
+  sub-blocks:
+  - `requires.app.{bundle_id, version, version_match}` — `version_match`
+    is one of `exact | minor | major | any` (default `minor`).
+  - `requires.sim.{device, ios_version}` — `ios_version` accepts a raw
+    string or a semver predicate (`>=18.0`, `<19.0`, `!=18.2`, etc.).
+  - `requires.initial_state.{foreground, text_subset_required,
+    text_subset_forbidden, primary_button_label}` — captured by OCRing
+    the step-0 screen via the existing `som.detect_marks()` pipeline.
+- **Auto-population at `record_start`** — observes the live screen,
+  captures app bundle/version + sim device/iOS + top text marks. User
+  doesn't write the contract; the camera does.
+- **Verification at replay step −1** — before any step executes, observes
+  the live state and compares against `requires:`. On mismatch, halts
+  with `halt_reason: "state_contract_mismatch"`, `halted_at: 0`,
+  structured `expected` / `actual` / `remedy` payload. If a permission
+  alert is detected in `actual.text_subset_present` (heuristic on
+  "Don't Allow" / "Allow" / "OK" / "Cancel"), the `remedy` field points
+  at `xcrun simctl privacy ... grant ...` rather than generic advice.
+- **New `replay` parameter:** `halt_on_state_mismatch` (default `True`).
+  Today's "run anyway" behavior is now opt-in by passing `False` — a
+  warning is still emitted in the response.
+- **Deprecation warning for unannotated recordings:** recordings without
+  a `requires:` block replay with `_simdrive_warning: "Recording has no
+  \`requires:\` block. State contract not verified. Run
+  \`simdrive migrate-recording <name>\` to capture one."` Existing
+  recordings continue to work.
+
+### Added — lint + migrate tooling
+
+- **`simdrive lint-recordings [--path DIR] [--quiet] [--json]`** CLI
+  command. Walks the directory tree, prints `[OK]` / `[FAIL]` per
+  recording, exits non-zero on any FAIL. `--json` for programmatic
+  consumption (CI `verify-pr.sh` integration).
+- **`simdrive migrate-recording <name> [--force] [--dry-run]`** CLI
+  command. Re-OCRs the step-0 `pre_screenshot` of a pre-a9 recording,
+  builds a `RequiresBlock`, writes the YAML back in place with a
+  `.pre-migrate.bak` sibling for recovery.
+- Both also exposed as MCP tools (`lint_recordings`, `migrate_recording`)
+  for agentic / CI consumers. Tool count: 30 → 32.
+
+### Internal
+
+- Refactored `_capture_state_contract` to share `_build_requires_block`
+  (pure transform on `marks + app/sim metadata`) with
+  `migrate_recording` — capture-time and migrate-time paths produce
+  identical RequiresBlock shapes by construction.
+- `robustness.validate_replay()` now tolerates the new `requires:`
+  top-level key (was: would have rejected as unknown field).
+- One e2e test (`test_replay_halts_on_drift_when_screen_diverges`)
+  updated to opt out of the new step-0 contract check — it deliberately
+  diverges state to test the per-step drift path, which a9.0 would
+  otherwise short-circuit.
+
+### Tests
+- 38 new tests across a9.0 (17) + a9.1 (21).
+- Suite total: 1.0.0a8 baseline 711 → 1.0.0a9 749 passing, 1 skipped.
+
+### Known (carried forward from a8)
+- D6 (empty `idevicesyslog` output on real devices) still investigation-
+  only — awaiting Palace dogfood capture of
+  `idevicesyslog -u <udid> 2>&1` for root-cause selection. See
+  `simdrive/docs/D6_LOGS_INVESTIGATION.md`.
+
+---
+
 ## [1.0.0a8] — 2026-05-06 (alpha — device session usable on real hardware)
 
 First end-to-end real-device dogfood (`a7`, iPhone 17 Pro Max "Moes Max",
