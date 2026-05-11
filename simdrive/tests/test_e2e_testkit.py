@@ -469,9 +469,11 @@ def test_replay_halts_on_drift_when_screen_diverges(session_id):
     # Now switch to a totally different tab
     _navigate_to(session_id, "Form")
 
-    # Replay with strict drift threshold — should halt
+    # Replay with strict drift threshold — should halt at step 1 (per-step SSIM).
+    # halt_on_state_mismatch=False so the new a9 step-0 contract check doesn't
+    # short-circuit this test; we're specifically validating drift-halt here.
     replay_res = server.tool_replay(
-        {"session_id": session_id, "name": rec_name, "on_drift": "halt", "drift_threshold": 0.95}
+        {"session_id": session_id, "name": rec_name, "on_drift": "halt", "drift_threshold": 0.95, "halt_on_state_mismatch": False}
     )
     assert replay_res["ok"] is False
     assert replay_res["halted_at"] == 1

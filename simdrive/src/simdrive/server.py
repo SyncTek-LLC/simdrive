@@ -657,8 +657,10 @@ def tool_replay(arguments: dict) -> dict:
     on_drift = str(arguments.get("on_drift", "halt"))
     threshold = float(arguments.get("drift_threshold", 0.85))
     mask_regions = arguments.get("mask_regions")
+    halt_on_state_mismatch = bool(arguments.get("halt_on_state_mismatch", True))
     return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold,
-                           mask_regions=mask_regions)
+                           mask_regions=mask_regions,
+                           halt_on_state_mismatch=halt_on_state_mismatch)
 
 
 def tool_list_devices(arguments: dict) -> dict:
@@ -904,6 +906,38 @@ def tool_list_replays(arguments: dict) -> dict:
 def tool_validate_replay(arguments: dict) -> dict:
     name = str(arguments["name"])
     return robustness.validate_replay(recorder.recordings_root(), name)
+
+
+def tool_lint_recordings(arguments: dict) -> dict:
+    """Lint every recording under `path` (or recordings root). a9.1."""
+    path_arg = arguments.get("path")
+    target = Path(path_arg) if path_arg else recorder.recordings_root()
+    results = recorder.lint_recordings(target)
+    fail_count = sum(1 for r in results if r.status == "fail")
+    return {
+        "results": [r.to_dict() for r in results],
+        "ok": len(results) - fail_count,
+        "fail": fail_count,
+    }
+
+
+def tool_migrate_recording(arguments: dict) -> dict:
+    """Backfill a `requires:` block onto an existing recording. a9.1."""
+    name = str(arguments["name"])
+    force = bool(arguments.get("force", False))
+    dry_run = bool(arguments.get("dry_run", False))
+    try:
+        result = recorder.migrate_recording(name, force=force, dry_run=dry_run)
+    except recorder.MigrationError as exc:
+        return {"migrated": False, "error": str(exc)}
+    return {
+        "migrated": result.migrated,
+        "reason": result.reason,
+        "dry_run": result.dry_run,
+        "text_mark_count": result.text_mark_count,
+        "primary_button_label": result.primary_button_label,
+        "backup_path": str(result.backup_path) if result.backup_path else None,
+    }
 
 
 # ─── v0.3.0a3 ─────────────────────────────────────────────────────────── #
@@ -1311,7 +1345,10 @@ _TOOLS: list[dict] = [
             "Replay a recorded session by name. on_drift halt|warn|force; "
             "drift_threshold default 0.85 (SSIM). Pass mask_regions to exclude "
             "noisy areas (e.g. status-bar clock) from the similarity compute. "
-            "When omitted, falls back to the recording's own ssim_masks if present."
+            "When omitted, falls back to the recording's own ssim_masks if present. "
+            "halt_on_state_mismatch (a9.0, default true) verifies the recorded "
+            "requires: block before step 1 and halts with halt_reason="
+            "'state_contract_mismatch' on failure. Set false to proceed with a warning."
         ),
         "inputSchema": {
             "type": "object",
@@ -1321,6 +1358,7 @@ _TOOLS: list[dict] = [
                 "name": {"type": "string"},
                 "on_drift": {"type": "string", "enum": ["halt", "warn", "force"], "default": "halt"},
                 "drift_threshold": {"type": "number", "default": 0.85},
+                "halt_on_state_mismatch": {"type": "boolean", "default": True},
                 "mask_regions": {
                     "type": "array",
                     "description": "Rectangles to blank in both screenshots before similarity. Each entry is [x, y, w, h] OR {x, y, w, h}.",
@@ -1649,6 +1687,45 @@ _TOOLS: list[dict] = [
         },
         "handler": tool_load_journey,
     },
+    # ── SimDrive a9.1 — recording lint + migrate ────────────────────────
+    {
+        "name": "lint_recordings",
+        "description": (
+            "Walk a directory tree and lint every recording.yaml for state-contract "
+            "(`requires:`) presence + shape. Returns one result per recording: "
+            "ok / fail with reason. Use to find recordings that pre-date a9.0 "
+            "and still need `migrate_recording` to backfill their state contract."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Optional directory to scan; defaults to the simdrive recordings root.",
+                },
+            },
+        },
+        "handler": tool_lint_recordings,
+    },
+    {
+        "name": "migrate_recording",
+        "description": (
+            "Backfill a `requires:` state contract onto an existing recording by "
+            "OCR'ing its step-0 pre_screenshot. Idempotent: no-op when the recording "
+            "already has `requires:` (use force=true to overwrite). Writes a "
+            ".pre-migrate.bak sibling before mutating so a botched migration is recoverable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": {"type": "string", "description": "Recording name (directory under recordings root)."},
+                "force": {"type": "boolean", "description": "Re-migrate even if `requires:` already present."},
+                "dry_run": {"type": "boolean", "description": "Compute the would-be result without writing."},
+            },
+        },
+        "handler": tool_migrate_recording,
+    },
 ]
 
 
@@ -1763,6 +1840,10 @@ SimDrive journey subcommands:
   simdrive run  --session-id <id> --journey <path> [--persona-override <path>]
                 [--budget-override max_steps=N,max_seconds=N,max_llm_calls=N]
   simdrive ci   --session-id <id> [--journeys-dir <path>] [--tag <tag>...]
+
+Recording maintenance:
+  simdrive lint-recordings    [--path <dir>] [--quiet] [--json]
+  simdrive migrate-recording  <name> [--force] [--dry-run]
 
 Trial / license subcommands:
   simdrive trial start --email <you@example.com>
@@ -1972,6 +2053,97 @@ def _cmd_wda_up(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _cmd_lint_recordings(args: list[str]) -> None:
+    """Handle `simdrive lint-recordings [--path] [--quiet] [--json]` CLI subcommand."""
+    import argparse
+    import json as _json
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive lint-recordings",
+        description=(
+            "Walk a directory tree and lint every recording.yaml found.\n"
+            "Reports OK / FAIL per recording with the failure reason.\n"
+            "Exits non-zero if any recording fails the lint."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--path", default=None,
+                        help="Directory to scan (default: simdrive recordings root).")
+    parser.add_argument("--quiet", action="store_true", default=False,
+                        help="Suppress [OK] lines; print only [FAIL] lines.")
+    parser.add_argument("--json", action="store_true", default=False,
+                        dest="json_out",
+                        help="Emit a single JSON object instead of per-line records.")
+    ns = parser.parse_args(args)
+
+    target = Path(ns.path) if ns.path else recorder.recordings_root()
+    results = recorder.lint_recordings(target)
+
+    fail_count = sum(1 for r in results if r.status == "fail")
+    ok_count = len(results) - fail_count
+
+    if ns.json_out:
+        print(_json.dumps({
+            "results": [r.to_dict() for r in results],
+            "ok": ok_count,
+            "fail": fail_count,
+        }))
+    else:
+        for r in results:
+            if r.status == "ok":
+                if ns.quiet:
+                    continue
+                meta = (f"{r.text_mark_count} text marks, "
+                        f"requires app={r.app_bundle_id}, sim={r.sim_device}")
+                print(f"[OK]   {r.path}  ({meta})")
+            else:
+                print(f"[FAIL] {r.path}  {r.reason}")
+
+    sys.exit(1 if fail_count else 0)
+
+
+def _cmd_migrate_recording(args: list[str]) -> None:
+    """Handle `simdrive migrate-recording <name> [--force] [--dry-run]` CLI subcommand."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive migrate-recording",
+        description=(
+            "Backfill a `requires:` state contract onto an old recording.\n"
+            "Re-OCRs the step-0 pre_screenshot, builds a RequiresBlock, and\n"
+            "writes the YAML back in place (with a .pre-migrate.bak sibling)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("name", help="Recording name (directory under recordings root).")
+    parser.add_argument("--force", action="store_true", default=False,
+                        help="Re-migrate even if the recording already has `requires:`.")
+    parser.add_argument("--dry-run", action="store_true", default=False,
+                        help="Print what would be written; do not modify the file.")
+    ns = parser.parse_args(args)
+
+    try:
+        result = recorder.migrate_recording(ns.name, force=ns.force, dry_run=ns.dry_run)
+    except recorder.MigrationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not result.migrated:
+        print(result.reason)
+        sys.exit(0)
+
+    suffix = " (dry-run)" if result.dry_run else ""
+    backup_note = (f" Backup at {result.backup_path}."
+                   if result.backup_path else "")
+    print(
+        f"Migrated {result.name}{suffix}: {result.text_mark_count} text marks"
+        f" (primary button: {result.primary_button_label!r}).{backup_note}"
+    )
+    sys.exit(0)
+
+
 def _cmd_wda_down(args: list[str]) -> None:
     """Handle `simdrive wda-down <udid>` — SIGTERM the running WDA daemon."""
     import argparse
@@ -2098,6 +2270,8 @@ _SUBCOMMANDS: dict = {
     "wda-down": _cmd_wda_down,
     "trial": _cmd_trial,
     "license": _cmd_license,
+    "lint-recordings": _cmd_lint_recordings,
+    "migrate-recording": _cmd_migrate_recording,
 }
 
 
