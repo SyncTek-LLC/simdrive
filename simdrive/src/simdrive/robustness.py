@@ -82,6 +82,16 @@ def set_appearance(udid: str, appearance: str) -> dict:
 
 _VALID_REPLAY_ACTIONS = {"tap", "swipe", "type_text", "press_key"}
 
+# Top-level recording.yaml keys that are known and optional. validate_replay
+# does not require them, but listing here is a hint to readers that these are
+# not "extra" fields. `requires` was added in a9.0 for the state contract.
+_KNOWN_OPTIONAL_KEYS = {
+    "device", "os_version", "app_bundle_id", "app_version",
+    "simdrive_version", "created_by_session", "screenshot_size_pixels",
+    "tags", "ssim_masks",
+    "requires",  # a9.0 — state contract; contents not lint-checked here
+}
+
 
 def list_replays(replays_root: Path) -> list[dict]:
     """Surface all recordings under `replays_root/<name>/recording.yaml` with metadata."""
