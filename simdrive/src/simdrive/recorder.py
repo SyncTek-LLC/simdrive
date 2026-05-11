@@ -29,6 +29,112 @@ def recordings_root() -> Path:
     return Path(base) / "recordings"
 
 
+# ---------- State contract (a9.0) ---------- #
+#
+# Captured automatically at record_start, verified at replay step -1. Halts
+# replay on mismatch so a divergent app state (e.g. a permission alert sitting
+# in front of the recorded UI) can't silently re-execute taps into the wrong
+# targets. See simdrive/docs/FEATURE_REQUEST_STATE_CONTRACT_2026_05_11.md.
+
+
+_VERSION_MATCH_MODES = {"exact", "minor", "major", "any"}
+
+
+@dataclass
+class AppRequires:
+    bundle_id: Optional[str] = None
+    version: Optional[str] = None
+    version_match: str = "minor"   # exact | minor | major | any
+
+    def to_dict(self) -> dict:
+        return {
+            "bundle_id": self.bundle_id,
+            "version": self.version,
+            "version_match": self.version_match,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "AppRequires":
+        if not isinstance(d, dict):
+            return cls()
+        vm = d.get("version_match", "minor")
+        if vm not in _VERSION_MATCH_MODES:
+            vm = "minor"
+        return cls(
+            bundle_id=d.get("bundle_id"),
+            version=d.get("version"),
+            version_match=vm,
+        )
+
+
+@dataclass
+class SimRequires:
+    device: Optional[str] = None
+    ios_version: Optional[str] = None   # raw or predicate like ">=18.0"
+
+    def to_dict(self) -> dict:
+        return {"device": self.device, "ios_version": self.ios_version}
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "SimRequires":
+        if not isinstance(d, dict):
+            return cls()
+        return cls(device=d.get("device"), ios_version=d.get("ios_version"))
+
+
+@dataclass
+class InitialStateRequires:
+    foreground: bool = True
+    text_subset_required: list[str] = field(default_factory=list)
+    text_subset_forbidden: list[str] = field(default_factory=list)
+    primary_button_label: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "foreground": self.foreground,
+            "text_subset_required": list(self.text_subset_required),
+            "text_subset_forbidden": list(self.text_subset_forbidden),
+            "primary_button_label": self.primary_button_label,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Any) -> "InitialStateRequires":
+        if not isinstance(d, dict):
+            return cls()
+        return cls(
+            foreground=bool(d.get("foreground", True)),
+            text_subset_required=list(d.get("text_subset_required") or []),
+            text_subset_forbidden=list(d.get("text_subset_forbidden") or []),
+            primary_button_label=d.get("primary_button_label"),
+        )
+
+
+@dataclass
+class RequiresBlock:
+    app: AppRequires
+    sim: SimRequires
+    initial_state: InitialStateRequires
+
+    def to_dict(self) -> dict:
+        return {
+            "app": self.app.to_dict(),
+            "sim": self.sim.to_dict(),
+            "initial_state": self.initial_state.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Any) -> Optional["RequiresBlock"]:
+        # Forgiving load: anything not a dict yields None so callers can branch
+        # on "no contract" without exception handling.
+        if not isinstance(d, dict):
+            return None
+        return cls(
+            app=AppRequires.from_dict(d.get("app")),
+            sim=SimRequires.from_dict(d.get("sim")),
+            initial_state=InitialStateRequires.from_dict(d.get("initial_state")),
+        )
+
+
 @dataclass
 class Recorder:
     name: str
