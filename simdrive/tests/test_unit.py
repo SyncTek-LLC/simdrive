@@ -10,13 +10,13 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "1.0.0a8"
+    assert server.__version__ == "1.0.0a9"
 
 
 def test_tool_count_is_thirty():
-    # 29 pre-existing tools + load_journey (1.0.0a7, replaces run_journey) = 30
+    # 29 pre-existing + load_journey (1.0.0a7) + lint_recordings + migrate_recording (a9.1) = 32
     tools = server.list_tools()
-    assert len(tools) == 30, f"expected 30 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 32, f"expected 32 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -35,6 +35,8 @@ def test_tool_names_match_spec():
         "version", "clear_field",
         # SimDrive 1.0.0a7 — load_journey replaces run_journey on MCP surface
         "load_journey",
+        # SimDrive a9.1 — recording state-contract maintenance tools
+        "lint_recordings", "migrate_recording",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
