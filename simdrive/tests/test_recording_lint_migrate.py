@@ -354,3 +354,50 @@ def test_cli_migrate_recording_exits_one_on_zero_steps(tmp_path, monkeypatch):
     assert exc.value.code == 1
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# MCP tool surface
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_lint_recordings_mcp_tool_exposed():
+    from simdrive import server
+
+    names = {t["name"] for t in server.list_tools()}
+    assert "lint_recordings" in names
+
+
+def test_migrate_recording_mcp_tool_exposed():
+    from simdrive import server
+
+    names = {t["name"] for t in server.list_tools()}
+    assert "migrate_recording" in names
+
+
+def test_tool_lint_recordings_returns_results(tmp_path, monkeypatch):
+    from simdrive import server
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    _write_recording(tmp_path / "recordings" / "ok", requires=_GOOD_REQUIRES)
+    _write_recording(tmp_path / "recordings" / "bad", requires=None)
+
+    result = server.tool_lint_recordings({})
+    assert result["ok"] == 1
+    assert result["fail"] == 1
+    assert len(result["results"]) == 2
+
+
+def test_tool_migrate_recording_runs(tmp_path, monkeypatch):
+    from simdrive import server, som
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    from simdrive import recorder
+    rec_dir = recorder.recordings_root() / "mcp-mig"
+    _write_recording(rec_dir, requires=None)
+
+    marks = [som.Mark(id=1, x=40, y=80, w=400, h=200, text="Library", confidence=0.95)]
+    monkeypatch.setattr(som, "detect_marks", lambda _p: list(marks))
+
+    result = server.tool_migrate_recording({"name": "mcp-mig"})
+    assert result["migrated"] is True
+    payload = _yaml.safe_load((rec_dir / "recording.yaml").read_text())
+    assert "requires" in payload

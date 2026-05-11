@@ -908,6 +908,38 @@ def tool_validate_replay(arguments: dict) -> dict:
     return robustness.validate_replay(recorder.recordings_root(), name)
 
 
+def tool_lint_recordings(arguments: dict) -> dict:
+    """Lint every recording under `path` (or recordings root). a9.1."""
+    path_arg = arguments.get("path")
+    target = Path(path_arg) if path_arg else recorder.recordings_root()
+    results = recorder.lint_recordings(target)
+    fail_count = sum(1 for r in results if r.status == "fail")
+    return {
+        "results": [r.to_dict() for r in results],
+        "ok": len(results) - fail_count,
+        "fail": fail_count,
+    }
+
+
+def tool_migrate_recording(arguments: dict) -> dict:
+    """Backfill a `requires:` block onto an existing recording. a9.1."""
+    name = str(arguments["name"])
+    force = bool(arguments.get("force", False))
+    dry_run = bool(arguments.get("dry_run", False))
+    try:
+        result = recorder.migrate_recording(name, force=force, dry_run=dry_run)
+    except recorder.MigrationError as exc:
+        return {"migrated": False, "error": str(exc)}
+    return {
+        "migrated": result.migrated,
+        "reason": result.reason,
+        "dry_run": result.dry_run,
+        "text_mark_count": result.text_mark_count,
+        "primary_button_label": result.primary_button_label,
+        "backup_path": str(result.backup_path) if result.backup_path else None,
+    }
+
+
 # ─── v0.3.0a3 ─────────────────────────────────────────────────────────── #
 
 
@@ -1654,6 +1686,45 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_load_journey,
+    },
+    # ── SimDrive a9.1 — recording lint + migrate ────────────────────────
+    {
+        "name": "lint_recordings",
+        "description": (
+            "Walk a directory tree and lint every recording.yaml for state-contract "
+            "(`requires:`) presence + shape. Returns one result per recording: "
+            "ok / fail with reason. Use to find recordings that pre-date a9.0 "
+            "and still need `migrate_recording` to backfill their state contract."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Optional directory to scan; defaults to the simdrive recordings root.",
+                },
+            },
+        },
+        "handler": tool_lint_recordings,
+    },
+    {
+        "name": "migrate_recording",
+        "description": (
+            "Backfill a `requires:` state contract onto an existing recording by "
+            "OCR'ing its step-0 pre_screenshot. Idempotent: no-op when the recording "
+            "already has `requires:` (use force=true to overwrite). Writes a "
+            ".pre-migrate.bak sibling before mutating so a botched migration is recoverable."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+                "name": {"type": "string", "description": "Recording name (directory under recordings root)."},
+                "force": {"type": "boolean", "description": "Re-migrate even if `requires:` already present."},
+                "dry_run": {"type": "boolean", "description": "Compute the would-be result without writing."},
+            },
+        },
+        "handler": tool_migrate_recording,
     },
 ]
 
