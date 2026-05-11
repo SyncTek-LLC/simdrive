@@ -657,8 +657,10 @@ def tool_replay(arguments: dict) -> dict:
     on_drift = str(arguments.get("on_drift", "halt"))
     threshold = float(arguments.get("drift_threshold", 0.85))
     mask_regions = arguments.get("mask_regions")
+    halt_on_state_mismatch = bool(arguments.get("halt_on_state_mismatch", True))
     return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold,
-                           mask_regions=mask_regions)
+                           mask_regions=mask_regions,
+                           halt_on_state_mismatch=halt_on_state_mismatch)
 
 
 def tool_list_devices(arguments: dict) -> dict:
@@ -1311,7 +1313,10 @@ _TOOLS: list[dict] = [
             "Replay a recorded session by name. on_drift halt|warn|force; "
             "drift_threshold default 0.85 (SSIM). Pass mask_regions to exclude "
             "noisy areas (e.g. status-bar clock) from the similarity compute. "
-            "When omitted, falls back to the recording's own ssim_masks if present."
+            "When omitted, falls back to the recording's own ssim_masks if present. "
+            "halt_on_state_mismatch (a9.0, default true) verifies the recorded "
+            "requires: block before step 1 and halts with halt_reason="
+            "'state_contract_mismatch' on failure. Set false to proceed with a warning."
         ),
         "inputSchema": {
             "type": "object",
@@ -1321,6 +1326,7 @@ _TOOLS: list[dict] = [
                 "name": {"type": "string"},
                 "on_drift": {"type": "string", "enum": ["halt", "warn", "force"], "default": "halt"},
                 "drift_threshold": {"type": "number", "default": 0.85},
+                "halt_on_state_mismatch": {"type": "boolean", "default": True},
                 "mask_regions": {
                     "type": "array",
                     "description": "Rectangles to blank in both screenshots before similarity. Each entry is [x, y, w, h] OR {x, y, w, h}.",

@@ -307,13 +307,15 @@ def test_replay_passes_when_state_matches(tmp_path, monkeypatch):
         },
     })
 
+    monkeypatch.setattr(recorder, "_current_app_version",
+                        lambda session: "2.4.1", raising=False)
     marks = [som.Mark(id=1, x=40, y=80, w=400, h=200, text="Add Library", confidence=0.95)]
     _patch_replay_observe(monkeypatch, marks)
     _patch_tap_noop(monkeypatch)
 
     s = _replay_session(tmp_path)
     result = recorder.replay("match", s, on_drift="force")
-    assert result["ok"] is True
+    assert result["ok"] is True, f"unexpected halt: {result}"
     assert result.get("halt_reason") != "state_contract_mismatch"
 
 
