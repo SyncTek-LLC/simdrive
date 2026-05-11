@@ -143,6 +143,10 @@ class Recorder:
     steps: list[dict] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
     tags: list[str] = field(default_factory=list)
+    requires_block: Optional[RequiresBlock] = None
+    # Set when capture-time observe fails — rides along to the replay result
+    # so the agent sees why the contract is missing.
+    capture_warning: Optional[str] = None
 
     @property
     def yaml_path(self) -> Path:
@@ -197,9 +201,80 @@ class Recorder:
             "tags": list(self.tags),
             "steps": self.steps,
         }
+        if self.requires_block is not None:
+            payload["requires"] = self.requires_block.to_dict()
         with self.yaml_path.open("w") as f:
             yaml.safe_dump(payload, f, sort_keys=False)
         return self.yaml_path
+
+
+def _capture_state_contract(session: Session, workdir: Path) -> tuple[Optional[RequiresBlock], Optional[str]]:
+    """Observe the live screen and build a RequiresBlock for the captured state.
+
+    Returns (block, warning). On observe failure returns (None, "reason") so the
+    recording still starts — the contract just won't be verified at replay.
+    """
+    try:
+        live = observe.observe(session.device.udid, workdir, target=session.target)
+    except Exception as exc:  # pragma: no cover — exercised via degrades_gracefully test
+        return None, f"Could not capture state contract at record_start: {exc}"
+
+    marks = list(live.marks or [])
+    # initial_state fields
+    foreground = len(marks) > 0
+    # text_subset_required: top-10 (top-to-bottom from detect_marks), confidence
+    # band high|medium, text >= 2 chars
+    required: list[str] = []
+    for m in marks:
+        if len(required) >= 10:
+            break
+        if getattr(m, "confidence_band", None) not in ("high", "medium"):
+            continue
+        text = (m.text or "").strip()
+        if len(text) < 2:
+            continue
+        required.append(text)
+
+    primary_label: Optional[str] = None
+    if marks:
+        screen_h = live.screenshot_h or 0
+        upper = [m for m in marks if (m.y + m.h // 2) < (screen_h / 2 if screen_h else float("inf"))]
+        pool = upper if upper else marks
+        biggest = max(pool, key=lambda m: m.w * m.h)
+        primary_label = (biggest.text or "").strip() or None
+
+    block = RequiresBlock(
+        app=AppRequires(
+            bundle_id=session.app_bundle_id,
+            version=_current_app_version(session),
+            version_match="minor",
+        ),
+        sim=SimRequires(
+            device=session.device.name,
+            ios_version=session.device.os_version,
+        ),
+        initial_state=InitialStateRequires(
+            foreground=foreground,
+            text_subset_required=required,
+            text_subset_forbidden=[],
+            primary_button_label=primary_label,
+        ),
+    )
+    return block, None
+
+
+def _current_app_version(session: Session) -> Optional[str]:
+    """Best-effort live app version for the session.
+
+    Simulator: query simctl. Device: not implemented (would need WDA / devicectl
+    plumbing that doesn't exist yet). Returns None on any failure.
+    """
+    if session.target != "simulator" or not session.app_bundle_id:
+        return None
+    try:
+        return sim.get_app_version(session.device.udid, session.app_bundle_id)
+    except Exception:
+        return None
 
 
 def start(session: Session, name: str, tags: Optional[list[str]] = None) -> Recorder:
@@ -211,6 +286,9 @@ def start(session: Session, name: str, tags: Optional[list[str]] = None) -> Reco
         root = recordings_root() / f"{name}-{int(time.time())}"
     root.mkdir(parents=True, exist_ok=True)
     rec = Recorder(name=name, session=session, root=root, tags=list(tags or []))
+    block, warning = _capture_state_contract(session, root / "_capture")
+    rec.requires_block = block
+    rec.capture_warning = warning
     session.recorder = rec
     log.info("recording started", extra={"recording_name": name, "session_id": session.session_id})
     return rec
