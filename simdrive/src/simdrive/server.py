@@ -1770,6 +1770,10 @@ SimDrive journey subcommands:
                 [--budget-override max_steps=N,max_seconds=N,max_llm_calls=N]
   simdrive ci   --session-id <id> [--journeys-dir <path>] [--tag <tag>...]
 
+Recording maintenance:
+  simdrive lint-recordings    [--path <dir>] [--quiet] [--json]
+  simdrive migrate-recording  <name> [--force] [--dry-run]
+
 Trial / license subcommands:
   simdrive trial start --email <you@example.com>
   simdrive trial start --email <you@example.com> --offline-dev
@@ -1978,6 +1982,97 @@ def _cmd_wda_up(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _cmd_lint_recordings(args: list[str]) -> None:
+    """Handle `simdrive lint-recordings [--path] [--quiet] [--json]` CLI subcommand."""
+    import argparse
+    import json as _json
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive lint-recordings",
+        description=(
+            "Walk a directory tree and lint every recording.yaml found.\n"
+            "Reports OK / FAIL per recording with the failure reason.\n"
+            "Exits non-zero if any recording fails the lint."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--path", default=None,
+                        help="Directory to scan (default: simdrive recordings root).")
+    parser.add_argument("--quiet", action="store_true", default=False,
+                        help="Suppress [OK] lines; print only [FAIL] lines.")
+    parser.add_argument("--json", action="store_true", default=False,
+                        dest="json_out",
+                        help="Emit a single JSON object instead of per-line records.")
+    ns = parser.parse_args(args)
+
+    target = Path(ns.path) if ns.path else recorder.recordings_root()
+    results = recorder.lint_recordings(target)
+
+    fail_count = sum(1 for r in results if r.status == "fail")
+    ok_count = len(results) - fail_count
+
+    if ns.json_out:
+        print(_json.dumps({
+            "results": [r.to_dict() for r in results],
+            "ok": ok_count,
+            "fail": fail_count,
+        }))
+    else:
+        for r in results:
+            if r.status == "ok":
+                if ns.quiet:
+                    continue
+                meta = (f"{r.text_mark_count} text marks, "
+                        f"requires app={r.app_bundle_id}, sim={r.sim_device}")
+                print(f"[OK]   {r.path}  ({meta})")
+            else:
+                print(f"[FAIL] {r.path}  {r.reason}")
+
+    sys.exit(1 if fail_count else 0)
+
+
+def _cmd_migrate_recording(args: list[str]) -> None:
+    """Handle `simdrive migrate-recording <name> [--force] [--dry-run]` CLI subcommand."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive migrate-recording",
+        description=(
+            "Backfill a `requires:` state contract onto an old recording.\n"
+            "Re-OCRs the step-0 pre_screenshot, builds a RequiresBlock, and\n"
+            "writes the YAML back in place (with a .pre-migrate.bak sibling)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("name", help="Recording name (directory under recordings root).")
+    parser.add_argument("--force", action="store_true", default=False,
+                        help="Re-migrate even if the recording already has `requires:`.")
+    parser.add_argument("--dry-run", action="store_true", default=False,
+                        help="Print what would be written; do not modify the file.")
+    ns = parser.parse_args(args)
+
+    try:
+        result = recorder.migrate_recording(ns.name, force=ns.force, dry_run=ns.dry_run)
+    except recorder.MigrationError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not result.migrated:
+        print(result.reason)
+        sys.exit(0)
+
+    suffix = " (dry-run)" if result.dry_run else ""
+    backup_note = (f" Backup at {result.backup_path}."
+                   if result.backup_path else "")
+    print(
+        f"Migrated {result.name}{suffix}: {result.text_mark_count} text marks"
+        f" (primary button: {result.primary_button_label!r}).{backup_note}"
+    )
+    sys.exit(0)
+
+
 def _cmd_wda_down(args: list[str]) -> None:
     """Handle `simdrive wda-down <udid>` — SIGTERM the running WDA daemon."""
     import argparse
@@ -2104,6 +2199,8 @@ _SUBCOMMANDS: dict = {
     "wda-down": _cmd_wda_down,
     "trial": _cmd_trial,
     "license": _cmd_license,
+    "lint-recordings": _cmd_lint_recordings,
+    "migrate-recording": _cmd_migrate_recording,
 }
 
 

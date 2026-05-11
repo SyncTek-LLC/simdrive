@@ -208,19 +208,20 @@ class Recorder:
         return self.yaml_path
 
 
-def _capture_state_contract(session: Session, workdir: Path) -> tuple[Optional[RequiresBlock], Optional[str]]:
-    """Observe the live screen and build a RequiresBlock for the captured state.
+def _build_requires_block(
+    marks: list,
+    *,
+    screen_h: Optional[int],
+    app_bundle_id: Optional[str],
+    app_version: Optional[str],
+    sim_device: Optional[str],
+    sim_ios_version: Optional[str],
+) -> RequiresBlock:
+    """Pure transform from (marks + screen metadata) → RequiresBlock.
 
-    Returns (block, warning). On observe failure returns (None, "reason") so the
-    recording still starts — the contract just won't be verified at replay.
+    Shared by capture-time (`_capture_state_contract`) and post-hoc migration
+    (`migrate_recording`) so both paths produce identical contracts.
     """
-    try:
-        live = observe.observe(session.device.udid, workdir, target=session.target)
-    except Exception as exc:  # pragma: no cover — exercised via degrades_gracefully test
-        return None, f"Could not capture state contract at record_start: {exc}"
-
-    marks = list(live.marks or [])
-    # initial_state fields
     foreground = len(marks) > 0
     # text_subset_required: top-10 (top-to-bottom from detect_marks), confidence
     # band high|medium, text >= 2 chars
@@ -237,28 +238,46 @@ def _capture_state_contract(session: Session, workdir: Path) -> tuple[Optional[R
 
     primary_label: Optional[str] = None
     if marks:
-        screen_h = live.screenshot_h or 0
-        upper = [m for m in marks if (m.y + m.h // 2) < (screen_h / 2 if screen_h else float("inf"))]
+        h = screen_h or 0
+        upper = [m for m in marks if (m.y + m.h // 2) < (h / 2 if h else float("inf"))]
         pool = upper if upper else marks
         biggest = max(pool, key=lambda m: m.w * m.h)
         primary_label = (biggest.text or "").strip() or None
 
-    block = RequiresBlock(
+    return RequiresBlock(
         app=AppRequires(
-            bundle_id=session.app_bundle_id,
-            version=_current_app_version(session),
+            bundle_id=app_bundle_id,
+            version=app_version,
             version_match="minor",
         ),
-        sim=SimRequires(
-            device=session.device.name,
-            ios_version=session.device.os_version,
-        ),
+        sim=SimRequires(device=sim_device, ios_version=sim_ios_version),
         initial_state=InitialStateRequires(
             foreground=foreground,
             text_subset_required=required,
             text_subset_forbidden=[],
             primary_button_label=primary_label,
         ),
+    )
+
+
+def _capture_state_contract(session: Session, workdir: Path) -> tuple[Optional[RequiresBlock], Optional[str]]:
+    """Observe the live screen and build a RequiresBlock for the captured state.
+
+    Returns (block, warning). On observe failure returns (None, "reason") so the
+    recording still starts — the contract just won't be verified at replay.
+    """
+    try:
+        live = observe.observe(session.device.udid, workdir, target=session.target)
+    except Exception as exc:  # pragma: no cover — exercised via degrades_gracefully test
+        return None, f"Could not capture state contract at record_start: {exc}"
+
+    block = _build_requires_block(
+        list(live.marks or []),
+        screen_h=live.screenshot_h,
+        app_bundle_id=session.app_bundle_id,
+        app_version=_current_app_version(session),
+        sim_device=session.device.name,
+        sim_ios_version=session.device.os_version,
     )
     return block, None
 
@@ -303,6 +322,164 @@ def stop(session: Session) -> Path:
     session.recorder = None
     log.debug("recording finalized", extra={"yaml_path": str(yaml_path)})
     return yaml_path
+
+
+# ---------- Lint + migrate (a9.1) ---------- #
+
+
+@dataclass
+class LintResult:
+    path: Path
+    status: str   # "ok" | "fail"
+    reason: str = ""
+    text_mark_count: int = 0
+    app_bundle_id: Optional[str] = None
+    sim_device: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "path": str(self.path),
+            "status": self.status,
+            "reason": self.reason,
+            "text_mark_count": self.text_mark_count,
+            "app_bundle_id": self.app_bundle_id,
+            "sim_device": self.sim_device,
+        }
+
+
+def lint_recordings(path: Path) -> list[LintResult]:
+    """Walk `path` and lint every recording.yaml found.
+
+    Returns a list of LintResult — one per recording. Empty if no recordings.
+    """
+    path = Path(path)
+    if not path.exists():
+        return []
+    results: list[LintResult] = []
+    for yaml_path in sorted(path.rglob("recording.yaml")):
+        results.append(_lint_one(yaml_path))
+    return results
+
+
+def _lint_one(yaml_path: Path) -> LintResult:
+    try:
+        payload = yaml.safe_load(yaml_path.read_text())
+    except yaml.YAMLError as exc:
+        return LintResult(path=yaml_path, status="fail", reason=f"yaml parse error: {exc}")
+    except OSError as exc:
+        return LintResult(path=yaml_path, status="fail", reason=f"read error: {exc}")
+
+    if not isinstance(payload, dict):
+        return LintResult(path=yaml_path, status="fail",
+                          reason="recording.yaml did not parse to a mapping")
+
+    requires_raw = payload.get("requires")
+    if requires_raw is None:
+        return LintResult(
+            path=yaml_path,
+            status="fail",
+            reason=f"no requires block — run `simdrive migrate-recording {yaml_path.parent.name}` to capture one",
+        )
+
+    block = RequiresBlock.from_dict(requires_raw)
+    if block is None:
+        return LintResult(path=yaml_path, status="fail",
+                          reason="malformed requires block (not a mapping)")
+
+    return LintResult(
+        path=yaml_path,
+        status="ok",
+        text_mark_count=len(block.initial_state.text_subset_required),
+        app_bundle_id=block.app.bundle_id,
+        sim_device=block.sim.device,
+    )
+
+
+class MigrationError(Exception):
+    """Raised when migrate_recording cannot proceed."""
+
+
+@dataclass
+class MigrationResult:
+    name: str
+    migrated: bool
+    reason: str = ""
+    dry_run: bool = False
+    text_mark_count: int = 0
+    primary_button_label: Optional[str] = None
+    backup_path: Optional[Path] = None
+
+
+def migrate_recording(name: str, *, force: bool = False,
+                      dry_run: bool = False) -> MigrationResult:
+    """Backfill a `requires:` block onto an old recording by OCR'ing step-0.
+
+    Idempotent: no-op when `requires:` already present (unless force=True).
+    """
+    rec_dir = recordings_root() / name
+    yaml_path = rec_dir / "recording.yaml"
+    if not yaml_path.exists():
+        raise MigrationError(f"recording not found at {yaml_path}")
+
+    payload = yaml.safe_load(yaml_path.read_text())
+    if not isinstance(payload, dict):
+        raise MigrationError("recording.yaml did not parse to a mapping")
+
+    if payload.get("requires") is not None and not force:
+        return MigrationResult(name=name, migrated=False,
+                               reason="already migrated (use --force to overwrite)")
+
+    steps = payload.get("steps") or []
+    if not steps:
+        raise MigrationError("cannot migrate — no step-0 screenshot to OCR")
+
+    pre_rel = steps[0].get("pre_screenshot")
+    if not pre_rel:
+        raise MigrationError("cannot migrate — step-0 has no pre_screenshot")
+
+    pre_path = rec_dir / pre_rel
+    if not pre_path.exists():
+        raise MigrationError(f"cannot migrate — pre_screenshot missing at {pre_path}")
+
+    marks = som.detect_marks(pre_path)
+
+    # Screen dimensions: prefer step args, fall back to PIL probe.
+    args0 = steps[0].get("args") or {}
+    screen_h = args0.get("screenshot_h")
+    if not screen_h:
+        from PIL import Image
+        with Image.open(pre_path) as im:
+            _, screen_h = im.size
+
+    block = _build_requires_block(
+        marks,
+        screen_h=screen_h,
+        app_bundle_id=payload.get("app_bundle_id"),
+        app_version=payload.get("app_version"),
+        sim_device=payload.get("device"),
+        sim_ios_version=payload.get("os_version"),
+    )
+
+    result = MigrationResult(
+        name=name,
+        migrated=True,
+        dry_run=dry_run,
+        text_mark_count=len(block.initial_state.text_subset_required),
+        primary_button_label=block.initial_state.primary_button_label,
+    )
+
+    if dry_run:
+        return result
+
+    # Backup before mutation — non-obvious recovery aid if migration mangles the file.
+    backup = yaml_path.with_suffix(".yaml.pre-migrate.bak")
+    shutil.copy2(yaml_path, backup)
+    result.backup_path = backup
+
+    payload["requires"] = block.to_dict()
+    with yaml_path.open("w") as f:
+        yaml.safe_dump(payload, f, sort_keys=False)
+    return result
 
 
 # ---------- Replay ---------- #
