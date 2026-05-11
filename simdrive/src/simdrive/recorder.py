@@ -389,9 +389,202 @@ def _block_similarity(a: Path, b: Path, grid: int = 32, threshold: int = 8,
     return matches / float(grid * grid)
 
 
+_ALERT_TEXTS = {"don't allow", "dont allow", "allow", "ok", "cancel"}
+
+
+def _split_semver_predicate(raw: str) -> tuple[str, str]:
+    """Parse `">=18.0"` → (">=", "18.0"). Returns ("==", raw) when no operator."""
+    raw = raw.strip()
+    for op in (">=", "<=", "==", "!=", ">", "<"):
+        if raw.startswith(op):
+            return op, raw[len(op):].strip()
+    return "==", raw
+
+
+def _semver_tuple(v: str) -> tuple[int, ...]:
+    parts = []
+    for chunk in v.split("."):
+        try:
+            parts.append(int(chunk))
+        except ValueError:
+            # Stop at the first non-numeric component (e.g. "18.0-beta")
+            break
+    return tuple(parts) or (0,)
+
+
+def _ios_version_matches(predicate: str, actual: str) -> bool:
+    op, target = _split_semver_predicate(predicate)
+    if op == "==":
+        # Plain equality is case-insensitive string match (covers "18.0" vs "18.0").
+        if predicate.strip() == actual.strip():
+            return True
+    a = _semver_tuple(actual)
+    t = _semver_tuple(target)
+    # Pad with zeros so (18,) compares against (18, 0).
+    n = max(len(a), len(t))
+    a = a + (0,) * (n - len(a))
+    t = t + (0,) * (n - len(t))
+    if op == "==":
+        return a == t
+    if op == "!=":
+        return a != t
+    if op == ">=":
+        return a >= t
+    if op == "<=":
+        return a <= t
+    if op == ">":
+        return a > t
+    if op == "<":
+        return a < t
+    return False
+
+
+def _version_matches(mode: str, expected: Optional[str], actual: Optional[str]) -> bool:
+    if mode == "any" or expected is None:
+        return True
+    if actual is None:
+        return False
+    if mode == "exact":
+        return expected == actual
+    a = _semver_tuple(actual)
+    e = _semver_tuple(expected)
+    if mode == "major":
+        return a[:1] == e[:1]
+    # default "minor"
+    a2 = a + (0,) * max(0, 2 - len(a))
+    e2 = e + (0,) * max(0, 2 - len(e))
+    return a2[:2] == e2[:2]
+
+
+def _verify_state_contract(session: Session, block: RequiresBlock,
+                           workdir: Path) -> tuple[bool, Optional[dict]]:
+    """Check the live state against the recorded contract.
+
+    Returns (True, None) on full match; (False, mismatch_dict) when any
+    constraint fails. The mismatch_dict carries `expected`, `actual`, and a
+    `remedy` hint.
+    """
+    expected: dict[str, Any] = {}
+    actual: dict[str, Any] = {}
+    reasons: list[str] = []
+
+    # App bundle
+    if block.app.bundle_id:
+        actual_bundle = session.app_bundle_id
+        expected["app.bundle_id"] = block.app.bundle_id
+        actual["app.bundle_id"] = actual_bundle
+        if actual_bundle != block.app.bundle_id:
+            reasons.append(
+                f"app.bundle_id: expected {block.app.bundle_id!r}, got {actual_bundle!r}"
+            )
+
+    # App version
+    if block.app.version is not None and block.app.version_match != "any":
+        live_version = _current_app_version(session)
+        expected["app.version"] = f"{block.app.version} (match: {block.app.version_match})"
+        actual["app.version"] = live_version
+        if not _version_matches(block.app.version_match, block.app.version, live_version):
+            reasons.append(
+                f"app.version: expected {block.app.version} ({block.app.version_match}), got {live_version}"
+            )
+
+    # Sim device
+    if block.sim.device:
+        live_device = session.device.name or ""
+        expected["sim.device"] = block.sim.device
+        actual["sim.device"] = live_device
+        if live_device.lower() != block.sim.device.lower():
+            reasons.append(f"sim.device: expected {block.sim.device!r}, got {live_device!r}")
+
+    # iOS version
+    if block.sim.ios_version:
+        live_os = session.device.os_version or ""
+        expected["sim.ios_version"] = block.sim.ios_version
+        actual["sim.ios_version"] = live_os
+        if not _ios_version_matches(block.sim.ios_version, live_os):
+            reasons.append(
+                f"sim.ios_version: expected {block.sim.ios_version}, got {live_os!r}"
+            )
+
+    # Observe live state for the initial_state checks
+    try:
+        live = observe.observe(session.device.udid, workdir, target=session.target)
+        live_marks = list(live.marks or [])
+    except Exception as exc:
+        return False, {
+            "expected": expected,
+            "actual": actual,
+            "reasons": reasons + [f"observe failed: {exc}"],
+            "remedy": "Could not observe live state. Verify the simulator/device is reachable.",
+        }
+
+    live_texts = [(m.text or "") for m in live_marks]
+
+    if block.initial_state.foreground:
+        expected["initial_state.foreground"] = True
+        actual["initial_state.foreground"] = len(live_marks) > 0
+        if not live_marks:
+            reasons.append("initial_state.foreground: expected app on screen, got empty observation")
+
+    required = block.initial_state.text_subset_required
+    if required:
+        missing = [t for t in required if not any(t in lt for lt in live_texts)]
+        expected["initial_state.text_subset_required"] = list(required)
+        actual["initial_state.text_subset_present"] = [t for t in required if t not in missing]
+        if missing:
+            reasons.append(f"initial_state.text_subset_required missing: {missing}")
+
+    forbidden = block.initial_state.text_subset_forbidden
+    if forbidden:
+        present = [t for t in forbidden if any(t in lt for lt in live_texts)]
+        expected["initial_state.text_subset_forbidden"] = list(forbidden)
+        actual["initial_state.text_subset_present_forbidden"] = present
+        if present:
+            reasons.append(f"initial_state.text_subset_forbidden present: {present}")
+
+    if block.initial_state.primary_button_label:
+        label = block.initial_state.primary_button_label
+        expected["initial_state.primary_button_label"] = label
+        # v1 relaxation: accept any band so we don't false-halt when OCR
+        # downgrades the same text from high → medium between sessions.
+        present = any(label in (m.text or "") for m in live_marks)
+        actual["initial_state.primary_button_present"] = present
+        if not present:
+            reasons.append(f"initial_state.primary_button_label {label!r} not seen on screen")
+
+    if not reasons:
+        return True, None
+
+    # Remedy: alert-shaped if any forbidden text looks like an alert button,
+    # OR any live mark text is an alert button label.
+    alert_shaped = any(
+        (t or "").strip().lower() in _ALERT_TEXTS for t in (forbidden or [])
+    ) or any(
+        (m.text or "").strip().lower() in _ALERT_TEXTS for m in live_marks
+    )
+    if alert_shaped:
+        remedy = (
+            "App appears to be showing a permission alert. Pre-grant via "
+            "`xcrun simctl privacy <udid> grant ...` before launching, then retry."
+        )
+    else:
+        remedy = (
+            "State at replay-start differs from capture-time. Reset the app to "
+            "its captured state, or re-record."
+        )
+
+    return False, {
+        "expected": expected,
+        "actual": actual,
+        "reasons": reasons,
+        "remedy": remedy,
+    }
+
+
 def replay(name: str, session: Session, on_drift: str = "halt",
            drift_threshold: float = 0.85,
-           mask_regions: Optional[list] = None) -> dict:
+           mask_regions: Optional[list] = None,
+           halt_on_state_mismatch: bool = True) -> dict:
     """Replay a recording against the current session.
 
     on_drift ∈ {"halt", "warn", "force"} controls what happens when the live
@@ -400,6 +593,11 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     mask_regions: list of (x, y, w, h) tuples or {x,y,w,h} dicts to exclude
     from the similarity compute (e.g. status-bar clock). When None, falls back
     to the YAML's `ssim_masks` field if present.
+
+    halt_on_state_mismatch (a9.0): when True (default), verify the live state
+    against the recording's `requires:` block before step 1. Halt with
+    halt_reason="state_contract_mismatch" on any failure. When False, mismatch
+    is reported via `_simdrive_warning` and replay proceeds.
     """
     if on_drift not in {"halt", "warn", "force"}:
         raise ValueError("on_drift must be halt|warn|force")
@@ -415,7 +613,35 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     if masks is None:
         masks = _normalize_masks(payload.get("ssim_masks"))
 
+    # State-contract verification (a9.0) — happens BEFORE any step executes.
+    requires_block = RequiresBlock.from_dict(payload.get("requires"))
+    state_warning: Optional[str] = None
     steps_planned = len(steps)
+    if requires_block is None:
+        state_warning = (
+            "Recording has no `requires:` block. State contract not verified. "
+            "Run `simdrive migrate-recording " + name + "` to capture one."
+        )
+    else:
+        ok, mismatch = _verify_state_contract(session, requires_block,
+                                              session.workdir / "replay")
+        if not ok:
+            summary = "; ".join(mismatch.get("reasons", []) or [])[:300]
+            if halt_on_state_mismatch:
+                return {
+                    "ok": False,
+                    "halted_at": 0,
+                    "halt_reason": "state_contract_mismatch",
+                    "threshold": drift_threshold,
+                    "steps_planned": steps_planned,
+                    "steps": [],
+                    "expected": mismatch["expected"],
+                    "actual": mismatch["actual"],
+                    "reasons": mismatch.get("reasons", []),
+                    "remedy": mismatch["remedy"],
+                }
+            state_warning = f"state_contract_mismatch: {summary}"
+
     results: list[dict] = []
     for step in steps:
         live = observe.observe(session.device.udid, session.workdir / "replay")
@@ -435,7 +661,7 @@ def replay(name: str, session: Session, on_drift: str = "halt",
         if drifted and on_drift == "halt":
             step_result["error"] = f"drift {score:.3f} < {drift_threshold}; halted"
             results.append(step_result)
-            return {
+            out = {
                 "ok": False,
                 "halted_at": step["id"],
                 "halt_reason": "drift",
@@ -443,6 +669,9 @@ def replay(name: str, session: Session, on_drift: str = "halt",
                 "steps_planned": steps_planned,
                 "steps": results,
             }
+            if state_warning:
+                out["_simdrive_warning"] = state_warning
+            return out
 
         try:
             _execute_step(step, session, live_observation=live)
@@ -450,7 +679,7 @@ def replay(name: str, session: Session, on_drift: str = "halt",
         except Exception as exc:
             step_result["error"] = str(exc)
             results.append(step_result)
-            return {
+            out = {
                 "ok": False,
                 "halted_at": step["id"],
                 "halt_reason": "execute_error",
@@ -458,10 +687,13 @@ def replay(name: str, session: Session, on_drift: str = "halt",
                 "steps_planned": steps_planned,
                 "steps": results,
             }
+            if state_warning:
+                out["_simdrive_warning"] = state_warning
+            return out
 
         results.append(step_result)
 
-    return {
+    out = {
         "ok": True,
         "halted_at": None,
         "halt_reason": None,
@@ -469,6 +701,9 @@ def replay(name: str, session: Session, on_drift: str = "halt",
         "steps_planned": steps_planned,
         "steps": results,
     }
+    if state_warning:
+        out["_simdrive_warning"] = state_warning
+    return out
 
 
 def _execute_step(step: dict, session: Session, live_observation: Optional[observe.Observation] = None) -> None:
