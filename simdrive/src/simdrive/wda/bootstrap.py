@@ -1054,12 +1054,15 @@ def smoke_test(host: str, port: int) -> dict:
         except Exception:
             sess_body = {}
 
-        # Detect XCTDaemonErrorDomain Code=41.
+        # Detect XCTDaemonErrorDomain Code 41 (UI Automation disabled).
         # WDA surfaces this in the error value at: {value: {error: "...", message: "..."}}
         # or as a top-level {"status": 13, "value": "XCTDaemonErrorDomain Code=41 ..."}
-        # We scan the raw text for the canonical marker.
+        # WDA versions differ: some emit "Code=41", others "Code 41" (space).
+        # We scan the raw text for the canonical marker with both separators.
         raw_text = sess_resp.text or ""
-        if "XCTDaemonErrorDomain" in raw_text and "Code=41" in raw_text:
+        if "XCTDaemonErrorDomain" in raw_text and (
+            "Code=41" in raw_text or "Code 41" in raw_text
+        ):
             # Attempt teardown of any partial session that may have been created.
             _try_delete_wda_session(base_url, sess_body)
             raise wda_ui_automation_disabled(f"{host}:{port}")
