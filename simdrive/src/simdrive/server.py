@@ -92,7 +92,7 @@ def _wda_client_for(udid: str):
     return WdaClient(host=host, port=port)
 
 
-def _session_scale(s) -> float:
+def _session_scale(s, wda=None) -> float:
     """Return the pixel-per-logical-point scale for a device session (F-006).
 
     WDA input endpoints (tap, swipe) expect logical points — the same coordinate
@@ -103,6 +103,13 @@ def _session_scale(s) -> float:
 
     The scale is computed once per session and cached on Session.pixel_per_point_scale
     to avoid a WDA round-trip on every input call.
+
+    Args:
+        s: The Session object.
+        wda: Optional already-resolved WdaClient. When supplied, skips the
+            s.wda_client / _wda_client_for() resolution so callers that have
+            already obtained a client don't trigger a second _wda_client_for()
+            call. When None, resolves via s.wda_client or _wda_client_for().
 
     Edge-case policy:
       - Simulator sessions: fast-path returns 1.0 (sim screenshots are already
@@ -124,8 +131,10 @@ def _session_scale(s) -> float:
     # Ensure screenshot dims are populated so we have the pixel size.
     sw, sh = _ensure_screenshot_dims(s)
 
-    # Prefer the session-stored WdaClient (already has an open session_id).
-    wda = s.wda_client or _wda_client_for(s.device.udid)
+    # Use the caller-supplied client (avoids a second _wda_client_for() call
+    # when the caller already resolved it) or fall back to session / registry.
+    if wda is None:
+        wda = s.wda_client or _wda_client_for(s.device.udid)
     try:
         w_pts, h_pts = wda.window_size_points()
     except Exception as exc:
@@ -440,7 +449,9 @@ def tool_tap(arguments: dict) -> dict:
         # established by session_start. A fresh client from _wda_client_for has
         # _session_id=None, causing wda_session_not_open on every tap (F-005).
         wda = s.wda_client or _wda_client_for(s.device.udid)
-        scale = _session_scale(s)  # convert pixel coords to WDA logical points (F-006)
+        # Pass the already-resolved wda to _session_scale to avoid a second
+        # _wda_client_for() call (F-006: single resolution per tap call).
+        scale = _session_scale(s, wda=wda)
         wda.tap(float(x) / scale, float(y) / scale)
         s.last_action_at = _now()
         session.append_action(s, {
