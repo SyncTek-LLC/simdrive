@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.0.0a10] — 2026-05-13
+
+### Added — Zero-config real-device bootstrap
+
+**Auto-detect team ID (`auto_detect_team_id`)**
+`bootstrap-device` no longer requires `--team-id`. A new `auto_detect_team_id() -> str | None`
+function in `wda/bootstrap.py` queries `security find-identity -p codesigning -v` for Apple
+Development certificates. If exactly one unique team ID appears, it is used automatically with a
+`[simdrive] Auto-detected team: <TEAM>` log line. If multiple teams are found, a clear error lists
+them and instructs the user to pass `--team-id <one of: A, B>`. Fallback to
+`defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists` for older Xcode
+installations with no keychain certs. The `--team-id` CLI flag is now optional.
+
+**Per-team WDA bundle ID rewrite (`patch_wda_bundle_id`)**
+Apple's auto-provisioning rejects the hardcoded `com.facebook.WebDriverAgentRunner.xctrunner`
+bundle ID because Facebook already owns that prefix under their team. Before each build,
+`patch_wda_bundle_id(source_dir, team_id)` rewrites every `PRODUCT_BUNDLE_IDENTIFIER` line
+in `WebDriverAgent.xcodeproj/project.pbxproj` to `co.synctek.simdrive.wda.<team_lower>`.
+The rewrite is idempotent (safe to run twice), narrow (only `PRODUCT_BUNDLE_IDENTIFIER` lines
+are touched), and the scheme/PRODUCT_NAME remain "WebDriverAgentRunner" so xcodebuild's
+scheme resolution is unaffected. The new bundle ID is persisted to the registry JSON.
+`build_wda()` now returns `(derived_data_path, bundle_id)` instead of just `derived_data_path`.
+`install_wda()` accepts an explicit `bundle_id` and uninstalls both the new and legacy Facebook IDs.
+
+**Accurate `list_devices` HID flags**
+`tool_list_devices` in `server.py` now sets `hid_supported=True` for each device that has a
+WDA registry entry (`~/.simdrive/wda/<udid>.json`), and `False` otherwise. The `hid_note`
+field is updated to accurate guidance: "run `simdrive bootstrap-device` once per device".
+`session_start` and `list_devices` tool descriptions no longer mention a "v0.2 roadmap" —
+the feature is implemented and live.
+
+### Source
+
+INIT-2026-540. Files changed: `wda/bootstrap.py` (new functions `auto_detect_team_id`,
+`_wda_bundle_id_for_team`, `patch_wda_bundle_id`; updated `build_wda`, `install_wda`,
+`bootstrap_device`), `server.py` (`tool_list_devices`, two schema description strings),
+`pyproject.toml` (version bump).
+
+---
+
 ## [1.0.0a7] — 2026-05-05
 
 ### Added
