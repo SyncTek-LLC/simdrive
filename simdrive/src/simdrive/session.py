@@ -36,6 +36,7 @@ class Session:
     perf_baselines: dict = field(default_factory=dict)  # label -> snapshot dict (for perf_compare)
     started_at: float = field(default_factory=time.time)  # used by `crashes` to filter .ips by mtime
     wda_client: Optional[object] = None  # WdaClient instance for target="device" sessions
+    pixel_per_point_scale: Optional[float] = None  # cached px/pt scale for WDA coord conversion (F-006)
 
 
 def _workroot() -> Path:
