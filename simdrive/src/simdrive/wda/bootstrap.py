@@ -82,7 +82,18 @@ _SERVER_URL_RE = re.compile(r"ServerURLHere->http://([^:]+):(\d+)<-")
 _LOCKED_DEVICE_RE = re.compile(r"Unlock .+ to Continue|device is locked", re.IGNORECASE)
 
 # WDA bundle identifier (Appium fork default, matches xcodebuild scheme).
+# Note: this is the fallback — auto-bootstrap rewrites it to a per-team ID to
+# dodge Apple's reservation of the com.facebook namespace.
 _WDA_BUNDLE_ID = "com.facebook.WebDriverAgentRunner.xctrunner"
+
+# Regex that matches the WDA bundle ID assignment in project.pbxproj.
+# Matches the Facebook default AND any previously-patched co.synctek value.
+# Only targets PRODUCT_BUNDLE_IDENTIFIER lines so unrelated occurrences are safe.
+_PBXPROJ_BUNDLE_RE = re.compile(
+    r"(PRODUCT_BUNDLE_IDENTIFIER\s*=\s*)"
+    r"(?:com\.facebook\.WebDriverAgentRunner[^\s;]*|co\.synctek\.simdrive\.wda\.[^\s;]*)"
+    r"(;)"
+)
 
 
 # ─── daemon paths ────────────────────────────────────────────────────────────
@@ -101,6 +112,63 @@ def _log_path(udid: str) -> Path:
 def _pid_path(udid: str) -> Path:
     """Path of the per-UDID WDA daemon pidfile."""
     return _wda_home() / f"{udid}.pid"
+
+
+# ─── team auto-detection ─────────────────────────────────────────────────────
+
+
+def auto_detect_team_id() -> Optional[str]:
+    """Detect the Apple Developer Team ID from the local keychain or Xcode prefs.
+
+    Resolution order:
+      a. ``security find-identity -p codesigning -v`` — parse team IDs from
+         "Apple Development: <name> (<TEAM>)" lines. If exactly one unique team
+         appears across all valid identities, return it. If multiple unique
+         teams, return None (caller must ask the user to pass --team-id
+         explicitly).
+      b. Fallback: ``defaults read com.apple.dt.Xcode
+         DVTDeveloperAccountManagerAppleIDLists`` — extract ``teamID = "..."``
+         entries (older Xcode). Same single-team rule.
+
+    Returns the 10-character team ID string, or None if detection fails or
+    the result is ambiguous.
+    """
+    # ── approach (a): keychain identities ──────────────────────────────────
+    result = subprocess.run(
+        ["security", "find-identity", "-p", "codesigning", "-v"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout:
+        identities = _parse_identities(result.stdout)
+        teams = {i["team_id"] for i in identities if i["team_id"]}
+        if len(teams) == 1:
+            return next(iter(teams))
+        if len(teams) > 1:
+            # Multiple teams — caller must disambiguate.
+            return None
+
+    # ── approach (b): Xcode preferences plist ──────────────────────────────
+    prefs = subprocess.run(
+        ["defaults", "read", "com.apple.dt.Xcode",
+         "DVTDeveloperAccountManagerAppleIDLists"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if prefs.returncode == 0 and prefs.stdout:
+        # Match `teamID = "ABCD123456";` or `DVTDeveloperAccountTeamID = "..."`.
+        found = set(re.findall(
+            r'(?:teamID|DVTDeveloperAccountTeamID)\s*=\s*"([A-Z0-9]{10})"',
+            prefs.stdout,
+        ))
+        if len(found) == 1:
+            return next(iter(found))
+
+    return None
 
 
 # ─── host-tool verification ───────────────────────────────────────────────────
@@ -568,6 +636,53 @@ def _xcode_account_output_has_team(stdout: str, team_id: str) -> bool:
     return False
 
 
+# ─── WDA bundle ID rewrite ───────────────────────────────────────────────────
+
+
+def _wda_bundle_id_for_team(team_id: str) -> str:
+    """Return the per-team WDA bundle ID used for provisioning.
+
+    Format: ``co.synctek.simdrive.wda.<team_id_lower>``
+
+    This scheme is globally unique (scoped under our domain), readable, and
+    idempotent — running patch_wda_bundle_id twice yields the same result.
+    Apple's com.facebook namespace is avoided so auto-provisioning succeeds.
+    """
+    return f"co.synctek.simdrive.wda.{team_id.lower()}"
+
+
+def patch_wda_bundle_id(source_dir: Path, team_id: str) -> str:
+    """Rewrite PRODUCT_BUNDLE_IDENTIFIER in WebDriverAgent.xcodeproj/project.pbxproj.
+
+    Replaces the Facebook default (``com.facebook.WebDriverAgentRunner...``) and
+    any previously-written ``co.synctek.simdrive.wda.*`` value with the per-team
+    bundle ID. Only PRODUCT_BUNDLE_IDENTIFIER lines are touched; the scheme name
+    and PRODUCT_NAME remain "WebDriverAgentRunner" so xcodebuild's scheme lookup
+    is unaffected.
+
+    Idempotent: running twice on the same source_dir produces the same file.
+
+    Returns the new bundle ID string.
+    """
+    pbxproj = source_dir / "WebDriverAgent.xcodeproj" / "project.pbxproj"
+    if not pbxproj.exists():
+        _LOG.warning("project.pbxproj not found at %s — skipping bundle ID patch", pbxproj)
+        return _wda_bundle_id_for_team(team_id)
+
+    new_bundle_id = _wda_bundle_id_for_team(team_id)
+    original = pbxproj.read_text(encoding="utf-8")
+    patched = _PBXPROJ_BUNDLE_RE.sub(
+        lambda m: f"{m.group(1)}{new_bundle_id}{m.group(2)}",
+        original,
+    )
+    if patched != original:
+        pbxproj.write_text(patched, encoding="utf-8")
+        print(f"[simdrive] Patched WDA bundle ID → {new_bundle_id}", flush=True)
+    else:
+        print(f"[simdrive] WDA bundle ID already set to {new_bundle_id} (idempotent)", flush=True)
+    return new_bundle_id
+
+
 # ─── xcodebuild ──────────────────────────────────────────────────────────────
 
 
@@ -576,17 +691,20 @@ def build_wda(
     source_dir: Path,
     team_id: str,
     hardware_udid: str,
-) -> Path:
+) -> tuple[Path, str]:
     """Run xcodebuild build-for-testing for WebDriverAgentRunner.
 
-    Streams stdout live (so the user can see progress). Returns the derived
-    data path. Raises wda_build_failed with the log path on non-zero exit.
+    Streams stdout live (so the user can see progress). Returns
+    ``(derived_data_path, bundle_id)``. Raises wda_build_failed with the log
+    path on non-zero exit.
 
     Bug 3 fix: uses CODE_SIGN_IDENTITY="Apple Development" + CODE_SIGN_STYLE=Automatic
                instead of the full certificate string, and passes -allowProvisioningUpdates.
     Bug 4 fix: passes OTHER_CFLAGS="-Wno-reserved-identifier" to suppress clang
                -Wreserved-identifier errors in WDA v9.9.0 PrivateHeaders on Xcode 16.
     Bug 2 fix: uses hardware_udid for xcodebuild -destination (not coredevice UUID).
+    a10: patches project.pbxproj bundle ID to a per-team value before building,
+         dodging Apple's reservation of the com.facebook namespace.
 
     B4 (FAILED-before-SUCCEEDED retry): the very first build that touches a new
     team often emits a single `** BUILD FAILED **` line before xcodebuild
@@ -600,6 +718,10 @@ def build_wda(
     derived_data = wda_home / coredevice_uuid / "derived"
     log_path = wda_home / coredevice_uuid / "build.log"
     derived_data.mkdir(parents=True, exist_ok=True)
+
+    # a10: rewrite bundle ID in xcodeproj before building so Apple auto-provisioning
+    # works for any team (com.facebook is reserved under their team, not ours).
+    bundle_id = patch_wda_bundle_id(source_dir, team_id)
 
     project = source_dir / "WebDriverAgent.xcodeproj"
     cmd = [
@@ -642,7 +764,7 @@ def build_wda(
         pass
 
     print(f"[simdrive] Build succeeded. Derived data: {derived_data}", flush=True)
-    return derived_data
+    return derived_data, bundle_id
 
 
 _BUILD_FAILED_RE = re.compile(r"\*\*\s*BUILD FAILED\s*\*\*", re.IGNORECASE)
@@ -706,10 +828,18 @@ def _find_xctestrun(derived_data: Path) -> Optional[Path]:
     return None
 
 
-def install_wda(coredevice_uuid: str, derived_data: Path) -> str:
+def install_wda(
+    coredevice_uuid: str,
+    derived_data: Path,
+    bundle_id: str = _WDA_BUNDLE_ID,
+) -> str:
     """Install the WDA app bundle via xcrun devicectl.
 
-    Returns the bundle identifier of the installed app.
+    bundle_id: the per-team bundle identifier written into project.pbxproj
+               by patch_wda_bundle_id(). Defaults to the Appium Facebook value
+               for backwards compatibility when called outside bootstrap_device.
+
+    Returns bundle_id (the identifier of the installed app).
     Raises wda_install_failed on non-zero exit.
 
     Uses coredevice_uuid (not hardware UDID) for devicectl commands.
@@ -721,16 +851,21 @@ def install_wda(coredevice_uuid: str, derived_data: Path) -> str:
             "Run with --rebuild to trigger a fresh build."
         )
 
-    # Uninstall any old WDA to avoid signing/team conflicts.
-    print(f"[simdrive] Uninstalling old WDA (if present) from device {coredevice_uuid} ...", flush=True)
-    subprocess.run(
-        ["xcrun", "devicectl", "device", "uninstall", "app",
-         "--device", coredevice_uuid, "--bundle-id", _WDA_BUNDLE_ID],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,  # Non-zero is OK — WDA may not be installed yet
-    )
+    # Uninstall both the per-team bundle ID AND the legacy Facebook ID to avoid
+    # signing/team conflicts (devices previously bootstrapped with the old default).
+    for old_bid in {bundle_id, _WDA_BUNDLE_ID}:
+        print(
+            f"[simdrive] Uninstalling old WDA ({old_bid}) from device {coredevice_uuid} if present ...",
+            flush=True,
+        )
+        subprocess.run(
+            ["xcrun", "devicectl", "device", "uninstall", "app",
+             "--device", coredevice_uuid, "--bundle-id", old_bid],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,  # Non-zero is OK — WDA may not be installed yet
+        )
 
     print(f"[simdrive] Installing {app_bundle.name} on device {coredevice_uuid} ...", flush=True)
     result = subprocess.run(
@@ -745,7 +880,7 @@ def install_wda(coredevice_uuid: str, derived_data: Path) -> str:
         raise wda_install_failed(result.stderr or result.stdout)
 
     print("[simdrive] Install succeeded.", flush=True)
-    return _WDA_BUNDLE_ID
+    return bundle_id
 
 
 # ─── launch + port discovery (Bug 5+6) ───────────────────────────────────────
@@ -988,12 +1123,50 @@ def bootstrap_device(
     udid: CoreDevice pairing UUID (as shown by `xcrun devicectl list devices`).
           The hardware UDID for xcodebuild is resolved automatically via devicectl.
 
+    team_id: Apple Developer Team ID. When omitted (None), auto_detect_team_id()
+             is called first. If exactly one team is found it is used silently.
+             If multiple teams are detected, a clear error is raised listing them.
+
     Returns the registry dict that was persisted to ~/.simdrive/wda/<udid>.json.
     All steps raise a typed SimdriveError subclass on failure.
     """
     # 1. Host tools
     verify_host_tools()
     print("[simdrive] Host tools OK.", flush=True)
+
+    # 1b. Auto-detect team when not explicitly supplied (a10).
+    if team_id is None and signing_identity is None:
+        detected = auto_detect_team_id()
+        if detected is not None:
+            print(f"[simdrive] Auto-detected team: {detected}", flush=True)
+            team_id = detected
+        else:
+            # Could not resolve to a single team — surface a clear error.
+            # Run security again to list what we found so the user can pick.
+            _sec = subprocess.run(
+                ["security", "find-identity", "-p", "codesigning", "-v"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            found_teams: list[str] = []
+            if _sec.returncode == 0:
+                found_teams = sorted({
+                    i["team_id"] for i in _parse_identities(_sec.stdout) if i["team_id"]
+                })
+            if found_teams:
+                teams_str = ", ".join(found_teams)
+                raise RuntimeError(
+                    f"[simdrive] Multiple Developer Teams found in keychain: {teams_str}\n"
+                    f"Pass --team-id <one of: {teams_str}> to disambiguate."
+                )
+            else:
+                raise RuntimeError(
+                    "[simdrive] No Developer signing identities found.\n"
+                    "To fix:\n"
+                    "  1. Open Xcode → Settings → Accounts → add your Apple ID, OR\n"
+                    "  2. Install a Developer certificate from developer.apple.com/account,\n"
+                    "     then re-run without --team-id.\n"
+                    "  3. Or pass --team-id <TEAM_ID> explicitly."
+                )
 
     # 2. Device state
     verify_device_ready(udid)
@@ -1026,11 +1199,13 @@ def bootstrap_device(
     # Trust guidance before install (device screen may prompt).
     _print_trust_guidance(resolved_team)
 
-    # 5. Build (Bug 2, 3, 4 fixes applied inside build_wda)
-    derived_data = build_wda(udid, source_dir, resolved_team, hardware_udid)
+    # 5. Build (Bug 2, 3, 4 + a10 bundle-ID-rewrite fixes applied inside build_wda).
+    # build_wda now returns (derived_data, bundle_id).
+    derived_data, build_bundle_id = build_wda(udid, source_dir, resolved_team, hardware_udid)
 
-    # 6. Install (uses coredevice UUID for devicectl)
-    bundle_id = install_wda(udid, derived_data)
+    # 6. Install (uses coredevice UUID for devicectl; passes per-team bundle_id
+    # so devicectl uninstalls the right app, not the stale com.facebook one).
+    bundle_id = install_wda(udid, derived_data, build_bundle_id)
 
     # 7. Launch + port discovery (Bug 5+6 fix: xcodebuild test-without-building)
     host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
