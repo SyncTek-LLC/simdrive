@@ -666,21 +666,23 @@ def tool_replay(arguments: dict) -> dict:
 def tool_list_devices(arguments: dict) -> dict:
     """Enumerate real devices reachable via Apple devicectl + libimobiledevice."""
     from . import device
+    from .wda import registry as wda_registry
     ok, missing = device.libimobiledevice_available()
     devs = []
     err: dict | None = None
     try:
         for d in device.list_devices():
-            # hid_supported is always False for real devices in v0.2.x — input
-            # routes through WDA which is not yet shipped. Sim sessions are
-            # the only HID-capable target.
+            # hid_supported: True when a WDA registry entry exists for this UDID
+            # (i.e. `simdrive bootstrap-device` has been run and WDA is ready).
+            # tap/swipe/type_text/press_key all route through WDA on real devices.
+            reg = wda_registry.load(d.udid)
             devs.append({
                 "udid": d.udid,
                 "name": d.name,
                 "model": d.model,
                 "transport": d.transport,
                 "state": d.state,
-                "hid_supported": False,
+                "hid_supported": reg is not None,
                 "last_seen": d.last_seen,
                 "unavailable_reason": d.unavailable_reason,
             })
@@ -692,9 +694,9 @@ def tool_list_devices(arguments: dict) -> dict:
         "libimobiledevice_ready": ok,
         "missing_tools": missing,
         "hid_note": (
-            "Real-device HID injection is not yet implemented. Use simulators "
-            "for tap/swipe/type_text/press_key. WDA-based real-device input is "
-            "on the v0.3 roadmap."
+            "Real-device tap/swipe/type require a bootstrapped WebDriverAgent "
+            "(run `simdrive bootstrap-device` once per device). "
+            "Devices showing hid_supported=true are ready to drive."
         ),
         "error": err,
     }
@@ -1166,7 +1168,7 @@ _TOOLS: list[dict] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "target": {"type": "string", "enum": ["simulator", "device"], "default": "simulator", "description": "'simulator' (default) or 'device' for a real iPhone/iPad. Real-device sessions support observe + logs + app lifecycle; tap/swipe/type_text/press_key require WebDriverAgent (v0.2 roadmap)."},
+                "target": {"type": "string", "enum": ["simulator", "device"], "default": "simulator", "description": "'simulator' (default) or 'device' for a real iPhone/iPad. Real-device sessions support observe, logs, app lifecycle, and (after `simdrive bootstrap-device`) tap/swipe/type_text/press_key via WebDriverAgent."},
                 "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
                 "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
@@ -1388,8 +1390,9 @@ _TOOLS: list[dict] = [
         "description": (
             "Enumerate real iPhones/iPads paired with this Mac. Use the returned "
             "udid in session_start({target: 'device', udid: ...}) to attach. "
-            "Note: real-device sessions support observe + logs + app lifecycle; "
-            "tap/swipe/type_text/press_key require WebDriverAgent (v0.2 roadmap)."
+            "Devices with hid_supported=true have a bootstrapped WebDriverAgent "
+            "and support tap/swipe/type_text/press_key. Run "
+            "`simdrive bootstrap-device <udid>` once to enable HID on a device."
         ),
         "inputSchema": {"type": "object", "properties": {}},
         "handler": tool_list_devices,
