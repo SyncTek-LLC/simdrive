@@ -66,6 +66,7 @@ class WdaClient:
         self._base = f"http://{host}:{port}"
         self._session_id: Optional[str] = None
         self._last_seen_at: float = time.time()
+        self._window_size_cache: Optional[tuple[int, int]] = None  # cached (w_pts, h_pts) for F-006
         # httpx transport is injectable for unit tests (httpx.MockTransport).
         self._client = httpx.Client(base_url=self._base, timeout=timeout)
 
@@ -245,6 +246,27 @@ class WdaClient:
         resp = self._request("GET", "/screenshot")
         b64 = (resp.get("value") or "")
         return base64.b64decode(b64)
+
+    def window_size_points(self) -> tuple[int, int]:
+        """GET /session/<id>/window/size -> (width_pts, height_pts) in logical points.
+
+        WDA returns the screen dimensions in the same coordinate space as
+        XCUIScreen.main -- logical points, not pixels. On a 3x device the pixel
+        screenshot is 3x wider/taller than this value.
+
+        Cached on the client after the first call so we never hit the network more
+        than once per WDA session (window size is stable for the session lifetime).
+        Requires an open WDA session (raises wda_session_not_open if none is open).
+        """
+        if self._window_size_cache is not None:
+            return self._window_size_cache
+        resp = self._request("GET", self._session_path("/window/size"))
+        # WDA returns {value: {width: N, height: N}} (WebDriver spec).
+        value = resp.get("value") or {}
+        w = int(value.get("width", 0))
+        h = int(value.get("height", 0))
+        self._window_size_cache = (w, h)
+        return self._window_size_cache
 
     def delete_session(self) -> None:
         """DELETE /session/<id> — close the WDA session."""

@@ -92,6 +92,72 @@ def _wda_client_for(udid: str):
     return WdaClient(host=host, port=port)
 
 
+def _session_scale(s) -> float:
+    """Return the pixel-per-logical-point scale for a device session (F-006).
+
+    WDA input endpoints (tap, swipe) expect logical points — the same coordinate
+    space as XCUIScreen.main (e.g. 440x956 pts on iPhone 17 Pro Max). Screenshots
+    from the device pipeline are in pixels (1320x2868 on the same device — 3.0x).
+    Every device-branch input tool MUST divide pixel coords by this scale before
+    calling wda.tap / wda.swipe.
+
+    The scale is computed once per session and cached on Session.pixel_per_point_scale
+    to avoid a WDA round-trip on every input call.
+
+    Edge-case policy:
+      - Simulator sessions: fast-path returns 1.0 (sim screenshots are already
+        in logical points / pixel-equal-to-point).
+      - HTTP error fetching WDA window size: falls back to 1.0 with a warning;
+        better to attempt a likely-wrong tap than to fail-shut the input tool.
+      - Invalid window size (0x0): falls back to 1.0 with a warning.
+      - Width-derived scale is preferred; if width and height scales differ by
+        more than 5%, log a warning (unexpected orientation) and use width.
+    """
+    # Fast-path: simulators don't need px->pt conversion.
+    if s.target != "device":
+        return 1.0
+
+    # Return cached value if already computed for this session.
+    if s.pixel_per_point_scale is not None:
+        return s.pixel_per_point_scale
+
+    # Ensure screenshot dims are populated so we have the pixel size.
+    sw, sh = _ensure_screenshot_dims(s)
+
+    # Prefer the session-stored WdaClient (already has an open session_id).
+    wda = s.wda_client or _wda_client_for(s.device.udid)
+    try:
+        w_pts, h_pts = wda.window_size_points()
+    except Exception as exc:
+        _log.warning(
+            "Failed to fetch WDA window size for scale computation "
+            "(udid=%r): %s. Falling back to scale=1.0.",
+            s.device.udid, exc,
+        )
+        s.pixel_per_point_scale = 1.0
+        return 1.0
+
+    if w_pts <= 0 or h_pts <= 0:
+        _log.warning(
+            "WDA returned invalid window size (%dx%d) for udid=%r. "
+            "Falling back to scale=1.0.",
+            w_pts, h_pts, s.device.udid,
+        )
+        s.pixel_per_point_scale = 1.0
+        return 1.0
+
+    scale_w = sw / w_pts
+    scale_h = sh / h_pts
+    if abs(scale_w - scale_h) > 0.05:
+        _log.warning(
+            "Width scale (%.3f) and height scale (%.3f) differ for udid=%r "
+            "-- device may be in an unexpected orientation. Using width-derived scale.",
+            scale_w, scale_h, s.device.udid,
+        )
+    s.pixel_per_point_scale = scale_w
+    return scale_w
+
+
 # v0.3.0a3 — module-load timestamp + cached disk-version probe.
 # The whole point: catch the case where `pip install --upgrade simdrive`
 # refreshes the wheel on disk but the running MCP server is still serving
@@ -220,7 +286,10 @@ def tool_observe(arguments: dict) -> dict:
         from PIL import Image
         import io
 
-        wda = _wda_client_for(s.device.udid)
+        # Prefer the session-stored WdaClient (which already holds the open WDA
+        # session_id) over a fresh client. A fresh client has _session_id=None,
+        # which is fine for screenshot_any() but wastes a new httpx.Client object (F-005).
+        wda = s.wda_client or _wda_client_for(s.device.udid)
         png_bytes = wda.screenshot_any()
 
         obs_dir = s.workdir / "observations"
@@ -357,8 +426,12 @@ def tool_tap(arguments: dict) -> dict:
     pre_path = s.last_screenshot_path
 
     if s.target == "device":
-        wda = _wda_client_for(s.device.udid)
-        wda.tap(float(x), float(y))
+        # Prefer the session-stored WdaClient so we reuse the open WDA session_id
+        # established by session_start. A fresh client from _wda_client_for has
+        # _session_id=None, causing wda_session_not_open on every tap (F-005).
+        wda = s.wda_client or _wda_client_for(s.device.udid)
+        scale = _session_scale(s)  # convert pixel coords to WDA logical points (F-006)
+        wda.tap(float(x) / scale, float(y) / scale)
         s.last_action_at = _now()
         session.append_action(s, {
             "action": "tap",
@@ -451,8 +524,16 @@ def tool_swipe(arguments: dict) -> dict:
 
     pre_path = s.last_screenshot_path
     if s.target == "device":
-        wda = _wda_client_for(s.device.udid)
-        wda.swipe(float(x1), float(y1), float(x2), float(y2), duration_ms)
+        # Prefer the session-stored WdaClient so we reuse the open WDA session_id
+        # established by session_start. A fresh client from _wda_client_for has
+        # _session_id=None, causing wda_session_not_open on every swipe (F-005).
+        wda = s.wda_client or _wda_client_for(s.device.udid)
+        scale = _session_scale(s)  # convert pixel coords to WDA logical points (F-006)
+        wda.swipe(
+            float(x1) / scale, float(y1) / scale,
+            float(x2) / scale, float(y2) / scale,
+            duration_ms,
+        )
     else:
         act.swipe(x1, y1, x2, y2, sw, sh, duration_ms, udid=s.device.udid)
     s.last_action_at = _now()
@@ -487,11 +568,15 @@ def tool_type_text(arguments: dict) -> dict:
     focused_mark = None  # Mark of the tap_first target if resolved via mark/stable_id/text
 
     if s.target == "device":
-        wda = _wda_client_for(s.device.udid)
+        # Prefer the session-stored WdaClient so we reuse the open WDA session_id
+        # established by session_start. A fresh client from _wda_client_for has
+        # _session_id=None, causing wda_session_not_open on type_text (F-005).
+        wda = s.wda_client or _wda_client_for(s.device.udid)
         if tap_target:
             sw, sh = _ensure_screenshot_dims(s)
             tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
-            wda.tap(float(tx), float(ty))
+            scale = _session_scale(s)  # px->pt for tap-to-focus; type_text has no coords (F-006)
+            wda.tap(float(tx) / scale, float(ty) / scale)
             import time as _t
             _t.sleep(0.6)
         if clear_first:
@@ -616,7 +701,11 @@ def tool_press_key(arguments: dict) -> dict:
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
     if s.target == "device":
-        wda = _wda_client_for(s.device.udid)
+        # Prefer the session-stored WdaClient so we reuse the open WDA session_id
+        # established by session_start. A fresh client from _wda_client_for has
+        # _session_id=None, causing wda_session_not_open on press_key (F-005).
+        # press_key has no coordinates, so no px->pt conversion is needed.
+        wda = s.wda_client or _wda_client_for(s.device.udid)
         wda.press_key(key)
     else:
         act.press_key(key, udid=s.device.udid)
@@ -975,11 +1064,15 @@ def tool_clear_field(arguments: dict) -> dict:
     target = arguments.get("target")
 
     if s.target == "device":
-        wda = _wda_client_for(s.device.udid)
+        # Prefer the session-stored WdaClient so we reuse the open WDA session_id
+        # established by session_start. A fresh client from _wda_client_for has
+        # _session_id=None, causing wda_session_not_open on clear_field (F-005).
+        wda = s.wda_client or _wda_client_for(s.device.udid)
         if target:
             sw, sh = _ensure_screenshot_dims(s)
             tx, ty, _, _ = _resolve_target_xy(s, target)
-            wda.tap(float(tx), float(ty))
+            scale = _session_scale(s)  # px->pt for tap-to-focus; clear_field has no coords (F-006)
+            wda.tap(float(tx) / scale, float(ty) / scale)
             import time as _t
             _t.sleep(0.5)
         wda.clear_field()
