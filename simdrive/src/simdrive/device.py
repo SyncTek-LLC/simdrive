@@ -174,24 +174,26 @@ def get_log_tail(
     lines: int = 50,
     predicate: Optional[str] = None,
     timeout_s: float = 5.0,
+    bundle_id: Optional[str] = None,
 ) -> str:
     """Capture a live tail of syslog from the device via idevicesyslog.
 
-    idevicesyslog streams indefinitely; we spawn it, read up to `lines` lines
-    within `timeout_s` seconds, then kill it. Capping line collection prevents
-    megabyte accumulation on noisy devices.
+    idevicesyslog streams indefinitely; we spawn it with communicate(timeout=...)
+    to capture up to `timeout_s` seconds of output, then apply filtering.
 
     Args:
         udid: The device UDID (hardware UDID, not CoreDevice UUID).
-        lines: Maximum number of lines to return (default 50). Lines are
-            collected in a rolling buffer — once `lines` is hit the process
-            is terminated and the buffer is returned immediately.
+        lines: Maximum number of lines to return (default 50). The most
+            recent ``lines`` entries are returned after filtering.
         predicate: Optional substring filter. When given, only log lines
-            that contain this string are counted toward the `lines` cap.
-            If the filter causes zero matches, raw (unfiltered) lines are
-            returned with a warning prefix so the caller is not silently empty.
+            that contain this string are included in the output.
+            If the filter causes zero matches, a warning line is returned
+            so the caller is not silently empty.
         timeout_s: Wall-clock timeout in seconds (default 5). idevicesyslog
-            is killed after this time whether or not `lines` was reached.
+            is killed after this time whether or not output has finished.
+        bundle_id: Optional app bundle identifier to pass as a process/bundle
+            filter to idevicesyslog (--match or -p flag). When set, only
+            log lines from that process are captured, reducing noise.
 
     Returns:
         A newline-joined string of the captured (and optionally filtered) log
@@ -209,59 +211,54 @@ def get_log_tail(
         )
 
     cmd = [bin_path, "-u", udid]
+    if bundle_id:
+        # Pass the bundle_id as a process filter so idevicesyslog narrows
+        # output to the named process.  idevicesyslog uses --match for
+        # substring process-name filtering (libimobiledevice >= 1.3).
+        cmd.extend(["--match", bundle_id])
 
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
-        bufsize=1,  # line-buffered
     )
 
-    collected: list[str] = []
-    deadline = time.monotonic() + timeout_s
-
+    raw_output: str = ""
     try:
-        assert proc.stdout is not None
-        while time.monotonic() < deadline:
-            # Non-blocking line read with a short poll interval to stay
-            # responsive to the cap and deadline without busy-spinning.
-            import select as _select
-            ready, _, _ = _select.select([proc.stdout], [], [], 0.1)
-            if not ready:
-                if proc.poll() is not None:
-                    break  # process exited
-                continue
-            line = proc.stdout.readline()
-            if not line:
-                # EOF
-                break
-            stripped = line.rstrip("\n")
-            if predicate is None or predicate in stripped:
-                collected.append(stripped)
-                if len(collected) >= lines:
-                    break  # cap reached — stop collecting
-    finally:
-        proc.terminate()
+        raw_output, _ = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        # Drain whatever partial output was already written to the buffer.
+        try:
+            remaining = proc.stdout.read() if proc.stdout else ""
+        except Exception:
+            remaining = ""
+        raw_output = remaining or ""
+    except Exception:
+        proc.kill()
         try:
             proc.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            pass
+        raw_output = ""
 
-    # If predicate filtering produced zero results, fall back to raw lines
-    # with a warning so the caller is not silently empty.
-    if predicate and not collected:
-        # Re-read what was buffered before the proc was killed — already done
-        # above; collected is empty because no lines matched the predicate.
-        # Surface a warning line rather than an opaque empty string.
-        return (
-            f"[simdrive] idevicesyslog: no lines matched predicate={predicate!r} "
-            f"within {timeout_s:.0f}s. The app may not be logging or the filter "
-            "is too narrow. Retry without predicate to see raw syslog."
-        )
+    all_lines = [ln for ln in raw_output.splitlines() if ln]
 
-    return "\n".join(collected[-lines:])
+    # Apply predicate filter (Python-side substring match).
+    if predicate:
+        filtered = [ln for ln in all_lines if predicate in ln]
+        if not filtered:
+            # Surface a warning line rather than an opaque empty string.
+            return (
+                f"[simdrive] idevicesyslog: no lines matched predicate={predicate!r} "
+                f"within {timeout_s:.0f}s. The app may not be logging or the filter "
+                "is too narrow. Retry without predicate to see raw syslog."
+            )
+        all_lines = filtered
+
+    # Trim to the most recent `lines` entries.
+    return "\n".join(all_lines[-lines:])
 
 
 # ----------------------- App lifecycle ----------------------- #
