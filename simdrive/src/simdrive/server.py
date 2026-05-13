@@ -235,17 +235,27 @@ def tool_observe(arguments: dict) -> dict:
         s.last_screenshot_w = w
         s.last_screenshot_h = h
         s.last_screenshot_path = screenshot_path
-        # marks=[] for now — SOM annotation on real device requires wiring
-        # WDA's /source endpoint into the SOM annotator; tracked for 1.0.0a8.
         s.last_action_at = _now()
+
+        marks: list = []
+        annotated_path = None
+        if bool(arguments.get("annotate", True)):
+            from .wda.som_device import annotate_device_screenshot
+            wda_annotate = s.wda_client or wda
+            point_scale: float = float(getattr(s, "pixel_per_point_scale", None) or 1.0)
+            marks, annotated_path = annotate_device_screenshot(
+                screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
+            )
+            if marks:
+                s.last_marks = marks
 
         result = {
             "screenshot_path": str(screenshot_path),
-            "annotated_path": None,
+            "annotated_path": str(annotated_path) if annotated_path else None,
             "screenshot_size_pixels": [w, h],
             "window_bounds_macos": None,
             "captured_at": _now(),
-            "marks": [],
+            "marks": marks,
             "recent_logs": None,
             "target": "device",
         }

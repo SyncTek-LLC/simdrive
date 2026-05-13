@@ -264,6 +264,16 @@ class WdaClient:
         except SimdriveError:
             raise wda_session_lost(udid, last_seen_at=self._last_seen_at)
 
+    def source(self) -> str:
+        """GET /session/<id>/source -> XCUI accessibility tree as UTF-8 XML.
+
+        The WDA response is {value: '<xml ...>'}. We return the inner string
+        for xml.etree.ElementTree consumption by som_device.annotate_device_screenshot.
+        """
+        resp = self._request("GET", self._session_path("/source"))
+        xml_str = (resp.get("value") or "")
+        return str(xml_str)
+
     def close(self) -> None:
         """Close the underlying httpx client. Call when done with this WdaClient."""
         self._client.close()
