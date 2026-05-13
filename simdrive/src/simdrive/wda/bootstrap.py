@@ -515,7 +515,31 @@ def verify_xcode_account_for_team(team_id: str) -> None:
         raise wda_xcode_account_not_authenticated(team_id)
 
     if not _xcode_account_output_has_team(stdout, team_id):
-        raise wda_xcode_account_not_authenticated(team_id)
+        # B1+ relax (Xcode 16+ compatibility): DVTDeveloperAccountManagerAppleIDLists
+        # no longer always contains team_id bindings — newer Xcode keeps team
+        # membership in keychain / IDEPersistentSettings instead. If at least one
+        # Apple ID account is signed in here, trust it and let xcodebuild fail
+        # later with a meaningful error if the requested team isn't accessible.
+        if not _xcode_account_output_has_any_account(stdout):
+            raise wda_xcode_account_not_authenticated(team_id)
+        print(
+            f"[simdrive] Xcode account present but team {team_id} not visible in "
+            "DVTDeveloperAccountManagerAppleIDLists; deferring final team check to "
+            "xcodebuild -allowProvisioningUpdates.",
+            flush=True,
+        )
+
+
+def _xcode_account_output_has_any_account(stdout: str) -> bool:
+    """Return True if at least one Apple-ID account entry is signed in.
+
+    Xcode 16+ stores each signed-in account as ``{ identifier = "<UUID>"; }``
+    inside the plist with team membership cached elsewhere. The presence of
+    such an entry is sufficient to know that ``xcodebuild -allowProvisioningUpdates``
+    has a session it can use; the strict per-team check stays as the primary
+    path for older Xcode versions where the team IDs are inline.
+    """
+    return bool(re.search(r'identifier\s*=\s*"[^"]+"', stdout))
 
 
 def _xcode_account_output_has_team(stdout: str, team_id: str) -> bool:
