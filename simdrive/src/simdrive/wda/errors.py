@@ -200,6 +200,30 @@ def wda_not_bootstrapped(udid: str) -> SimdriveError:
     )
 
 
+def wda_ui_automation_disabled(udid: str) -> SimdriveError:
+    """Raised during bootstrap smoke when Settings → Developer → Enable UI Automation is OFF.
+
+    XCTDaemonErrorDomain Code=41 is the wire-level signal. Surfaced early at
+    bootstrap so users get an actionable message rather than opaque input-tool
+    failures later.
+    """
+    return SimdriveError(
+        code="wda_ui_automation_disabled",
+        message=(
+            f"UI Automation is disabled on device {udid}. "
+            "WDA returned XCTDaemonErrorDomain Code=41 "
+            "(\"Not authorized for performing UI testing actions.\"). "
+            "\n\n"
+            "Recovery: on the device, open Settings → Developer → "
+            "Enable UI Automation = ON, then re-run "
+            f"`simdrive bootstrap-device {udid}`. "
+            "iOS pins this entitlement at runner-process launch; toggling it "
+            "requires restarting WDA."
+        ),
+        details={"udid": udid, "xct_code": 41},
+    )
+
+
 def wda_session_lost(udid: str, last_seen_at: Optional[float] = None) -> SimdriveError:
     """Raised at runtime when the WDA tunnel drops mid-journey."""
     seen_msg = f" (last seen at {last_seen_at:.0f})" if last_seen_at is not None else ""
