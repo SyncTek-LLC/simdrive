@@ -10,7 +10,18 @@ from simdrive.window import WindowBounds
 
 
 def test_version_present():
-    assert server.__version__ == "1.0.0a9"
+    # Dynamic importlib.metadata resolution — version reflects the installed
+    # wheel, not a hardcoded string. Assert it is a non-empty semver-like string.
+    import simdrive
+    assert simdrive.__version__, "simdrive.__version__ must be a non-empty string"
+    assert simdrive.__version__ != "0.0.0+local", (
+        "simdrive must be installed (pip install -e .) for __version__ to resolve; "
+        f"got fallback sentinel, expected a real version like '1.0.0a10'."
+    )
+    # Sanity: must start with "1.0.0" for the a11 release cycle.
+    assert simdrive.__version__.startswith("1.0.0"), (
+        f"simdrive.__version__={simdrive.__version__!r} should start with '1.0.0'"
+    )
 
 
 def test_tool_count_is_thirty():
