@@ -1049,26 +1049,55 @@ def test_tap_response_includes_step_id_when_recording(tmp_path, monkeypatch):
 
 
 def test_list_devices_emits_hid_supported_and_note(monkeypatch):
+    """list_devices: hid_supported is runtime-derived from wda registry, and
+    hid_note mentions `simdrive bootstrap-device` (not "v0.3 roadmap").
+
+    Two cases are tested inline:
+    - device with a registry entry → hid_supported=True
+    - device without a registry entry → hid_supported=False
+    """
     from simdrive import server
     from simdrive import device as dev_mod
+    from simdrive.wda import registry as wda_registry
 
-    fake_dev = dev_mod.RealDevice(
+    dev_with_wda = dev_mod.RealDevice(
+        udid="UDID-BOOTSTRAPPED",
+        name="iPhone QA Bootstrapped",
+        model="iPhone 17 Pro",
+        transport="wired",
+        state="available",
+    )
+    dev_no_wda = dev_mod.RealDevice(
         udid="UDID-1234",
         name="iPhone QA",
         model="iPhone 17 Pro",
         transport="wired",
         state="available",
     )
-    monkeypatch.setattr(dev_mod, "list_devices", lambda: [fake_dev])
+    monkeypatch.setattr(dev_mod, "list_devices", lambda: [dev_with_wda, dev_no_wda])
     monkeypatch.setattr(dev_mod, "libimobiledevice_available", lambda: (True, []))
+
+    # dev_with_wda has a registry entry; dev_no_wda does not
+    fake_entry = {"host": "192.168.1.1", "port": 8100}
+    monkeypatch.setattr(
+        wda_registry,
+        "load",
+        lambda udid: fake_entry if udid == "UDID-BOOTSTRAPPED" else None,
+    )
 
     result = server.tool_list_devices({})
     assert result["ok"] is True
-    assert "hid_note" in result and "WDA" in result["hid_note"]
-    assert len(result["devices"]) == 1
-    d = result["devices"][0]
-    assert d["hid_supported"] is False
-    assert d["udid"] == "UDID-1234"
+    assert "hid_note" in result
+    assert "bootstrap-device" in result["hid_note"]
+    assert "v0.3" not in result["hid_note"]
+    assert "roadmap" not in result["hid_note"]
+    assert "not yet implemented" not in result["hid_note"]
+
+    assert len(result["devices"]) == 2
+    by_udid = {d["udid"]: d for d in result["devices"]}
+
+    assert by_udid["UDID-BOOTSTRAPPED"]["hid_supported"] is True
+    assert by_udid["UDID-1234"]["hid_supported"] is False
 
 
 def test_recording_metadata_includes_version_and_session(tmp_path, monkeypatch):
