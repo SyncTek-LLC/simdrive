@@ -1,5 +1,83 @@
 # Changelog
 
+## [1.0.0a11] — 2026-05-13
+
+Closes six findings from the 1.0.0a10 device-dogfood feedback (Example Reader iOS team,
+Moes Max iPhone 17 Pro Max, iOS 26.4.2). a10's headline — "zero-config real-device
+bootstrap" — gets to actually drive the device end-to-end in a11.
+
+### Fixed — Critical / High
+
+**F-005 — device input verbs are no longer broken**
+After a successful `session_start(target="device")` in a10, every `tap` / `swipe` /
+`type_text` / `press_key` / `observe` / `clear_field` call returned `wda_session_not_open`.
+Root cause: each tool built a fresh `WdaClient` per call via `_wda_client_for(udid)`
+instead of reusing the session-stored client that holds the open WDA HTTP session id.
+Each tool now prefers `s.wda_client` and falls back to `_wda_client_for` only when no
+session client exists. The whole `target=device` MCP input surface is unblocked.
+
+**F-006 — WDA inputs now receive logical points, not pixel coords**
+SimDrive's screenshot pipeline emits pixel coords (1320×2868 on Pro Max); WDA's
+`/wda/tap` expects logical points (440×956). On 3× devices taps were silently absorbed
+2680 px below the target. New `WdaClient.window_size_points()` is called once per
+session and cached; `Session.pixel_per_point_scale` holds the px/pt ratio. Every device
+input tool divides its coords by the scale before calling WDA. Simulator sessions
+fast-path to scale=1.0 with no network call. HTTP errors on `/window/size` default to
+scale=1.0 with a warning so tools never raise from coord conversion.
+
+**F-002 — `observe(target=device, annotate=true)` finally returns marks**
+The marks-list deferral from a8 is closed. New `simdrive/wda/som_device.py` walks the
+XCUI accessibility tree from `GET /session/<sid>/source`, filters to leaf-ish text-bearing
+elements (excludes Application / Window / >70% screen-area containers, invisible nodes,
+zero-area, out-of-screen, empty-text, and parent duplicates), and emits marks in the
+exact 9-key shape sim produces: `id`, `stable_id`, `stable_id_loose`, `bbox`, `center`,
+`text`, `confidence`, `raw_confidence`, `confidence_band`. `stable_id` uses the same
+blake2b 20px / 60px bucketing as the sim OCR path so cross-target recordings are
+comparable. WDA `/source` failures (HTTP error, malformed XML, empty tree) return
+`marks=[]` with a warning — never raise.
+
+### Fixed — Medium / Low
+
+**F-003 — `tool_logs` on device wired to `idevicesyslog`**
+The device branch of `tool_logs` was silently-empty in a10 (returning `lines: 0`
+even when the target app was logging). It now invokes `idevicesyslog -u <udid>` and
+streams stdout into a bounded, time-capped buffer (default 5s timeout, N-line cap).
+Predicates filter post-capture as Python substring matches. If `idevicesyslog` is
+missing from PATH, the tool returns a structured `device_logs_unavailable` error
+with `brew install libimobiledevice` in the message instead of a generic exception.
+`TimeoutExpired` no longer drops partial output — the stdout buffer is drained
+before the process is killed.
+
+**F-004 — bootstrap smoke now catches UI Automation entitlement off**
+After the existing `GET /status` check, bootstrap now also `POST /session` against
+`com.apple.Preferences` to verify XCTDaemon authorization is actually granted. If
+the response contains `XCTDaemonErrorDomain Code 41` (or `Code=41`), bootstrap
+raises the new `wda_ui_automation_disabled` error with the exact `Settings → Developer →
+Enable UI Automation` remedy plus a note that iOS pins this entitlement at runner
+launch (toggling it requires re-running bootstrap-device). On success the probe session
+is DELETE'd immediately so we don't leak. Non-41 HTTP errors warn but don't fail
+bootstrap.
+
+**F-001 — `__version__` constant resolves dynamically**
+The a10 wheel shipped with `__version__ = "1.0.0a9"` hardcoded — every tool response
+carried a misleading `_simdrive_warning: drift detected, restart...` even on a clean
+install. `simdrive/__init__.py` now reads via `importlib.metadata.version("simdrive")`
+with a `PackageNotFoundError` fallback to `"0.0.0+local"`. The manual-bump-`__init__`
+step is removed from every future release.
+
+### Source
+
+INIT-2026-542 + INIT-2026-540 + INIT-2026-548. Files changed: new
+`simdrive/wda/som_device.py`; `simdrive/wda/client.py` (new `source()`, `window_size_points()`),
+`simdrive/wda/bootstrap.py` (Code 41 smoke probe), `simdrive/wda/errors.py`
+(`wda_ui_automation_disabled`), `simdrive/server.py` (every device-branch input tool
++ corrected hid flag derivation), `simdrive/session.py` (`pixel_per_point_scale`),
+`simdrive/device.py` (`get_log_tail` rewrite), `simdrive/__init__.py` (dynamic version),
+`simdrive/pyproject.toml` (version bump). 39 new regression tests added; 795 total
+pass after merge.
+
+---
+
 ## [1.0.0a10] — 2026-05-13
 
 ### Added — Zero-config real-device bootstrap
