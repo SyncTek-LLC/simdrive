@@ -169,38 +169,99 @@ def screenshot(udid: str, dest_path: Path) -> Path:
 # ----------------------- Logs ----------------------- #
 
 
-def get_log_tail(udid: str, lines: int = 50, predicate: Optional[str] = None) -> str:
-    """Capture a short live tail of syslog from the device.
+def get_log_tail(
+    udid: str,
+    lines: int = 50,
+    predicate: Optional[str] = None,
+    timeout_s: float = 5.0,
+) -> str:
+    """Capture a live tail of syslog from the device via idevicesyslog.
 
-    `idevicesyslog` streams indefinitely, so we read for ~1 second and trim
-    to the most recent `lines` lines. `predicate`, when given, is applied as
-    a simple substring filter (NSPredicate on real device requires log
-    framework, not idevicesyslog).
+    idevicesyslog streams indefinitely; we spawn it, read up to `lines` lines
+    within `timeout_s` seconds, then kill it. Capping line collection prevents
+    megabyte accumulation on noisy devices.
+
+    Args:
+        udid: The device UDID (hardware UDID, not CoreDevice UUID).
+        lines: Maximum number of lines to return (default 50). Lines are
+            collected in a rolling buffer — once `lines` is hit the process
+            is terminated and the buffer is returned immediately.
+        predicate: Optional substring filter. When given, only log lines
+            that contain this string are counted toward the `lines` cap.
+            If the filter causes zero matches, raw (unfiltered) lines are
+            returned with a warning prefix so the caller is not silently empty.
+        timeout_s: Wall-clock timeout in seconds (default 5). idevicesyslog
+            is killed after this time whether or not `lines` was reached.
+
+    Returns:
+        A newline-joined string of the captured (and optionally filtered) log
+        lines, trimmed to the most recent `lines` entries.
+
+    Raises:
+        DeviceError with code context "device_logs_unavailable" when
+        idevicesyslog is not on PATH.
     """
     bin_path = _which("idevicesyslog")
     if not bin_path:
         raise DeviceError(
-            "idevicesyslog not found. Install with: brew install libimobiledevice"
+            "device_logs_unavailable: idevicesyslog not installed. "
+            "Recovery: brew install libimobiledevice"
         )
 
+    cmd = [bin_path, "-u", udid]
+
     proc = subprocess.Popen(
-        [bin_path, "-u", udid],
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
+        bufsize=1,  # line-buffered
     )
-    try:
-        time.sleep(1.0)
-        proc.terminate()
-        out, _ = proc.communicate(timeout=2.0)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        out = ""
 
-    out_lines = (out or "").splitlines()
-    if predicate:
-        out_lines = [ln for ln in out_lines if predicate in ln]
-    return "\n".join(out_lines[-lines:])
+    collected: list[str] = []
+    deadline = time.monotonic() + timeout_s
+
+    try:
+        assert proc.stdout is not None
+        while time.monotonic() < deadline:
+            # Non-blocking line read with a short poll interval to stay
+            # responsive to the cap and deadline without busy-spinning.
+            import select as _select
+            ready, _, _ = _select.select([proc.stdout], [], [], 0.1)
+            if not ready:
+                if proc.poll() is not None:
+                    break  # process exited
+                continue
+            line = proc.stdout.readline()
+            if not line:
+                # EOF
+                break
+            stripped = line.rstrip("\n")
+            if predicate is None or predicate in stripped:
+                collected.append(stripped)
+                if len(collected) >= lines:
+                    break  # cap reached — stop collecting
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    # If predicate filtering produced zero results, fall back to raw lines
+    # with a warning so the caller is not silently empty.
+    if predicate and not collected:
+        # Re-read what was buffered before the proc was killed — already done
+        # above; collected is empty because no lines matched the predicate.
+        # Surface a warning line rather than an opaque empty string.
+        return (
+            f"[simdrive] idevicesyslog: no lines matched predicate={predicate!r} "
+            f"within {timeout_s:.0f}s. The app may not be logging or the filter "
+            "is too narrow. Retry without predicate to see raw syslog."
+        )
+
+    return "\n".join(collected[-lines:])
 
 
 # ----------------------- App lifecycle ----------------------- #

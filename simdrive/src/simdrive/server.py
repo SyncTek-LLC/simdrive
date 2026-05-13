@@ -708,7 +708,24 @@ def tool_logs(arguments: dict) -> dict:
     predicate = arguments.get("predicate")
     if s.target == "device":
         from . import device
-        text = device.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+        try:
+            text = device.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+        except device.DeviceError as exc:
+            # F-003: surface missing idevicesyslog as a structured error rather
+            # than an unhandled exception, so the MCP caller gets a clean code.
+            msg = str(exc)
+            if "device_logs_unavailable" in msg:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "device_logs_unavailable",
+                        "message": (
+                            "idevicesyslog not installed. "
+                            "Recovery: brew install libimobiledevice"
+                        ),
+                    },
+                }
+            raise
     else:
         text = sim.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
     return {"ok": True, "lines": len(text.splitlines()), "logs": text}
