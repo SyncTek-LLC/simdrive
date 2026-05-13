@@ -304,17 +304,27 @@ def tool_observe(arguments: dict) -> dict:
         s.last_screenshot_w = w
         s.last_screenshot_h = h
         s.last_screenshot_path = screenshot_path
-        # marks=[] for now — SOM annotation on real device requires wiring
-        # WDA's /source endpoint into the SOM annotator; tracked for 1.0.0a8.
         s.last_action_at = _now()
+
+        marks: list = []
+        annotated_path = None
+        if bool(arguments.get("annotate", True)):
+            from .wda.som_device import annotate_device_screenshot
+            wda_annotate = s.wda_client or wda
+            point_scale: float = float(getattr(s, "pixel_per_point_scale", None) or 1.0)
+            marks, annotated_path = annotate_device_screenshot(
+                screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
+            )
+            if marks:
+                s.last_marks = marks
 
         result = {
             "screenshot_path": str(screenshot_path),
-            "annotated_path": None,
+            "annotated_path": str(annotated_path) if annotated_path else None,
             "screenshot_size_pixels": [w, h],
             "window_bounds_macos": None,
             "captured_at": _now(),
-            "marks": [],
+            "marks": marks,
             "recent_logs": None,
             "target": "device",
         }
@@ -797,7 +807,24 @@ def tool_logs(arguments: dict) -> dict:
     predicate = arguments.get("predicate")
     if s.target == "device":
         from . import device
-        text = device.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+        try:
+            text = device.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+        except device.DeviceError as exc:
+            # F-003: surface missing idevicesyslog as a structured error rather
+            # than an unhandled exception, so the MCP caller gets a clean code.
+            msg = str(exc)
+            if "device_logs_unavailable" in msg:
+                return {
+                    "ok": False,
+                    "error": {
+                        "code": "device_logs_unavailable",
+                        "message": (
+                            "idevicesyslog not installed. "
+                            "Recovery: brew install libimobiledevice"
+                        ),
+                    },
+                }
+            raise
     else:
         text = sim.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
     return {"ok": True, "lines": len(text.splitlines()), "logs": text}
