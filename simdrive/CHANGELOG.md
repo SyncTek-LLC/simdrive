@@ -31,12 +31,25 @@ field is updated to accurate guidance: "run `simdrive bootstrap-device` once per
 `session_start` and `list_devices` tool descriptions no longer mention a "v0.2 roadmap" —
 the feature is implemented and live.
 
+### Fixed — Xcode 16+ account check (B1+ relax)
+
+`verify_xcode_account_for_team` strict B1 check was a false-negative on Xcode 16+:
+`DVTDeveloperAccountManagerAppleIDLists` no longer stores `teamID = "..."` bindings
+inline — newer Xcode caches team membership in keychain / IDEPersistentSettings.
+Surfaced during the 2026-05-12 Moes Max dogfood: user was signed into the team's
+Admin account and held the matching cert, yet bootstrap rejected with
+"Xcode is not signed in for team X". When the strict check misses, we now confirm
+any Apple-ID account is signed in (`identifier = "..."` probe), log the deferral,
+and let `xcodebuild -allowProvisioningUpdates` own the final team verification.
+The strict path remains primary for older Xcodes. (INIT-2026-548)
+
 ### Source
 
-INIT-2026-540. Files changed: `wda/bootstrap.py` (new functions `auto_detect_team_id`,
-`_wda_bundle_id_for_team`, `patch_wda_bundle_id`; updated `build_wda`, `install_wda`,
-`bootstrap_device`), `server.py` (`tool_list_devices`, two schema description strings),
-`pyproject.toml` (version bump).
+INIT-2026-540 + INIT-2026-548. Files changed: `wda/bootstrap.py` (new functions
+`auto_detect_team_id`, `_wda_bundle_id_for_team`, `patch_wda_bundle_id`,
+`_xcode_account_output_has_any_account`; updated `build_wda`, `install_wda`,
+`bootstrap_device`, `verify_xcode_account_for_team`), `server.py` (`tool_list_devices`,
+two schema description strings), `pyproject.toml` (version bump).
 
 ---
 
