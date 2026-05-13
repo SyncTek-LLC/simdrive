@@ -35,10 +35,14 @@ XML attributes read from each XCUIElement node
 Exclusion rules (in order)
 --------------------------
   1. visible != "true"  → skip
-  2. name, label, value all empty/whitespace  → skip
-  3. width == 0 or height == 0  → skip
-  4. bbox_pixels entirely outside screenshot bounds  → skip
-  5. Nested duplicates: if a child element has identical text to its direct
+  2. element type IN {XCUIElementTypeApplication, XCUIElementTypeWindow} → skip
+     (root containers span the full screen and add noise for agent tap resolution)
+  3. bbox area >= 70% of screen area (catches XCUIElementTypeOther wrappers that
+     cover the whole screen — they match app-name text and poison tap resolution)
+  4. name, label, value all empty/whitespace  → skip
+  5. width == 0 or height == 0  → skip
+  6. bbox_pixels entirely outside screenshot bounds  → skip
+  7. Nested duplicates: if a child element has identical text to its direct
      parent AND an identical or fully-contained bbox, emit only the child
      (deepest wins).
 """
@@ -53,6 +57,18 @@ from typing import Optional
 from ..som import Mark, annotate as _draw_annotated
 
 _log = logging.getLogger(__name__)
+
+# Element types that are always excluded — they are root containers that span
+# the full screen and add noise to tap-target resolution for agent drivers.
+_CONTAINER_TYPES = frozenset({
+    "XCUIElementTypeApplication",
+    "XCUIElementTypeWindow",
+})
+
+# Fraction of screen area at or above which an element is treated as a
+# full-screen container and excluded.  70% covers the typical "Other" wrapper
+# that XCUITest inserts for scroll views / root content views.
+_CONTAINER_AREA_RATIO = 0.70
 
 
 def _pick_text(el: ET.Element) -> str:
@@ -132,6 +148,7 @@ def _walk_tree(
     collected; all other exclusion rules are applied inline.
     """
     collected: list[tuple[str, tuple[int, int, int, int]]] = []
+    screen_area = img_w * img_h
 
     # Iterative DFS to avoid Python recursion limits on deep trees.
     stack: list[ET.Element] = [root]
@@ -140,6 +157,14 @@ def _walk_tree(
         # Push children in reverse order so left-most child is processed first.
         for child in reversed(list(el)):
             stack.append(child)
+
+        # Leaf filter 1: skip root container types (Application, Window).
+        # WDA /source XML uses the tag name as the element type identifier
+        # (e.g. <XCUIElementTypeButton ...>); a type="" attribute may also be
+        # present in some WDA versions — check both.
+        el_type = el.get("type", "") or el.tag or ""
+        if el_type in _CONTAINER_TYPES:
+            continue
 
         # Visibility gate: skip invisible elements.
         if el.get("visible", "true").lower() != "true":
@@ -151,6 +176,12 @@ def _walk_tree(
 
         bbox = _el_bbox_pixels(el, point_scale, img_w, img_h)
         if bbox is None:
+            continue
+
+        # Leaf filter 2: skip elements whose area covers >= 70% of the screen
+        # (e.g. XCUIElementTypeOther wrappers that span the whole viewport).
+        bx, by, bw, bh = bbox
+        if screen_area > 0 and (bw * bh) >= _CONTAINER_AREA_RATIO * screen_area:
             continue
 
         collected.append((text, bbox))
