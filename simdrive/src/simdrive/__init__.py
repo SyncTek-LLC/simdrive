@@ -1,3 +1,8 @@
 """simdrive — MCP-native iOS simulator driver."""
 
-__version__ = "1.0.0a9"
+from importlib.metadata import PackageNotFoundError, version as _v
+
+try:
+    __version__ = _v("simdrive")
+except PackageNotFoundError:
+    __version__ = "0.0.0+local"
