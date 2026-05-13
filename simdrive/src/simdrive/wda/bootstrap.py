@@ -45,6 +45,7 @@ import httpx
 
 _LOG = logging.getLogger("simdrive.wda.bootstrap")
 
+from .. import errors as _errors_module
 from . import registry
 from .errors import (
     wda_build_failed,
@@ -57,6 +58,7 @@ from .errors import (
     wda_port_discovery_timeout,
     wda_signing_ambiguous,
     wda_smoke_failed,
+    wda_ui_automation_disabled,
     wda_xcode_account_not_authenticated,
 )
 
@@ -997,16 +999,30 @@ def launch_and_discover_port(
 
 
 def smoke_test(host: str, port: int) -> dict:
-    """GET http://<host>:<port>/status and assert {value: {ready: true}}.
+    """GET /status then POST /session probe to validate WDA is fully operational.
 
-    Returns the parsed status body so callers can extract OS / device info
-    (D8). Raises wda_smoke_failed on mismatch or HTTP error.
+    Step 1 — GET /status: asserts {value: {ready: true}}. Raises wda_smoke_failed
+    on mismatch or HTTP error.
+
+    Step 2 — POST /session probe (F-004): attempts to create a transient session
+    using com.apple.Preferences as the target (always installed). If the response
+    contains XCTDaemonErrorDomain Code=41, UI Automation is disabled on the device
+    and we raise wda_ui_automation_disabled immediately with a clear remedy.
+    Any session created is immediately deleted (DELETE /session/<id>) so no session
+    leaks from bootstrap. If POST /session fails for non-41 reasons (network, 5xx),
+    we log a warning and let bootstrap succeed — /status already confirmed WDA is
+    reachable; future tool calls will surface the real error.
+
+    Returns the parsed /status body so callers can extract OS / device info (D8).
     host is the device's WiFi IP (captured from WDA's ServerURLHere announcement).
     """
-    url = f"http://{host}:{port}/status"
-    print(f"[simdrive] Smoke testing WDA at {url} ...", flush=True)
+    base_url = f"http://{host}:{port}"
+    status_url = f"{base_url}/status"
+    print(f"[simdrive] Smoke testing WDA at {status_url} ...", flush=True)
+
+    # ── Step 1: GET /status ──────────────────────────────────────────────────
     try:
-        resp = httpx.get(url, timeout=10.0)
+        resp = httpx.get(status_url, timeout=10.0)
     except httpx.TransportError as exc:
         raise wda_smoke_failed(0, str(exc))
 
@@ -1022,8 +1038,83 @@ def smoke_test(host: str, port: int) -> dict:
     if not ready:
         raise wda_smoke_failed(resp.status_code, json.dumps(body))
 
-    print("[simdrive] WDA smoke test passed — ready=True.", flush=True)
+    print("[simdrive] WDA /status smoke test passed — ready=True.", flush=True)
+
+    # ── Step 2: POST /session probe for UI Automation entitlement ────────────
+    # Probe using com.apple.Preferences which is always installed on real devices.
+    # A Code=41 error means Settings → Developer → Enable UI Automation is OFF.
+    # On success we immediately delete the session so nothing leaks.
+    session_url = f"{base_url}/session"
+    probe_payload = {"capabilities": {"alwaysMatch": {"bundleId": "com.apple.Preferences"}}}
+    try:
+        print("[simdrive] Probing WDA UI Automation entitlement via POST /session ...", flush=True)
+        sess_resp = httpx.post(session_url, json=probe_payload, timeout=15.0)
+        try:
+            sess_body = sess_resp.json()
+        except Exception:
+            sess_body = {}
+
+        # Detect XCTDaemonErrorDomain Code=41.
+        # WDA surfaces this in the error value at: {value: {error: "...", message: "..."}}
+        # or as a top-level {"status": 13, "value": "XCTDaemonErrorDomain Code=41 ..."}
+        # We scan the raw text for the canonical marker.
+        raw_text = sess_resp.text or ""
+        if "XCTDaemonErrorDomain" in raw_text and "Code=41" in raw_text:
+            # Attempt teardown of any partial session that may have been created.
+            _try_delete_wda_session(base_url, sess_body)
+            raise wda_ui_automation_disabled(f"{host}:{port}")
+
+        # POST /session succeeded — immediately delete the probe session.
+        if sess_resp.is_success:
+            _try_delete_wda_session(base_url, sess_body)
+            print("[simdrive] UI Automation entitlement confirmed. Probe session cleaned up.", flush=True)
+        else:
+            # Non-41 failure (5xx, network, capability mismatch, etc.) — not a
+            # hard blocker since /status already succeeded. Log and continue.
+            _LOG.warning(
+                "WDA POST /session probe returned HTTP %s — skipping entitlement check. "
+                "Raw body: %.200s",
+                sess_resp.status_code,
+                raw_text,
+            )
+            print(
+                f"[simdrive] Warning: POST /session probe failed (HTTP {sess_resp.status_code}); "
+                "WDA is reachable but UI Automation entitlement unverified.",
+                flush=True,
+            )
+
+    except _errors_module.SimdriveError:
+        # Re-raise wda_ui_automation_disabled (a SimdriveError) without catching it here.
+        raise
+    except httpx.TransportError as exc:
+        # Network error during the probe — WDA may have just started; don't fail bootstrap.
+        _LOG.warning("WDA POST /session probe transport error: %s — skipping entitlement check.", exc)
+        print(
+            f"[simdrive] Warning: POST /session probe transport error ({exc}); "
+            "WDA is reachable (/status OK) but UI Automation entitlement unverified.",
+            flush=True,
+        )
+
     return body
+
+
+def _try_delete_wda_session(base_url: str, sess_body: dict) -> None:
+    """Best-effort DELETE /session/<id> to clean up a probe session.
+
+    Silently ignores all errors — this is cleanup, not a correctness path.
+    """
+    session_id = (
+        (sess_body.get("sessionId"))
+        or (sess_body.get("value") or {}).get("sessionId")
+        or None
+    )
+    if not session_id:
+        return
+    try:
+        httpx.delete(f"{base_url}/session/{session_id}", timeout=5.0)
+        _LOG.debug("Deleted probe session %s", session_id)
+    except Exception as exc:  # noqa: BLE001
+        _LOG.debug("Could not delete probe session %s: %s", session_id, exc)
 
 
 # ─── D8: device metadata extraction from WDA /status + devicectl ────────────
