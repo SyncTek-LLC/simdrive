@@ -852,9 +852,12 @@ def test_verify_xcode_account_passes_when_team_bound(monkeypatch):
     verify_xcode_account_for_team("E52N8732YT")
 
 
-def test_verify_xcode_account_raises_when_only_other_teams_signed_in(monkeypatch):
-    """B1: Account signed in for a *different* team must not pass — old code
-    used a substring grep on `"identifier"` and false-positived here.
+def test_verify_xcode_account_raises_when_only_other_teams_signed_in(monkeypatch, capsys):
+    """B1+: Account signed in for a *different* team now defers rather than
+    raising — the plist has an `identifier` entry so at least one Apple ID is
+    signed in, and xcodebuild is trusted to fail with a meaningful error if the
+    requested team isn't accessible. The function must return normally and print
+    the deferral message.
     """
     def fake_run(args, **kwargs):
         from subprocess import CompletedProcess
@@ -866,6 +869,31 @@ def test_verify_xcode_account_raises_when_only_other_teams_signed_in(monkeypatch
                 "OTHERTEAM1"
             );
         }
+    );
+}
+"""
+        return CompletedProcess(args=args, returncode=0, stdout=stdout, stderr="")
+    monkeypatch.setattr("simdrive.wda.bootstrap.subprocess.run", fake_run)
+
+    from simdrive.wda.bootstrap import verify_xcode_account_for_team
+    # B1+ relax: should NOT raise when any Apple ID is signed in
+    verify_xcode_account_for_team("E52N8732YT")
+
+    captured = capsys.readouterr()
+    assert "E52N8732YT" in captured.out
+    assert "deferring final team check to xcodebuild" in captured.out
+
+
+def test_verify_xcode_account_raises_when_no_accounts_signed_in(monkeypatch):
+    """B1+: When the plist has NO `identifier` entries (no Apple ID signed in
+    at all), verify_xcode_account_for_team must still raise
+    wda_xcode_account_not_authenticated — that is the only remaining hard failure.
+    """
+    def fake_run(args, **kwargs):
+        from subprocess import CompletedProcess
+        # Plist with no identifier entries — not even a different team
+        stdout = """{
+    "IDE.Identifiers.Prod" =     (
     );
 }
 """
