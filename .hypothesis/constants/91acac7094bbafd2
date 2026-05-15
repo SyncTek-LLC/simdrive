@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/journey/ci.py
+# hypothesis_version: 6.141.1
+
+[0.0, 4096, '.simdrive/journeys', '.simdrive/personas', '_end', 'agent_trace.jsonl', 'budget_exceeded', 'ci_summary_path', 'classname', 'crashed', 'error', 'errors', 'failed', 'failed_journey_names', 'failure', 'failures', 'junit_xml_path', 'message', 'name', 'passed', 'simdrive-journeys', 'simdrive.journey', 'simdrive.journey.ci', 'system-out', 'testcase', 'tests', 'testsuite', 'time', 'total', 'total_llm_cost_usd', 'type', 'utf-8']

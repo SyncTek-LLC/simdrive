@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/wda/client.py
+# hypothesis_version: 6.141.1
+
+[30.0, 1000.0, 300, '/element/active', '/screenshot', '/session', '/status', '/wda/keys', '/wda/pressButton', '/wda/tap', 'DELETE', 'ELEMENT', 'GET', 'POST', 'alwaysMatch', 'body', 'bundleId', 'capabilities', 'duration', 'exc', 'fromX', 'fromY', 'home', 'host', 'lock', 'method', 'name', 'port', 'power', 'response', 'sessionId', 'status', 'toX', 'toY', 'url', 'value', 'volumeDown', 'volumeUp', 'volumedown', 'volumeup', 'wda_http_error', 'wda_session_not_open', 'wda_unknown_button', 'wda_unreachable', 'x', 'y', '\ue003']

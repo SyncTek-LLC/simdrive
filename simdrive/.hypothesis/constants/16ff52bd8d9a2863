@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/wda/registry.py
+# hypothesis_version: 6.152.4
+
+['.simdrive', 'WDA_REGISTRY_DIR', 'utf-8', 'wda']

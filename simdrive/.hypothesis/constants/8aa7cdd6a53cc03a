@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/observability/tracing.py
+# hypothesis_version: 6.141.1
+
+[1000.0, 'Span', 'duration_ms', 'ended_at', 'metadata', 'name', 'parent_span_id', 'span_id', 'started_at']

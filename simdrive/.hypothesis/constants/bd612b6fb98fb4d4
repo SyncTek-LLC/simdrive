@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/act.py
+# hypothesis_version: 6.152.4
+
+[0.05, 0.15, 5.0, 10.0, 128, 300, 5000, '-e', '-w', '30', 'Action Button', 'App Switcher', 'Device', 'Home', 'Lock', 'Rotate Left', 'Rotate Right', 'Shake', 'Siri', 'Trigger Screenshot', 'action-button', 'app-switcher', 'arrow-down', 'arrow-left', 'arrow-right', 'arrow-up', 'backspace', 'cliclick', 'cmd', 'delete', 'enter', 'esc', 'escape', 'hid', 'home', 'kp:arrow-down', 'kp:arrow-left', 'kp:arrow-right', 'kp:arrow-up', 'kp:delete', 'kp:esc', 'kp:return', 'kp:space', 'kp:tab', 'lock', 'osascript', 'return', 'rotate-left', 'rotate-right', 'screenshot', 'shake', 'siri', 'space', 't:', 'tab', 'v']

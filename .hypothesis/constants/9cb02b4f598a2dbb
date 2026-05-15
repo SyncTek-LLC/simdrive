@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/license/errors.py
+# hypothesis_version: 6.152.4
+
+['cloud_unreachable', 'code', 'current', 'detail', 'details', 'email', 'error', 'expires_at', 'grace_days', 'ip', 'license_expired', 'license_invalid', 'license_not_found', 'message', 'ok', 'path', 'reason', 'required', 'trial_already_used', 'trial_rate_limited']

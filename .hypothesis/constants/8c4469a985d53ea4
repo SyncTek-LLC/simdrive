@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/journey/runner.py
+# hypothesis_version: 6.141.1
+
+[0.0, 0.004, 5.0, '## Success Criteria', '.simdrive', 'SIMDRIVE_HOME', '_', 'agent_trace.jsonl', 'budget_exceeded', 'clear_field', 'cost_usd', 'crashed', 'crashes', 'done', 'error', 'fail', 'failed', 'llm_calls', 'passed', 'press_key', 'runs', 'screenshot_path', 'seconds', 'session_id', 'since', 'started_at', 'steps', 'summary.json', 'summary.md', 'swipe', 'tap', 'type_text', 'unknown', 'w', '✓', '✗']

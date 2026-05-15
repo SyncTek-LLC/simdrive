@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/errors.py
+# hypothesis_version: 6.141.1
+
+['action', 'already_recording', 'available', 'cloud_auth_invalid', 'cloud_auth_missing', 'cloud_rate_limited', 'code', 'details', 'error', 'field', 'form', 'hid_unavailable', 'invalid_argument', 'limit_gb', 'message', 'missing_target', 'name', 'no_device', 'no_session', 'not_recording', 'ok', 'path', 'query', 'reason', 'recording_id', 'recording_not_found', 'replay_drift_halt', 'retry_after_seconds', 'session_id', 'sim_unhealthy', 'similarity', 'step_id', 'target_not_found', 'threshold', 'udid', 'used_gb', 'value', 'why']

@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/config.py
+# hypothesis_version: 6.141.1
+
+[100, 1024, 8080, '/tmp/simdrive-cloud', '0.0.0.0', 'CloudConfig', 'enterprise', 'pro', 'solo', 'team', 'trial']
