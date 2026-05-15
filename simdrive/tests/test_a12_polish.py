@@ -239,7 +239,7 @@ def test_logs_schema_has_predicate_kind():
 
 
 def test_wda_http_debug_logs_request(monkeypatch, caplog):
-    """With SIMDRIVE_HTTP_DEBUG set, _request logs method + path at INFO level."""
+    """With SIMDRIVE_HTTP_DEBUG set, _request logs method + path at DEBUG level."""
     import importlib
     import simdrive.wda.client as wda_client_mod
 
@@ -258,12 +258,14 @@ def test_wda_http_debug_logs_request(monkeypatch, caplog):
     client._client = MagicMock()
     client._client.request.return_value = mock_resp
 
-    with caplog.at_level(logging.INFO, logger="simdrive.wda.client"):
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.client"):
         client._request("GET", "/status")
 
-    info_msgs = [r.message for r in caplog.records if r.levelno == logging.INFO]
-    assert any("[WDA]" in m and "GET" in m and "/status" in m for m in info_msgs), (
-        f"Expected INFO log with '[WDA] >> GET /status', got: {info_msgs}"
+    # Logs are emitted at INFO level (so they appear even without SIMDRIVE_DEBUG=1).
+    wda_msgs = [r.message for r in caplog.records
+                if r.name.startswith("simdrive.wda.client") and "[WDA]" in r.message]
+    assert any("GET" in m and "/status" in m for m in wda_msgs), (
+        f"Expected [WDA] log with 'GET /status', got: {wda_msgs}"
     )
 
 
@@ -272,6 +274,7 @@ def test_wda_http_debug_off_no_logs(monkeypatch, caplog):
     import simdrive.wda.client as wda_client_mod
 
     monkeypatch.setattr(wda_client_mod, "_HTTP_DEBUG", False)
+    monkeypatch.delenv("SIMDRIVE_HTTP_DEBUG", raising=False)
 
     import httpx
     mock_resp = MagicMock(spec=httpx.Response)
@@ -284,12 +287,12 @@ def test_wda_http_debug_off_no_logs(monkeypatch, caplog):
     client._client = MagicMock()
     client._client.request.return_value = mock_resp
 
-    with caplog.at_level(logging.INFO, logger="simdrive.wda.client"):
+    with caplog.at_level(logging.DEBUG, logger="simdrive.wda.client"):
         client._request("GET", "/status")
 
-    info_msgs = [r.message for r in caplog.records if "[WDA]" in r.message]
-    assert not info_msgs, (
-        f"With _HTTP_DEBUG=False, no [WDA] logs expected, got: {info_msgs}"
+    debug_msgs = [r.message for r in caplog.records if "[WDA]" in r.message]
+    assert not debug_msgs, (
+        f"With _HTTP_DEBUG=False, no [WDA] logs expected, got: {debug_msgs}"
     )
 
 
@@ -413,10 +416,15 @@ def test_session_start_replace_existing_ends_old_session(tmp_path, monkeypatch):
     assert result["session_id"] == "new-session-id"
 
 
-def test_session_start_replace_existing_false_does_not_end_old(tmp_path, monkeypatch):
-    """replace_existing=False (default) does NOT touch existing sessions."""
+def test_session_start_replace_existing_false_raises_when_active(tmp_path, monkeypatch):
+    """replace_existing=False (default) raises SimdriveError when a session already exists for the same UDID.
+
+    a12 spec: conflict detection — a second session for the same device must not
+    silently start. The caller must explicitly pass replace_existing=True.
+    """
     import simdrive.server as server_mod
     import simdrive.session as session_mod
+    from simdrive.errors import SimdriveError
     from simdrive.sim import Device
 
     udid = "DEV-NO-REPLACE-UDID"
@@ -438,24 +446,18 @@ def test_session_start_replace_existing_false_does_not_end_old(tmp_path, monkeyp
 
     monkeypatch.setattr(session_mod, "end", _fake_end)
 
-    new_device = Device(udid=udid, name="New", os_version="26.0", state="active")
-    new_session = SimpleNamespace(
-        session_id="new-id",
-        device=new_device,
-        target="device",
-        app_bundle_id=None,
-        state="active",
+    with pytest.raises(SimdriveError) as exc_info:
+        server_mod.tool_session_start({
+            "udid": udid,
+            "target": "device",
+            "replace_existing": False,
+        })
+
+    assert exc_info.value.code == "session_already_active", (
+        f"Expected code='session_already_active', got: {exc_info.value.code!r}"
     )
-    monkeypatch.setattr(session_mod, "start", lambda **kw: new_session)
-
-    server_mod.tool_session_start({
-        "udid": udid,
-        "target": "device",
-        "replace_existing": False,
-    })
-
     assert not ended_sids, (
-        f"replace_existing=False should not end any sessions, ended: {ended_sids}"
+        f"replace_existing=False must not end existing sessions, ended: {ended_sids}"
     )
 
 

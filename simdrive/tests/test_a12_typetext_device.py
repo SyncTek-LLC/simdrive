@@ -113,7 +113,8 @@ def test_type_text_device_no_simctl_call(tmp_path):
 
     with patch("simdrive.observe.observe", return_value=post_obs), \
          patch("subprocess.run") as mock_run, \
-         patch("simdrive.server._wda_client_for", return_value=wda):
+         patch("simdrive.server._wda_client_for", return_value=wda), \
+         patch("simdrive.server.tool_observe", return_value={}):
         from simdrive import server
         server.tool_type_text({"session_id": s.session_id, "text": "hello"})
 
@@ -141,7 +142,8 @@ def test_type_text_device_with_clear_first(tmp_path):
     wda.type_text.side_effect = lambda t: call_order.append(f"type_text:{t}")
 
     with patch("simdrive.observe.observe", return_value=post_obs), \
-         patch("subprocess.run"):
+         patch("subprocess.run"), \
+         patch("simdrive.server.tool_observe", return_value={}):
         from simdrive import server
         server.tool_type_text({
             "session_id": s.session_id,
@@ -170,7 +172,8 @@ def test_type_text_device_with_tap_first_coords(tmp_path):
     post_obs = _mock_post_observe(tmp_path)
 
     with patch("simdrive.observe.observe", return_value=post_obs), \
-         patch("subprocess.run"):
+         patch("subprocess.run"), \
+         patch("simdrive.server.tool_observe", return_value={}):
         from simdrive import server
         server.tool_type_text({
             "session_id": s.session_id,
@@ -220,7 +223,8 @@ def test_type_text_device_with_tap_first_text_target(tmp_path):
 
     with patch("simdrive.observe.observe", return_value=post_obs), \
          patch("subprocess.run"), \
-         patch("simdrive.som.find_by_text", return_value=mark):
+         patch("simdrive.som.find_by_text", return_value=mark), \
+         patch("simdrive.server.tool_observe", return_value={}):
         from simdrive import server
         server.tool_type_text({
             "session_id": s.session_id,
