@@ -76,13 +76,11 @@ def test_dismiss_sheet_now_marked_sim_and_device():
 # ── test 7 ────────────────────────────────────────────────────────────────────
 
 
-def test_record_start_still_marked_sim_only():
-    """record_start description must contain '(sim only)'.
+def test_record_start_marked_sim_plus_device():
+    """a13: record_start ships on device — description must contain '(sim + device)'.
 
-    Recording is a simulator-only feature (simctl video record). This marker
-    must be present and must NOT accidentally become '(sim + device)'.
-
-    Fails on HEAD: record_start description has no target marker at all.
+    Recording previously was sim-only. a13 ships device record/replay parity,
+    so the marker flips from '(sim only)' to '(sim + device)'.
     """
     import simdrive.server as server_mod
 
@@ -90,10 +88,10 @@ def test_record_start_still_marked_sim_only():
     assert "record_start" in tools_by_name, "record_start must be in _TOOLS"
 
     description = tools_by_name["record_start"].get("description", "")
-    assert "(sim only)" in description, (
-        f"record_start description must contain '(sim only)', "
+    assert "(sim + device)" in description, (
+        f"record_start description must contain '(sim + device)' after a13, "
         f"but got: {description!r}"
     )
-    assert "(sim + device)" not in description, (
-        "record_start must NOT be marked '(sim + device)' — recording is sim-only."
+    assert "(sim only)" not in description, (
+        "record_start must NOT be marked '(sim only)' — a13 ships device recording."
     )
