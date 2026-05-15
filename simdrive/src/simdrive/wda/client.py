@@ -27,6 +27,12 @@ Auto-recovery (a12):
     stored session_id. If SIMDRIVE_NO_AUTO_REBUILD=1, raises original error.
     Otherwise calls open_session(_last_bundle_id) to get a fresh session_id
     and retries once. Same _recovery_attempt counter as Code 41.
+
+Debugging:
+  Set ``SIMDRIVE_HTTP_DEBUG=1`` (any non-empty value) in the environment to log
+  every HTTP call at INFO level: method, path, request body (truncated at 2 KB),
+  response status, and response body (truncated at 2 KB). Useful for diagnosing
+  WDA protocol issues or unexpected responses without adding permanent noise.
 """
 from __future__ import annotations
 
@@ -43,10 +49,15 @@ from .errors import wda_session_lost, wda_ui_automation_disabled
 from ..errors import SimdriveError
 
 _LOG = logging.getLogger("simdrive.wda.client")
+_log = _LOG  # alias for code paths using either name
 
 # Regex that matches both WDA Code=41 and Code 41 forms within an error body
 # that also contains "XCTDaemonErrorDomain".
 _CODE41_RE = re.compile(r"Code[= ]41")
+
+# SIMDRIVE_HTTP_DEBUG — set to any non-empty value to enable per-call HTTP logging.
+_HTTP_DEBUG = bool(os.environ.get("SIMDRIVE_HTTP_DEBUG", "").strip())
+_DEBUG_TRUNCATE = 2048  # chars; long bodies (screenshots) are truncated to this
 
 
 # Runtime error for HTTP-level failures (non-2xx or network error).
@@ -125,12 +136,23 @@ class WdaClient:
         impossible.
         """
         url = path
+        if _HTTP_DEBUG:
+            req_body = kwargs.get("json") or kwargs.get("data") or ""
+            req_body_str = str(req_body)[:_DEBUG_TRUNCATE] if req_body else ""
+            _log.info(
+                "[WDA] >> %s %s body=%s",
+                method, url, req_body_str or "(none)",
+            )
         try:
             resp = self._client.request(method, url, **kwargs)
         except httpx.TransportError as exc:
             raise _wda_unreachable(self._host, self._port, str(exc)) from exc
         self._last_seen_at = time.time()
-
+        if _HTTP_DEBUG:
+            _log.info(
+                "[WDA] << %s %s status=%d body=%s",
+                method, url, resp.status_code, resp.text[:_DEBUG_TRUNCATE],
+            )
         if not resp.is_success:
             raw_body = resp.text
 

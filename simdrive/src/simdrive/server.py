@@ -225,9 +225,22 @@ def tool_session_start(arguments: dict) -> dict:
     udid = arguments.get("udid") or arguments.get("device_udid")
     app_bundle_id = arguments.get("app_bundle_id")
     target = arguments.get("target", "simulator")
+    replace_existing = bool(arguments.get("replace_existing", False))
     if target not in ("simulator", "device"):
         raise errors.invalid_argument("target", target,
                                        "must be 'simulator' or 'device'")
+
+    # replace_existing: end any existing session for this UDID before starting.
+    if replace_existing and udid:
+        for existing in session.all_sessions():
+            if existing.device.udid == udid:
+                _log.info(
+                    "replace_existing=True: ending existing session %s for udid=%s",
+                    existing.session_id, udid,
+                )
+                session.end(existing.session_id, terminate_app=False)
+                break
+
     s = session.start(
         device_name=device_name, os_version=os_version, udid=udid,
         app_bundle_id=app_bundle_id, target=target,
@@ -870,10 +883,24 @@ def tool_logs(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
     lines = int(arguments.get("lines", 200))
     predicate = arguments.get("predicate")
+    predicate_kind = str(arguments.get("predicate_kind", "nspredicate"))
+    if predicate_kind not in ("nspredicate", "regex", "substring"):
+        raise errors.invalid_argument(
+            "predicate_kind", predicate_kind,
+            "must be 'nspredicate', 'regex', or 'substring'",
+        )
     if s.target == "device":
         from . import device
         try:
-            text = device.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+            # Device path: idevicesyslog does not speak NSPredicate.
+            # When predicate_kind='nspredicate' on device, get_log_tail downgrades
+            # to 'substring' and logs a one-time WARNING about the limitation.
+            text = device.get_log_tail(
+                s.device.udid,
+                lines=lines,
+                predicate=predicate,
+                predicate_kind=predicate_kind,
+            )
         except device.DeviceError as exc:
             # F-003: surface missing idevicesyslog as a structured error rather
             # than an unhandled exception, so the MCP caller gets a clean code.
@@ -891,7 +918,33 @@ def tool_logs(arguments: dict) -> dict:
                 }
             raise
     else:
-        text = sim.get_log_tail(s.device.udid, lines=lines, predicate=predicate)
+        # Simulator path: NSPredicate is passed natively to `log show --predicate`.
+        # regex/substring kinds are applied Python-side after capture.
+        import re as _re
+        raw_predicate = predicate
+        post_filter_kind: str | None = None
+        if predicate_kind in ("regex", "substring") and predicate:
+            # Pass no predicate to log show; filter in Python after capture.
+            raw_predicate = None
+            post_filter_kind = predicate_kind
+        text = sim.get_log_tail(s.device.udid, lines=lines, predicate=raw_predicate)
+        if post_filter_kind and predicate:
+            raw_lines = [ln for ln in text.splitlines() if ln]
+            if post_filter_kind == "regex":
+                try:
+                    pat = _re.compile(predicate)
+                    raw_lines = [ln for ln in raw_lines if pat.search(ln)]
+                except _re.error as exc:
+                    return {
+                        "ok": False,
+                        "error": {
+                            "code": "invalid_regex",
+                            "message": f"Invalid regex predicate {predicate!r}: {exc}",
+                        },
+                    }
+            else:
+                raw_lines = [ln for ln in raw_lines if predicate in ln]
+            text = "\n".join(raw_lines[-lines:])
     return {"ok": True, "lines": len(text.splitlines()), "logs": text}
 
 
@@ -1072,13 +1125,24 @@ def tool_set_appearance(arguments: dict) -> dict:
 
 def tool_dismiss_sheet(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
-    if s.target == "device":
-        raise errors.device_input_unavailable("dismiss_sheet")
     sw, sh = _ensure_screenshot_dims(s)
     x_mid = sw // 2
     y_start = int(sh * 0.2)
     y_end = int(sh * 0.7)
-    act.swipe(x_mid, y_start, x_mid, y_end, sw, sh, 300, udid=s.device.udid)
+
+    if s.target == "device":
+        # WDA swipe path (F-006): pixel coords -> logical points via scale.
+        # dismiss_sheet uses a swipe from 20% to 70% of screen height, centred
+        # horizontally — identical geometry to the sim path, with px->pt conversion.
+        wda = s.wda_client or _wda_client_for(s.device.udid)
+        scale = _session_scale(s, wda=wda)
+        wda.swipe(
+            float(x_mid) / scale, float(y_start) / scale,
+            float(x_mid) / scale, float(y_end) / scale,
+            300,
+        )
+    else:
+        act.swipe(x_mid, y_start, x_mid, y_end, sw, sh, 300, udid=s.device.udid)
     s.last_action_at = _now()
     return {"ok": True}
 
@@ -1348,7 +1412,7 @@ _TOOLS: list[dict] = [
     {
         "name": "session_start",
         "description": (
-            "Boot/find an iOS simulator (or attach to a real device), optionally "
+            "(sim + device) Boot/find an iOS simulator (or attach to a real device), optionally "
             "launch an app, and start a simdrive session. Returns session_id."
         ),
         "inputSchema": {
@@ -1360,13 +1424,14 @@ _TOOLS: list[dict] = [
                 "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
                 "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
                 "app_bundle_id": {"type": "string", "description": "Optional bundle id to launch after boot, e.g. 'com.apple.Preferences'."},
+                "replace_existing": {"type": "boolean", "default": False, "description": "When True, end any existing session for the same UDID before starting a new one (app stays foreground). Avoids the 'session already active' error on reconnect."},
             },
         },
         "handler": tool_session_start,
     },
     {
         "name": "session_end",
-        "description": "End a simdrive session. Optionally terminate the launched app. Sim stays booted.",
+        "description": "(sim + device) End a simdrive session. Optionally terminate the launched app. Sim stays booted.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
@@ -1379,7 +1444,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "session_status",
-        "description": "Return state of a session, or all sessions if session_id is omitted.",
+        "description": "(sim + device) Return state of a session, or all sessions if session_id is omitted.",
         "inputSchema": {
             "type": "object",
             "properties": {"session_id": {"type": "string"}},
@@ -1389,7 +1454,7 @@ _TOOLS: list[dict] = [
     {
         "name": "observe",
         "description": (
-            "Capture screenshot + numbered marks of all detected text/UI regions. "
+            "(sim + device) Capture screenshot + numbered marks of all detected text/UI regions. "
             "Returns: screenshot_path (raw PNG), annotated_path (PNG with red numbered "
             "boxes drawn over each mark), marks (id, bbox, center, text). The agent can "
             "either look at the annotated image and tap by mark id/text, or look at the "
@@ -1413,7 +1478,7 @@ _TOOLS: list[dict] = [
     {
         "name": "tap",
         "description": (
-            "Tap a target. Supply ONE of: {x, y} (screenshot pixel coords), "
+            "(sim + device) Tap a target. Supply ONE of: {x, y} (screenshot pixel coords), "
             "{mark: <id>} (mark id from latest observe — reshuffles per observe), "
             "{stable_id: <hash>} (stable across observes; preferred for replay), "
             "{stable_id_loose: <hash>} (coarser 60px bucket — tolerates layout drift "
@@ -1438,7 +1503,7 @@ _TOOLS: list[dict] = [
     {
         "name": "swipe",
         "description": (
-            "Drag between two points. Supply EITHER {x1,y1,x2,y2} pixel coords OR "
+            "(sim + device) Drag between two points. Supply EITHER {x1,y1,x2,y2} pixel coords OR "
             "{from: <target>, to: <target>} where each target is {x,y} | {mark} | {text}."
         ),
         "inputSchema": {
@@ -1460,7 +1525,7 @@ _TOOLS: list[dict] = [
     {
         "name": "type_text",
         "description": (
-            "Send text via the keyboard. If tap_first is given (a target dict), tap "
+            "(sim + device) Send text via the keyboard. If tap_first is given (a target dict), tap "
             "that target first to focus a field, then type. If clear_first=true, send "
             "Cmd-A + delete after focusing and before typing — convenient for resetting "
             "search fields. Returns ok, chars, injection_method ('hid' or 'cliclick' — "
@@ -1488,7 +1553,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "press_key",
-        "description": "Press a hardware/special key. Supported: home, lock, shake, siri, return, tab, escape, space, delete, arrow-up/down/left/right.",
+        "description": "(sim + device) Press a hardware/special key. Supported: home, lock, shake, siri, return, tab, escape, space, delete, arrow-up/down/left/right.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id", "key"],
@@ -1501,7 +1566,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "record_start",
-        "description": "Begin recording every act-tool call (with screenshots) under name. Stops via record_stop.",
+        "description": "(sim only) Begin recording every act-tool call (with screenshots) under name. Stops via record_stop. Device record/replay deferred to a13.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id", "name"],
@@ -1519,7 +1584,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "record_stop",
-        "description": "Finalize the active recording and write recording.yaml. Returns yaml_path + step count.",
+        "description": "(sim only) Finalize the active recording and write recording.yaml. Returns yaml_path + step count. Device record/replay deferred to a13.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
@@ -1530,7 +1595,8 @@ _TOOLS: list[dict] = [
     {
         "name": "replay",
         "description": (
-            "Replay a recorded session by name. on_drift halt|warn|force; "
+            "(sim only) Replay a recorded session by name. Device record/replay deferred to a13. "
+            "on_drift halt|warn|force; "
             "drift_threshold default 0.85 (SSIM). Pass mask_regions to exclude "
             "noisy areas (e.g. status-bar clock) from the similarity compute. "
             "When omitted, falls back to the recording's own ssim_masks if present. "
@@ -1574,7 +1640,7 @@ _TOOLS: list[dict] = [
     {
         "name": "list_devices",
         "description": (
-            "Enumerate real iPhones/iPads paired with this Mac. Use the returned "
+            "(device only) Enumerate real iPhones/iPads paired with this Mac. Use the returned "
             "udid in session_start({target: 'device', udid: ...}) to attach. "
             "Devices with hid_supported=true have a bootstrapped WebDriverAgent "
             "and support tap/swipe/type_text/press_key. Run "
@@ -1585,14 +1651,34 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "logs",
-        "description": "Tail simulator logs (last 30s window). Use predicate to filter (NSPredicate string).",
+        "description": (
+            "(sim + device) Tail iOS logs. On simulator: uses `log show --last 30s` "
+            "(NSPredicate supported natively). On device: uses idevicesyslog — "
+            "NSPredicate is NOT supported; pass predicate_kind='substring' or 'regex' "
+            "for reliable filtering, or omit predicate_kind (defaults to 'nspredicate' "
+            "which auto-downgrades to substring on device with a logged WARNING). "
+            "predicate_kind values: 'nspredicate' (sim native / device downgrades), "
+            "'substring' (Python str-in-line, sim + device), "
+            "'regex' (Python re.search, sim + device)."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
             "properties": {
                 "session_id": {"type": "string"},
                 "lines": {"type": "integer", "default": 200},
-                "predicate": {"type": "string"},
+                "predicate": {"type": "string", "description": "Filter string. Interpretation depends on predicate_kind."},
+                "predicate_kind": {
+                    "type": "string",
+                    "enum": ["nspredicate", "regex", "substring"],
+                    "default": "nspredicate",
+                    "description": (
+                        "How to apply `predicate`. "
+                        "'nspredicate': NSPredicate on sim (native), downgraded to substring on device. "
+                        "'substring': Python `predicate in line` (sim + device). "
+                        "'regex': Python re.search (sim + device)."
+                    ),
+                },
             },
         },
         "handler": tool_logs,
@@ -1601,7 +1687,7 @@ _TOOLS: list[dict] = [
     {
         "name": "perf",
         "description": (
-            "Snapshot CPU%, memory RSS (MB), and thread count for the active app. "
+            "(sim only) Snapshot CPU%, memory RSS (MB), and thread count for the active app. "
             "simctl + ps based — no XCTest bridge required."
         ),
         "inputSchema": {
@@ -1616,7 +1702,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "perf_baseline",
-        "description": "Capture a labeled perf snapshot on the session for later compare. Default label='default'.",
+        "description": "(sim only) Capture a labeled perf snapshot on the session for later compare. Default label='default'.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
@@ -1631,7 +1717,7 @@ _TOOLS: list[dict] = [
     {
         "name": "perf_compare",
         "description": (
-            "Diff a fresh perf snapshot against the stored baseline. Returns "
+            "(sim only) Diff a fresh perf snapshot against the stored baseline. Returns "
             "{baseline, current, delta, severity}; severity is 'high' when "
             "memory_rss_mb_delta>50 or threads_delta>10, 'medium' when "
             "cpu_pct_delta>25, else 'low'."
@@ -1650,7 +1736,7 @@ _TOOLS: list[dict] = [
     {
         "name": "memory",
         "description": (
-            "Detailed memory breakdown (footprint/dirty/swapped/clean MB) via "
+            "(sim only) Detailed memory breakdown (footprint/dirty/swapped/clean MB) via "
             "macOS `footprint`. Returns {available: false, reason} when the "
             "binary is missing — never raises for that case."
         ),
@@ -1668,7 +1754,7 @@ _TOOLS: list[dict] = [
     {
         "name": "doctor",
         "description": (
-            "Environment readiness: Xcode CLT, simctl runtimes, booted devices, "
+            "(sim + device) Environment readiness: Xcode CLT, simctl runtimes, booted devices, "
             "native HID helper presence. Returns {ok, checks: [{name, ok, detail}]}."
         ),
         "inputSchema": {"type": "object", "properties": {}},
@@ -1677,7 +1763,7 @@ _TOOLS: list[dict] = [
     {
         "name": "app_state",
         "description": (
-            "Heuristic app lifecycle state: foreground / not-running. (background/suspended "
+            "(sim + device) Heuristic app lifecycle state: foreground / not-running. (background/suspended "
             "are reserved — distinguishing them needs an XCTest bridge.)"
         ),
         "inputSchema": {
@@ -1693,8 +1779,9 @@ _TOOLS: list[dict] = [
     {
         "name": "apps",
         "description": (
-            "List installed apps on a sim. Resolve UDID from session_id OR pass udid directly. "
-            "Each entry: bundle_id, name, version, path."
+            "(sim + device) List installed apps. Resolve UDID from session_id OR pass udid directly. "
+            "Each entry: bundle_id, name, version, build, path. "
+            "'version' is CFBundleShortVersionString; 'build' is CFBundleVersion."
         ),
         "inputSchema": {
             "type": "object",
@@ -1708,7 +1795,7 @@ _TOOLS: list[dict] = [
     {
         "name": "crashes",
         "description": (
-            "Retrieve `.ips` crash reports from ~/Library/Logs/DiagnosticReports. "
+            "(sim only) Retrieve `.ips` crash reports from ~/Library/Logs/DiagnosticReports. "
             "Filter by session-start time (default true) and bundle id (optional). "
             "Returns up to `max` reports newest-first."
         ),
@@ -1728,7 +1815,7 @@ _TOOLS: list[dict] = [
     {
         "name": "dismiss_first_launch_alerts",
         "description": (
-            "Tap Allow/Don't Allow on permission alerts. Re-observes 200 ms post-tap "
+            "(sim only) Tap Allow/Don't Allow on permission alerts. Re-observes 200 ms post-tap "
             "and retries once when the alert text persists (closes the 1-in-4 "
             "SpringBoard alert-handoff race)."
         ),
@@ -1746,7 +1833,7 @@ _TOOLS: list[dict] = [
     {
         "name": "pre_grant_permissions",
         "description": (
-            "Pre-grant permissions via `simctl privacy grant` BEFORE app launch. "
+            "(sim only) Pre-grant permissions via `simctl privacy grant` BEFORE app launch. "
             "Permissions: location, photos, contacts, camera, microphone, calendar, "
             "reminders, motion, health, homekit, siri, speech, medialibrary, all."
         ),
@@ -1763,7 +1850,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "set_appearance",
-        "description": "Toggle the simulator's UI appearance: 'light' or 'dark'.",
+        "description": "(sim only) Toggle the simulator's UI appearance: 'light' or 'dark'.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id", "appearance"],
@@ -1776,7 +1863,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "dismiss_sheet",
-        "description": "Dismiss a presented sheet/modal by swiping down (20% → 70% of screen height).",
+        "description": "(sim + device) Dismiss a presented sheet/modal by swiping down (20% → 70% of screen height). On sim: uses HID swipe. On device: uses WDA swipe via WebDriverAgent (F-006 point-scale applied).",
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
@@ -1787,7 +1874,7 @@ _TOOLS: list[dict] = [
     {
         "name": "list_replays",
         "description": (
-            "List saved replay recordings under SIMDRIVE_HOME/recordings. "
+            "(sim only) List saved replay recordings under SIMDRIVE_HOME/recordings. "
             "Each entry: name, path, steps, created_at, modified_at, simdrive_version, tags."
         ),
         "inputSchema": {"type": "object", "properties": {}},
@@ -1796,7 +1883,7 @@ _TOOLS: list[dict] = [
     {
         "name": "validate_replay",
         "description": (
-            "Structural validation of a recording YAML without executing. Checks "
+            "(sim only) Structural validation of a recording YAML without executing. Checks "
             "required fields, step structure, supported actions, screenshot file presence."
         ),
         "inputSchema": {
@@ -1810,7 +1897,7 @@ _TOOLS: list[dict] = [
     {
         "name": "version",
         "description": (
-            "Report loaded simdrive version vs. on-disk version. Zero-arg. "
+            "(sim + device) Report loaded simdrive version vs. on-disk version. Zero-arg. "
             "Returns {version, loaded_at, disk_version, drift}; drift=true means "
             "the running server is stale (`pip install --upgrade simdrive` without "
             "restarting the agent host). Cheap; safe to call any time."
@@ -1821,7 +1908,8 @@ _TOOLS: list[dict] = [
     {
         "name": "clear_field",
         "description": (
-            "Clear a focused text field by sending Cmd-A + delete via HID. "
+            "(sim + device) Clear a focused text field. "
+            "On sim: Cmd-A + delete via HID. On device: WDA active-element clear. "
             "If `target` is given, tap it first so the field is the active "
             "first responder. Returns {ok, cleared}."
         ),
@@ -1842,7 +1930,7 @@ _TOOLS: list[dict] = [
     {
         "name": "load_journey",
         "description": (
-            "Load and parse a journey YAML, returning its goals, success criteria, "
+            "(sim + device) Load and parse a journey YAML, returning its goals, success criteria, "
             "budget, and persona data as structured JSON. "
             "\n\n"
             "AGENT-FIRST WORKFLOW (no API key needed, no MCP sampling required):\n"
@@ -1880,7 +1968,7 @@ _TOOLS: list[dict] = [
     {
         "name": "lint_recordings",
         "description": (
-            "Walk a directory tree and lint every recording.yaml for state-contract "
+            "(sim only) Walk a directory tree and lint every recording.yaml for state-contract "
             "(`requires:`) presence + shape. Returns one result per recording: "
             "ok / fail with reason. Use to find recordings that pre-date a9.0 "
             "and still need `migrate_recording` to backfill their state contract."
@@ -1899,7 +1987,7 @@ _TOOLS: list[dict] = [
     {
         "name": "migrate_recording",
         "description": (
-            "Backfill a `requires:` state contract onto an existing recording by "
+            "(sim only) Backfill a `requires:` state contract onto an existing recording by "
             "OCR'ing its step-0 pre_screenshot. Idempotent: no-op when the recording "
             "already has `requires:` (use force=true to overwrite). Writes a "
             ".pre-migrate.bak sibling before mutating so a botched migration is recoverable."
