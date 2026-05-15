@@ -212,36 +212,38 @@ def test_record_writes_requires_block_with_device_state(tmp_path, monkeypatch):
 
     req = payload["requires"]
 
-    # a13 device requires block must carry these 5 fields (may be nested or flat).
-    # Support both a9.0 nested style (app.bundle_id, sim.device, etc.) and a13 flat style.
-    def _get(key: str):
-        """Try nested then flat lookup."""
-        parts = key.split(".")
-        if len(parts) == 2:
-            section, field = parts
-            if section in req and isinstance(req[section], dict):
-                return req[section].get(field)
-        return req.get(key)
+    # a13 device requires block shape (from CodeAtlas a13 implementation):
+    #   requires:
+    #     target: "device"
+    #     app:
+    #       bundle_id: <str>
+    #     device:
+    #       udid: <str>
+    #       device_name: <str>
+    #       os_version: <str>
+    #       os_major: <int>
 
     # target: "device"
-    target_val = _get("target") or _get("sim.target")
+    target_val = req.get("target")
     assert target_val == "device", f"requires.target expected 'device', got {target_val!r}"
 
-    # udid
-    udid_val = _get("udid") or _get("sim.udid") or _get("device_udid")
-    assert udid_val == "DEVICE-UDID-A13-001", f"udid mismatch: {udid_val!r}"
+    # device.udid
+    device_block = req.get("device") or {}
+    udid_val = device_block.get("udid")
+    assert udid_val == "DEVICE-UDID-A13-001", f"requires.device.udid mismatch: {udid_val!r}"
 
-    # device_name
-    name_val = _get("device_name") or _get("sim.device") or _get("sim.device_name")
-    assert name_val == "iPhone 16 Pro", f"device_name mismatch: {name_val!r}"
+    # device.device_name
+    name_val = device_block.get("device_name")
+    assert name_val == "iPhone 16 Pro", f"requires.device.device_name mismatch: {name_val!r}"
 
-    # os_version
-    os_val = _get("os_version") or _get("sim.ios_version") or _get("sim.os_version")
-    assert os_val is not None, "os_version missing from requires block"
+    # device.os_version
+    os_val = device_block.get("os_version")
+    assert os_val is not None, "requires.device.os_version missing from requires block"
 
-    # app_bundle_id
-    bid_val = _get("app_bundle_id") or _get("app.bundle_id")
-    assert bid_val == "com.test.app", f"app_bundle_id mismatch: {bid_val!r}"
+    # app.bundle_id
+    app_block = req.get("app") or {}
+    bid_val = app_block.get("bundle_id")
+    assert bid_val == "com.test.app", f"requires.app.bundle_id mismatch: {bid_val!r}"
 
 
 # ─── Test 5 ────────────────────────────────────────────────────────────────
