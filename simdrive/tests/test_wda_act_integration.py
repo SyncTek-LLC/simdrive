@@ -49,14 +49,37 @@ def cleanup_sessions():
 # ── WdaClient mock factory ────────────────────────────────────────────────────
 
 
+_ONE_PX_PNG = bytes.fromhex(
+    "89504e470d0a1a0a"
+    "0000000d49484452"
+    "00000001"
+    "00000001"
+    "08060000001f15c489"
+    "0000000a49444154"
+    "789c6260000000020001"
+    "e221bc33"
+    "0000000049454e44ae426082"
+)
+
+
 def _mock_wda_client() -> MagicMock:
-    """Return a MagicMock that looks like a WdaClient."""
+    """Return a MagicMock that looks like a WdaClient.
+
+    screenshot_any returns valid 1×1 PNG bytes so device-path post-observe calls
+    (tool_observe → wda.screenshot_any()) don't crash on write_bytes.
+    """
     client = MagicMock()
     client.tap.return_value = None
     client.swipe.return_value = None
     client.type_text.return_value = None
     client.press_key.return_value = None
     client.clear_field.return_value = None
+    # a12 — device post-type observe calls tool_observe which calls screenshot_any;
+    # provide real bytes so write_bytes() does not raise TypeError.
+    client.screenshot_any.return_value = _ONE_PX_PNG
+    # source() is called by annotate_device_screenshot; return empty XML so it
+    # short-circuits to marks=[] without error.
+    client.source.return_value = ""
     return client
 
 
@@ -162,16 +185,11 @@ def test_tool_type_text_device_routes_to_wda(tmp_path):
     mock_client = _mock_wda_client()
     registry_entry = {"host": "localhost", "port": 8100}
 
-    # type_text also calls observe for keyboard detection — mock that too
-    mock_obs = MagicMock()
-    mock_obs.screenshot_w = 390
-    mock_obs.screenshot_h = 844
-    mock_obs.screenshot_path = tmp_path / "obs.png"
-    mock_obs.marks = []
-
+    # a12 — device type_text post-observe calls tool_observe (device code path),
+    # not observe.observe.  Patch annotate_device_screenshot to return empty marks.
     with patch("simdrive.wda.registry.load", return_value=registry_entry), \
          patch("simdrive.wda.client.WdaClient") as mock_cls, \
-         patch("simdrive.observe.observe", return_value=mock_obs):
+         patch("simdrive.wda.som_device.annotate_device_screenshot", return_value=([], None)):
         mock_cls.return_value = mock_client
 
         from simdrive.server import tool_type_text
@@ -190,15 +208,11 @@ def test_tool_type_text_device_return_shape(tmp_path):
     s = _make_device_session(tmp_path)
     mock_client = _mock_wda_client()
     registry_entry = {"host": "localhost", "port": 8100}
-    mock_obs = MagicMock()
-    mock_obs.screenshot_w = 390
-    mock_obs.screenshot_h = 844
-    mock_obs.screenshot_path = tmp_path / "obs.png"
-    mock_obs.marks = []
 
+    # a12 — device type_text post-observe calls tool_observe (device code path).
     with patch("simdrive.wda.registry.load", return_value=registry_entry), \
          patch("simdrive.wda.client.WdaClient") as mock_cls, \
-         patch("simdrive.observe.observe", return_value=mock_obs):
+         patch("simdrive.wda.som_device.annotate_device_screenshot", return_value=([], None)):
         mock_cls.return_value = mock_client
         from simdrive.server import tool_type_text
         result = tool_type_text({"session_id": "testsession", "text": "abc"})
