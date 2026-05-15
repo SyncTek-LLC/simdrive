@@ -12,10 +12,18 @@ WDA REST reference (Appium WDA fork):
   POST   /session/<id>/wda/keys                  → type text
   POST   /session/<id>/wda/pressButton           → hardware button
   GET    /session/<id>/screenshot                → PNG screenshot (base64)
+
+Debugging:
+  Set ``SIMDRIVE_HTTP_DEBUG=1`` (any non-empty value) in the environment to log
+  every HTTP call at INFO level: method, path, request body (truncated at 2 KB),
+  response status, and response body (truncated at 2 KB). Useful for diagnosing
+  WDA protocol issues or unexpected responses without adding permanent noise.
 """
 from __future__ import annotations
 
 import base64
+import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -23,6 +31,11 @@ import httpx
 
 from .errors import wda_session_lost
 from ..errors import SimdriveError
+
+_log = logging.getLogger(__name__)
+# SIMDRIVE_HTTP_DEBUG — set to any non-empty value to enable per-call HTTP logging.
+_HTTP_DEBUG = bool(os.environ.get("SIMDRIVE_HTTP_DEBUG", "").strip())
+_DEBUG_TRUNCATE = 2048  # chars; long bodies (screenshots) are truncated to this
 
 
 # Runtime error for HTTP-level failures (non-2xx or network error).
@@ -82,11 +95,23 @@ class WdaClient:
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict:
         url = path
+        if _HTTP_DEBUG:
+            req_body = kwargs.get("json") or kwargs.get("data") or ""
+            req_body_str = str(req_body)[:_DEBUG_TRUNCATE] if req_body else ""
+            _log.info(
+                "[WDA] >> %s %s body=%s",
+                method, url, req_body_str or "(none)",
+            )
         try:
             resp = self._client.request(method, url, **kwargs)
         except httpx.TransportError as exc:
             raise _wda_unreachable(self._host, self._port, str(exc)) from exc
         self._last_seen_at = time.time()
+        if _HTTP_DEBUG:
+            _log.info(
+                "[WDA] << %s %s status=%d body=%s",
+                method, url, resp.status_code, resp.text[:_DEBUG_TRUNCATE],
+            )
         if not resp.is_success:
             raise _wda_http_error(method, url, resp.status_code, resp.text)
         try:
