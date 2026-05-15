@@ -473,7 +473,9 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
     if s.recorder is None:
         return None
     # Capture post-screenshot for the recording.
-    post_obs = observe.observe(s.device.udid, s.workdir / "observations")
+    # Pass s.target so device sessions use the WDA/devicectl screenshot path,
+    # not simctl (which rejects real device UDIDs with "Invalid device").
+    post_obs = observe.observe(s.device.udid, s.workdir / "observations", target=s.target)
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
@@ -644,7 +646,10 @@ def tool_type_text(arguments: dict) -> dict:
             _t.sleep(0.6)
         if clear_first:
             wda.clear_field()
-        pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
+        # Pass target="device" so observe uses the WDA/devicectl screenshot path.
+        # Without this, observe falls back to sim.screenshot() which calls
+        # `simctl io <udid> screenshot` — rejected by real devices as "Invalid device".
+        pre_obs = observe.observe(s.device.udid, s.workdir / "observations", target="device") if s.recorder else None
         pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
         wda.type_text(text)
         s.last_action_at = _now()
@@ -696,6 +701,12 @@ def tool_type_text(arguments: dict) -> dict:
             except Exception:
                 pass
 
+    # Safety guard: the simulator path must never be reached on a device session.
+    # If this assertion fires, a new code path is routing device sessions here.
+    assert s.target == "simulator", (
+        f"[F-009] simctl type_text path reached on target={s.target!r} "
+        f"(session {s.session_id!r}). Route device type_text through wda.type_text()."
+    )
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
     act.type_text(text, udid=s.device.udid)
