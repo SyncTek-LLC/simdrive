@@ -11,6 +11,7 @@ from typing import Optional
 from urllib.parse import unquote, urlparse
 
 from . import hid_inject
+from .device import _filter_devicectl_stderr
 
 
 def _run(cmd: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
@@ -34,9 +35,10 @@ def _devicectl_info_json(subcommand: str, udid: str, timeout: float = 30.0) -> d
         ]
         res = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
         if res.returncode != 0:
+            filtered_err = _filter_devicectl_stderr(res.stderr or "", res.returncode)
             raise RuntimeError(
                 f"devicectl device info {subcommand} failed: "
-                f"{(res.stderr or res.stdout).strip()}"
+                f"{(filtered_err or res.stdout).strip()}"
             )
         try:
             with open(json_path) as f:
@@ -208,7 +210,10 @@ def app_state_device(udid: str, bundle_id: str) -> dict:
 
 def list_apps_device(udid: str) -> list[dict]:
     """Device equivalent of list_apps: query devicectl and normalize to the
-    simulator schema (bundle_id, name, version, path).
+    simulator schema (bundle_id, name, version, build, path).
+
+    'version' is CFBundleShortVersionString; 'build' is CFBundleVersion.
+    Both fields match the shape emitted by `xcrun devicectl device info apps`.
     """
     data = _devicectl_info_json("apps", udid)
     out: list[dict] = []
@@ -220,6 +225,7 @@ def list_apps_device(udid: str) -> list[dict]:
             "bundle_id": bundle_id,
             "name": a.get("name") or "",
             "version": a.get("version") or a.get("bundleVersion") or "",
+            "build": a.get("buildVersion") or a.get("CFBundleVersion") or "",
             "path": _file_url_to_path(a.get("url") or ""),
         })
     out.sort(key=lambda a: a["name"].lower())
@@ -273,7 +279,8 @@ def list_apps(udid: str) -> list[dict]:
         out.append({
             "bundle_id": bundle_id,
             "name": info.get("CFBundleDisplayName") or info.get("CFBundleName") or "",
-            "version": info.get("CFBundleShortVersionString") or info.get("CFBundleVersion") or "",
+            "version": info.get("CFBundleShortVersionString") or "",
+            "build": info.get("CFBundleVersion") or "",
             "path": info.get("Path") or "",
         })
     out.sort(key=lambda a: a["name"].lower())
