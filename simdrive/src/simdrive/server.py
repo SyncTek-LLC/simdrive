@@ -359,8 +359,10 @@ def tool_observe(arguments: dict) -> dict:
     # Only overwrite the mark cache when this observe actually produced marks.
     # observe(annotate=False) returns marks=[] and used to wipe the cache, breaking
     # subsequent tap text=/mark=/stable_id= calls with "no marks available."
+    # a12 — normalise to list[dict] so sim and device paths share a single shape
+    # (device path already returns list[dict] from annotate_device_screenshot).
     if obs.marks:
-        s.last_marks = obs.marks
+        s.last_marks = [m.to_dict() for m in obs.marks]
     s.last_action_at = _now()
     return obs.to_dict()
 
@@ -368,20 +370,58 @@ def tool_observe(arguments: dict) -> dict:
 def _ensure_screenshot_dims(s) -> tuple[int, int]:
     if s.last_screenshot_w == 0 or s.last_screenshot_h == 0:
         # Auto-observe so the agent can call act tools without first calling observe.
-        obs = observe.observe(s.device.udid, s.workdir / "observations")
-        s.last_screenshot_w = obs.screenshot_w
-        s.last_screenshot_h = obs.screenshot_h
-        s.last_screenshot_path = obs.screenshot_path
-        s.last_marks = obs.marks
+        # a12 — route through tool_observe so device sessions use the device code path
+        # (WDA screenshot + annotate_device_screenshot with pixel scaling) rather than
+        # the sim path (Vision OCR, unscaled coords).  This prevents F-008: coord-space
+        # flip where _ensure_screenshot_dims on a device session would store sim-path
+        # marks (points, 440-wide) in last_marks, conflicting with device-path marks
+        # (pixels, 1320-wide) stored by the previous tool_observe call.
+        if getattr(s, "target", "simulator") == "device":
+            tool_observe({"session_id": s.session_id, "annotate": True})
+        else:
+            obs = observe.observe(s.device.udid, s.workdir / "observations")
+            s.last_screenshot_w = obs.screenshot_w
+            s.last_screenshot_h = obs.screenshot_h
+            s.last_screenshot_path = obs.screenshot_path
+            # a12 — normalise to list[dict]
+            s.last_marks = [m.to_dict() for m in obs.marks] if obs.marks else []
     return s.last_screenshot_w, s.last_screenshot_h
 
 
-def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | None"]:
-    """Translate {x,y} | {mark} | {text} | {stable_id} into pixel coords + debug 'how' + matched Mark.
+def _mark_attr(m: "som.Mark | dict", key: str):
+    """Uniform attribute/key access for a mark that may be a Mark dataclass or a dict.
 
-    The 4th element is the matched `som.Mark` for mark/stable_id/text resolutions, or
-    `None` for raw {x, y} resolutions. Callers that need to record `stable_id` alongside
-    pixel coords (so replay can re-resolve against the live screen) read it from there.
+    a12 — Session.last_marks is always list[dict] after this release.  This helper
+    is the single extraction point; it handles both shapes so callers don't need
+    isinstance checks scattered throughout the resolver.
+    """
+    if isinstance(m, dict):
+        return m.get(key)
+    return getattr(m, key, None)
+
+
+def _mark_center(m: "som.Mark | dict") -> tuple[int, int]:
+    """Return (cx, cy) pixel centre from a Mark dataclass or dict mark."""
+    if isinstance(m, dict):
+        c = m.get("center")
+        if c and len(c) >= 2:
+            return int(c[0]), int(c[1])
+        # Fallback: compute from bbox if center key is missing.
+        bbox = m.get("bbox") or [0, 0, 0, 0]
+        return int(bbox[0] + bbox[2] // 2), int(bbox[1] + bbox[3] // 2)
+    # Mark dataclass
+    return m.center
+
+
+def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | dict | None"]:
+    """Translate {x,y} | {mark} | {text} | {stable_id} into pixel coords + debug 'how' + matched mark.
+
+    The 4th element is the matched mark (dict or Mark dataclass) for mark/stable_id/text
+    resolutions, or None for raw {x, y} resolutions.  Callers read stable_id/text from it
+    to record alongside pixel coords for replay.
+
+    a12 — Session.last_marks is normalised to list[dict] end-to-end (sim and device paths).
+    All attribute access on matched marks uses _mark_attr() so dicts and dataclasses both work.
     """
     if "x" in args and "y" in args:
         return int(args["x"]), int(args["y"]), "coords", None
@@ -390,39 +430,41 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | None"]
         mark_id = int(args["mark"])
         m = som.find_by_mark_id(s.last_marks or [], mark_id)
         if not m:
-            available = [{"id": mk.id, "text": mk.text} for mk in (s.last_marks or [])]
+            available = [{"id": _mark_attr(mk, "id"), "text": _mark_attr(mk, "text")}
+                         for mk in (s.last_marks or [])]
             raise errors.target_not_found("mark", mark_id, available)
-        cx, cy = m.center
-        return cx, cy, f"mark:{mark_id}({m.text!r})", m
+        cx, cy = _mark_center(m)
+        return cx, cy, f"mark:{mark_id}({_mark_attr(m, 'text')!r})", m
 
     if "stable_id" in args:
         sid_q = str(args["stable_id"])
         m = som.find_by_stable_id(s.last_marks or [], sid_q)
         if not m:
-            available = [{"stable_id": mk.stable_id, "text": mk.text}
+            available = [{"stable_id": _mark_attr(mk, "stable_id"), "text": _mark_attr(mk, "text")}
                          for mk in (s.last_marks or [])]
             raise errors.target_not_found("stable_id", sid_q, available)
-        cx, cy = m.center
-        return cx, cy, f"stable_id:{sid_q}({m.text!r})", m
+        cx, cy = _mark_center(m)
+        return cx, cy, f"stable_id:{sid_q}({_mark_attr(m, 'text')!r})", m
 
     if "stable_id_loose" in args:
         sid_q = str(args["stable_id_loose"])
         m = som.find_by_stable_id_loose(s.last_marks or [], sid_q)
         if not m:
-            available = [{"stable_id_loose": mk.stable_id_loose, "text": mk.text}
+            available = [{"stable_id_loose": _mark_attr(mk, "stable_id_loose"),
+                          "text": _mark_attr(mk, "text")}
                          for mk in (s.last_marks or [])]
             raise errors.target_not_found("stable_id_loose", sid_q, available)
-        cx, cy = m.center
-        return cx, cy, f"stable_id_loose:{sid_q}({m.text!r})", m
+        cx, cy = _mark_center(m)
+        return cx, cy, f"stable_id_loose:{sid_q}({_mark_attr(m, 'text')!r})", m
 
     if "text" in args:
         query = str(args["text"])
         m = som.find_by_text(s.last_marks or [], query)
         if not m:
-            available = [mk.text for mk in (s.last_marks or [])]
+            available = [_mark_attr(mk, "text") for mk in (s.last_marks or [])]
             raise errors.target_not_found("text", query, available)
-        cx, cy = m.center
-        return cx, cy, f"text:{query!r}->mark:{m.id}", m
+        cx, cy = _mark_center(m)
+        return cx, cy, f"text:{query!r}->mark:{_mark_attr(m, 'id')}", m
 
     raise errors.missing_target()
 
@@ -473,9 +515,9 @@ def tool_tap(arguments: dict) -> dict:
         if matched_mark is not None and pre_path:
             step_id = _record_act_step(s, "tap", {
                 "x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh,
-                "stable_id": matched_mark.stable_id,
-                "stable_id_loose": matched_mark.stable_id_loose,
-                "text": matched_mark.text,
+                "stable_id": _mark_attr(matched_mark, "stable_id"),
+                "stable_id_loose": _mark_attr(matched_mark, "stable_id_loose"),
+                "text": _mark_attr(matched_mark, "text"),
             }, pre_path)
             if step_id is not None:
                 resp["step_id"] = step_id
@@ -488,9 +530,9 @@ def tool_tap(arguments: dict) -> dict:
     # can re-resolve against the live screen (a 1px layout shift no longer silently
     # mistaps; loose covers the >3px shifts that escape the tight 20px bucket).
     if matched_mark is not None:
-        args["stable_id"] = matched_mark.stable_id
-        args["stable_id_loose"] = matched_mark.stable_id_loose
-        args["text"] = matched_mark.text
+        args["stable_id"] = _mark_attr(matched_mark, "stable_id")
+        args["stable_id_loose"] = _mark_attr(matched_mark, "stable_id_loose")
+        args["text"] = _mark_attr(matched_mark, "text")
     step_id = None
     if pre_path:
         step_id = _record_act_step(s, "tap", args, pre_path)
@@ -615,13 +657,12 @@ def tool_type_text(arguments: dict) -> dict:
             "backend": "wda",
             "at": _now(),
         })
-        post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=True)
-        s.last_screenshot_w = post_obs.screenshot_w
-        s.last_screenshot_h = post_obs.screenshot_h
-        s.last_screenshot_path = post_obs.screenshot_path
-        if post_obs.marks:
-            s.last_marks = post_obs.marks
-        focused_field = focused_mark.stable_id if focused_mark is not None else None
+        # a12 — device post-type observe must go through device code path so marks
+        # remain in pixel space (list[dict] from annotate_device_screenshot).
+        # Calling observe.observe() here would use Vision OCR and store Mark
+        # dataclasses in points, causing F-008 coord-space flip.
+        tool_observe({"session_id": s.session_id, "annotate": True})
+        focused_field = _mark_attr(focused_mark, "stable_id") if focused_mark is not None else None
         resp: dict = {
             "ok": True,
             "chars": len(text),
@@ -673,17 +714,19 @@ def tool_type_text(arguments: dict) -> dict:
     # Post-type observe so the caller can verify the field accepted focus without
     # having to chain an extra observe() call. Heuristic: keyboard chrome shows
     # well-known key labels OR a row of 1-2 char marks in the bottom 45% of the screen.
+    # a12 — normalise to list[dict] so last_marks remains dict-shaped after this observe.
     post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=True)
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
     if post_obs.marks:
-        s.last_marks = post_obs.marks
+        s.last_marks = [m.to_dict() for m in post_obs.marks]
 
     keyboard_chrome_words = {"return", "search", "go", "next", "done", "shift", "delete", "space"}
     keyboard_visible = False
     bottom_threshold = post_obs.screenshot_h * 0.55
     short_marks_in_bottom = 0
+    # a12 — marks are now list[dict]; use dict key access instead of attribute access.
     for mk in post_obs.marks:
         t = (mk.text or "").strip().lower()
         if t in keyboard_chrome_words:
@@ -695,7 +738,7 @@ def tool_type_text(arguments: dict) -> dict:
     if not keyboard_visible and short_marks_in_bottom >= 2:
         keyboard_visible = True
 
-    focused_field = focused_mark.stable_id if focused_mark is not None else None
+    focused_field = _mark_attr(focused_mark, "stable_id") if focused_mark is not None else None
 
     response = {
         "ok": True,
@@ -982,7 +1025,8 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
         s.last_screenshot_h = obs.screenshot_h
         s.last_screenshot_path = obs.screenshot_path
         if obs.marks:
-            s.last_marks = obs.marks
+            # a12 — normalise to list[dict] for last_marks consistency
+            s.last_marks = [m.to_dict() for m in obs.marks]
         target_mark = robustness.alert_button_match(obs.marks, choice)
         if target_mark is None:
             break
