@@ -1,5 +1,117 @@
 # Changelog
 
+## [1.0.0a12] — 2026-05-14
+
+Closes every item from the 2026-05-14 Palace iOS device-dogfood feedback —
+five P0/P1 driver-path bugs and seven polish items. a12 turns the device
+target into a first-class peer of the sim target.
+
+### Fixed — Critical / High
+
+**F-007 — `tap(stable_id=...)` on device no longer raises `AttributeError`**
+Sim path emitted `Mark` dataclass instances; device path emitted dicts; the
+resolver used attribute access (`m.stable_id`) which crashed on dicts. a12
+canonicalises marks to `dict` end-to-end (sim path calls `.to_dict()` at every
+write site) and the resolver uses a `_mark_attr` helper that handles both
+shapes for safety. `tap(stable_id=)`, `tap(text=)`, `tap(mark=)`, and
+`tap(stable_id_loose=)` all work uniformly on sim AND device.
+
+**F-008 — observe coord-space invariant pinned to pixels on device**
+The dogfood reported point/pixel flipping between consecutive observes on the
+same screen. Root cause: `_ensure_screenshot_dims` on device sessions called
+`observe.observe()` (sim Vision OCR path, unscaled points), then a subsequent
+`tool_observe` returned pixel-scaled marks from `annotate_device_screenshot` —
+two different coord spaces stored in the same session. `_ensure_screenshot_dims`
+and the type_text post-observe now route through `tool_observe(target=s.target)`
+so device sessions always go through the WDA `/screenshot` + pixel-scaling
+path. Coord-space contract is documented at module level in `observe.py` and
+`som_device.py`. Out-of-bounds marks (negative coords from system overlays
+like `AdditionalDimmingOverlay`) are filtered with a debug log rather than
+asserted, surfaced during Moes Max live validation.
+
+**WDA Code 41 auto-recovery — mid-session entitlement loss**
+If XCTDaemonErrorDomain returns `Code=41` or `Code 41` during any WDA call,
+simdrive now logs a warning, calls `bootstrap.bootstrap_device(udid, ..., rebuild=True)`,
+reloads the registry, updates the WDA client's host/port/session, and retries
+the original request once. `SIMDRIVE_NO_AUTO_REBUILD=1` opts out. Per-call
+retry counter `_recovery_attempt: int` prevents infinite loops.
+
+**F-010 — orphan-session 404 auto re-acquire**
+If WDA returns HTTP 404 on a `/session/<id>/...` path (an out-of-band script
+called `POST /session` or `DELETE /session/<id>`), simdrive now calls
+`open_session(self._last_bundle_id)` to acquire a fresh session id and retries
+the original request once. Same per-call counter; same env opt-out.
+
+**F-009 — `type_text` on device routes through WDA, never simctl**
+Surfaced during code-tracing: `tool_type_text` device branch was correct, but
+helpers it called (`_ensure_screenshot_dims`, `_record_act_step`, and two
+explicit `observe.observe()` calls) defaulted to `target="simulator"` and
+hit `simctl spawn <real-udid> screenshot` → "Invalid device". Four call
+sites now pass `target=s.target` (or route through `tool_observe` for
+device). Guard `assert s.target == "simulator"` added before every `act.*`
+helper so a future device-leak fails loud instead of with a cryptic simctl error.
+
+### Fixed — Medium / Low + new capabilities
+
+**Per-target log-filter API (`predicate_kind`)**
+`tool_logs` now accepts `predicate_kind: Literal["nspredicate", "regex", "substring"]`
+defaulting to `"nspredicate"`. Sim NSPredicate routes to native `log show`;
+device NSPredicate downgrades to substring with a WARNING log; regex and
+substring kinds are explicit post-capture filters that work on both targets.
+Closes the dogfood report that `processImagePath CONTAINS "Palace"` returned
+zero lines on device.
+
+**Tool-schema per-target parity markers**
+Every MCP tool description now starts with `(sim only)`, `(device only)`, or
+`(sim + device)` so an agent reading `tools/list` knows BEFORE calling
+which target the tool supports. Twenty tools audited. `dismiss_sheet` is now
+`(sim + device)` (a12 ships the device path). Record/replay/perf tools are
+explicitly `(sim only)` until a13 record/replay-on-device lands.
+
+**`SIMDRIVE_HTTP_DEBUG=1` verbose mode**
+Set the env var to log every WDA HTTP call at INFO: method, path, request
+body (truncated 2 KB), response status, response body (truncated 2 KB).
+Module attr and env var both checked per call so monkeypatching from tests
+and live env both work.
+
+**`apps` includes `CFBundleVersion` as `build`**
+`mcp__simdrive__apps` items now include `build` alongside `version`, matching
+`xcrun devicectl device info apps` shape. Saves a round-trip when the agent
+needs to identify a specific TestFlight build.
+
+**`session_start(replace_existing=True)`**
+Atomically end any existing session for the same UDID and start a fresh one
+in a single round-trip. Without the flag, a UDID collision raises
+`session_already_active` with the existing session id in the error details
+(used to silently overwrite — now loud).
+
+**`dismiss_sheet` on device via WDA swipe-down**
+The "v0.2 coming" error is gone. Device branch performs the same 20% →
+70% screen-height swipe-down as sim, routed through WDA with F-006 scale
+conversion. Identical agent UX across both targets.
+
+**devicectl "No provider was found" warning filter**
+The cosmetic `No provider was found for this descriptor` line is stripped
+from devicectl stderr when `returncode == 0`. Real failures still emit the
+full stderr (the warning may be diagnostically relevant when the command
+also failed).
+
+### Deferred to a13
+
+- Recording/replay-on-device — substantial standalone initiative.
+- Cross-device-state-matches journey criterion — flagged at journey/criteria.py
+  with `NotImplementedError` for now.
+
+### Source
+
+INIT-2026-542. Files: `simdrive/src/simdrive/server.py`, `som.py`,
+`observe.py`, `device.py`, `diagnostics.py`, `session.py`,
+`simdrive/src/simdrive/wda/client.py`, `wda/som_device.py`, `wda/bootstrap.py`,
+`wda/errors.py`, plus 12 new test files under `simdrive/tests/test_a12_*.py`.
+Total 64 new regression tests; 831 pass on the merged suite.
+
+---
+
 ## [1.0.0a11] — 2026-05-13
 
 Closes six findings from the 1.0.0a10 device-dogfood feedback (Palace iOS team,
