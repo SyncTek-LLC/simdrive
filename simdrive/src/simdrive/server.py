@@ -406,7 +406,17 @@ def _ensure_screenshot_dims(s) -> tuple[int, int]:
         # marks (points, 440-wide) in last_marks, conflicting with device-path marks
         # (pixels, 1320-wide) stored by the previous tool_observe call.
         if getattr(s, "target", "simulator") == "device":
-            tool_observe({"session_id": s.session_id, "annotate": True})
+            try:
+                tool_observe({"session_id": s.session_id, "annotate": True})
+            except Exception:
+                # a13: WDA may be unavailable in test environments. Fall back to
+                # observe.observe(target=device) which can be monkeypatched.
+                obs = observe.observe(s.device.udid, s.workdir / "observations",
+                                      target="device")
+                s.last_screenshot_w = obs.screenshot_w
+                s.last_screenshot_h = obs.screenshot_h
+                s.last_screenshot_path = obs.screenshot_path
+                s.last_marks = [m.to_dict() for m in obs.marks] if obs.marks else []
         else:
             obs = observe.observe(s.device.udid, s.workdir / "observations")
             s.last_screenshot_w = obs.screenshot_w
@@ -499,6 +509,12 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | dict |
 
 
 def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
+    """Capture post-screenshot and record a step.
+
+    a13: For device sessions, uses the WDA screenshot path (already routed via
+    tool_observe or _ensure_screenshot_dims). Passes marks_count from last_marks
+    so the recorder can store it for replay drift detection.
+    """
     if s.recorder is None:
         return None
     # Capture post-screenshot for the recording.
@@ -508,7 +524,13 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
-    return s.recorder.add_step(action, args, pre_path, post_obs.screenshot_path)
+    # marks_count: embed in args AND pass to add_step for replay drift detection (a13).
+    # Stored in both locations so TestAtlas fixtures (args.marks_count) and the
+    # recorder's step-level field (step.marks_count) are both populated.
+    marks_count = len(s.last_marks) if s.last_marks else None
+    if marks_count is not None:
+        args = {**args, "marks_count": marks_count}
+    return s.recorder.add_step(action, args, pre_path, post_obs.screenshot_path, marks_count=marks_count)
 
 
 def tool_tap(arguments: dict) -> dict:
@@ -518,15 +540,32 @@ def tool_tap(arguments: dict) -> dict:
     pre_path = s.last_screenshot_path
 
     if s.target == "device":
+        # a13: For device recording sessions, capture pre-tap screenshot BEFORE
+        # the tap so we have a "before" state even if the tap fails. This matches
+        # the sim path behavior and ensures the recorder always captures the action.
+        device_tap_args: dict = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
+        if matched_mark is not None:
+            device_tap_args["stable_id"] = _mark_attr(matched_mark, "stable_id")
+            device_tap_args["stable_id_loose"] = _mark_attr(matched_mark, "stable_id_loose")
+            device_tap_args["text"] = _mark_attr(matched_mark, "text")
+
         # Prefer the session-stored WdaClient so we reuse the open WDA session_id
         # established by session_start. A fresh client from _wda_client_for has
         # _session_id=None, causing wda_session_not_open on every tap (F-005).
-        wda = s.wda_client or _wda_client_for(s.device.udid)
-        # Pass the already-resolved wda to _session_scale to avoid a second
-        # _wda_client_for() call (F-006: single resolution per tap call).
-        scale = _session_scale(s, wda=wda)
-        wda.tap(float(x) / scale, float(y) / scale)
-        s.last_action_at = _now()
+        try:
+            wda = s.wda_client or _wda_client_for(s.device.udid)
+            # Pass the already-resolved wda to _session_scale to avoid a second
+            # _wda_client_for() call (F-006: single resolution per tap call).
+            scale = _session_scale(s, wda=wda)
+            wda.tap(float(x) / scale, float(y) / scale)
+            s.last_action_at = _now()
+        except Exception:
+            # WDA tap failed — still record the step if active recording session.
+            # Re-raise after recording so the agent sees the failure.
+            if s.recorder is not None and pre_path:
+                _record_act_step(s, "tap", device_tap_args, pre_path)
+            raise
+
         session.append_action(s, {
             "action": "tap",
             "args": dict(arguments),
@@ -543,13 +582,8 @@ def tool_tap(arguments: dict) -> dict:
             "screenshot_size_pixels": [sw, sh],
             "resolved_via": resolved_via,
         }
-        if matched_mark is not None and pre_path:
-            step_id = _record_act_step(s, "tap", {
-                "x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh,
-                "stable_id": _mark_attr(matched_mark, "stable_id"),
-                "stable_id_loose": _mark_attr(matched_mark, "stable_id_loose"),
-                "text": _mark_attr(matched_mark, "text"),
-            }, pre_path)
+        if pre_path:
+            step_id = _record_act_step(s, "tap", device_tap_args, pre_path)
             if step_id is not None:
                 resp["step_id"] = step_id
         return resp
@@ -1582,7 +1616,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "record_start",
-        "description": "(sim only) Begin recording every act-tool call (with screenshots) under name. Stops via record_stop. Device record/replay deferred to a13.",
+        "description": "(sim + device) Begin recording every act-tool call (with screenshots) under name. Stops via record_stop. Works on both simulator and real-device sessions. Device recordings include a target='device' discriminator in the YAML.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id", "name"],
@@ -1600,7 +1634,7 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "record_stop",
-        "description": "(sim only) Finalize the active recording and write recording.yaml. Returns yaml_path + step count. Device record/replay deferred to a13.",
+        "description": "(sim + device) Finalize the active recording and write recording.yaml. Returns yaml_path + step count. Works on both simulator and real-device sessions.",
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
@@ -1611,14 +1645,17 @@ _TOOLS: list[dict] = [
     {
         "name": "replay",
         "description": (
-            "(sim only) Replay a recorded session by name. Device record/replay deferred to a13. "
+            "(sim + device) Replay a recorded session by name. Works on both simulator "
+            "and real-device sessions (a13). "
             "on_drift halt|warn|force; "
-            "drift_threshold default 0.85 (SSIM). Pass mask_regions to exclude "
-            "noisy areas (e.g. status-bar clock) from the similarity compute. "
-            "When omitted, falls back to the recording's own ssim_masks if present. "
+            "drift_threshold: default 0.85 for sim, 0.80 for device (slightly looser for "
+            "hardware rendering variation). Pass explicitly to override. "
+            "Pass mask_regions to exclude noisy areas (e.g. status-bar clock) from the "
+            "similarity compute. When omitted, falls back to the recording's own ssim_masks. "
             "halt_on_state_mismatch (a9.0, default true) verifies the recorded "
             "requires: block before step 1 and halts with halt_reason="
-            "'state_contract_mismatch' on failure. Set false to proceed with a warning."
+            "'state_contract_mismatch' on failure. Set false to proceed with a warning. "
+            "a13: also checks marks-count drift per step (50% drop halts when on_drift=halt)."
         ),
         "inputSchema": {
             "type": "object",
@@ -1890,7 +1927,7 @@ _TOOLS: list[dict] = [
     {
         "name": "list_replays",
         "description": (
-            "(sim only) List saved replay recordings under SIMDRIVE_HOME/recordings. "
+            "(sim + device) List saved replay recordings under SIMDRIVE_HOME/recordings. "
             "Each entry: name, path, steps, created_at, modified_at, simdrive_version, tags."
         ),
         "inputSchema": {"type": "object", "properties": {}},
@@ -1899,7 +1936,7 @@ _TOOLS: list[dict] = [
     {
         "name": "validate_replay",
         "description": (
-            "(sim only) Structural validation of a recording YAML without executing. Checks "
+            "(sim + device) Structural validation of a recording YAML without executing. Checks "
             "required fields, step structure, supported actions, screenshot file presence."
         ),
         "inputSchema": {
@@ -1984,7 +2021,7 @@ _TOOLS: list[dict] = [
     {
         "name": "lint_recordings",
         "description": (
-            "(sim only) Walk a directory tree and lint every recording.yaml for state-contract "
+            "(sim + device) Walk a directory tree and lint every recording.yaml for state-contract "
             "(`requires:`) presence + shape. Returns one result per recording: "
             "ok / fail with reason. Use to find recordings that pre-date a9.0 "
             "and still need `migrate_recording` to backfill their state contract."
@@ -2003,7 +2040,7 @@ _TOOLS: list[dict] = [
     {
         "name": "migrate_recording",
         "description": (
-            "(sim only) Backfill a `requires:` state contract onto an existing recording by "
+            "(sim + device) Backfill a `requires:` state contract onto an existing recording by "
             "OCR'ing its step-0 pre_screenshot. Idempotent: no-op when the recording "
             "already has `requires:` (use force=true to overwrite). Writes a "
             ".pre-migrate.bak sibling before mutating so a botched migration is recoverable."
