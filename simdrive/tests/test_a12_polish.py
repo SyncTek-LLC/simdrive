@@ -198,12 +198,13 @@ def test_all_mcp_tools_have_target_marker():
     )
 
 
-def test_record_start_is_sim_only():
-    """record_start should be marked (sim only)."""
+def test_record_start_is_sim_plus_device():
+    """a13: record_start ships on device — must be marked (sim + device)."""
     from simdrive.server import _TOOLS
     t = next(t for t in _TOOLS if t["name"] == "record_start")
-    assert t["description"].startswith("(sim only)"), (
-        f"record_start description must start with '(sim only)', got: {t['description'][:60]}"
+    assert t["description"].startswith("(sim + device)"), (
+        f"record_start description must start with '(sim + device)' after a13, "
+        f"got: {t['description'][:60]}"
     )
 
 
