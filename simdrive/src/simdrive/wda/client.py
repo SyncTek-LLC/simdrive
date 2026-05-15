@@ -12,17 +12,41 @@ WDA REST reference (Appium WDA fork):
   POST   /session/<id>/wda/keys                  → type text
   POST   /session/<id>/wda/pressButton           → hardware button
   GET    /session/<id>/screenshot                → PNG screenshot (base64)
+
+Auto-recovery (a12):
+  Code 41 (XCTDaemonErrorDomain) — entitlement revoked mid-session:
+    Detected in _request on any non-2xx response body containing both
+    "XCTDaemonErrorDomain" and ("Code=41" or "Code 41"). If
+    SIMDRIVE_NO_AUTO_REBUILD=1 is set, raises wda_ui_automation_disabled
+    immediately. Otherwise calls bootstrap.bootstrap_device(..., rebuild=True),
+    reloads the registry, updates host/port/session, and retries the original
+    request once (_recovery_attempt kwarg prevents infinite loops).
+
+  Orphan-session 404 — session deleted out-of-band:
+    Detected in _request on HTTP 404 whose URL path matches the currently-
+    stored session_id. If SIMDRIVE_NO_AUTO_REBUILD=1, raises original error.
+    Otherwise calls open_session(_last_bundle_id) to get a fresh session_id
+    and retries once. Same _recovery_attempt counter as Code 41.
 """
 from __future__ import annotations
 
 import base64
+import logging
+import os
+import re
 import time
 from typing import Any, Optional
 
 import httpx
 
-from .errors import wda_session_lost
+from .errors import wda_session_lost, wda_ui_automation_disabled
 from ..errors import SimdriveError
+
+_LOG = logging.getLogger("simdrive.wda.client")
+
+# Regex that matches both WDA Code=41 and Code 41 forms within an error body
+# that also contains "XCTDaemonErrorDomain".
+_CODE41_RE = re.compile(r"Code[= ]41")
 
 
 # Runtime error for HTTP-level failures (non-2xx or network error).
@@ -58,6 +82,14 @@ class WdaClient:
     Lifetime: one WdaClient per WDA host:port pair. Call open_session() to
     get a WDA session_id before issuing any action calls. delete_session()
     when done.
+
+    Auto-recovery fields (a12):
+      _udid           — CoreDevice UUID for the device this client serves.
+                        Required for Code-41 rebuild. Set by callers after
+                        construction (session.py sets it before open_session).
+      _last_bundle_id — Most-recently opened app bundle_id. Persisted on
+                        open_session() so orphan-404 recovery can re-open
+                        the same app without caller intervention.
     """
 
     def __init__(self, host: str, port: int, timeout: float = 30.0) -> None:
@@ -69,6 +101,9 @@ class WdaClient:
         self._window_size_cache: Optional[tuple[int, int]] = None  # cached (w_pts, h_pts) for F-006
         # httpx transport is injectable for unit tests (httpx.MockTransport).
         self._client = httpx.Client(base_url=self._base, timeout=timeout)
+        # a12 auto-recovery state.
+        self._udid: Optional[str] = None           # set by caller after construction
+        self._last_bundle_id: Optional[str] = None  # set by open_session()
 
     # Allow injection of a custom transport (used by tests).
     def _replace_transport(self, transport: httpx.BaseTransport) -> None:
@@ -80,19 +115,133 @@ class WdaClient:
 
     # ── internal helpers ─────────────────────────────────────────────────────
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> dict:
+    def _request(self, method: str, path: str, _recovery_attempt: int = 0, **kwargs: Any) -> dict:
+        """Issue an HTTP request to WDA, with auto-recovery on:
+          - XCTDaemonErrorDomain Code=41 / Code 41 (entitlement lost → rebuild)
+          - HTTP 404 on a session-scoped path (orphan session → re-acquire)
+
+        _recovery_attempt is incremented on each auto-retry; max 1 retry per
+        call. This is a per-call counter (not global), so cascading retries are
+        impossible.
+        """
         url = path
         try:
             resp = self._client.request(method, url, **kwargs)
         except httpx.TransportError as exc:
             raise _wda_unreachable(self._host, self._port, str(exc)) from exc
         self._last_seen_at = time.time()
+
         if not resp.is_success:
-            raise _wda_http_error(method, url, resp.status_code, resp.text)
+            raw_body = resp.text
+
+            # ── Code-41 auto-recovery (XCTDaemonErrorDomain entitlement loss) ──
+            if (
+                _recovery_attempt == 0
+                and "XCTDaemonErrorDomain" in raw_body
+                and _CODE41_RE.search(raw_body)
+            ):
+                _LOG.warning(
+                    "[simdrive] WDA UI Automation entitlement was revoked mid-session"
+                    " — auto-rebuilding"
+                    " (set SIMDRIVE_NO_AUTO_REBUILD=1 to opt out and handle manually)"
+                )
+                if os.environ.get("SIMDRIVE_NO_AUTO_REBUILD"):
+                    raise wda_ui_automation_disabled(self._udid or f"{self._host}:{self._port}")
+                # Attempt rebuild + re-acquire session.
+                self._rebuild_and_reopen()
+                # Retry the original request once.
+                return self._request(method, path, _recovery_attempt=1, **kwargs)
+
+            # ── Orphan-session 404 auto-recovery ─────────────────────────────
+            if (
+                _recovery_attempt == 0
+                and resp.status_code == 404
+                and self._session_id
+                and f"/session/{self._session_id}" in path
+            ):
+                bundle_label = repr(self._last_bundle_id) if self._last_bundle_id else "<none>"
+                _LOG.warning(
+                    "[simdrive] WDA session was deleted out-of-band"
+                    " — re-acquiring on bundle %s"
+                    " (set SIMDRIVE_NO_AUTO_REBUILD=1 to opt out and handle manually)",
+                    bundle_label,
+                )
+                if os.environ.get("SIMDRIVE_NO_AUTO_REBUILD"):
+                    raise _wda_http_error(method, url, resp.status_code, raw_body)
+                # Re-open WDA session on the same bundle.
+                new_sid = self.open_session(self._last_bundle_id)
+                # Substitute the new session id into the path and retry once.
+                new_path = path.replace(
+                    f"/session/{self._session_id}", f"/session/{new_sid}", 1
+                )
+                return self._request(method, new_path, _recovery_attempt=1, **kwargs)
+
+            raise _wda_http_error(method, url, resp.status_code, raw_body)
+
         try:
             return resp.json()
         except Exception:
             return {}
+
+    def _rebuild_and_reopen(self) -> None:
+        """Trigger a full WDA rebuild for self._udid, reload registry, and
+        re-open a WDA session on self._last_bundle_id.
+
+        Called automatically by _request when Code-41 is detected.
+        Raises SimdriveError if no udid is stored (safety guard) or if the
+        rebuild itself fails.
+        """
+        if not self._udid:
+            raise SimdriveError(
+                code="wda_auto_rebuild_no_udid",
+                message=(
+                    "Cannot auto-rebuild WDA: no UDID is bound to this WdaClient. "
+                    "Recovery: set client._udid = '<coredevice-uuid>' after construction, "
+                    "or set SIMDRIVE_NO_AUTO_REBUILD=1 to disable auto-rebuild."
+                ),
+                details={},
+            )
+
+        from . import registry as _registry
+        from . import bootstrap as _bootstrap
+
+        # Load team_id from existing registry so we can pass it to bootstrap.
+        entry = _registry.load(self._udid)
+        team_id: Optional[str] = (entry or {}).get("team_id") or None
+
+        _LOG.warning(
+            "[simdrive] Running bootstrap-device --rebuild for udid=%s team_id=%s",
+            self._udid,
+            team_id or "(auto-detect)",
+        )
+        _bootstrap.bootstrap_device(self._udid, team_id=team_id, rebuild=True)
+
+        # Reload updated registry and wire the new host/port into this client.
+        new_entry = _registry.load(self._udid)
+        if not new_entry:
+            raise SimdriveError(
+                code="wda_auto_rebuild_registry_missing",
+                message=(
+                    f"bootstrap_device succeeded for {self._udid} but the registry "
+                    "entry is missing after rebuild. "
+                    "Recovery: run `simdrive bootstrap-device <udid>` manually."
+                ),
+                details={"udid": self._udid},
+            )
+
+        new_host = new_entry.get("host") or new_entry.get("ip") or self._host
+        new_port = int(new_entry.get("port") or self._port)
+        self._host = new_host
+        self._port = new_port
+        self._base = f"http://{new_host}:{new_port}"
+        self._window_size_cache = None  # invalidate cached window size
+        # Rebuild the httpx client to point at the new endpoint.
+        old_timeout = self._client.timeout
+        self._client.close()
+        self._client = httpx.Client(base_url=self._base, timeout=old_timeout)
+
+        # Re-open WDA session on the same bundle the caller was using.
+        self.open_session(self._last_bundle_id)
 
     def _session_path(self, tail: str = "") -> str:
         if not self._session_id:
@@ -119,6 +268,9 @@ class WdaClient:
         provided, the session is scoped to that app. When ``bundle_id`` is
         None, no bundleId capability is sent — WDA returns a sessionId that
         lets callers tap/swipe at the home screen / current foreground app.
+
+        a12: stores bundle_id in self._last_bundle_id so auto-recovery can
+        re-open the same session after Code-41 rebuild or orphan-404.
         """
         always: dict[str, Any] = {"shouldWaitForQuiescence": False}
         if bundle_id:
@@ -138,6 +290,7 @@ class WdaClient:
                 details={"response": resp},
             )
         self._session_id = str(sid)
+        self._last_bundle_id = bundle_id   # persist for a12 auto-recovery
         return self._session_id
 
     def tap(self, x: float, y: float) -> None:
@@ -224,7 +377,7 @@ class WdaClient:
             self._request(
                 "POST",
                 self._session_path("/wda/keys"),
-                json={"value": [""] * 50},  # Delete key 50×
+                json={"value": [""] * 50},  # Delete key 50×
             )
             return
         self._request("POST", f"/session/{self._session_id}/element/{element_id}/clear")
