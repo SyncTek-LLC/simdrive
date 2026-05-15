@@ -38,12 +38,13 @@ def test_every_mcp_tool_has_target_marker():
         description = tool.get("description", "")
         has_sim_only = "(sim only)" in description
         has_sim_device = "(sim + device)" in description
-        if not (has_sim_only or has_sim_device):
+        has_device_only = "(device only)" in description
+        if not (has_sim_only or has_sim_device or has_device_only):
             missing.append(name)
 
     assert not missing, (
         f"The following {len(missing)} tool(s) are missing a target marker "
-        f"('(sim only)' or '(sim + device)') in their description:\n"
+        f"('(sim only)', '(sim + device)', or '(device only)') in their description:\n"
         + "\n".join(f"  - {name}" for name in missing)
         + "\n\na12 requires every tool to declare its device-target support."
     )

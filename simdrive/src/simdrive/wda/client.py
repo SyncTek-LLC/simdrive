@@ -55,9 +55,28 @@ _log = _LOG  # alias for code paths using either name
 # that also contains "XCTDaemonErrorDomain".
 _CODE41_RE = re.compile(r"Code[= ]41")
 
-# SIMDRIVE_HTTP_DEBUG — set to any non-empty value to enable per-call HTTP logging.
-_HTTP_DEBUG = bool(os.environ.get("SIMDRIVE_HTTP_DEBUG", "").strip())
+# SIMDRIVE_HTTP_DEBUG — module-level flag; also re-checked per-call so that
+# both env-var monkeypatching (test_a12_http_debug.py) and direct attribute
+# patching (test_a12_polish.py) work without a module reload.
+_HTTP_DEBUG: bool = bool(os.environ.get("SIMDRIVE_HTTP_DEBUG", "").strip())
 _DEBUG_TRUNCATE = 2048  # chars; long bodies (screenshots) are truncated to this
+
+
+def _http_debug_enabled() -> bool:
+    """Return True when HTTP debug logging is active.
+
+    Checks both the module-level ``_HTTP_DEBUG`` flag (patchable via
+    ``monkeypatch.setattr(mod, '_HTTP_DEBUG', True/False)``) and the live
+    environment variable (patchable via ``monkeypatch.setenv``).
+
+    Design intent:
+      - Tests that use ``monkeypatch.setenv("SIMDRIVE_HTTP_DEBUG", "1")`` get
+        True from the env check even if _HTTP_DEBUG is False.
+      - Tests that use ``monkeypatch.delenv(...)`` + ``monkeypatch.setattr(mod,
+        "_HTTP_DEBUG", False)`` get False from both checks.
+      - Production code uses the env var; _HTTP_DEBUG mirrors it at boot.
+    """
+    return _HTTP_DEBUG or bool(os.environ.get("SIMDRIVE_HTTP_DEBUG", "").strip())
 
 
 # Runtime error for HTTP-level failures (non-2xx or network error).
@@ -114,6 +133,7 @@ class WdaClient:
         self._client = httpx.Client(base_url=self._base, timeout=timeout)
         # a12 auto-recovery state.
         self._udid: Optional[str] = None           # set by caller after construction
+        self._team_id: Optional[str] = None        # set by caller after construction
         self._last_bundle_id: Optional[str] = None  # set by open_session()
 
     # Allow injection of a custom transport (used by tests).
@@ -136,7 +156,8 @@ class WdaClient:
         impossible.
         """
         url = path
-        if _HTTP_DEBUG:
+        _debug = _http_debug_enabled()
+        if _debug:
             req_body = kwargs.get("json") or kwargs.get("data") or ""
             req_body_str = str(req_body)[:_DEBUG_TRUNCATE] if req_body else ""
             _log.info(
@@ -148,10 +169,13 @@ class WdaClient:
         except httpx.TransportError as exc:
             raise _wda_unreachable(self._host, self._port, str(exc)) from exc
         self._last_seen_at = time.time()
-        if _HTTP_DEBUG:
+        if _debug:
+            resp_body_str = resp.text
+            if len(resp_body_str) > _DEBUG_TRUNCATE:
+                resp_body_str = resp_body_str[:_DEBUG_TRUNCATE] + "[truncated]"
             _log.info(
                 "[WDA] << %s %s status=%d body=%s",
-                method, url, resp.status_code, resp.text[:_DEBUG_TRUNCATE],
+                method, url, resp.status_code, resp_body_str,
             )
         if not resp.is_success:
             raw_body = resp.text
@@ -204,6 +228,47 @@ class WdaClient:
             return resp.json()
         except Exception:
             return {}
+
+    def _request_with_recovery(self, method: str, path: str, **kwargs: Any) -> dict:
+        """Call _request and apply Code-41 / orphan-404 recovery on raised SimdriveErrors.
+
+        This wrapper exists so that tests can monkeypatch _request to raise
+        SimdriveError by code (rather than returning an HTTP response body) and
+        still exercise the auto-recovery paths. Action methods (tap, swipe, etc.)
+        call this instead of _request directly.
+
+        Recovery rules (mirror the HTTP-body detection in _request):
+          - wda_ui_automation_disabled (Code 41): rebuild + reopen + retry once.
+          - wda_session_404 (orphan session): reopen session + retry once.
+          - SIMDRIVE_NO_AUTO_REBUILD=1: re-raise immediately for both codes.
+          - All other codes: re-raise unchanged.
+        """
+        try:
+            return self._request(method, path, **kwargs)
+        except SimdriveError as exc:
+            if exc.code == "wda_ui_automation_disabled":
+                if os.environ.get("SIMDRIVE_NO_AUTO_REBUILD"):
+                    raise
+                _LOG.warning(
+                    "[simdrive] Code-41 error raised — auto-rebuilding"
+                    " (set SIMDRIVE_NO_AUTO_REBUILD=1 to opt out)"
+                )
+                from . import bootstrap as _bootstrap
+                _bootstrap.bootstrap_device(self._udid, team_id=self._team_id)
+                self.open_session(self._last_bundle_id)
+                return self._request(method, path, **kwargs)
+
+            if exc.code == "wda_session_404":
+                if os.environ.get("SIMDRIVE_NO_AUTO_REBUILD"):
+                    raise
+                _LOG.warning(
+                    "[simdrive] wda_session_404 raised — re-acquiring session"
+                    " (set SIMDRIVE_NO_AUTO_REBUILD=1 to opt out)"
+                )
+                self.open_session(self._last_bundle_id)
+                return self._request(method, path, **kwargs)
+
+            raise
 
     def _rebuild_and_reopen(self) -> None:
         """Trigger a full WDA rebuild for self._udid, reload registry, and
@@ -317,7 +382,7 @@ class WdaClient:
 
     def tap(self, x: float, y: float) -> None:
         """POST /session/<id>/wda/tap — tap at logical device-point coordinates."""
-        self._request(
+        self._request_with_recovery(
             "POST",
             self._session_path("/wda/tap"),
             json={"x": x, "y": y},
@@ -332,7 +397,7 @@ class WdaClient:
         duration_ms: int = 300,
     ) -> None:
         """POST /session/<id>/wda/dragfromtoforduration."""
-        self._request(
+        self._request_with_recovery(
             "POST",
             self._session_path("/wda/dragfromtoforduration"),
             json={
@@ -346,7 +411,7 @@ class WdaClient:
 
     def type_text(self, text: str) -> None:
         """POST /session/<id>/wda/keys — inject text into the focused element."""
-        self._request(
+        self._request_with_recovery(
             "POST",
             self._session_path("/wda/keys"),
             json={"value": list(text)},
