@@ -119,7 +119,12 @@ def test_http_debug_env_absent_no_debug_logs(monkeypatch, caplog):
     HTTP records without the env var.
     Fails on HEAD only if we accidentally add unconditional logging.
     """
+    import simdrive.wda.client as wda_client_mod
     monkeypatch.delenv("SIMDRIVE_HTTP_DEBUG", raising=False)
+    # Also reset the module-level flag in case a previous test in the same
+    # process left it True via monkeypatch (module-level attrs persist across
+    # the test run if the flag was True when the module was first imported).
+    monkeypatch.setattr(wda_client_mod, "_HTTP_DEBUG", False)
 
     wda = _build_wda_client()
     transport = _mock_transport(status_code=200, body={"value": None})

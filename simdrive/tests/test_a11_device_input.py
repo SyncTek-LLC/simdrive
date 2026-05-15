@@ -138,7 +138,8 @@ def test_type_text_reuses_session_client(tmp_path):
     mock_obs.marks = []
 
     with patch("simdrive.server._wda_client_for") as mock_fallback, \
-         patch("simdrive.observe.observe", return_value=mock_obs):
+         patch("simdrive.observe.observe", return_value=mock_obs), \
+         patch("simdrive.server.tool_observe", return_value={}):
         from simdrive import server
         server.tool_type_text({"session_id": s.session_id, "text": "hello"})
 

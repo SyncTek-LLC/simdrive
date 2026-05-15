@@ -224,8 +224,13 @@ def list_apps_device(udid: str) -> list[dict]:
         out.append({
             "bundle_id": bundle_id,
             "name": a.get("name") or "",
-            "version": a.get("version") or a.get("bundleVersion") or "",
-            "build": a.get("buildVersion") or a.get("CFBundleVersion") or "",
+            "version": a.get("version") or a.get("CFBundleShortVersionString") or "",
+            "build": (
+                a.get("bundleVersion")
+                or a.get("buildVersion")
+                or a.get("CFBundleVersion")
+                or ""
+            ),
             "path": _file_url_to_path(a.get("url") or ""),
         })
     out.sort(key=lambda a: a["name"].lower())

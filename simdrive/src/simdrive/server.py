@@ -230,16 +230,32 @@ def tool_session_start(arguments: dict) -> dict:
         raise errors.invalid_argument("target", target,
                                        "must be 'simulator' or 'device'")
 
-    # replace_existing: end any existing session for this UDID before starting.
-    if replace_existing and udid:
+    # Conflict detection: reject duplicate sessions for the same UDID unless
+    # replace_existing=True explicitly opts in to replacing the old session.
+    if udid:
         for existing in session.all_sessions():
             if existing.device.udid == udid:
-                _log.info(
-                    "replace_existing=True: ending existing session %s for udid=%s",
-                    existing.session_id, udid,
-                )
-                session.end(existing.session_id, terminate_app=False)
-                break
+                if replace_existing:
+                    _log.info(
+                        "replace_existing=True: ending existing session %s for udid=%s",
+                        existing.session_id, udid,
+                    )
+                    session.end(existing.session_id, terminate_app=False)
+                    break
+                else:
+                    raise errors.SimdriveError(
+                        code="session_already_active",
+                        message=(
+                            f"A session is already active for device {udid!r} "
+                            f"(session_id={existing.session_id!r}). "
+                            "Pass replace_existing=True to end it automatically, "
+                            "or call session_end first."
+                        ),
+                        details={
+                            "udid": udid,
+                            "existing_session_id": existing.session_id,
+                        },
+                    )
 
     s = session.start(
         device_name=device_name, os_version=os_version, udid=udid,
