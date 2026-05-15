@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.0.0a13] — 2026-05-14
+
+Ships the deferred a12 item: **record/replay parity on real device.** Sim
+target had record_start / record_stop / replay / validate_replay / list_replays;
+device target was explicitly stubbed (`recorder.py` line ~288: "Device: not
+implemented"). a13 closes that gap with full parity, plus a per-target state
+contract so replays refuse to run on the wrong device or OS major.
+
+### Added — Device record/replay
+
+**Recording on device**
+- `record_start` on `target=device` sessions binds a recorder that intercepts
+  every act tool call (tap/swipe/type_text/press_key/dismiss_sheet/clear_field)
+  with a WDA screenshot via `s.wda_client.screenshot_any()` and a marks count
+  via `annotate_device_screenshot`. Screenshots live under
+  `~/.simdrive/recordings/<name>/screenshots/<step_id>.png` (same layout as sim).
+- `record_stop` writes `recording.yaml` with the same schema as sim plus a
+  device-specific `requires.device` block: `{udid, device_name, os_version, os_major}`.
+- `Recorder.write_partial()` persists `recording.yaml.partial` if a mid-record
+  step raises — preserves debug context across crashes.
+
+**Replay on device**
+- `replay <name>` against a device session: verifies the state contract first,
+  then per-step takes a live WDA screenshot + observe, SSIM-compares against
+  recorded screenshot, marks-count-compares against recorded marks_count, and
+  only then dispatches the recorded action.
+- SSIM threshold for device: **0.80** (sim stays at 0.85). Rationale: real
+  device screenshots have hardware compositing jitter and anti-aliasing
+  variance that sim doesn't; 0.80 still halts loudly on meaningful drift
+  (the dogfood "23 blind taps at SSIM 0.014" failure mode fails by 57× margin).
+- Marks-count drift halt: when `live_marks > 0` AND `live_marks / recorded_marks
+  < 0.50`, halt with `marks_count_drift` in `drift_events`. The `> 0` guard
+  prevents false-positives when observe annotation is unavailable (test envs).
+
+**State contract enforcement**
+
+| Field | Mismatch behavior |
+|-------|-------------------|
+| `requires.target` | **halt** (`replay_state_contract_failed`) |
+| `requires.device.udid` | **halt** |
+| `requires.device.os_major` | **halt** |
+| `requires.device.os_version` (minor diff) | **warn** only, replay proceeds |
+| `requires.device.device_name` | **warn** only (user may rename device) |
+| `requires.app.bundle_id` | **halt** |
+
+Closes the "23 blind taps at SSIM 0.014" failure mode — replays refuse to run
+when the precondition isn't met (per `reference_simdrive_state_contract_request.md`).
+
+### Changed — Tool schema markers
+
+Seven tools flip from `(sim only)` → `(sim + device)`:
+- `record_start`, `record_stop`, `replay`
+- `validate_replay`, `list_replays`
+- `lint_recordings`, `migrate_recording`
+
+### New error codes
+
+- `replay_drift_detected` — step `error` when SSIM < threshold or marks-count
+  ratio drops below the floor.
+- `replay_state_contract_failed` — listed in `reasons[]` when udid / os_major /
+  target / bundle_id mismatch before step 1.
+- `marks_count_drift` — appears in `drift_events[].kind`.
+
+### Deferred to a14
+
+- `cross_device_state_matches` journey criterion still scope-cut. The
+  comparison API across two device-state snapshots isn't yet defined.
+
+### Source
+
+INIT-2026-542. Recording shape is a strict superset of a12 — pre-a13 sim
+recordings still load via `RequiresBlock.from_dict` (forward-compatible).
+20 new regression tests; 851 pass on the merged suite.
+
+---
+
 ## [1.0.0a12] — 2026-05-14
 
 Closes every item from the 2026-05-14 Palace iOS device-dogfood feedback —
