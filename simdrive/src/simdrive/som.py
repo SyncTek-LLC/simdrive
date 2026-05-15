@@ -377,7 +377,19 @@ def annotate(image_path: Path, marks: list[Mark], out_path: Path) -> Path:
     return out_path
 
 
-def find_by_text(marks: list[Mark], query: str) -> Optional[Mark]:
+def _mark_get(m: "Mark | dict", key: str):
+    """Uniform attribute/key access for a mark that may be a Mark dataclass or a dict.
+
+    a12 — marks are normalised to ``dict`` end-to-end (sim and device paths both
+    store ``list[dict]`` in ``Session.last_marks``).  This helper retains backwards
+    compatibility for any callers that still pass ``Mark`` dataclass instances.
+    """
+    if isinstance(m, dict):
+        return m.get(key)
+    return getattr(m, key, None)
+
+
+def find_by_text(marks: "list[Mark | dict]", query: str) -> "Optional[Mark | dict]":
     """Best mark matching `query`. Exact > prefix > substring (case-insensitive).
 
     v0.3.0a3 — when no direct text match is found, fall back to the icon-glyph
@@ -386,45 +398,51 @@ def find_by_text(marks: list[Mark], query: str) -> Optional[Mark]:
     are a *final* fallback; exact/prefix/substring still win when present, so
     behavior is backwards-compatible for any caller that wasn't relying on
     glyph fallbacks.
+
+    a12 — accepts both ``Mark`` dataclass instances and plain ``dict`` marks so
+    that sim and device paths share a single code path.
     """
     q = query.strip().lower()
     if not q or not marks:
         return None
-    exact = [m for m in marks if m.text.strip().lower() == q]
+    exact = [m for m in marks if (_mark_get(m, "text") or "").strip().lower() == q]
     if exact:
-        return max(exact, key=lambda m: m.confidence)
-    prefix = [m for m in marks if m.text.strip().lower().startswith(q)]
+        return max(exact, key=lambda m: _mark_get(m, "confidence") or 0)
+    prefix = [m for m in marks if (_mark_get(m, "text") or "").strip().lower().startswith(q)]
     if prefix:
-        return max(prefix, key=lambda m: m.confidence)
-    sub = [m for m in marks if q in m.text.lower()]
+        return max(prefix, key=lambda m: _mark_get(m, "confidence") or 0)
+    sub = [m for m in marks if q in (_mark_get(m, "text") or "").lower()]
     if sub:
-        return max(sub, key=lambda m: m.confidence)
+        return max(sub, key=lambda m: _mark_get(m, "confidence") or 0)
     # Final fallback: icon-glyph semantic-name aliases.
     aliases = _ICON_GLYPH_ALIASES.get(q)
     if aliases:
         alias_set = {a.lower() for a in aliases}
-        cands = [m for m in marks if m.text.strip().lower() in alias_set]
+        cands = [m for m in marks if (_mark_get(m, "text") or "").strip().lower() in alias_set]
         if cands:
-            return max(cands, key=lambda m: m.confidence)
+            return max(cands, key=lambda m: _mark_get(m, "confidence") or 0)
     return None
 
 
-def find_by_mark_id(marks: list[Mark], mark_id: int) -> Optional[Mark]:
+def find_by_mark_id(marks: "list[Mark | dict]", mark_id: int) -> "Optional[Mark | dict]":
+    """a12 — accepts both Mark dataclasses and dict marks."""
     for m in marks:
-        if m.id == mark_id:
+        if _mark_get(m, "id") == mark_id:
             return m
     return None
 
 
-def find_by_stable_id(marks: list[Mark], stable_id: str) -> Optional[Mark]:
+def find_by_stable_id(marks: "list[Mark | dict]", stable_id: str) -> "Optional[Mark | dict]":
+    """a12 — accepts both Mark dataclasses and dict marks."""
     for m in marks:
-        if m.stable_id == stable_id:
+        if _mark_get(m, "stable_id") == stable_id:
             return m
     return None
 
 
-def find_by_stable_id_loose(marks: list[Mark], stable_id: str) -> Optional[Mark]:
+def find_by_stable_id_loose(marks: "list[Mark | dict]", stable_id: str) -> "Optional[Mark | dict]":
+    """a12 — accepts both Mark dataclasses and dict marks."""
     for m in marks:
-        if m.stable_id_loose == stable_id:
+        if _mark_get(m, "stable_id_loose") == stable_id:
             return m
     return None
