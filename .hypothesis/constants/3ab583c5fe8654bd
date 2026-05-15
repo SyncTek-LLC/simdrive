@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/wda/errors.py
+# hypothesis_version: 6.141.1
+
+['Library', 'MobileDevice', 'body', 'http_status', 'identities', 'last_seen_at', 'log_path', 'missing', 'profiles_dir', 'stderr', 'team_id', 'tool', 'udid', 'wda_build_failed', 'wda_device_locked', 'wda_device_not_ready', 'wda_install_failed', 'wda_not_bootstrapped', 'wda_session_lost', 'wda_smoke_failed', 'xct_code']

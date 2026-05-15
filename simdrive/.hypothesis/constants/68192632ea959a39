@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/db/models.py
+# hypothesis_version: 6.141.1
+
+[255, 512, 'check_same_thread', 'connect_args', 'license_activations', 'poolclass', 'recordings', 'sqlite://', 'sqlite:///', 'trial_activations']

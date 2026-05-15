@@ -16,6 +16,24 @@ from pathlib import Path
 from typing import Optional
 
 
+# ----------------------- devicectl noise filter ----------------------- #
+
+_DEVICECTL_NOISE = "No provider was found for this descriptor"
+
+
+def _filter_devicectl_stderr(stderr: str, returncode: int) -> str:
+    """Strip the noisy 'No provider was found' warning from devicectl stderr.
+
+    When the command succeeds (returncode == 0), the warning is cosmetic noise
+    emitted on every call regardless of outcome. We strip it to keep logs clean.
+    Non-zero exits preserve stderr intact so callers can diagnose failures.
+    """
+    if returncode != 0:
+        return stderr
+    lines = [ln for ln in stderr.splitlines() if _DEVICECTL_NOISE not in ln]
+    return "\n".join(lines)
+
+
 class DeviceError(RuntimeError):
     """Raised when a real-device operation fails."""
 
@@ -78,7 +96,7 @@ def list_devices() -> list[RealDevice]:
             capture_output=True, text=True, timeout=10.0, check=False,
         )
         if res.returncode != 0:
-            raise DeviceError(f"devicectl list failed: {res.stderr.strip()}")
+            raise DeviceError(f"devicectl list failed: {_filter_devicectl_stderr(res.stderr, res.returncode).strip()}")
         try:
             with open(json_out) as f:
                 data = json.load(f)
@@ -173,6 +191,7 @@ def get_log_tail(
     udid: str,
     lines: int = 50,
     predicate: Optional[str] = None,
+    predicate_kind: str = "substring",
     timeout_s: float = 5.0,
     bundle_id: Optional[str] = None,
 ) -> str:
@@ -185,10 +204,15 @@ def get_log_tail(
         udid: The device UDID (hardware UDID, not CoreDevice UUID).
         lines: Maximum number of lines to return (default 50). The most
             recent ``lines`` entries are returned after filtering.
-        predicate: Optional substring filter. When given, only log lines
-            that contain this string are included in the output.
+        predicate: Optional filter string. Interpretation depends on predicate_kind.
             If the filter causes zero matches, a warning line is returned
             so the caller is not silently empty.
+        predicate_kind: How to apply ``predicate``. One of:
+            - "substring" (default for device): Python ``predicate in line``.
+            - "regex": Python ``re.search(predicate, line)`` post-capture.
+            - "nspredicate": Not natively supported by idevicesyslog. A simple
+              CONTAINS/equality predicate body is used as-is for substring match.
+              A WARNING is logged once on downgrade.
         timeout_s: Wall-clock timeout in seconds (default 5). idevicesyslog
             is killed after this time whether or not output has finished.
         bundle_id: Optional app bundle identifier to pass as a process/bundle
@@ -203,12 +227,27 @@ def get_log_tail(
         DeviceError with code context "device_logs_unavailable" when
         idevicesyslog is not on PATH.
     """
+    import logging as _logging
+    import re as _re
+    _device_log = _logging.getLogger(__name__)
+
     bin_path = _which("idevicesyslog")
     if not bin_path:
         raise DeviceError(
             "device_logs_unavailable: idevicesyslog not installed. "
             "Recovery: brew install libimobiledevice"
         )
+
+    # nspredicate is not supported on device; downgrade to substring with a warning.
+    effective_kind = predicate_kind
+    if predicate_kind == "nspredicate" and predicate:
+        _device_log.warning(
+            "predicate_kind='nspredicate' is not supported on device (idevicesyslog "
+            "does not speak NSPredicate). Downgrading to predicate_kind='substring' "
+            "using the predicate body as-is. For reliable device filtering, use "
+            "predicate_kind='substring' or 'regex'."
+        )
+        effective_kind = "substring"
 
     cmd = [bin_path, "-u", udid]
     if bundle_id:
@@ -245,15 +284,28 @@ def get_log_tail(
 
     all_lines = [ln for ln in raw_output.splitlines() if ln]
 
-    # Apply predicate filter (Python-side substring match).
+    # Apply predicate filter based on effective_kind.
     if predicate:
-        filtered = [ln for ln in all_lines if predicate in ln]
+        if effective_kind == "regex":
+            try:
+                pattern = _re.compile(predicate)
+                filtered = [ln for ln in all_lines if pattern.search(ln)]
+            except _re.error as exc:
+                return (
+                    f"[simdrive] idevicesyslog: invalid regex predicate={predicate!r}: {exc}. "
+                    "Fix the regex or use predicate_kind='substring'."
+                )
+        else:
+            # "substring" or downgraded "nspredicate" — plain Python substring match.
+            filtered = [ln for ln in all_lines if predicate in ln]
+
         if not filtered:
             # Surface a warning line rather than an opaque empty string.
             return (
                 f"[simdrive] idevicesyslog: no lines matched predicate={predicate!r} "
-                f"within {timeout_s:.0f}s. The app may not be logging or the filter "
-                "is too narrow. Retry without predicate to see raw syslog."
+                f"(kind={effective_kind!r}) within {timeout_s:.0f}s. "
+                "The app may not be logging or the filter is too narrow. "
+                "Retry without predicate to see raw syslog."
             )
         all_lines = filtered
 
@@ -273,7 +325,7 @@ def install_app(udid: str, app_path: Path) -> None:
         capture_output=True, text=True, timeout=120.0, check=False,
     )
     if res.returncode != 0:
-        raise DeviceError(f"devicectl install failed: {res.stderr.strip() or res.stdout.strip()}")
+        raise DeviceError(f"devicectl install failed: {_filter_devicectl_stderr(res.stderr, res.returncode).strip() or res.stdout.strip()}")
 
 
 def launch_app(udid: str, bundle_id: str) -> int:
@@ -284,7 +336,7 @@ def launch_app(udid: str, bundle_id: str) -> int:
         capture_output=True, text=True, timeout=30.0, check=False,
     )
     if res.returncode != 0:
-        raise DeviceError(f"devicectl launch failed: {res.stderr.strip() or res.stdout.strip()}")
+        raise DeviceError(f"devicectl launch failed: {_filter_devicectl_stderr(res.stderr, res.returncode).strip() or res.stdout.strip()}")
     try:
         data = json.loads(res.stdout)
         return int(data.get("result", {}).get("process", {}).get("processIdentifier", 0))

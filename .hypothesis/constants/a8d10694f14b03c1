@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/routes/recordings.py
+# hypothesis_version: 6.141.1
+
+[3600, '/recordings', 'customer_email', 'download_url', 'enterprise', 'journey_slug', 'pro', 'recording_id', 'screenshot_count', 'size_bytes', 'solo', 'team', 'tier', 'trial', 'unknown', 'utf-8']
