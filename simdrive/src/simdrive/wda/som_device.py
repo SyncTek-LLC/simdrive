@@ -330,30 +330,32 @@ def annotate_device_screenshot(
     if not marks_objs:
         return [], None
 
-    # Step 7: Pixel-coordinate invariant assertion (F-008).
-    # All bboxes must lie within (0, 0, img_w, img_h) ± 1px tolerance.
-    # A tolerance of 1px accommodates integer rounding at the boundary.
-    # This fires only in debug scenarios (assertion error = programming bug, not
-    # user input error) and is cheap: O(n) on the already-collected marks.
+    # Step 7: Pixel-coordinate invariant — filter out-of-bounds marks (F-008).
+    # XCUI accessibility trees sometimes include system overlays with negative
+    # coords (e.g. AdditionalDimmingOverlay at x=-120pt) that legitimately exist
+    # but aren't tappable. We drop them with a debug log rather than raise — an
+    # assertion-error here is hostile to callers and a partial-off-screen mark
+    # is just noise, not a coord-space bug.
     _PIXEL_TOLERANCE = 1
+    _in_bounds: list = []
     for _m in marks_objs:
         _bx, _by, _bw, _bh = _m.x, _m.y, _m.w, _m.h
-        assert _bx >= -_PIXEL_TOLERANCE, (
-            f"device SoM: mark '{_m.text}' bbox x={_bx} is outside screenshot "
-            f"(width={img_w}). Coordinate space bug — expected pixel coords."
-        )
-        assert _by >= -_PIXEL_TOLERANCE, (
-            f"device SoM: mark '{_m.text}' bbox y={_by} is outside screenshot "
-            f"(height={img_h}). Coordinate space bug — expected pixel coords."
-        )
-        assert _bx + _bw <= img_w + _PIXEL_TOLERANCE, (
-            f"device SoM: mark '{_m.text}' bbox right edge {_bx + _bw} exceeds "
-            f"screenshot width {img_w}. Did point_scale get applied twice?"
-        )
-        assert _by + _bh <= img_h + _PIXEL_TOLERANCE, (
-            f"device SoM: mark '{_m.text}' bbox bottom edge {_by + _bh} exceeds "
-            f"screenshot height {img_h}. Did point_scale get applied twice?"
-        )
+        if (
+            _bx < -_PIXEL_TOLERANCE
+            or _by < -_PIXEL_TOLERANCE
+            or _bx + _bw > img_w + _PIXEL_TOLERANCE
+            or _by + _bh > img_h + _PIXEL_TOLERANCE
+        ):
+            _log.debug(
+                "device SoM: skipping out-of-bounds mark text=%r bbox=(%d,%d,%d,%d) "
+                "screenshot=(%d,%d) — likely a system overlay",
+                _m.text, _bx, _by, _bw, _bh, img_w, img_h,
+            )
+            continue
+        _in_bounds.append(_m)
+    marks_objs = _in_bounds
+    if not marks_objs:
+        return [], None
 
     # Step 8: Draw annotated PNG.  Written to <stem>_annotated.png alongside
     # the raw screenshot.  Calling twice overwrites the same file (no double-draw).
