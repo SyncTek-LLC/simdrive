@@ -10,6 +10,15 @@ Design notes
   resolution.  E.g. a 3x device (iPhone 15 Pro) has point_scale=3.0 so
   element at point (100, 200) maps to pixel (300, 600).
 
+* PIXEL-COORDINATE INVARIANT (a12, F-008): all bbox and center values
+  returned by ``annotate_device_screenshot`` are in SCREENSHOT PIXEL
+  coordinates (matching ``screenshot_size_pixels``).  They are NEVER in
+  logical points.  The points→pixels conversion via ``point_scale`` happens
+  inside ``_el_bbox_pixels`` before any mark is emitted; downstream callers
+  (the resolver in server.py) always receive pixels.  The WDA tap call
+  converts back to points at the WDA boundary by dividing by ``point_scale``.
+  Do NOT pass point-space values to the tap resolver.
+
 * Mark shape is IDENTICAL to the simulator-OCR path (som.Mark.to_dict()).
   The stable_id / stable_id_loose hashing reuses Mark directly so device
   and sim marks are comparable across cross-session recordings.
@@ -321,7 +330,32 @@ def annotate_device_screenshot(
     if not marks_objs:
         return [], None
 
-    # Step 7: Draw annotated PNG.  Written to <stem>_annotated.png alongside
+    # Step 7: Pixel-coordinate invariant assertion (F-008).
+    # All bboxes must lie within (0, 0, img_w, img_h) ± 1px tolerance.
+    # A tolerance of 1px accommodates integer rounding at the boundary.
+    # This fires only in debug scenarios (assertion error = programming bug, not
+    # user input error) and is cheap: O(n) on the already-collected marks.
+    _PIXEL_TOLERANCE = 1
+    for _m in marks_objs:
+        _bx, _by, _bw, _bh = _m.x, _m.y, _m.w, _m.h
+        assert _bx >= -_PIXEL_TOLERANCE, (
+            f"device SoM: mark '{_m.text}' bbox x={_bx} is outside screenshot "
+            f"(width={img_w}). Coordinate space bug — expected pixel coords."
+        )
+        assert _by >= -_PIXEL_TOLERANCE, (
+            f"device SoM: mark '{_m.text}' bbox y={_by} is outside screenshot "
+            f"(height={img_h}). Coordinate space bug — expected pixel coords."
+        )
+        assert _bx + _bw <= img_w + _PIXEL_TOLERANCE, (
+            f"device SoM: mark '{_m.text}' bbox right edge {_bx + _bw} exceeds "
+            f"screenshot width {img_w}. Did point_scale get applied twice?"
+        )
+        assert _by + _bh <= img_h + _PIXEL_TOLERANCE, (
+            f"device SoM: mark '{_m.text}' bbox bottom edge {_by + _bh} exceeds "
+            f"screenshot height {img_h}. Did point_scale get applied twice?"
+        )
+
+    # Step 8: Draw annotated PNG.  Written to <stem>_annotated.png alongside
     # the raw screenshot.  Calling twice overwrites the same file (no double-draw).
     annotated_path: Optional[Path] = None
     try:

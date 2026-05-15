@@ -1,4 +1,16 @@
-"""Observe the current simulator state — screenshot + optional SoM annotation + logs."""
+"""Observe the current simulator state — screenshot + optional SoM annotation + logs.
+
+Coordinate-space contract (a12, F-008)
+--------------------------------------
+* ``Observation.marks`` (list[Mark]) bbox and center are in SCREENSHOT PIXEL
+  coordinates — they match the ``(screenshot_w, screenshot_h)`` fields of the
+  Observation.  Vision OCR normalised coords are converted to pixels inside
+  ``som.detect_marks`` before a Mark is constructed.
+* Callers storing marks in ``Session.last_marks`` MUST convert to ``list[dict]``
+  via ``[m.to_dict() for m in obs.marks]`` so the resolver always receives dicts
+  (device path also returns dicts from annotate_device_screenshot).
+  This is the a12 normalisation — see server.py.
+"""
 from __future__ import annotations
 
 import json
