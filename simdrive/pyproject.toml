@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "simdrive"
 version = "1.0.0a13"
-description = "MCP-native iOS simulator + real-device automation. Agent-first: your MCP client drives via 31 vision-first tools — simdrive does not require an API key."
+description = "SimDrive — MCP-native iOS simulator + real-device automation. Agent-first: your MCP client drives via 32 vision-first tools. SimDrive does not require an API key."
 readme = "README.md"
 license = "Elastic-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -43,9 +43,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://synctek.io/specterqa"
+Homepage = "https://synctek.io/products/simdrive"
 Repository = "https://github.com/SyncTek-LLC/specterqa-ios"
 Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
+# NOTE: GitHub repository rename to `simdrive` is pending Chairman action (INIT-2026-549).
+# After rename, update Repository and Issues URLs to `SyncTek-LLC/simdrive`.
 
 [project.optional-dependencies]
 ssim = ["scikit-image>=0.22"]
