@@ -1,18 +1,21 @@
-# SpecterQA iOS
+# SimDrive
 
-SpecterQA iOS is an AI-native iOS simulator testing tool that lets AI agents record test sessions once using Claude's vision capabilities and replay them deterministically in CI — with zero AI cost on reruns. It ships as both a Python CLI (`specterqa-ios`) and an MCP server (`specterqa-ios-mcp`) with 41 tools, making it natively callable from Claude Code, Claude Desktop, and any MCP-compatible agent platform. The key insight: use AI to record, use a deterministic engine to replay. You pay for AI tokens once; every subsequent CI run is free.
+SimDrive is an MCP-native iOS simulator and real-device automation tool. Your MCP client
+(Claude Code, Claude Desktop, or any MCP-compatible agent) drives the simulator via 32
+vision-first tools — record once, then replay deterministically in CI with zero AI cost.
+It ships as a Python package (`simdrive`) and an MCP server command (`simdrive`). The key
+insight: use AI to record, use a deterministic engine to replay. Your client pays for tokens
+during recording; every subsequent CI run is free. SimDrive itself does **not** require an
+API key.
+
+> Repo note: the GitHub repository is currently `SyncTek-LLC/specterqa-ios`; rename to
+> `SyncTek-LLC/simdrive` is pending. The PyPI package name is **`simdrive`**.
 
 ## Install
 
 ```bash
-# CLI only
-pip install specterqa-ios
-
-# With MCP server
-pip install 'specterqa-ios[mcp]'
-
-# With AI recording engine (required for record phase)
-pip install 'specterqa-ios[mcp,orchestration]'
+# CLI + MCP server (single install)
+pip install simdrive
 ```
 
 Requires: macOS, Xcode 15+, Python 3.10+
@@ -24,110 +27,86 @@ Add to `.claude/mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude 
 ```json
 {
   "mcpServers": {
-    "specterqa-ios": {
-      "command": "specterqa-ios-mcp",
-      "env": {
-        "ANTHROPIC_API_KEY": "sk-ant-..."
-      }
+    "simdrive": {
+      "command": "simdrive"
     }
   }
 }
 ```
 
-Then in Claude: _"Run a smoke test on the Palace app and record it as palace-smoke."_ Claude drives the simulator, records every action as a deterministic YAML file. Future CI runs replay that YAML without calling Claude.
+Then in your agent: _"Run a smoke test on the Palace app and record it as palace-smoke."_
+Your agent drives the simulator, records every action as a deterministic recording. Future
+CI runs replay that recording without calling the agent.
 
 ## Minimum Viable Session (5 calls)
 
 ```python
-ios_start_session(bundle_id="com.example.app")
-ios_screenshot()                           # observe initial screen
-ios_tap(label="Sign In")                   # interact
-ios_screenshot()                           # verify state
-ios_stop_recording(name="signin-smoke")    # save replay YAML
-ios_stop_session()                         # clean up
+session_start(bundle_id="com.example.app")
+observe()                                  # observe initial screen
+tap(label="Sign In")                       # interact
+observe()                                  # verify state
+record_stop(session_id="...", name="signin-smoke")  # save replay
+session_end(session_id="...")              # clean up
 ```
 
-## MCP Tool Registry (41 tools)
+## MCP Tool Registry (32 tools — canonical)
 
-- `ios_accessibility_audit` — Audit the current screen for common accessibility issues
-- `ios_app_state` — Check app lifecycle state (foreground, background, suspended)
-- `ios_apps` — List apps installed on a booted simulator
-- `ios_crashes` — Check for app crashes since the session started
-- `ios_devices` — List booted iOS simulators: UDID, name, runtime, state
-- `ios_dismiss_keyboard` — Dismiss the software keyboard
-- `ios_dismiss_sheet` — Dismiss a presented sheet (half-sheet, action sheet, modal) by swiping down
-- `ios_dismiss_springboard_alert` — Dismiss a SpringBoard-level iOS system permission alert by tapping a named button
-- `ios_doctor` — Check environment readiness: Xcode path, simulator runtimes, booted devices,  SpecterQA runner build status
-- `ios_elements` — Get the current interactive element list without capturing a screenshot
-- `ios_license_status` — Report SpecterQA license tier and feature entitlements
-- `ios_list_replays` — List saved replay YAML files with their names, step counts, and last-modified timestamps
-- `ios_logs` — Get recent app console logs from the iOS Simulator
-- `ios_long_press` — Long-press an element by its index number from the last screenshot
-- `ios_memory` — Get a detailed memory breakdown for the app under test via the macOS footprint tool
-- `ios_network` — Get network activity for the app under test
-- `ios_perf` — Get real-time CPU usage, memory footprint (RSS), and thread count for the app  under test
-- `ios_perf_baseline` — Capture current CPU, memory, and thread metrics as a baseline
-- `ios_perf_compare` — Compare current performance metrics against the baseline captured by ios_perf_baseline
-- `ios_pre_grant_permissions` — Pre-grant iOS app permissions via xcrun simctl BEFORE the app launches,  preventing permission alerts from appearing at runtime
-- `ios_press_key` — Press a named keyboard key on the iOS Simulator
-- `ios_replay` — Run a saved replay YAML end-to-end against the booted simulator
-- `ios_save_replay` — [DEPRECATED in v12 — prefer ios_stop_recording which saves and clears the buffer.]  Save the current session as a deterministic replay YAML file WITHOUT clearing the step buffer
-- `ios_screenshot` — Capture an annotated screenshot of the running iOS app
-- `ios_set_appearance` — Toggle dark or light mode on the iOS Simulator
-- `ios_simctl` — Run an arbitrary simctl subcommand on the simulator
-- `ios_start_recording` — Clear the recorder's step buffer to start a fresh recording
-- `ios_start_runner` — Build (if needed) and deploy the SpecterQA XCTest runner against a booted simulator
-- `ios_start_session` — Start a SpecterQA session on the booted iOS Simulator
-- `ios_stop_recording` — Save the current recording as a replay YAML file AND clear the step buffer
-- `ios_stop_runner` — Terminate the SpecterQA XCTest runner subprocess on the given port
-- `ios_stop_session` — Stop the XCTest runner and clean up
-- `ios_swipe` — Swipe in a cardinal direction on the iOS Simulator screen
-- `ios_swipe_back` — Perform the iOS swipe-from-left-edge back navigation gesture
-- `ios_tap` — Tap an element by IDENTIFIER (most reliable), LABEL, index number, or raw COORDINATES
-- `ios_type` — Type text into a text field on the iOS Simulator
-- `ios_validate_replay` — Parse a replay YAML and validate structure + referenced element identifiers  without executing it
-- `ios_wait` — Wait (sleep) for a specified number of seconds
-- `ios_wait_for_element` — Poll the element tree until an element matching label appears, or timeout expires
-- `ios_wait_idle` — Wait for the app to become idle (no pending UI changes)
-- `ios_webview_elements` — Get elements inside WKWebView content (EPUB readers, PDF viewers,  audiobook UI rendered in WKWebView)
+The exhaustive, machine-readable list lives in `simdrive/src/simdrive/server.py::_TOOLS`.
+The categorized human-readable surface lives in `docs/MCP_TOOL_SURFACE.md`. The 32 tools
+exposed by the MCP server are:
+
+- `session_start` — Start a SimDrive session on a booted iOS Simulator (or opted-in physical device).
+- `session_end` — Stop the runner and clean up the session.
+- `session_status` — Report active sessions, modes, and version.
+- `observe` — Capture an annotated screenshot + element list (vision-first primitive).
+- `tap` — Tap by mark id, label, identifier, or raw coordinates.
+- `swipe` — Swipe in a direction or between two points.
+- `type_text` — Type into a focused text field.
+- `press_key` — Press a named keyboard key.
+- `record_start` — Begin a new recording (clears the step buffer).
+- `record_stop` — Save the current recording and clear the buffer.
+- `replay` — Run a saved recording end-to-end against a booted target.
+- `list_devices` — List booted iOS simulators (UDID, name, runtime, state).
+- `logs` — Get recent app console logs from the iOS Simulator.
+- `perf` — Real-time CPU / RSS / thread count for the app under test.
+- `perf_baseline` — Capture a metrics baseline.
+- `perf_compare` — Compare current metrics against the baseline.
+- `memory` — Detailed memory breakdown via the macOS `footprint` tool.
+- `doctor` — Environment readiness: Xcode, simulator runtimes, booted devices, runner build status.
+- `app_state` — App lifecycle state (foreground, background, suspended).
+- `apps` — List apps installed on a booted simulator.
+- `crashes` — App crashes since the session started.
+- `dismiss_first_launch_alerts` — Dismiss system permission alerts at first launch.
+- `pre_grant_permissions` — Pre-grant iOS app permissions before launch.
+- `set_appearance` — Toggle dark or light mode on the iOS Simulator.
+- `dismiss_sheet` — Dismiss a presented sheet by swiping down.
+- `list_replays` — List saved recordings with their names, step counts, and timestamps.
+- `validate_replay` — Parse and validate a saved recording without executing it.
+- `version` — Return the installed SimDrive version.
+- `clear_field` — Clear a text field.
+- `load_journey` — Load a recorded journey for replay.
+- `lint_recordings` — Lint saved recordings for state-contract drift.
+- `migrate_recording` — Migrate a recording from an older schema to the current one.
+
 ## Use via CLI
 
 ```bash
 # First-time setup
-specterqa-ios setup          # verify Xcode + simulators
-specterqa-ios init           # scaffold .specterqa/ project files
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Record a test (AI-driven, costs tokens once)
-specterqa-ios run --product myapp --journey smoke
-
-# Replay a recorded session (free, deterministic)
-specterqa-ios replay .specterqa/replays/smoke.yaml
-
-# CI mode — replay all recorded sessions
-specterqa-ios ci .specterqa/replays/
-specterqa-ios ci --parallel 4    # run 4 simultaneously (~10x faster)
-
-# Validate a replay file before running
-specterqa-ios validate-replay .specterqa/replays/smoke.yaml
+simdrive --version           # verify install
+simdrive                     # start the MCP server (stdio)
 ```
+
+(Additional CLI subcommands are exposed via the underlying `simdrive` console script. See
+`docs/MCP_TOOL_SURFACE.md` for the canonical tool surface and `README.md` for usage.)
 
 ## Pricing
 
-| Tier       | Price     | Simulators | Runs/Session | Parallel CI |
-|------------|-----------|------------|--------------|-------------|
-| Trial      | Free      | 1          | 3            | No          |
-| Indie      | $29/mo    | 2          | Unlimited    | No          |
-| Pro        | $99/mo    | 4          | Unlimited    | Yes         |
-| Team       | $299/mo   | 10         | Unlimited    | Yes         |
-| Enterprise | Custom    | Unlimited  | Unlimited    | Yes         |
-
-BYOK required: bring your own Anthropic API key for the record phase. Replay is free. SyncTek never sees your API key or test data.
+See https://synctek.io/products/simdrive for current tiers. SimDrive itself does not require
+an API key; record-time AI cost is borne by your MCP client (BYOK).
 
 ## Links
 
-- Homepage: https://synctek.io/products/specterqa-ios
-- GitHub (docs + issues): https://github.com/SyncTek-LLC/specterqa-ios
-- Pricing: https://synctek.io/products/specterqa-ios#pricing
-- A2A agent card: https://github.com/SyncTek-LLC/specterqa-ios/blob/main/.well-known/agent.json
+- Homepage: https://synctek.io/products/simdrive
+- GitHub (docs + issues): https://github.com/SyncTek-LLC/specterqa-ios (rename to `simdrive` pending)
 - Support: support@synctek.io
+- Security: security@simdrive.dev (routes to maintainer until inbox live)
