@@ -2210,6 +2210,7 @@ Recording maintenance:
 Trial / license subcommands:
   simdrive trial start --email <you@example.com>
   simdrive trial start --email <you@example.com> --offline-dev
+  simdrive auth <license-key>
   simdrive license show
   simdrive license path
 """
@@ -2623,6 +2624,43 @@ def _cmd_license(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _cmd_auth(args: list[str]) -> None:
+    """Handle ``simdrive auth <license-key>`` — write a paid key + validate."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive auth",
+        description=(
+            "Install a paid SimDrive license key (Pro / Team / Enterprise).\n"
+            "The key is verified locally before being written to disk."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("license_key", help="The license key string from your receipt.")
+    parser.add_argument(
+        "--license-path",
+        default=None,
+        help="Override the license.json path (default: ~/.simdrive/license.json).",
+    )
+
+    ns = parser.parse_args(args)
+
+    from pathlib import Path as _Path
+    from simdrive.license.cli import _DEFAULT_LICENSE_PATH, cmd_auth
+    from simdrive.license.errors import LicenseError
+
+    license_path = _Path(ns.license_path) if ns.license_path else _DEFAULT_LICENSE_PATH
+
+    try:
+        result = cmd_auth(ns.license_key, license_path=license_path)
+        print(result["message"])
+        sys.exit(0)
+    except LicenseError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        sys.exit(1)
+
+
 # Subcommand dispatch registry — maps the first CLI argument to its handler.
 _SUBCOMMANDS: dict = {
     "run": _cmd_run,
@@ -2632,6 +2670,7 @@ _SUBCOMMANDS: dict = {
     "wda-down": _cmd_wda_down,
     "trial": _cmd_trial,
     "license": _cmd_license,
+    "auth": _cmd_auth,
     "lint-recordings": _cmd_lint_recordings,
     "migrate-recording": _cmd_migrate_recording,
 }
