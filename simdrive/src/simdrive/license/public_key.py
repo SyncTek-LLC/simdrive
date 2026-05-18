@@ -3,11 +3,11 @@
 WHY a module-level constant: avoids filesystem reads at import time;
 the public key is not secret — it's safe to embed in client code.
 
-PLACEHOLDER: this hex constant is a generated test key. The Chairman
-generates the real keypair using:
-    python -m simdrive.license.keypair generate
-and replaces SIMDRIVE_PUBLIC_KEY_HEX with the output public key hex.
-The private key goes into the Railway env var SIMDRIVE_LICENSE_PRIVATE_KEY.
+PRODUCTION: SIMDRIVE_PUBLIC_KEY_HEX below is the live license-signing
+public key for SimDrive paid tiers. Matching private key lives in the
+BusinessAtlas vault at `simdrive/license_signing_private_key` (scope
+DeployAtlas) and is bound to the Cloudflare Worker license issuer via
+`wrangler secret put LICENSE_SIGNING_PRIVATE_KEY`.
 
 DEV KEY NOTE:
 The DEV_VERIFY_KEY_HEX / DEV_SIGNING_KEY_HEX pair is intentionally
@@ -23,13 +23,18 @@ from nacl.signing import SigningKey, VerifyKey
 from simdrive.license.keypair import verify_key_from_hex, signing_key_from_hex
 
 
-# Ed25519 license-signing public key for SimDrive 1.0.
-# Generated 2026-05-02; private key held in Chairman's 1Password under
-# "SimDrive license signing" and configured as SIMDRIVE_LICENSE_PRIVATE_KEY
-# env var on the Railway license server. DO NOT regenerate without
-# coordinated key rotation — every issued license becomes invalid.
+# Ed25519 license-signing public key for SimDrive 1.0 paid tiers.
+# Generated 2026-05-18 (rotated from 2026-05-02 placeholder — no licenses
+# were ever issued under the prior key, so rotation has no customer impact).
+# Private key lives in BusinessAtlas vault: `simdrive/license_signing_private_key`
+# (scope: DeployAtlas). Retrieve for Cloudflare Worker deploy via:
+#   cd /Users/atlas/BusinessAtlas
+#   .venv/bin/python v2/ba vault get --service simdrive --key license_signing_private_key
+# Then: wrangler secret put LICENSE_SIGNING_PRIVATE_KEY (paste hex at prompt).
+# DO NOT regenerate without coordinated key rotation — every issued
+# license becomes invalid the instant this constant changes.
 SIMDRIVE_PUBLIC_KEY_HEX: str = (
-    "8d282e49db135b6e67dd16133bb57c436685e06c3582d28091134c4c15ce462c"
+    "6de89dc03064c3fd50a916d08e2d4a68a52082c804b4eceaa0be241c247749c6"
 )
 
 # Ed25519 dev-only keypair for offline self-issued trial licenses.
