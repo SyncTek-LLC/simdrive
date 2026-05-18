@@ -32,22 +32,33 @@ def _readme_full() -> str:
 # ---------------------------------------------------------------------------
 
 def test_quickstart_pip_install_in_first_100_lines() -> None:
-    """pip install --pre simdrive must appear in the first 100 lines of the README."""
+    """`pip install simdrive` must appear in the first 100 lines of the README.
+
+    INIT-2026-549 W1.5: the package is now a paywalled trial+paid product
+    rather than a pre-release alpha, so the install command no longer carries
+    the ``--pre`` flag. The presence of the install command itself is the
+    invariant under test.
+    """
     head = _readme_first_n_lines(100)
-    assert "pip install --pre simdrive" in head, (
-        "README quickstart regression: 'pip install --pre simdrive' not found in "
+    assert "pip install simdrive" in head, (
+        "README quickstart regression: 'pip install simdrive' not found in "
         "the first 100 lines. The install command must be at the top of the README "
         "so new users and MCP client registries see it immediately."
     )
 
 
-def test_quickstart_offline_dev_in_first_100_lines() -> None:
-    """--offline-dev must appear in the first 100 lines of the README."""
+def test_quickstart_trial_start_in_first_100_lines() -> None:
+    """`simdrive trial start --email` must appear in the first 100 lines.
+
+    INIT-2026-549 W1.5: trial issuance is now the canonical first step after
+    install — every gated tool returns ``license_required`` until a trial or
+    paid key is on disk.
+    """
     head = _readme_first_n_lines(100)
-    assert "--offline-dev" in head, (
-        "README quickstart regression: '--offline-dev' not found in the first 100 "
-        "lines. The offline trial flag must be documented up front — it's the primary "
-        "path for new users who don't have cloud infra access."
+    assert "simdrive trial start --email" in head, (
+        "README quickstart regression: 'simdrive trial start --email' not "
+        "found in the first 100 lines. The trial-bootstrap command must be "
+        "documented up front so new users can clear the paywall in 30 seconds."
     )
 
 

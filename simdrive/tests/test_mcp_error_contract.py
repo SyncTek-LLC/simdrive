@@ -99,11 +99,14 @@ class TestMcpWrapperErrorEnvelope:
             "`except LicenseError` clause in _call_tool."
         )
 
-    def test_license_error_to_dict_matches_simdrive_error_schema(self) -> None:
-        """LicenseError.to_dict() must produce the same schema as SimdriveError.to_dict().
+    def test_license_error_to_dict_is_superset_of_simdrive_error_schema(self) -> None:
+        """LicenseError.to_dict() must remain compatible with SimdriveError consumers.
 
-        This ensures that once the inheritance is fixed, the serialisation is
-        compatible — no changes needed in _call_tool() for the dict shape.
+        INIT-2026-549 W1.5: LicenseError adds UX-affordance fields
+        (``error: "license_required"``, ``pricing_url``, command hints) so
+        agent hosts can surface a copy-pasteable upsell. Existing fields
+        (``code``, ``message``, ``details``) are preserved — the envelope is a
+        SUPERSET of the SimdriveError envelope, not an exact match.
         """
         from simdrive.license.errors import LicenseError
         from simdrive.errors import SimdriveError
@@ -122,12 +125,22 @@ class TestMcpWrapperErrorEnvelope:
         lic_dict = lic_err.to_dict()
         sim_dict = sim_err.to_dict()
 
-        # Schema must match
+        # Outer envelope still matches (ok + error).
         assert set(lic_dict.keys()) == set(sim_dict.keys()), (
-            f"LicenseError.to_dict() schema {set(lic_dict.keys())} does not match "
-            f"SimdriveError.to_dict() schema {set(sim_dict.keys())}"
+            f"LicenseError outer keys {set(lic_dict.keys())} != "
+            f"SimdriveError outer keys {set(sim_dict.keys())}"
         )
-        assert set(lic_dict["error"].keys()) == set(sim_dict["error"].keys()), (
-            f"LicenseError error envelope keys {set(lic_dict['error'].keys())} do not "
-            f"match SimdriveError keys {set(sim_dict['error'].keys())}"
+
+        # LicenseError MUST preserve every SimdriveError inner key.
+        missing = set(sim_dict["error"].keys()) - set(lic_dict["error"].keys())
+        assert not missing, (
+            f"LicenseError envelope dropped SimdriveError keys: {missing}"
+        )
+
+        # LicenseError adds the W1.5 UX-affordance fields.
+        expected_extras = {"error", "pricing_url", "trial_command_hint", "auth_command_hint"}
+        actual_extras = set(lic_dict["error"].keys()) - set(sim_dict["error"].keys())
+        assert expected_extras <= actual_extras, (
+            f"LicenseError envelope missing W1.5 UX fields: "
+            f"{expected_extras - actual_extras}"
         )
