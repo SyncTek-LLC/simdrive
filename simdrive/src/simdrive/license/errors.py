@@ -13,11 +13,29 @@ Error codes surfaced here:
   - license_not_found
   - trial_rate_limited
   - cloud_unreachable
+
+UX envelope (INIT-2026-549 W1.5):
+  When the MCP-tool wrapper serialises a LicenseError to the agent host, the
+  envelope is enriched with:
+    error: "license_required"           - umbrella code agents switch on
+    code:  <specific code>              - granular code (license_not_found, …)
+    message:                            - human-readable
+    pricing_url:                        - https://simdrive.dev/pricing
+    trial_command_hint:                 - exact CLI string to start a trial
+    auth_command_hint:                  - exact CLI string to install a key
+  Hosts (Claude Code, Cursor) surface this verbatim so users can
+  copy-paste the command without leaving the agent loop.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+
+
+PRICING_URL = "https://simdrive.dev/pricing"
+TRIAL_COMMAND_HINT = "simdrive trial start --email <your-email>"
+AUTH_COMMAND_HINT = "simdrive auth <your-license-key>"
+
 
 from simdrive.errors import SimdriveError
 
@@ -30,6 +48,10 @@ class LicenseError(SimdriveError):
     ``except errors.SimdriveError`` clause catches it automatically,
     preserving the structured error envelope rather than wrapping it as
     code="internal".
+
+    ``to_dict()`` returns the W1.5 "license_required" envelope rather than the
+    generic SimdriveError shape so agent hosts get pricing + command hints
+    without parsing the message prose.
     """
 
     code: str
@@ -43,9 +65,16 @@ class LicenseError(SimdriveError):
         return {
             "ok": False,
             "error": {
+                # Umbrella code — host switches on this to render the upsell UX.
+                "error": "license_required",
+                # Granular code (license_not_found / license_expired / …) for
+                # callers that want to differentiate trial-expired from missing.
                 "code": self.code,
                 "message": self.message,
                 "details": self.details,
+                "pricing_url": PRICING_URL,
+                "trial_command_hint": TRIAL_COMMAND_HINT,
+                "auth_command_hint": AUTH_COMMAND_HINT,
             },
         }
 
@@ -57,9 +86,10 @@ def license_invalid(reason: str) -> LicenseError:
     return LicenseError(
         code="license_invalid",
         message=(
-            f"License key is invalid: {reason}. "
-            "Recovery: run `simdrive license status` to check your key, "
-            "or `simdrive trial start` to begin a new trial."
+            f"Your SimDrive license is invalid: {reason}. "
+            "Recovery: run `simdrive license show` to inspect it, "
+            "`simdrive auth <your-license-key>` to install a new one, or "
+            "`simdrive trial start --email you@example.com` to begin a trial."
         ),
         details={"reason": reason},
     )
@@ -69,9 +99,10 @@ def license_expired(expires_at: int) -> LicenseError:
     return LicenseError(
         code="license_expired",
         message=(
-            f"License expired at {expires_at}. "
-            "Recovery: run `simdrive license activate <key>` to install a renewed key, "
-            "or visit https://simdrive.dev/pricing to renew."
+            "SimDrive Pro license required — your trial has expired. "
+            f"Recovery: renew at {PRICING_URL} and run "
+            "`simdrive auth <your-license-key>` to reactivate. "
+            f"(License expired at {expires_at}.)"
         ),
         details={"expires_at": expires_at},
     )
@@ -116,10 +147,10 @@ def license_not_found(path: str) -> LicenseError:
     return LicenseError(
         code="license_not_found",
         message=(
-            f"No license file found at {path!r}. "
-            "Recovery: run `simdrive trial start --email <you@example.com>` "
-            "(cloud) or `simdrive trial start --email <you@example.com> --offline-dev` "
-            "(local, no network required) to begin a 14-day free trial."
+            "No SimDrive license found. "
+            "Recovery: run `simdrive trial start --email you@example.com` to "
+            "start a 14-day trial, or `simdrive auth <your-license-key>` if "
+            f"you already have a paid key. (Looked at: {path})"
         ),
         details={"path": path},
     )
