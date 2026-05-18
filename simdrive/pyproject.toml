@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "simdrive"
 version = "1.0.0a13"
-description = "SimDrive — MCP-native iOS simulator + real-device automation. Agent-first: your MCP client drives via 32 vision-first tools. SimDrive does not require an API key."
+description = "SimDrive — reproduce and validate iOS bugs in 60 seconds with Claude. MCP-native iOS automation; 32 vision-first tools; record once, replay free in CI. 14-day trial, then $29/mo Pro."
 readme = "README.md"
 license = "Elastic-2.0"
 license-files = ["LICENSE", "NOTICE"]

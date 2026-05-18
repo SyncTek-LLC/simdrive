@@ -1,28 +1,43 @@
 # SimDrive
 
-SimDrive is an MCP-native iOS simulator and real-device automation tool. Your MCP client
-(Claude Code, Claude Desktop, or any MCP-compatible agent) drives the simulator via 32
-vision-first tools — record once, then replay deterministically in CI with zero AI cost.
-It ships as a Python package (`simdrive`) and an MCP server command (`simdrive`). The key
-insight: use AI to record, use a deterministic engine to replay. Your client pays for tokens
-during recording; every subsequent CI run is free. SimDrive itself does **not** require an
-API key.
+SimDrive is an MCP-native iOS automation toolkit for reproducing and
+validating iOS bugs in 60 seconds with Claude (or any MCP-compatible agent).
+Your agent drives the iOS Simulator or a paired real device via 32 vision-first
+tools, captures the failure as a deterministic recording, and replays that
+recording in CI with zero AI cost on subsequent runs.
 
-> Repo note: the GitHub repository is currently `SyncTek-LLC/specterqa-ios`; rename to
-> `SyncTek-LLC/simdrive` is pending. The PyPI package name is **`simdrive`**.
+Distribution: PyPI package `simdrive` (also the MCP server command). The hero
+use case is **bug reproduction and validation** — paste a Linear/Jira ticket
+into your agent, watch it walk the steps, attach the captured recording to
+the PR. Record-time AI cost is borne by your MCP client (BYOK); replay is free
+forever after.
 
-## Install
+Licensing: 14-day full-feature trial issued locally by `simdrive trial start
+--email <addr>` (Ed25519-signed, machine-locked). After 14 days the MCP tool
+surface is paywalled — purchase a Pro / Team / Enterprise license at
+<https://simdrive.dev/pricing> and install it with `simdrive auth
+<license-key>`. Trial CLI commands (`trial`, `license`, `auth`) themselves
+never require a license; everything else does.
+
+> Repo note: the GitHub repository is currently `SyncTek-LLC/specterqa-ios`;
+> rename to `SyncTek-LLC/simdrive` is pending. The PyPI package name is
+> **`simdrive`**.
+
+## Install + activate
 
 ```bash
-# CLI + MCP server (single install)
 pip install simdrive
+simdrive trial start --email you@example.com
+# 14 days full access, then:
+simdrive auth <license-key>
 ```
 
-Requires: macOS, Xcode 15+, Python 3.10+
+Requires: macOS, Xcode 15+, Python 3.10+.
 
-## Use via MCP (Claude Code / Claude Desktop)
+## Use via MCP (Claude Code / Claude Desktop / Cursor)
 
-Add to `.claude/mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude Desktop):
+Add to `.claude/mcp.json` (Claude Code), `claude_desktop_config.json` (Claude
+Desktop), or your Cursor MCP config:
 
 ```json
 {
@@ -34,11 +49,16 @@ Add to `.claude/mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude 
 }
 ```
 
-Then in your agent: _"Run a smoke test on the Example Reader app and record it as example-smoke."_
-Your agent drives the simulator, records every action as a deterministic recording. Future
-CI runs replay that recording without calling the agent.
+Then in your agent:
 
-## Minimum Viable Session (5 calls)
+> "Use simdrive to reproduce Linear ENG-1247 — sign-in fails on iPhone 17 /
+> iOS 26.3. Try test@example.com and capture the error."
+
+Your agent drives the simulator, captures every action, and saves a
+deterministic recording. Future CI runs replay that recording without
+calling the agent.
+
+## Minimum-viable session (5 calls)
 
 ```python
 session_start(bundle_id="com.example.app")
@@ -51,14 +71,17 @@ session_end(session_id="...")              # clean up
 
 ## MCP Tool Registry (32 tools — canonical)
 
-The exhaustive, machine-readable list lives in `simdrive/src/simdrive/server.py::_TOOLS`.
-The categorized human-readable surface lives in `docs/MCP_TOOL_SURFACE.md`. The 32 tools
-exposed by the MCP server are:
+The exhaustive machine-readable list lives in
+`simdrive/src/simdrive/server.py::_TOOLS`. The categorized human-readable
+surface lives in `docs/MCP_TOOL_SURFACE.md`. The 32 tools exposed by the MCP
+server are:
 
-- `session_start` — Start a SimDrive session on a booted iOS Simulator (or opted-in physical device).
+- `session_start` — Start a SimDrive session on a booted iOS Simulator (or
+  opted-in physical device).
 - `session_end` — Stop the runner and clean up the session.
 - `session_status` — Report active sessions, modes, and version.
-- `observe` — Capture an annotated screenshot + element list (vision-first primitive).
+- `observe` — Capture an annotated screenshot + element list (vision-first
+  primitive).
 - `tap` — Tap by mark id, label, identifier, or raw coordinates.
 - `swipe` — Swipe in a direction or between two points.
 - `type_text` — Type into a focused text field.
@@ -72,41 +95,56 @@ exposed by the MCP server are:
 - `perf_baseline` — Capture a metrics baseline.
 - `perf_compare` — Compare current metrics against the baseline.
 - `memory` — Detailed memory breakdown via the macOS `footprint` tool.
-- `doctor` — Environment readiness: Xcode, simulator runtimes, booted devices, runner build status.
+- `doctor` — Environment readiness: Xcode, simulator runtimes, booted
+  devices, runner build status.
 - `app_state` — App lifecycle state (foreground, background, suspended).
 - `apps` — List apps installed on a booted simulator.
 - `crashes` — App crashes since the session started.
-- `dismiss_first_launch_alerts` — Dismiss system permission alerts at first launch.
+- `dismiss_first_launch_alerts` — Dismiss system permission alerts at first
+  launch.
 - `pre_grant_permissions` — Pre-grant iOS app permissions before launch.
 - `set_appearance` — Toggle dark or light mode on the iOS Simulator.
 - `dismiss_sheet` — Dismiss a presented sheet by swiping down.
-- `list_replays` — List saved recordings with their names, step counts, and timestamps.
-- `validate_replay` — Parse and validate a saved recording without executing it.
+- `list_replays` — List saved recordings with their names, step counts, and
+  timestamps.
+- `validate_replay` — Parse and validate a saved recording without
+  executing it.
 - `version` — Return the installed SimDrive version.
 - `clear_field` — Clear a text field.
 - `load_journey` — Load a recorded journey for replay.
 - `lint_recordings` — Lint saved recordings for state-contract drift.
-- `migrate_recording` — Migrate a recording from an older schema to the current one.
+- `migrate_recording` — Migrate a recording from an older schema to the
+  current one.
+
+Every tool requires a valid license. Without one, every call returns a
+structured ``license_required`` envelope including the pricing URL and
+copy-pasteable command hints to start a trial or install a paid key.
 
 ## Use via CLI
 
 ```bash
-# First-time setup
 simdrive --version           # verify install
 simdrive                     # start the MCP server (stdio)
+simdrive trial start --email you@example.com
+simdrive auth <license-key>  # install a paid key
+simdrive license show        # show current license state
 ```
-
-(Additional CLI subcommands are exposed via the underlying `simdrive` console script. See
-`docs/MCP_TOOL_SURFACE.md` for the canonical tool surface and `README.md` for usage.)
 
 ## Pricing
 
-See https://synctek.io/products/simdrive for current tiers. SimDrive itself does not require
-an API key; record-time AI cost is borne by your MCP client (BYOK).
+| Plan | Price | Notes |
+|------|-------|-------|
+| Trial | Free, 14 days | All Pro features, machine-locked |
+| Pro | $29 / mo | One seat |
+| Team | $99 / seat / mo | Multi-seat |
+| Enterprise | Contact | Self-hosted licensing, SLA |
+
+Pricing + ROI calculator: <https://simdrive.dev/pricing>
 
 ## Links
 
-- Homepage: https://synctek.io/products/simdrive
-- GitHub (docs + issues): https://github.com/SyncTek-LLC/specterqa-ios (rename to `simdrive` pending)
-- Support: support@synctek.io
-- Security: security@simdrive.dev (routes to maintainer until inbox live)
+- Homepage / pricing: <https://simdrive.dev>
+- GitHub (docs + issues): <https://github.com/SyncTek-LLC/specterqa-ios>
+  (rename to `simdrive` pending)
+- Support: <support@synctek.io>
+- Security: <security@simdrive.dev>

@@ -71,9 +71,25 @@ class TestServeDispatchesTrial:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def isolate_trial_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect ``trial_history`` so tests don't pollute ``~/.simdrive``.
+
+    INIT-2026-549 W1.5 added an (email, machine) uniqueness check that reads
+    ``~/.simdrive/trial_history.json`` on every ``trial start``. Without this
+    fixture the second test in the suite would always see ``trial_already_used``.
+    """
+    import simdrive.license.trial_history as history_mod
+    hist = tmp_path / "trial_history.json"
+    monkeypatch.setattr(history_mod, "_DEFAULT_HISTORY_PATH", hist)
+    return hist
+
+
 class TestTrialOfflineDev:
 
-    def test_trial_offline_dev_creates_local_license(self, tmp_path: Path) -> None:
+    def test_trial_offline_dev_creates_local_license(
+        self, tmp_path: Path, isolate_trial_history: Path
+    ) -> None:
         """cmd_trial_start with offline_dev=True must write a license.json
         with required fields and a valid 14-day expiry, without hitting the network.
 
@@ -124,7 +140,7 @@ class TestTrialOfflineDev:
         # won't validate against the production public key — just structural check above.
 
     def test_trial_cloud_unreachable_falls_back_to_offline_dev(
-        self, tmp_path: Path
+        self, tmp_path: Path, isolate_trial_history: Path
     ) -> None:
         """When requests.post raises ConnectionError and offline_dev=True,
         cmd_trial_start must succeed via local fallback.
@@ -167,7 +183,7 @@ class TestTrialOfflineDev:
             )
 
     def test_run_journey_works_with_offline_dev_license(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, isolate_trial_history: Path
     ) -> None:
         """After an offline-dev trial start, tool_run_journey must NOT raise
         LicenseError at the license gate.  It may raise other errors (missing

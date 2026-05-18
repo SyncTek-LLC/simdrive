@@ -34,6 +34,7 @@ from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
+from .license.gate import gate as _entitlement_gate
 from .observability.logger import get_logger
 
 
@@ -219,6 +220,7 @@ def _check_version_drift() -> str | None:
 
 
 def tool_session_start(arguments: dict) -> dict:
+    _entitlement_gate()
     device_name = arguments.get("device") or arguments.get("device_name")
     os_version = arguments.get("os_version")
     # Accept both "udid" (schema name) and "device_udid" (common alias used by live callers).
@@ -273,12 +275,14 @@ def tool_session_start(arguments: dict) -> dict:
 
 
 def tool_session_end(arguments: dict) -> dict:
+    _entitlement_gate()
     sid = arguments["session_id"]
     session.end(sid, terminate_app=bool(arguments.get("terminate_app", True)))
     return {"ended": sid}
 
 
 def tool_session_status(arguments: dict) -> dict:
+    _entitlement_gate()
     from . import act as _act
     sid = arguments.get("session_id")
     if sid:
@@ -313,6 +317,7 @@ def tool_session_status(arguments: dict) -> dict:
 
 
 def tool_observe(arguments: dict) -> dict:
+    _entitlement_gate()
     sid = arguments["session_id"]
     s = session.get(sid)
 
@@ -534,6 +539,7 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
 
 
 def tool_tap(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     sw, sh = _ensure_screenshot_dims(s)
     x, y, resolved_via, matched_mark = _resolve_target_xy(s, arguments)
@@ -622,6 +628,7 @@ def tool_tap(arguments: dict) -> dict:
 
 
 def tool_swipe(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     duration_ms = int(arguments.get("duration_ms", 300))
     sw, sh = _ensure_screenshot_dims(s)
@@ -688,6 +695,7 @@ def tool_swipe(arguments: dict) -> dict:
 
 
 def tool_type_text(arguments: dict) -> dict:
+    _entitlement_gate()
     from . import hid_inject
     s = session.get(arguments["session_id"])
     text = str(arguments["text"])
@@ -834,6 +842,7 @@ def tool_type_text(arguments: dict) -> dict:
 
 
 def tool_press_key(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     key = str(arguments["key"])
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
@@ -859,6 +868,7 @@ def tool_press_key(arguments: dict) -> dict:
 
 
 def tool_record_start(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     name = str(arguments["name"])
     tags = arguments.get("tags") or []
@@ -869,6 +879,7 @@ def tool_record_start(arguments: dict) -> dict:
 
 
 def tool_record_stop(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     if s.recorder is None:
         return {"ok": False, "error": "not recording"}
@@ -879,6 +890,7 @@ def tool_record_stop(arguments: dict) -> dict:
 
 
 def tool_replay(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     name = str(arguments["name"])
     on_drift = str(arguments.get("on_drift", "halt"))
@@ -892,6 +904,7 @@ def tool_replay(arguments: dict) -> dict:
 
 def tool_list_devices(arguments: dict) -> dict:
     """Enumerate real devices reachable via Apple devicectl + libimobiledevice."""
+    _entitlement_gate()
     from . import device
     from .wda import registry as wda_registry
     ok, missing = device.libimobiledevice_available()
@@ -930,6 +943,7 @@ def tool_list_devices(arguments: dict) -> dict:
 
 
 def tool_logs(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     lines = int(arguments.get("lines", 200))
     predicate = arguments.get("predicate")
@@ -1012,6 +1026,7 @@ def _resolve_bundle_id(s, arguments: dict) -> str:
 
 
 def tool_perf(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
     snap = perf.snapshot(s.device.udid, bundle_id)
@@ -1026,6 +1041,7 @@ def tool_perf(arguments: dict) -> dict:
 
 
 def tool_perf_baseline(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
     label = str(arguments.get("label") or "default")
@@ -1042,6 +1058,7 @@ def tool_perf_baseline(arguments: dict) -> dict:
 
 
 def tool_perf_compare(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
     label = str(arguments.get("label") or "default")
@@ -1067,16 +1084,19 @@ def tool_perf_compare(arguments: dict) -> dict:
 
 
 def tool_memory(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
     return perf.memory_detail(s.device.udid, bundle_id)
 
 
 def tool_doctor(arguments: dict) -> dict:
+    _entitlement_gate()
     return diagnostics.doctor()
 
 
 def tool_app_state(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
     if s.target == "device":
@@ -1085,6 +1105,7 @@ def tool_app_state(arguments: dict) -> dict:
 
 
 def tool_apps(arguments: dict) -> dict:
+    _entitlement_gate()
     udid = arguments.get("udid")
     target = "simulator"
     if not udid:
@@ -1103,6 +1124,7 @@ def tool_apps(arguments: dict) -> dict:
 
 
 def tool_crashes(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     since = bool(arguments.get("since_session_start", True))
     since_ts = s.started_at if since else 0.0
@@ -1122,6 +1144,7 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
     Re-observing 200 ms post-tap and retrying when the alert text persists
     closes that window without inflating the no-alert path.
     """
+    _entitlement_gate()
     import time as _t
     s = session.get(arguments["session_id"])
     if s.target == "device":
@@ -1159,6 +1182,7 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
 
 
 def tool_pre_grant_permissions(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     bundle_id = _resolve_bundle_id(s, arguments)
     perms = arguments.get("permissions") or []
@@ -1168,12 +1192,14 @@ def tool_pre_grant_permissions(arguments: dict) -> dict:
 
 
 def tool_set_appearance(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     appearance = str(arguments.get("appearance", "light"))
     return robustness.set_appearance(s.device.udid, appearance)
 
 
 def tool_dismiss_sheet(arguments: dict) -> dict:
+    _entitlement_gate()
     s = session.get(arguments["session_id"])
     sw, sh = _ensure_screenshot_dims(s)
     x_mid = sw // 2
@@ -1198,16 +1224,19 @@ def tool_dismiss_sheet(arguments: dict) -> dict:
 
 
 def tool_list_replays(arguments: dict) -> dict:
+    _entitlement_gate()
     return {"replays": robustness.list_replays(recorder.recordings_root())}
 
 
 def tool_validate_replay(arguments: dict) -> dict:
+    _entitlement_gate()
     name = str(arguments["name"])
     return robustness.validate_replay(recorder.recordings_root(), name)
 
 
 def tool_lint_recordings(arguments: dict) -> dict:
     """Lint every recording under `path` (or recordings root). a9.1."""
+    _entitlement_gate()
     path_arg = arguments.get("path")
     target = Path(path_arg) if path_arg else recorder.recordings_root()
     results = recorder.lint_recordings(target)
@@ -1221,6 +1250,7 @@ def tool_lint_recordings(arguments: dict) -> dict:
 
 def tool_migrate_recording(arguments: dict) -> dict:
     """Backfill a `requires:` block onto an existing recording. a9.1."""
+    _entitlement_gate()
     name = str(arguments["name"])
     force = bool(arguments.get("force", False))
     dry_run = bool(arguments.get("dry_run", False))
@@ -1248,6 +1278,7 @@ def tool_version(arguments: dict) -> dict:
     disk (after `pip install --upgrade simdrive` without restarting). The
     fix is to restart the agent host / MCP server so the new code is loaded.
     """
+    _entitlement_gate()
     disk = _disk_version()
     return {
         "version": _LOADED_VERSION,
@@ -1266,6 +1297,7 @@ def tool_clear_field(arguments: dict) -> dict:
     If a `target` is given, tap it first to ensure the field has first-responder
     focus before the clear operation.
     """
+    _entitlement_gate()
     from . import hid_inject
     s = session.get(arguments["session_id"])
     target = arguments.get("target")
@@ -1337,14 +1369,13 @@ async def tool_run_journey(arguments: dict) -> dict:
 
     Returns RunResult.to_dict().
     """
-    from simdrive.license.entitlement import check_entitlement
+    # License gate — raises LicenseError on expiry / invalid / not found.
+    _entitlement_gate()
+
     from simdrive.journey.schema import load_journey
     from simdrive.journey.persona import load_persona
     from simdrive.journey.runner import run_journey
     from simdrive.journey.mcp_sampling_client import MCPSamplingLLMClient
-
-    # License gate — raises LicenseError on expiry / invalid / not found.
-    check_entitlement()
 
     # Acquire the MCP session for sampling — required on the MCP path.
     mcp_session = _get_current_mcp_session()
@@ -1413,6 +1444,7 @@ def tool_load_journey(arguments: dict) -> dict:
       journey:  name, goals, success_criteria (as dicts), budget, target, tags
       persona:  slug, name, role, technical_comfort, patience, goals (or null)
     """
+    _entitlement_gate()
     from simdrive.journey.schema import load_journey
 
     path = arguments["path"]
@@ -2178,6 +2210,7 @@ Recording maintenance:
 Trial / license subcommands:
   simdrive trial start --email <you@example.com>
   simdrive trial start --email <you@example.com> --offline-dev
+  simdrive auth <license-key>
   simdrive license show
   simdrive license path
 """
@@ -2591,6 +2624,43 @@ def _cmd_license(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _cmd_auth(args: list[str]) -> None:
+    """Handle ``simdrive auth <license-key>`` — write a paid key + validate."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive auth",
+        description=(
+            "Install a paid SimDrive license key (Pro / Team / Enterprise).\n"
+            "The key is verified locally before being written to disk."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("license_key", help="The license key string from your receipt.")
+    parser.add_argument(
+        "--license-path",
+        default=None,
+        help="Override the license.json path (default: ~/.simdrive/license.json).",
+    )
+
+    ns = parser.parse_args(args)
+
+    from pathlib import Path as _Path
+    from simdrive.license.cli import _DEFAULT_LICENSE_PATH, cmd_auth
+    from simdrive.license.errors import LicenseError
+
+    license_path = _Path(ns.license_path) if ns.license_path else _DEFAULT_LICENSE_PATH
+
+    try:
+        result = cmd_auth(ns.license_key, license_path=license_path)
+        print(result["message"])
+        sys.exit(0)
+    except LicenseError as exc:
+        print(f"Error: {exc.message}", file=sys.stderr)
+        sys.exit(1)
+
+
 # Subcommand dispatch registry — maps the first CLI argument to its handler.
 _SUBCOMMANDS: dict = {
     "run": _cmd_run,
@@ -2600,6 +2670,7 @@ _SUBCOMMANDS: dict = {
     "wda-down": _cmd_wda_down,
     "trial": _cmd_trial,
     "license": _cmd_license,
+    "auth": _cmd_auth,
     "lint-recordings": _cmd_lint_recordings,
     "migrate-recording": _cmd_migrate_recording,
 }
