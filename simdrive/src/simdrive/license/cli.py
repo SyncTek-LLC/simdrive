@@ -5,6 +5,7 @@ Subcommands:
   simdrive trial start --email <email> --offline-dev
   simdrive license activate <key>
   simdrive license status
+  simdrive auth <license-key>           (writes a paid key + validates locally)
 
 These functions are called by server.py / the CLI entry point. Each
 function is standalone and testable without the click layer.
@@ -96,6 +97,13 @@ def cmd_trial_start(
         offline_dev = True
 
     if offline_dev:
+        # Trial-history check: refuse to issue a second trial for the same
+        # (email, machine) pair. Bypasses if the file is missing/corrupt.
+        from simdrive.license import trial_history
+        from simdrive.license.errors import trial_already_used
+        if trial_history.already_issued(email):
+            raise trial_already_used(email)
+
         key, expires_at = _issue_dev_license(email)
         start_trial(
             email=email,
@@ -103,6 +111,7 @@ def cmd_trial_start(
             expires_at=expires_at,
             license_path=license_path,
         )
+        trial_history.record_issued(email)
         return {
             "key": key,
             "expires_at": expires_at,
@@ -183,6 +192,68 @@ def cmd_license_activate(
         "seats": payload["seats"],
         "expires_at": payload["expires_at"],
         "message": f"License activated: {payload['tier']} tier, {payload['seats']} seat(s).",
+    }
+
+
+def cmd_auth(
+    key: str,
+    *,
+    license_path: Path = _DEFAULT_LICENSE_PATH,
+    verify_key=None,
+) -> dict:
+    """Install a paid license key from ``simdrive auth <key>``.
+
+    Validates the key locally (Ed25519 signature + expiry) before writing it to
+    disk; invalid keys never touch ``license.json``. This is the user's entry
+    point post-purchase: copy-paste the key string from the email/checkout
+    receipt and the agent host immediately picks it up on the next tool call.
+
+    Parameters
+    ----------
+    key:
+        The base64url-encoded license key string.
+    license_path:
+        Override the destination path (default: ``~/.simdrive/license.json``).
+    verify_key:
+        Test-only override of the verification key. Production callers should
+        leave this ``None`` so the embedded production key is used.
+
+    Returns
+    -------
+    dict
+        ``{"tier": str, "seats": int, "expires_at": int, "message": str}``.
+
+    Raises
+    ------
+    LicenseError
+        ``license_invalid`` / ``license_expired`` — the key is rejected before
+        anything is written to disk.
+    """
+    from simdrive.license.public_key import get_public_key
+    from simdrive.license.validator import validate_license
+
+    vk = verify_key if verify_key is not None else get_public_key()
+    payload = validate_license(key, verify_key=vk)
+
+    license_path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {
+        "license_key": key,
+        "email": payload.get("customer_email", ""),
+        "expires_at": payload["expires_at"],
+        "installed_at": int(time.time()),
+        "last_server_check": None,
+        "last_known_server_time": None,
+    }
+    license_path.write_text(json.dumps(data, indent=2))
+
+    return {
+        "tier": payload["tier"],
+        "seats": payload["seats"],
+        "expires_at": payload["expires_at"],
+        "message": (
+            f"License installed: {payload['tier']} tier, {payload['seats']} seat(s). "
+            f"Stored at {license_path}."
+        ),
     }
 
 
