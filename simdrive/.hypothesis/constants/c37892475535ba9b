@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/journey/errors.py
+# hypothesis_version: 6.141.1
+
+['act_tool_failed', 'attempt', 'cap_usd', 'ci_invalid_journey', 'claude_call_failed', 'claude_cost_cap_hit', 'cost_usd', 'criterion_type', 'inner_code', 'inner_message', 'journey_name', 'journeys_dir', 'llm_calls', 'path', 'persona_slug', 'personas_dir', 'reason', 'seconds', 'steps', 'supported', 'tag_filter', 'tool_name', 'version']

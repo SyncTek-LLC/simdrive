@@ -1,0 +1,26 @@
+schema_version: 1
+name: search-with-debounce
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - search
+  - feature_area_4
+  - debounce
+  - type_text
+
+goals:
+  - Navigate to the Search tab (identifier tab_search)
+  - Tap the search field (identifier search_field)
+  - Type "Run" and wait 400ms for the debounce to settle
+  - Observe search results appear (identifiers search_result_0 etc)
+  - Verify at least one result is visible
+
+success_criteria:
+  - text_visible: Morning Run
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

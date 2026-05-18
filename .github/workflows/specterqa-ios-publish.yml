@@ -1,0 +1,156 @@
+name: simdrive Publish to PyPI
+
+# INIT-2026-549 W1: tag scheme migrated from `specterqa-ios-v*` to `simdrive-v*`.
+# Three pre-publish gates run before the build, in order:
+#   1. version-match    — git tag == simdrive-v<pyproject.version>
+#   2. CHANGELOG head   — first `## [X.Y.Z]` heading == pyproject version
+#   3. tests-clean      — pytest simdrive/tests -m "not live" passes
+# Build then runs, the wheel is installed into a fresh venv for a `--version`
+# smoke test, and only then does the publish job push to PyPI via OIDC.
+
+on:
+  push:
+    tags:
+      - "simdrive-v*.*.*"
+      - "simdrive-v*.*.*a*"
+      - "simdrive-v*.*.*b*"
+      - "simdrive-v*.*.*rc*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build + smoke, no publish)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  pre-publish-gates:
+    name: Pre-publish gates (version match + CHANGELOG + tests)
+    runs-on: macos-14
+    outputs:
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Parse tag + verify version-match + CHANGELOG head
+        id: parse
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Tag: $TAG"
+          python - <<'PY'
+          import os, sys, pathlib
+          sys.path.insert(0, str(pathlib.Path('.').resolve()))
+          from tests.packaging.test_publish_gates import (
+              parse_tag, parse_pyproject_version, check_publish_gates,
+          )
+          tag = os.environ['GITHUB_REF'].removeprefix('refs/tags/')
+          py = pathlib.Path('simdrive/pyproject.toml').read_text()
+          cl = pathlib.Path('simdrive/CHANGELOG.md').read_text()
+          check_publish_gates(tag, py, cl)
+          ver = parse_pyproject_version(py)
+          # Emit the version for downstream jobs.
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
+              fh.write(f"version={ver}\n")
+          print(f"OK — tag, pyproject, and CHANGELOG all agree on {ver}")
+          PY
+
+      - name: Install simdrive[dev] (for the test gate)
+        working-directory: simdrive
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run unit + non-live tests (publish gate)
+        working-directory: simdrive
+        run: pytest tests -m "not live" -v
+
+  build:
+    name: Build wheel + sdist (universal2)
+    needs: pre-publish-gates
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: simdrive
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build native HID helper (universal2)
+        run: cd native && make clean && make
+
+      - name: Verify universal2 binary
+        run: |
+          file src/simdrive/_bin/simdrive-input
+          file src/simdrive/_bin/simdrive-input | grep -q "universal binary"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build distributions
+        env:
+          SIMDRIVE_SKIP_NATIVE_BUILD: "1"
+        run: python -m build
+
+      - name: Verify dist contents
+        run: |
+          ls -la dist/
+          twine check dist/*
+
+      - name: Fresh-venv install smoke test
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/simdrive-smoke-venv
+          python -m venv /tmp/simdrive-smoke-venv
+          /tmp/simdrive-smoke-venv/bin/pip install --upgrade pip
+          /tmp/simdrive-smoke-venv/bin/pip install dist/*.whl
+          # `simdrive --version` should print the version we just published.
+          /tmp/simdrive-smoke-venv/bin/simdrive --version || \
+            /tmp/simdrive-smoke-venv/bin/python -c "import simdrive; print(simdrive.__version__)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simdrive-dist
+          path: simdrive/dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/simdrive-v') && !inputs.dry_run }}
+    # PyPI Trusted Publishers (OIDC) — no token needed.
+    # Configure once at: https://pypi.org/manage/account/publishing/
+    #   project name:  simdrive
+    #   owner:         SyncTek-LLC
+    #   repo:          specterqa-ios   (until GitHub repo rename completes)
+    #   workflow:      specterqa-ios-publish.yml
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: simdrive-dist
+          path: dist/
+
+      - name: Publish to PyPI (via Trusted Publisher / OIDC)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true

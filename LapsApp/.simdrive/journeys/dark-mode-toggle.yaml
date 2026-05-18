@@ -1,0 +1,29 @@
+schema_version: 1
+name: dark-mode-toggle
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - settings
+  - feature_area_9
+  - appearance
+  - set_appearance
+  - accessibility_text_size
+
+goals:
+  - Navigate to the Appearance tab (identifier tab_appearance)
+  - Tap the Dark mode option (identifier settings_appearance_dark)
+  - Verify the app switches to dark appearance via set_appearance observation
+  - Navigate to Settings tab
+  - Tap Set Extra-Large text size (identifier settings_text_size_xl)
+  - Verify text size label shows Extra-Large
+  - Return to Appearance tab and switch back to system appearance
+
+success_criteria:
+  - text_visible: Appearance
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

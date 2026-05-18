@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/routes/trials.py
+# hypothesis_version: 6.152.4
+
+[86400, '/trials', 'trial', 'unknown']

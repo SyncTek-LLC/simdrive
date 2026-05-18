@@ -1,0 +1,12 @@
+schema_version: 1
+slug: smoke_user
+name: Smoke User
+role: A tester verifying that the journey runner wiring works end-to-end.
+technical_comfort: intermediate
+patience: high
+goals:
+  - Confirm the journey framework is wired correctly
+  - Validate that criteria evaluation passes when text is visible
+frustrations:
+  - Flaky test infrastructure
+locale: en-US

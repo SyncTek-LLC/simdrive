@@ -1,0 +1,27 @@
+schema_version: 1
+name: blog-scroll-bottom
+persona: returning_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - reader
+  - feature_area_3
+  - webview
+  - swipe
+  - end_of_content
+
+goals:
+  - Navigate to the Blog tab
+  - Tap the marathon-training post (identifier blog_post_marathon-training)
+  - Observe article title via OCR (WKWebView is XCTest-blind)
+  - Swipe up (scroll down) within the WKWebView to reach end of article
+  - Verify end-of-article content is visible via OCR
+
+success_criteria:
+  - text_visible: 16 Weeks to Marathon Day
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

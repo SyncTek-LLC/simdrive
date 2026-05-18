@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/license/entitlement.py
+# hypothesis_version: 6.141.1
+
+[250, 1000, '.simdrive', 'customer_email', 'enterprise', 'expires_at', 'license.json', 'license_key', 'pro', 'seats', 'solo', 'subject', 'team', 'tier', 'trial']

@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/middleware/quotas.py
+# hypothesis_version: 6.141.1
+
+[0.0, 100.0, 'Authorization', 'Bearer ', 'Retry-After', 'customer_email', 'percent_used', 'period_end', 'period_start', 'runs_limit', 'runs_used', 'solo', 'tier', 'unknown']
