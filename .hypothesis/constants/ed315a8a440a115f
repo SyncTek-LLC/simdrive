@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/errors.py
+# hypothesis_version: 6.141.1
+
+['action', 'already_recording', 'available', 'code', 'details', 'error', 'field', 'form', 'hid_unavailable', 'invalid_argument', 'message', 'missing_target', 'name', 'no_device', 'no_session', 'not_recording', 'ok', 'path', 'query', 'reason', 'recording_not_found', 'replay_drift_halt', 'session_id', 'sim_unhealthy', 'similarity', 'step_id', 'target_not_found', 'threshold', 'udid', 'value', 'why']

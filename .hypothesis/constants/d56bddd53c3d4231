@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/session.py
+# hypothesis_version: 6.141.1
+
+['.simdrive', 'Recorder', 'SIMDRIVE_HOME', 'Session', 'a', 'actions.jsonl', 'active', 'any_booted', 'device', 'device_name', 'launch_failed', 'os_version', 'sessions', 'simulator', 'target', 'udid']

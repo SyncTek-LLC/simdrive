@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/hid_inject.py
+# hypothesis_version: 6.141.1
+
+[5.0, 15.0, 1000.0, '_bin', 'button', 'chord', 'down', 'home', 'key', 'lock', 'side', 'simdrive-input', 'siri', 'size', 'tap', 'text', 'up']

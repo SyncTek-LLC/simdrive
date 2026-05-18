@@ -1,0 +1,26 @@
+schema_version: 1
+name: oauth-google-happy
+persona: returning_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - oauth
+  - feature_area_2
+  - google
+  - mock_flow
+
+goals:
+  - Navigate to the Auth tab (identifier auth_screen)
+  - Tap the Sign in with Google button (identifier auth_google_button)
+  - Observe the mock Safari-sheet overlay appear (identifier auth_mock_sheet_title)
+  - Tap the Allow button on the mock sheet (identifier auth_mock_sheet_allow)
+  - Verify the authenticated state shows with a mock_google_oauth2_ prefixed token
+
+success_criteria:
+  - text_visible: Signed in via Google
+  - no_crash: true
+
+budget:
+  max_steps: 15
+  max_seconds: 90
+  max_llm_calls: 20

@@ -1,0 +1,33 @@
+schema_version: 1
+name: perf-baseline-and-stress
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - performance
+  - feature_area_11
+  - perf_baseline
+  - stress_test
+  - 1000_rows
+
+goals:
+  - Navigate to the Year tab (identifier tab_year)
+  - Observe the empty state with Load button
+  - Call perf_baseline to establish a performance snapshot before loading
+  - Tap Load 1000 Activities button (identifier year_load_button)
+  - Wait for all 1000 rows to render (identifier year_list)
+  - Call perf_compare against the baseline
+  - Scroll the list to exercise rendering under memory pressure
+  - Tap any row to open the animated chart (identifier year_chart)
+  - Verify render time label is visible (identifier year_render_time_label)
+
+success_criteria:
+  - text_visible: Year in Laps
+  - no_crash: true
+  - perf_under:
+      memory_mb: 400
+
+budget:
+  max_steps: 25
+  max_seconds: 180
+  max_llm_calls: 30

@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/license/validator.py
+# hypothesis_version: 6.141.1
+
+[86400, '.', '=', 'ascii', 'expires_at']

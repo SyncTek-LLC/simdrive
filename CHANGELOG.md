@@ -7,6 +7,329 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [1.0.0a9] — 2026-05-11 (alpha — recording state contracts)
+
+Closes a class of replay failure where a divergent app state silently
+executed dozens of blind taps. Implements the **recording state contract**
+proposed by the Example Reader dogfood team
+(`simdrive/docs/FEATURE_REQUEST_STATE_CONTRACT_2026_05_11.md`): every
+recording now carries a `requires:` block captured automatically at
+`record_start` and verified at replay step −1.
+
+**The bug a9 closes:** in the Example Reader a8 dogfood, a replay of the
+SAML-signin recording against a fresh-install state (with a notifications
+permission alert visible at step 0) silently executed 23 taps at SSIM
+0.014, reporting `ok: true`. First tap meant for "Add Library" actually
+hit "Don't Allow"; the remaining 22 landed on arbitrary UI. Drift detection
+was post hoc — by the time the user knew, the app had been touched 23
+times. Third occurrence of this failure mode against Example Reader; a9 closes it
+at the schema level so individual projects no longer have to invent local
+workarounds.
+
+### Added — state contract on recordings
+
+- **`requires:` schema** in recording YAML. Captured, not authored. Three
+  sub-blocks:
+  - `requires.app.{bundle_id, version, version_match}` — `version_match`
+    is one of `exact | minor | major | any` (default `minor`).
+  - `requires.sim.{device, ios_version}` — `ios_version` accepts a raw
+    string or a semver predicate (`>=18.0`, `<19.0`, `!=18.2`, etc.).
+  - `requires.initial_state.{foreground, text_subset_required,
+    text_subset_forbidden, primary_button_label}` — captured by OCRing
+    the step-0 screen via the existing `som.detect_marks()` pipeline.
+- **Auto-population at `record_start`** — observes the live screen,
+  captures app bundle/version + sim device/iOS + top text marks. User
+  doesn't write the contract; the camera does.
+- **Verification at replay step −1** — before any step executes, observes
+  the live state and compares against `requires:`. On mismatch, halts
+  with `halt_reason: "state_contract_mismatch"`, `halted_at: 0`,
+  structured `expected` / `actual` / `remedy` payload. If a permission
+  alert is detected in `actual.text_subset_present` (heuristic on
+  "Don't Allow" / "Allow" / "OK" / "Cancel"), the `remedy` field points
+  at `xcrun simctl privacy ... grant ...` rather than generic advice.
+- **New `replay` parameter:** `halt_on_state_mismatch` (default `True`).
+  Today's "run anyway" behavior is now opt-in by passing `False` — a
+  warning is still emitted in the response.
+- **Deprecation warning for unannotated recordings:** recordings without
+  a `requires:` block replay with `_simdrive_warning: "Recording has no
+  \`requires:\` block. State contract not verified. Run
+  \`simdrive migrate-recording <name>\` to capture one."` Existing
+  recordings continue to work.
+
+### Added — lint + migrate tooling
+
+- **`simdrive lint-recordings [--path DIR] [--quiet] [--json]`** CLI
+  command. Walks the directory tree, prints `[OK]` / `[FAIL]` per
+  recording, exits non-zero on any FAIL. `--json` for programmatic
+  consumption (CI `verify-pr.sh` integration).
+- **`simdrive migrate-recording <name> [--force] [--dry-run]`** CLI
+  command. Re-OCRs the step-0 `pre_screenshot` of a pre-a9 recording,
+  builds a `RequiresBlock`, writes the YAML back in place with a
+  `.pre-migrate.bak` sibling for recovery.
+- Both also exposed as MCP tools (`lint_recordings`, `migrate_recording`)
+  for agentic / CI consumers. Tool count: 30 → 32.
+
+### Internal
+
+- Refactored `_capture_state_contract` to share `_build_requires_block`
+  (pure transform on `marks + app/sim metadata`) with
+  `migrate_recording` — capture-time and migrate-time paths produce
+  identical RequiresBlock shapes by construction.
+- `robustness.validate_replay()` now tolerates the new `requires:`
+  top-level key (was: would have rejected as unknown field).
+- One e2e test (`test_replay_halts_on_drift_when_screen_diverges`)
+  updated to opt out of the new step-0 contract check — it deliberately
+  diverges state to test the per-step drift path, which a9.0 would
+  otherwise short-circuit.
+
+### Tests
+- 38 new tests across a9.0 (17) + a9.1 (21).
+- Suite total: 1.0.0a8 baseline 711 → 1.0.0a9 749 passing, 1 skipped.
+
+### Known (carried forward from a8)
+- D6 (empty `idevicesyslog` output on real devices) still investigation-
+  only — awaiting Example Reader dogfood capture of
+  `idevicesyslog -u <udid> 2>&1` for root-cause selection. See
+  `simdrive/docs/D6_LOGS_INVESTIGATION.md`.
+
+---
+
+## [1.0.0a8] — 2026-05-06 (alpha — device session usable on real hardware)
+
+First end-to-end real-device dogfood (`a7`, iPhone 17 Pro Max "Moes Max",
+iOS 26.3.1, 2026-05-06) catalogued 12 device-session bugs in
+`simdrive/docs/DOGFOOD_FEEDBACK_2026_05_06_MOES_MAX.md`. a8 fixes 11 of
+12; the twelfth (D6, empty `idevicesyslog` output) ships as
+investigation-only because the original simctl diagnosis was wrong and
+the right fix differs by root cause — see
+`simdrive/docs/D6_LOGS_INVESTIGATION.md`.
+
+**Net effect:** a7 = "WDA bootstraps but MCP can't drive it"; a8 = "MCP
+device session is usable end-to-end". Suite went 678 → 711 passed.
+
+### Fixed — priority unlock (turns "unusable" into "usable")
+- **D3** `device.launch_app` no longer passes `--start-stopped=false` —
+  modern devicectl rejected the flag, blocking every `session_start`
+  with `app_bundle_id`.
+- **D2** `session_start target=device` now opens a default WDA test
+  session unconditionally (with or without `app_bundle_id`); input verbs
+  no longer hit `wda_session_not_open`.
+- **D1** `observe` gates `screenshot_b64` behind a new
+  `include_screenshot_b64` param (default `false`). The unconditional
+  101k-char b64 payload was overflowing the MCP token budget on real
+  devices. `screenshot_path` is still returned by default.
+
+### Fixed — daemonization
+- **B3** `bootstrap-device` now passes `start_new_session=True` to the
+  xcodebuild Popen and redirects stdout/stderr to
+  `~/.simdrive/wda/<udid>.log`; PID written to
+  `~/.simdrive/wda/<udid>.pid`. WDA survives bootstrap exit; users no
+  longer need a manual `nohup` workaround.
+- **B3** new CLI: `simdrive wda-up <udid>` (relaunch from registry
+  without rebuilding) and `simdrive wda-down <udid>` (SIGTERM via
+  pidfile).
+
+### Fixed — simctl-leak cluster (device sessions stop using simctl)
+- **D4** Device-launch failure raises `device_launch_failed` with a
+  devicectl-aware recovery hint instead of `no_device` with a simctl
+  hint.
+- **D5** `tool_apps` for `target=device` now queries
+  `xcrun devicectl device info apps --device <udid> --json-output -`
+  instead of returning `{apps: []}` from a simctl-only call.
+- **D7** `tool_app_state` for `target=device` now queries
+  `xcrun devicectl device info processes ...` instead of leaking
+  simctl's "Invalid device" error string.
+- New helper `simdrive.diagnostics._devicectl_info_json` underlies both.
+
+### Fixed — bootstrap polish
+- **B1** `verify_xcode_account_for_team(team_id)` now scans the parsed
+  plist output of `defaults read com.apple.dt.Xcode
+  DVTDeveloperAccountManagerAppleIDLists` for an actual team binding
+  (`teamID`/`teamIDs`/`DVTDeveloperAccountTeamID`) instead of grepping
+  for the literal substring `"identifier"` (which matched any non-empty
+  account list and let bootstraps proceed when no account was bound to
+  the requested team).
+- **B2** When multiple Apple Development certs share the requested
+  `team_id`, the most-recently-issued cert is auto-picked instead of
+  raising `wda_signing_ambiguous`. Ambiguity is still raised when
+  `team_id` was not provided.
+- **B4** When `xcodebuild build-for-testing` emits a `BUILD FAILED`
+  before its `-allowProvisioningUpdates` retry succeeds, the FAILED line
+  is logged at DEBUG with a single INFO-level summary
+  ("First attempt failed pending provisioning fetch; retry succeeded
+  …expected"). Stops scaring users on first-run bootstraps.
+
+### Fixed — session metadata
+- **D8** `bootstrap-device` now captures device name from
+  `xcrun devicectl device info details` and iOS version from WDA
+  `/status`; `~/.simdrive/wda/<udid>.json` carries `device_name` and
+  `os_version` keys; `tool_session_start` returns these instead of
+  `device: "Real Device"`, `os_version: ""`.
+
+### Investigated (not fixed — gated to a9)
+- **D6** `tool_logs` returns empty on real devices. The original a7
+  report blamed simctl, but the device path actually uses
+  `idevicesyslog`. Five candidate root causes ranked
+  (1s-warmup-too-short → broken brew binary → over-aggressive predicate
+  → DEVNULL'd stderr → Developer Mode regression) in
+  `simdrive/docs/D6_LOGS_INVESTIGATION.md`. a9 will pick the right fix
+  after TestVendor dogfood captures `idevicesyslog -u <udid> 2>&1` against
+  Example Reader on a real device.
+
+### Tests
+- 33 new tests across the four fix waves (1.0.0a7 baseline 678 →
+  1.0.0a8 711 passing, 1 skipped).
+- D5/D7 verified live against an iPad on iOS 26 / Xcode 26 (devicectl
+  JSON shape confirmed).
+
+### Known
+- CHANGELOG history for a3 → a7 not yet backfilled (gap pre-dates a8).
+- Pre-existing iOS 26 simulator TextField-focus timing flake in
+  `test_e2e_testkit.py::test_type_text_followed_by_submit_produces_result`
+  can intermittently fail on busy hosts; passes on isolated rerun and
+  full suite re-runs.
+
+---
+
+## [1.0.0a2] — 2026-05-02 (alpha — post-WDA cleanup + audit-driven fixes)
+
+### Fixed
+- **P1: `run_ci()` call-arg mismatch in `server.py`** — API drift from cycle 1 integration; runtime error when CI journey endpoint hit
+- **P1: missing test deps in [dev]** — `anthropic`, `fastapi`, `sqlalchemy`, `hypothesis`, `moto[s3]`, `pytest-cov` were used in tests but not declared; `pip install simdrive[dev]` now collects all tests
+- **5 asserts in `journey/criteria.py`** converted to explicit `raise ValueError` (asserts get stripped under `PYTHONOPTIMIZE`)
+- **105 ruff F401/E501 errors** auto-fixed across `simdrive/src/`, `simdrive/tests/`, `scripts/`
+- **Stray `print()` calls** in `server.py` converted to logger calls
+- License metadata aligned to Elastic-2.0: pyproject.toml previously
+  declared `license = "MIT"` but `simdrive/LICENSE` was MIT and root
+  `LICENSE` was Elastic-2.0 — three files in three states. Standardized
+  on Elastic License 2.0 across pyproject, simdrive/LICENSE, and root
+  LICENSE. SimDrive 1.0 ships as a commercial product: free for
+  personal/internal use, prohibits offering as a competing managed
+  service. (LapsApp at repo root remains separately MIT-licensed.)
+
+### Added
+- `Python 3.13` classifier in `pyproject.toml`
+
+### Security
+- pip CVE-2026-3219 — upgrade venv pip to 26.1
+
+---
+
+## [1.0.0a1] — 2026-05-02 (alpha — SimDrive 1.0 first alpha)
+
+This is the first alpha of the **SimDrive 1.0** line. It supersedes the
+former `specterqa-ios` 16.x line: PyPI distribution name reverted to
+`simdrive` (matching the public brand) and Python import path is now
+`from simdrive.X import Y`. **Migration for existing installs:**
+`pip uninstall specterqa-ios && pip install simdrive`.
+
+### Added — Journey runner + license + cloud foundation (Cycle 1)
+- **`run_journey` MCP tool + `simdrive run` / `simdrive ci` CLI** — agent loop with persona + journey YAML, budget enforcement, faked or real `LLMClient` (Anthropic SDK wrapper at `simdrive.journey.claude_client`)
+- **License system** — Ed25519-signed offline-verifiable keys with 7-day grace, `simdrive trial start`, `simdrive license activate`, `simdrive license status`
+- **Cloud private API skeleton** — FastAPI app with `/v1/trials`, `/v1/licenses/{activate,status}`, `/v1/recordings`, R2Stub storage
+
+### Added — LapsApp dogfood platform (Cycle 1+2+3)
+- New `LapsApp/` Xcode project at repo root: 12 feature areas (Settings, Light/Dark, Crash-Trigger, Search, OAuth-mocked, WebView reader, Activities infinite-scroll, Forms async-validation, Sheets+modals, PerfStress 1000-row, Offline mode toggle, Multi-app launcher), 5 primary tabs, 98 Swift tests
+- 20-journey YAML corpus + 3 personas under `LapsApp/.simdrive/`
+
+### Added — Cloud production-ready (Cycle 2)
+- **Real R2 storage** — boto3-backed `R2Client` (env-driven), R2Stub fallback for local dev
+- **Per-tier monthly run quotas** — Solo 50 / Pro 250 / Team 1000; `POST /v1/runs/increment` enforces with 429+`Retry-After`
+- **`GET /v1/licenses/usage`** — returns runs_used / runs_limit / percent_used / period dates
+- **`GET /health`** for Railway healthcheck
+- **Auth hardening** — expired/tampered/missing-bearer rejection paths tested; per-route required-tier gates
+- **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml, .env.example, README.md}`
+
+### Added — Production hardening (Cycle 3)
+- **Observability package** `simdrive.observability.{logger, metrics, tracing}` — `SIMDRIVE_DEBUG=1` toggles JSON-shaped logs; counters + histograms (`journey_runs_total`, `tap_latency_ms`, `observe_latency_ms`, `claude_call_cost_usd`); span-context tracing
+- **Perf benchmark suite** at `simdrive/tests/perf/` with 2× regression CI gate; baselines committed
+- **Edge-case coverage** for runner, validator, recordings boundaries
+- **`Recovery:` line audit** — every error constructor across `errors.py` and per-package modules carries a copyable next-step
+- **Docs** — `OBSERVABILITY.md`, `PERFORMANCE.md`, `RECOVERY.md`
+
+### Added — Production credentials
+- **Production Ed25519 license-signing public key** injected (private key held in Chairman's secure storage; configured as `SIMDRIVE_LICENSE_PRIVATE_KEY` env var on the Railway license server)
+
+### Fixed
+- `recordings.py` DELETE 204 + response-model `AssertionError` at router init (introduced and fixed in Cycle 2+3)
+- `pydantic`, `email-validator`, `pynacl` declared as runtime deps (were missing from previous pyproject)
+- Stale repo-root `pyproject.toml` removed (named the package `specterqa-ios@16.0.0a5` and shadowed the canonical `simdrive/pyproject.toml`)
+
+### Changed
+- Public brand and PyPI distribution name: `specterqa-ios` → `simdrive`
+- Python import path: `from specterqa_ios.X` → `from simdrive.X`
+- Major version reset to `1.0.0a1` to match the SimDrive 1.0 launch trajectory (the 17.x line was never published to PyPI)
+- 5-tab navigation in LapsApp (Home / Activities / Search / Blog / Settings) — avoids the iOS TabView "More" overflow
+
+### Test totals at this alpha
+- Python: ~488 tests pass + 3 perf benchmarks with 2× regression gates
+- Swift (LapsApp): 95 unit + 3 UI = 98 tests pass on iPhone 16e iOS 26.2
+- Smoke: `scripts/smoke_journey_cycle1.py` exits 0 plain and with `SIMDRIVE_DEBUG=1`
+
+### Pending for 1.0.0 (next alphas)
+- Real-device input via WebDriverAgent (full parity scope; in-flight)
+- Stripe webhook signature verification on `/v1/licenses/activate`
+- Cycle 4 dogfood-to-perfection (5 passes including Example Reader re-validation)
+
+---
+
+## [16.0.0a5] — 2026-05-02 (alpha — pydantic runtime dep correctness)
+
+### Fixed
+- **P1: `pydantic` declared as runtime dependency** (was dev-only). Journey + license packages import pydantic at module load; a fresh `pip install specterqa-ios` would `ModuleNotFoundError` without this fix.
+
+---
+
+## [16.0.0a4] — 2026-05-02 (alpha — SimDrive 1.0 Cycle 1: journey runner + license/cloud + LapsApp scaffold)
+
+**Status:** Cycle 1 of the SimDrive 1.0 build. Three parallel coding agents
+delivered 251 Python tests and 38 Xcode tests. Atlas integration pass merged
+25 new error codes, registered the `run_journey` MCP tool, wired `simdrive run`
+and `simdrive ci` CLI subcommands, and bumped the version.
+
+### Added
+
+- **Journey runner package** (`simdrive/src/specterqa_ios/journey/`) — Components
+  1, 2, 3, 8 of SimDrive spec: YAML schema + validator, Persona model, AI agent
+  loop with vision-first observe/act, success-criteria evaluator, CI orchestrator.
+  Exposes `run_journey()` as the core execution entry point.
+- **License package** (`simdrive/src/specterqa_ios/license/`) — NaCl-signed license
+  keys, trial activation, 7-day offline grace, entitlement tier model
+  (trial/solo/pro/team/enterprise), cloud CLI helpers. Adds `pynacl>=1.6.2`
+  dependency.
+- **Cloud API scaffold** (`simdrive/src/specterqa_ios/cloud/`) — FastAPI-based
+  license + recording API with R2 stub storage, JWT auth, Stripe webhook skeleton,
+  and rate-limiting groundwork.
+- **LapsApp Xcode scaffold** (`LapsApp/`) — SwiftUI test-host app (iOS 17+,
+  XcodeGen) with 4 feature areas: Search, Settings, Appearance, CrashTrigger.
+  Build and test verified against iPhone 16e iOS 26.2 sim.
+- **`run_journey` MCP tool** registered in `server.py:_TOOLS` — drives a
+  YAML journey against any active session via Claude. License-gated.
+- **`simdrive run` and `simdrive ci` CLI subcommands** — wired in `server.py:serve()`.
+  Both call `check_entitlement()` before proceeding. `run` dispatches to
+  `run_journey()`; `ci` dispatches to `journey.ci.run_ci()`.
+- **`ClaudeLLMClient`** (`journey/claude_client.py`) — Anthropic-SDK-backed
+  implementation of the `LLMClient` Protocol. Uses `claude-opus-4-7`, tracks
+  cumulative cost via `cost_usd` property.
+
+### Test additions
+
+- 137 Python tests — journey package (schema, persona, criteria, runner, CI)
+- 76 Python tests — license + cloud packages
+- 6 Python tests — ClaudeLLMClient (all mocked, no real API calls)
+- 38 Xcode/Swift tests — LapsApp feature unit + UI tests
+- **Total Cycle 1 new tests: 257 (219 Python + 38 Swift)**
+
+### Pending for Atlas before Cycle 2
+
+- Real `SIMDRIVE_PUBLIC_KEY_HEX` keypair needs Chairman generation and injection
+  into `license/public_key.py`. Current public key is a placeholder — license
+  signing/verification will fail in production until this is set.
+- Live smoke against TestKitApp deferred to Cycle 4 dogfood pass.
+- Cloud API requires database + R2 credentials before deployment.
+
+---
+
 ## [16.0.0a3] — 2026-04-28 (alpha — Maurice's a2 dogfood feedback, P0 plumbing fixes)
 
 **Status:** plumbing fixes from `.specterqa/dogfood/v16.0.0a2-maurice.md`. The

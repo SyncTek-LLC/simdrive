@@ -1,0 +1,26 @@
+schema_version: 1
+name: oauth-apple-happy
+persona: returning_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - oauth
+  - feature_area_2
+  - apple
+  - mock_flow
+
+goals:
+  - Navigate to the Auth tab
+  - Tap the Sign in with Apple button (identifier auth_apple_button)
+  - Observe loading state, then simulatingExternalSheet state
+  - Verify authenticated state with mock_apple_id_ prefixed token
+  - Confirm the sign-out button is visible (identifier auth_signout_button)
+
+success_criteria:
+  - text_visible: Signed in via Apple
+  - no_crash: true
+
+budget:
+  max_steps: 15
+  max_seconds: 90
+  max_llm_calls: 20

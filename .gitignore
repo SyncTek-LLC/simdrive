@@ -14,3 +14,7 @@ venv/
 .pytest_cache/
 .ruff_cache/
 *.ips
+
+# LapsApp — Xcode user-specific state (project.pbxproj IS committed)
+LapsApp/LapsApp.xcodeproj/xcuserdata/
+LapsApp/LapsApp.xcodeproj/project.xcworkspace/

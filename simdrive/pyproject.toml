@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simdrive"
+version = "1.0.0a13"
+description = "SimDrive — MCP-native iOS simulator + real-device automation. Agent-first: your MCP client drives via 32 vision-first tools. SimDrive does not require an API key."
+readme = "README.md"
+license = "Elastic-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+authors = [
+    {name = "SyncTek LLC", email = "info@synctek.io"},
+]
+keywords = ["ios", "simulator", "mcp", "claude", "testing", "qa", "agent", "anthropic", "automation", "xcuitest", "appium-alternative", "ai-testing", "sampling", "xcode"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "Pillow>=10.0",
+    "boto3>=1.20",
+    "email-validator>=2.0",
+    "httpx<1.0",  # defensive: mcp 1.27.0 has unbounded httpx>=0.27.1; pip --pre picks httpx 1.0.dev3 which breaks httpx-sse. Remove once upstream mcp pins its own upper bound. (INIT-2026-545)
+    "mcp>=1.0",
+    "prometheus-client>=0.19",
+    "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-Vision>=10.0",
+    "pydantic>=2.0",
+    "pynacl>=1.6.2",
+    "pyyaml>=6.0",
+    "requests>=2.28",
+]
+
+[project.urls]
+Homepage = "https://synctek.io/products/simdrive"
+Repository = "https://github.com/SyncTek-LLC/specterqa-ios"
+Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
+# NOTE: GitHub repository rename to `simdrive` is pending Chairman action (INIT-2026-549).
+# After rename, update Repository and Issues URLs to `SyncTek-LLC/simdrive`.
+
+[project.optional-dependencies]
+ssim = ["scikit-image>=0.22"]
+claude = [
+    "anthropic>=0.30",
+]
+dev = [
+    "anthropic>=0.30",
+    "fastapi>=0.115",
+    "hypothesis>=6",
+    "httpx>=0.24",
+    "moto[s3]>=5.0",
+    "mypy>=1.0",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23",
+    "pytest-benchmark>=4.0",
+    "pytest-cov>=4",
+    "ruff>=0.1.0",
+    "sqlalchemy>=2.0",
+]
+cloud = [
+    "boto3>=1.20",
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "sqlalchemy>=2.0",
+    "pynacl>=1.6.2",
+    "email-validator>=2.0",
+]
+
+[project.scripts]
+simdrive = "simdrive.server:serve"
+simdrive-mcp = "simdrive.server:serve"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+simdrive = ["_bin/simdrive-input", "wda/PINNED_SHA.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "live: tests that require a booted iOS Simulator and Xcode",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

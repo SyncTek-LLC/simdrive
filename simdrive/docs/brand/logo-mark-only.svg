@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="simdrive mark">
+  <title>simdrive mark</title>
+  <desc>Pixel pin: a 4×4 light-gray pixel grid, black crosshairs, red tap-pin at the intersection. Mark-only variant for favicon, app icon, social avatar.</desc>
+
+  <g transform="translate(20, 20)">
+    <g fill="#E5E5E5">
+      <rect x="0"   y="0"   width="36" height="36"/>
+      <rect x="40"  y="0"   width="36" height="36"/>
+      <rect x="80"  y="0"   width="36" height="36"/>
+      <rect x="120" y="0"   width="36" height="36"/>
+      <rect x="0"   y="40"  width="36" height="36"/>
+      <rect x="40"  y="40"  width="36" height="36"/>
+      <rect x="80"  y="40"  width="36" height="36"/>
+      <rect x="120" y="40"  width="36" height="36"/>
+      <rect x="0"   y="80"  width="36" height="36"/>
+      <rect x="40"  y="80"  width="36" height="36"/>
+      <rect x="80"  y="80"  width="36" height="36"/>
+      <rect x="120" y="80"  width="36" height="36"/>
+      <rect x="0"   y="120" width="36" height="36"/>
+      <rect x="40"  y="120" width="36" height="36"/>
+      <rect x="80"  y="120" width="36" height="36"/>
+      <rect x="120" y="120" width="36" height="36"/>
+    </g>
+
+    <g stroke="#0A0A0A" stroke-width="2.5" stroke-linecap="round">
+      <line x1="-16" y1="98" x2="172" y2="98"/>
+      <line x1="98"  y1="-16" x2="98" y2="172"/>
+    </g>
+
+    <circle cx="98" cy="98" r="16" fill="#FF3D2E"/>
+  </g>
+</svg>

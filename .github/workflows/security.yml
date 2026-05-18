@@ -1,0 +1,59 @@
+name: Security baseline (pip-audit + gitleaks)
+
+# INIT-2026-549 W1: security CI baseline.
+# - pip-audit: blocks on HIGH-severity vulns in the resolved dep graph.
+# - gitleaks: blocks on any detected secret in the diff.
+# CodeQL lives in .github/workflows/codeql.yml (separate workflow for the
+# distinct GitHub Code Scanning permissions model).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily 07:00 UTC dep-scan so newly disclosed CVEs surface within 24h.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: pip-audit (HIGH blocks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pip-audit
+        run: pip install --upgrade pip pip-audit
+      - name: Audit the resolved lock (HIGH blocks)
+        # `--strict` makes pip-audit fail on any non-fixable vuln in the input.
+        # `--vulnerability-service osv` covers PyPI + GitHub Advisory + OSV.
+        # `--severity HIGH` would be ideal but pip-audit doesn't filter by sev;
+        # we instead fail on ANY vuln and document below the policy: a HIGH
+        # finding blocks the PR; a MEDIUM/LOW finding is fixed within 7 days
+        # via a tracked TODO comment.
+        run: |
+          pip-audit -r simdrive/requirements.lock \
+            --vulnerability-service osv \
+            --strict
+
+  gitleaks:
+    name: gitleaks (secrets detection)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs full history to scan since-tag
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE: not required for the GHA action on public repos.
+          GITLEAKS_ENABLE_COMMENTS: "true"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+          GITLEAKS_ENABLE_SUMMARY: "true"

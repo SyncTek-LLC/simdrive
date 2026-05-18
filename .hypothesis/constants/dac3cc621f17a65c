@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/recorder.py
+# hypothesis_version: 6.141.1
+
+[0.85, 128, 300, '.simdrive', 'L', 'SIMDRIVE_HOME', 'action', 'app_bundle_id', 'app_version', 'args', 'captured_at', 'created_at', 'created_by_session', 'device', 'drift', 'drifted', 'duration_ms', 'error', 'execute_error', 'executed', 'force', 'h', 'halt', 'halt_reason', 'halted_at', 'id', 'key', 'name', 'ok', 'os_version', 'post_screenshot', 'pre_screenshot', 'press_key', 'recording finalized', 'recording started', 'recording stopping', 'recording.yaml', 'recording_name', 'recordings', 'replay', 'screenshot_h', 'screenshot_w', 'session_id', 'simdrive.recorder', 'simdrive_version', 'similarity', 'simulator', 'snapshots', 'ssim_masks', 'stable_id', 'stable_id_loose', 'steps', 'steps_planned', 'swipe', 'tags', 'tap', 'text', 'threshold', 'type_text', 'w', 'warn', 'x', 'x1', 'x2', 'y', 'y1', 'y2', 'yaml_path']
