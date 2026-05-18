@@ -1,17 +1,33 @@
-# SpecterQA iOS
+# SimDrive
 
 AI-driven iOS testing that records once and replays free in CI — no AI cost on repeat runs.
 
+> **Note:** This repository is in the process of being renamed from `specterqa-ios` to `simdrive`.
+> The PyPI package is published as **`simdrive`**. GitHub URLs below currently still resolve under
+> the legacy `SyncTek-LLC/specterqa-ios` path; they will redirect after the GitHub rename completes.
+
 ## Install
+
+```bash
+pip install simdrive
+```
+
+Or, install the latest from source:
 
 ```bash
 pip install "git+https://github.com/SyncTek-LLC/specterqa-ios.git"
 ```
 
+## Install (developers)
+
+```bash
+cd simdrive && pip install -e .
+```
+
 ## Quick Start with Claude Code (MCP)
 
 ```bash
-pip install 'specterqa-ios[mcp]'
+pip install simdrive
 ```
 
 Add to `.claude/mcp.json`:
@@ -19,9 +35,8 @@ Add to `.claude/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "specterqa-ios": {
-      "command": "specterqa-ios-mcp",
-      "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
+    "simdrive": {
+      "command": "simdrive"
     }
   }
 }
@@ -32,18 +47,18 @@ Then in Claude Code: _"Run a smoke test on the Palace app, record it as palace-s
 ### Your First Session (30 seconds)
 
 ```python
-# Claude calls these 6 MCP tools in order:
-ios_start_session(bundle_id="com.example.app")
-ios_screenshot()                          # see what's on screen
-ios_tap(label="Sign In")                  # tap by label
-ios_screenshot()                          # verify result
-ios_stop_recording(name="signin-smoke")   # save replay YAML to .specterqa/replays/
-ios_stop_session()                        # clean up
+# Claude calls these MCP tools in order:
+session_start(bundle_id="com.example.app")
+observe()                                 # see what's on screen
+tap(label="Sign In")                      # tap by label
+observe()                                 # verify result
+record_stop(session_id="...", name="signin-smoke")  # save replay
+session_end(session_id="...")             # clean up
 ```
 
-The replay YAML is now in `.specterqa/replays/signin-smoke.yaml`. Run it in CI with:
+The replay file is now saved under your recordings root. Run it in CI with:
 ```bash
-specterqa-ios replay .specterqa/replays/signin-smoke.yaml
+simdrive replay signin-smoke
 ```
 No AI needed on replay — it runs the deterministic engine directly.
 
@@ -51,14 +66,14 @@ No AI needed on replay — it runs the deterministic engine directly.
 
 | Phase | Who drives | Cost |
 |-------|-----------|------|
-| **Record** (once) | Claude AI via MCP | AI tokens |
+| **Record** (once) | Your MCP agent (Claude, Cline, …) | AI tokens |
 | **Replay** (every CI run) | Deterministic replay engine | Free |
 
-Record once with Claude, replay forever without it. This is the key advantage over traditional frameworks.
+Record once with your agent, replay forever without it. This is the key advantage over traditional frameworks.
 
 ## Maestro-Compatible YAML
 
-Users migrating from Maestro can use familiar shorthand — SpecterQA understands it natively:
+Users migrating from Maestro can use familiar shorthand — SimDrive understands it natively:
 
 ```yaml
 replay:
@@ -71,74 +86,42 @@ replay:
     - waitFor: "Feed"             # waits up to 10s for element
 ```
 
-All Maestro shortcuts work alongside native SpecterQA syntax in the same file.
+All Maestro shortcuts work alongside native SimDrive syntax in the same file.
 
-## CI Commands
+## MCP Tool Surface
 
-```bash
-# Run all replays (shared runner on by default — ~10x faster)
-specterqa-ios ci .specterqa/replays/
-
-# Parallel execution — run 4 replays simultaneously
-specterqa-ios ci --parallel 4
-
-# Per-replay isolation (full reset between each replay)
-specterqa-ios ci --no-reuse-runner
-
-# Validate a replay file before running it
-specterqa-ios validate-replay .specterqa/replays/smoke.yaml
-```
-
-## Full CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `setup` | Check Xcode, simulators, API key |
-| `devices` | List available iOS simulators |
-| `boot` | Boot a simulator |
-| `install <app.app>` | Install app on simulator |
-| `init` | Scaffold `.specterqa/` project files |
-| `validate --product <slug>` | Validate product/journey config |
-| `validate-replay <file>` | Validate a replay YAML (schema + references) |
-| `run --product <slug> --journey <id>` | Run a test journey (AI-driven) |
-| `smoke --product <slug>` | Quick smoke test |
-| `replay <file>` | Replay a recorded session |
-| `ci [dir]` | Run all replays in CI mode |
-| `serve` | Start the MCP server |
-
-## vs. Maestro / Appium / XCUITest
-
-| | SpecterQA | Maestro | Appium | XCUITest |
-|---|---|---|---|---|
-| No AI in CI | Yes | Yes | Yes | Yes |
-| AI-assisted recording | Yes | No | No | No |
-| Maestro YAML syntax | Yes | Native | No | No |
-| Parallel CI | Yes (`--parallel N`) | No | Yes | Yes |
-| Zero config | Yes | Yes | No | No |
-| Claude Code native | Yes (MCP) | No | No | No |
+SimDrive exposes **32 MCP tools** (canonical count — see `docs/MCP_TOOL_SURFACE.md`) across these
+categories: session lifecycle, observe, act (tap/swipe/type/press), record/replay, devices/logs,
+performance/memory, diagnostics, app state, alerts/permissions, appearance, replay management,
+recordings maintenance, and journeys.
 
 ## Physical device support (experimental)
 
-SpecterQA can drive a connected iOS device (iPhone or iPad) in addition to the simulator. Physical device support uses `devicectl`-based deployment and communicates with the XCTest runner over the device's IP address, exactly as in the simulator path.
+SimDrive can drive a connected iOS device (iPhone or iPad) in addition to the simulator. Physical device support uses `devicectl`-based deployment and communicates with the XCTest runner over the device's IP address, exactly as in the simulator path.
 
-To opt in, set the environment variable `SPECTERQA_ALLOW_PHYSICAL_DEVICE=1` and pass `device_type="physical"` when calling `ios_start_session`:
+To opt in, set the environment variable `SIMDRIVE_ALLOW_PHYSICAL_DEVICE=1` and pass `device_type="physical"` when calling `session_start`:
 
 ```bash
-export SPECTERQA_ALLOW_PHYSICAL_DEVICE=1
+export SIMDRIVE_ALLOW_PHYSICAL_DEVICE=1
 ```
 
 ```python
 # In your MCP tool call:
-ios_start_session(bundle_id="com.example.app", device_id="<device-udid>", device_type="physical")
+session_start(bundle_id="com.example.app", device_id="<device-udid>", device_type="physical")
 ```
 
-Call `ios_get_capabilities()` first to confirm the physical device type is advertised and check whether `opt_in_active` is `true`. Known limitations: xcodebuild integration has rough edges on iOS 26 that can cause intermittent failures; the install/deploy step is slower than the simulator path; and there is no guarantee of stability on non-GM OS builds. The simulator (`device_type="simulator"`, the default) remains the fully supported path.
+Known limitations: xcodebuild integration has rough edges on iOS 26 that can cause intermittent failures; the install/deploy step is slower than the simulator path; and there is no guarantee of stability on non-GM OS builds. The simulator (`device_type="simulator"`, the default) remains the fully supported path.
 
 ## Requirements
 
 - macOS + Xcode 15+
 - Python 3.10+
-- `ANTHROPIC_API_KEY` (recording only — not needed for replay)
+- An MCP-capable client (Claude Code, Claude Desktop, etc.) supplies its own model credentials —
+  SimDrive itself does not require an API key.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for vulnerability reporting and the supported-versions policy.
 
 ## License
 

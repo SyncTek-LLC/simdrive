@@ -1,0 +1,29 @@
+schema_version: 1
+name: add-note-sheet
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - sheets
+  - feature_area_6
+  - sheet_present
+  - sheet_dismiss
+  - persistence
+
+goals:
+  - Navigate to the Sheets tab (identifier sheets_screen)
+  - Tap Add Note button (identifier notes_add_button)
+  - Verify the Add Note sheet appears (identifier note_sheet_text)
+  - Type a note text in the TextEditor
+  - Tap Save (identifier note_sheet_save)
+  - Verify the sheet is dismissed
+  - Confirm the new note appears in the notes list
+
+success_criteria:
+  - no_crash: true
+  - text_visible: Notes
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

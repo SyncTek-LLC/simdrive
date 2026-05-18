@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/journey/criteria.py
+# hypothesis_version: 6.141.1
+
+[200, '; ', 'cpu_pct', 'error', 'marks', 'memory_mb', 'no crashes detected', 'no_crash', 'perf_under', 'rss_mb', 'screen_matches', 'stable_id', 'text', 'text_visible', 'unknown']

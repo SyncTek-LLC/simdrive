@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/sim.py
+# hypothesis_version: 6.152.4
+
+[5.0, 10.0, 15.0, 30.0, 60.0, 2000, '-', '--json', '--last', '--predicate', '--style', '-b', '-convert', '-o', '.', '30s', ':', 'Booted', 'CFBundleVersion', 'bootstatus', 'cliclick', 'compact', 'devices', 'iOS-', 'io', 'isAvailable', 'json', 'launch', 'list', 'listapps', 'log', 'name', 'pbcopy', 'plutil', 'screenshot', 'show', 'shutdown', 'simctl', 'spawn', 'state', 'terminate', 'udid', 'utf-8', 'xcrun']

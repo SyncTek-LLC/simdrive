@@ -1,0 +1,26 @@
+schema_version: 1
+name: tab-bar-tour-and-back
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - navigation
+  - feature_area_5
+  - stable_id
+
+goals:
+  - Tap the Settings tab (identifier tab_settings) and verify SettingsView title
+  - Tap the Appearance tab (identifier tab_appearance) and verify AppearanceView
+  - Tap the Search tab (identifier tab_search) and verify SearchView
+  - Tap the Blog tab (identifier tab_blog) and verify blog list
+  - Tap the Activities tab (identifier tab_activities) and verify activities list
+  - Return to Settings tab and confirm stable_id is preserved (no layout shift)
+
+success_criteria:
+  - text_visible: Settings
+  - no_crash: true
+
+budget:
+  max_steps: 25
+  max_seconds: 150
+  max_llm_calls: 30

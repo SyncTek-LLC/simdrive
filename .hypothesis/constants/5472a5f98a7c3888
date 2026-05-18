@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/cloud/routes/licenses.py
+# hypothesis_version: 6.141.1
+
+[365, 86400, '/licenses/activate', '/licenses/status', 'enterprise', 'expires_at', 'pro', 'solo', 'team', 'tier', 'trial']

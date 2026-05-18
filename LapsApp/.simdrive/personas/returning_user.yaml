@@ -1,0 +1,22 @@
+schema_version: 1
+slug: returning_user
+name: Jordan
+role: An experienced LapsApp user who logs in regularly, browses their activity history, reads blog posts, and shares content. Comfortable with the app's layout and navigates quickly.
+technical_comfort: intermediate
+patience: medium
+goals:
+  - Browse and review recent activities
+  - Read a blog post and share it
+  - Pull to refresh activity list
+  - Toggle dark mode for evening use
+frustrations:
+  - Slow loading screens
+  - Activities disappearing after a pull-to-refresh
+  - Share sheet that fails to present
+accessibility_needs:
+  large_text: false
+  voice_over: false
+  reduce_motion: false
+  high_contrast: false
+locale: en-US
+notes: Jordan is the persona for the activities list, blog reader, and pull-to-refresh journeys. Represents a realistic returning user who exercises the core loop without special accessibility needs.

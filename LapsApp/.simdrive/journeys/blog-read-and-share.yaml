@@ -1,0 +1,29 @@
+schema_version: 1
+name: blog-read-and-share
+persona: power_user
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - reader
+  - feature_area_3
+  - webview
+  - ocr_only
+  - share_sheet
+
+goals:
+  - Navigate to the Blog tab (identifier tab_blog)
+  - Tap the first blog post (identifier blog_post_morning-5k)
+  - Wait for WKWebView to load (observe OCR content — WKWebView is XCTest-blind)
+  - Verify article title text is visible via OCR
+  - Tap the Share button (identifier blog_share)
+  - Observe the share sheet appears
+  - Dismiss the share sheet
+
+success_criteria:
+  - text_visible: Your First 5K
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

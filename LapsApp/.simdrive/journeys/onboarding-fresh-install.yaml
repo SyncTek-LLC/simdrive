@@ -1,0 +1,25 @@
+schema_version: 1
+name: onboarding-fresh-install
+persona: first_time_runner
+target: simulator
+app_bundle_id: io.synctek.lapsapp
+tags:
+  - onboarding
+  - feature_area_1
+
+preconditions:
+  app_state: not_running
+
+goals:
+  - Launch LapsApp fresh (via -LapsAppTestReset launch arg) and observe the welcome screen
+  - Dismiss any first-launch alerts (push, location) using dismiss_first_launch_alerts
+  - Verify the tab bar is visible and the Settings tab is selected by default
+
+success_criteria:
+  - text_visible: LapsApp
+  - no_crash: true
+
+budget:
+  max_steps: 20
+  max_seconds: 120
+  max_llm_calls: 25

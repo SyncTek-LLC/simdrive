@@ -1,0 +1,4 @@
+# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/journey/result.py
+# hypothesis_version: 6.141.1
+
+['artifact_dir', 'budget_exceeded', 'crashed', 'error', 'failed', 'observed_value', 'passed', 'steps', 'success_criteria']
