@@ -39,6 +39,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install simdrive[dev] (needed by gate-check imports)
+        working-directory: simdrive
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
       - name: Parse tag + verify version-match + CHANGELOG head
         id: parse
         env:
@@ -63,12 +69,6 @@ jobs:
               fh.write(f"version={ver}\n")
           print(f"OK — tag, pyproject, and CHANGELOG all agree on {ver}")
           PY
-
-      - name: Install simdrive[dev] (for the test gate)
-        working-directory: simdrive
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
 
       - name: Run unit + non-live tests (publish gate)
         working-directory: simdrive
