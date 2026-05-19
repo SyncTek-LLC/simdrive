@@ -134,11 +134,14 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ startsWith(github.ref, 'refs/tags/simdrive-v') && !inputs.dry_run }}
     # PyPI Trusted Publishers (OIDC) — no token needed.
-    # Configure once at: https://pypi.org/manage/account/publishing/
+    # PyPI publisher config:
     #   project name:  simdrive
     #   owner:         SyncTek-LLC
-    #   repo:          specterqa-ios   (until GitHub repo rename completes)
+    #   repo:          simdrive
     #   workflow:      specterqa-ios-publish.yml
+    #   environment:   pypi   ← MUST match the `environment:` field below;
+    #                          PyPI rejects with `invalid-publisher` if absent.
+    environment: pypi
     permissions:
       id-token: write
       contents: read
