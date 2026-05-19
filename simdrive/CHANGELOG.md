@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.0b1] — 2026-05-18
+
+**First beta release.** Trial+paywall model live; bug-reproduction positioning. Six months of alpha development consolidated into a publishable, monetizable beta.
+
+### Added — Business model
+
+- **14-day free trial** — `simdrive trial start --email you@example.com` issues an Ed25519-signed local license valid for 14 days, full Pro feature access. Email+machine SHA-256 de-dupe prevents infinite re-trials.
+- **License authentication** — `simdrive auth <license-key>` redeems a Polar-issued production license. Writes to `~/.simdrive/license.json`, validates against the embedded public key.
+- **Paywall enforcement on every MCP tool** — all 32 MCP tools now gate on `check_entitlement()`. Trial users get full access; after trial expiry, `LicenseError` is raised with a structured `license_required` envelope containing `pricing_url`, `auth_command_hint`, and `trial_command_hint` so the MCP client (Claude Code, Cursor, Continue) surfaces a copy-pasteable recovery path to the user.
+
+### Added — Positioning
+
+- README, PyPI description, and `llms.txt` rewritten around the bug-reproduction use case: "Reproduce and validate iOS bugs in 60 seconds with Claude." Supporting capabilities (record/replay, journey runner, real device, perf baselines) get co-equal real estate.
+- `simdrive/docs/HERO_DEMO_SCRIPT.md` — 60-second hero demo storyboard (Linear ticket → Claude drives sim → captures failure → engineer fixes → validates) ready for recording.
+
+### Added — Release engineering
+
+- New publish workflow: triggers on `simdrive-v*` tag pattern (was `specterqa-ios-v*`), gates on version-match + CHANGELOG-head + non-live pytest + fresh-venv install smoke, publishes via PyPI Trusted Publisher (OIDC, no static token).
+- Production license-signing keypair rotated. Public key embedded in client; private key Fernet-encrypted in vault and bound to the simdrive-license-api Cloudflare Worker for license issuance on Polar webhook events.
+
+### Changed
+
+- Test suite: added autouse dev-trial fixture (`simdrive/tests/conftest.py`) so paywall-gated tools work in CI without manual setup. 949 tests passing, 74.77% coverage on hot-path modules.
+- CI: simdrive-ci runs the full non-live test suite with a 65% coverage ratchet floor; per-module climb-to-80 plan in `simdrive/docs/COVERAGE_RATCHET.md`.
+- Security baseline: pinned `requirements.lock`, `pip-audit --strict`, CodeQL Python, gitleaks all on every PR.
+
+### Removed
+
+- "no API key required" framing in README/PyPI/llms.txt (contradicted the trial+paywall model).
+
 ## [1.0.0a13] — 2026-05-14
 
 Ships the deferred a12 item: **record/replay parity on real device.** Sim
