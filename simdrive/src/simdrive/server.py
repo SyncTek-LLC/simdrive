@@ -35,6 +35,7 @@ from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
+from .cloud.middleware.quotas import check_local_quota
 from .license.gate import gate as _entitlement_gate
 from .observability.logger import get_logger
 
@@ -2111,6 +2112,25 @@ def list_tools() -> list[dict]:
     return [{k: v for k, v in t.items() if k != "handler"} for t in _TOOLS]
 
 
+def _check_quota_for_call(name: str, arguments: dict) -> None:
+    """Defense-in-depth local quota check before dispatching a tool.
+
+    Cheap, network-free: reads only the cached snapshot stored on the
+    Session by the auth/refresh bootstrap. Authoritative enforcement
+    still happens cloud-side on /v1/runs/increment — this just catches
+    over-limit calls before they touch the cloud, so the user gets a
+    fast, structured QuotaExceededError instead of an opaque 429.
+    """
+    sid = (arguments or {}).get("session_id")
+    if not sid:
+        return
+    try:
+        s = session.get(sid)
+    except errors.SimdriveError:
+        return
+    check_local_quota(name, s)
+
+
 def call_tool(name: str, arguments: dict) -> dict:
     """Sync tool dispatcher — for non-MCP callers (CLI smokes, direct test calls).
 
@@ -2124,6 +2144,7 @@ def call_tool(name: str, arguments: dict) -> dict:
                     f"Tool '{name}' has an async handler — use call_tool_async "
                     "inside an async context (MCP server) instead of call_tool."
                 )
+            _check_quota_for_call(name, arguments or {})
             result = handler(arguments or {})
             # v0.3.0a3 — inject `_simdrive_warning` side-channel field when the
             # running server is stale relative to the on-disk wheel. Doesn't
@@ -2145,6 +2166,7 @@ async def call_tool_async(name: str, arguments: dict) -> dict:
     for t in _TOOLS:
         if t["name"] == name:
             handler = t["handler"]
+            _check_quota_for_call(name, arguments or {})
             if inspect.iscoroutinefunction(handler):
                 result = await handler(arguments or {})
             else:
