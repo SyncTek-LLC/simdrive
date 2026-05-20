@@ -110,6 +110,36 @@ def recordings_root() -> Path:
     return Path(base) / "recordings"
 
 
+def _check_capture(pre: Optional[Path], post: Optional[Path]) -> Optional[str]:
+    """Validate that pre/post-state screenshot paths represent a successful capture.
+
+    Returns ``None`` when both are valid (path is non-None, file exists, non-empty),
+    otherwise returns a short failure string describing the first problem found
+    (used as a structured log field, not displayed to the user).
+
+    A failed pre-state capture means the recorder never had a "before" view of
+    the step; a failed post-state capture (the common case — e.g. a simulator
+    hiccup right after a tap) means the recorder doesn't know what state the
+    action produced. In either case the step is incomplete and replay would
+    surface confusing errors, so we drop it (INIT-2026-549).
+    """
+    for label, candidate in (("pre", pre), ("post", post)):
+        if candidate is None:
+            return f"{label}_state_missing: path is None"
+        try:
+            path = Path(candidate)
+        except TypeError:
+            return f"{label}_state_invalid_path"
+        if not path.exists():
+            return f"{label}_state_missing: file not found at {path}"
+        try:
+            if path.stat().st_size == 0:
+                return f"{label}_state_empty: zero-byte file at {path}"
+        except OSError as exc:
+            return f"{label}_state_stat_error: {exc}"
+    return None
+
+
 # ---------- State contract (a9.0) ---------- #
 #
 # Captured automatically at record_start, verified at replay step -1. Halts
@@ -338,21 +368,72 @@ class Recorder:
     def snapshots_dir(self) -> Path:
         return self.root / "snapshots"
 
-    def add_step(self, action: str, args: dict[str, Any], pre_screenshot: Path, post_screenshot: Path,
-                 marks_count: Optional[int] = None) -> int:
-        """Record a step. Returns the 1-based step index.
+    def add_step(self, action: str, args: dict[str, Any], pre_screenshot: Optional[Path],
+                 post_screenshot: Optional[Path],
+                 marks_count: Optional[int] = None) -> Optional[int]:
+        """Record a step. Returns the 1-based step index, or None when the step
+        is dropped due to a failed pre/post-state capture.
 
         marks_count (a13): number of SoM marks observed on the pre-screenshot.
         Stored in the step so replay can detect marks-count drift (structural UI
         change) even when SSIM passes.
+
+        Integrity guard (INIT-2026-549): if either ``pre_screenshot`` or
+        ``post_screenshot`` is missing, None, or points to a missing/empty file,
+        the step is **dropped entirely** with a structured warning logged. This
+        prevents partially-captured steps (typically caused by a flaky simulator
+        screenshot at post-action time) from being appended to the recording and
+        later tripping the replay engine. The recorder keeps its 1-based step
+        ids contiguous because we increment the index only when the step is
+        actually appended.
         """
+        # Validate pre/post-state capture before touching the snapshots dir or
+        # bumping the step id. A None path, missing file, or empty file all
+        # qualify as a failed capture — drop the step and log.
+        capture_failure = _check_capture(pre_screenshot, post_screenshot)
+        if capture_failure is not None:
+            log.warning(
+                "recorder.dropped_step_partial_capture",
+                extra={
+                    "recording_name": self.name,
+                    "session_id": getattr(self.session, "session_id", None),
+                    "action": action,
+                    "failure": capture_failure,
+                    "timestamp": time.time(),
+                    "next_step_id": len(self.steps) + 1,
+                },
+            )
+            return None
+
         idx = len(self.steps) + 1
         # Move pre/post snapshots into the recording dir for self-containment.
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         pre_dst = self.snapshots_dir / f"{idx:03d}_pre.png"
         post_dst = self.snapshots_dir / f"{idx:03d}_post.png"
-        shutil.copy2(pre_screenshot, pre_dst)
-        shutil.copy2(post_screenshot, post_dst)
+        try:
+            shutil.copy2(pre_screenshot, pre_dst)
+            shutil.copy2(post_screenshot, post_dst)
+        except OSError as exc:
+            # Copy itself failed (e.g. disk full, source vanished between the
+            # existence check and the copy). Roll back any partial copy and log.
+            for partial_path in (pre_dst, post_dst):
+                try:
+                    if partial_path.exists():
+                        partial_path.unlink()
+                except OSError:
+                    pass
+            log.warning(
+                "recorder.dropped_step_partial_capture",
+                extra={
+                    "recording_name": self.name,
+                    "session_id": getattr(self.session, "session_id", None),
+                    "action": action,
+                    "failure": f"copy_failed: {exc}",
+                    "timestamp": time.time(),
+                    "next_step_id": idx,
+                },
+            )
+            return None
         step: dict = {
             "id": idx,
             "action": action,
@@ -1273,7 +1354,6 @@ recorded marks count, it signals structural UI drift (e.g. app navigated to a
 completely different screen) even when SSIM passes (e.g. similar background color).
 Surfaced as ``marks_count_drift`` in step_result; halts when ``on_drift="halt"``.
 """
-
 
 def replay(name: str, session: Session, on_drift: str = "halt",
            drift_threshold: Optional[float] = None,
