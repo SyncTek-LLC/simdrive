@@ -26,6 +26,7 @@ import asyncio
 import base64
 import inspect
 import json
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,7 @@ from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
+from ._wait import wait_until
 from .license.gate import gate as _entitlement_gate
 from .observability.logger import get_logger
 
@@ -765,12 +767,16 @@ def tool_type_text(arguments: dict) -> dict:
         if s.device.udid:
             try:
                 hid_inject.chord(s.device.udid, "cmd", "a")
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                raise errors.HIDUnavailableError(
+                    f"clear_first cmd-a chord failed: {e}"
+                ) from e
             try:
                 act.press_key("delete", udid=s.device.udid)
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                raise errors.KeyboardNotReadyError(
+                    f"clear_first delete keypress failed: {e}"
+                ) from e
 
     # Safety guard: the simulator path must never be reached on a device session.
     # If this assertion fires, a new code path is routing device sessions here.
@@ -1335,7 +1341,11 @@ def tool_clear_field(arguments: dict) -> dict:
         hid_inject.chord(s.device.udid, "cmd", "a")
         act.press_key("delete", udid=s.device.udid)
         cleared = True
-    except Exception:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+        _log.warning(
+            "clear_field.hid_failed",
+            extra={"session_id": s.session_id, "cause": str(e)},
+        )
         cleared = False
     s.last_action_at = _now()
     session.append_action(s, {
