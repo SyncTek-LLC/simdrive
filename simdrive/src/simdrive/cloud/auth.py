@@ -16,6 +16,7 @@ from typing import Optional
 from fastapi import HTTPException, Request, status
 from nacl.signing import VerifyKey
 
+from simdrive.cloud.privacy import scrub_body
 from simdrive.license.errors import LicenseError
 from simdrive.license.validator import validate_license
 from simdrive.observability.logger import get_logger
@@ -69,20 +70,24 @@ def make_license_bearer(verify_key: VerifyKey):
             )
             log.debug(
                 "bearer auth accepted",
-                extra={
-                    "tier": payload.get("tier"),
-                    "customer_email": payload.get("customer_email"),
-                    "path": request.url.path,
-                },
+                extra=scrub_body(
+                    {
+                        "tier": payload.get("tier"),
+                        "customer_email": payload.get("customer_email"),
+                        "path": request.url.path,
+                    }
+                ),
             )
         except LicenseError as exc:
             log.warning(
                 "bearer auth rejected",
-                extra={"reason": exc.code, "path": request.url.path},
+                extra=scrub_body(
+                    {"reason": exc.code, "path": request.url.path}
+                ),
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=exc.message,
+                detail=scrub_body(exc.message),
             ) from exc
 
         return payload

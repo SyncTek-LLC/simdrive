@@ -28,6 +28,15 @@ class ActError(RuntimeError):
     """Raised when an act dispatch fails."""
 
 
+# ── Empirically-tuned HID rate limits ───────────────────────────────────────
+# These are NOT condition-waits — they're throttles between input ops. Removing
+# them caused cliclick to fire before the Simulator window came forward (lost
+# clicks) or HID Cmd-V to fire before the pasteboard write committed (paste
+# noop). Each value is the minimum that eliminated those races on Apple Silicon.
+_WINDOW_ACTIVATE_SETTLE_SEC = 0.15  # cliclick: wait for window:activate -> front
+_PASTEBOARD_SETTLE_SEC = 0.05       # simctl pbcopy -> HID Cmd-V
+
+
 # Cache of UDID → (logical_w, logical_h, scale) from hid_inject.device_size_points()
 _DEVICE_GEOM_CACHE: dict[str, tuple[float, float, float]] = {}
 
@@ -96,7 +105,7 @@ def tap(pixel_x: int, pixel_y: int, screenshot_w: int, screenshot_h: int, udid: 
     bounds = get_bounds()
     sx, sy = _pixels_to_screen(bounds, pixel_x, pixel_y, screenshot_w, screenshot_h)
     activate()
-    time.sleep(0.15)
+    time.sleep(_WINDOW_ACTIVATE_SETTLE_SEC)
     _run_cliclick([f"c:{sx},{sy}"])
     _tap_latency = (time.time() - _t0) * 1000.0
     record_histogram("tap_latency_ms", _tap_latency)
@@ -119,7 +128,7 @@ def swipe(
     sx1, sy1 = _pixels_to_screen(bounds, x1, y1, screenshot_w, screenshot_h)
     sx2, sy2 = _pixels_to_screen(bounds, x2, y2, screenshot_w, screenshot_h)
     activate()
-    time.sleep(0.15)
+    time.sleep(_WINDOW_ACTIVATE_SETTLE_SEC)
     duration_ms = max(50, min(duration_ms, 5000))
     steps = max(2, duration_ms // 30)
     moves: list[str] = []
@@ -150,14 +159,14 @@ def type_text(text: str, udid: Optional[str] = None) -> None:
             return
         # Non-ASCII path: pbcopy + paste-shortcut
         sim.set_pasteboard(udid, text)
-        time.sleep(0.05)
+        time.sleep(_PASTEBOARD_SETTLE_SEC)
         # Cmd-V via HID — issue Cmd modifier hold + V keypress
         # HID usage 0xE3 = Left Cmd; 0x19 = V
         _hid_paste(udid)
         return
 
     activate()
-    time.sleep(0.15)
+    time.sleep(_WINDOW_ACTIVATE_SETTLE_SEC)
     _run_cliclick(["t:" + text])
 
 
@@ -237,7 +246,7 @@ def press_key(key: str, udid: Optional[str] = None) -> None:
             f"+ {sorted(_DEVICE_MENU_KEYS)}"
         )
     activate()
-    time.sleep(0.15)
+    time.sleep(_WINDOW_ACTIVATE_SETTLE_SEC)
     _run_cliclick([cli_arg])
 
 

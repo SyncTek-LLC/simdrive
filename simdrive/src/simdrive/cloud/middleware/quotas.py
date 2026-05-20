@@ -15,12 +15,20 @@ WHY this file is the authoritative gate: the quota check happens at the
 FastAPI route level via `Depends(make_quota_gate(...))`, not in a
 Starlette middleware. This lets us return structured 429 responses and
 skip the gate on public endpoints (GET /health, /v1/licenses/status).
+
+INIT-2026-549 W-F:
+Also exposes :func:`check_local_quota`, a network-free per-tool check
+that Wave 2 wires into the MCP tool dispatch inside server.py. The
+check reads from a locally-cached quota snapshot attached to the
+session so it stays fast (no DB round-trip from inside a hot path).
 """
 from __future__ import annotations
 
 import calendar
 import time
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -30,6 +38,7 @@ from simdrive.cloud.db.usage import (
     get_or_create_counter,
     get_run_limit,
 )
+from simdrive.cloud.errors import QuotaExceededError, quota_exceeded
 
 
 def _month_period() -> tuple[int, int]:
@@ -168,3 +177,127 @@ def make_quota_gate(verify_key, db_engine):
         return license_payload
 
     return _gate
+
+
+# ---------------------------------------------------------------------------
+# Wave 2 hook: local (network-free) per-tool quota check
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LocalQuotaSnapshot:
+    """In-memory snapshot of a customer's current quota state.
+
+    Stashed onto the MCP session by the auth bootstrap so the per-tool
+    quota check can be done without hitting the DB or the cloud. The
+    bootstrap layer refreshes this snapshot on a coarse cadence (e.g.
+    once per session start + once every N tool calls), trading freshness
+    for not paying a round-trip on every dispatch.
+    """
+
+    tier: str
+    runs_used: int
+    runs_limit: int
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.runs_limit - self.runs_used)
+
+    @property
+    def over_limit(self) -> bool:
+        return self.runs_used >= self.runs_limit
+
+
+def _resolve_snapshot(session: Any) -> Optional[LocalQuotaSnapshot]:
+    """Find a LocalQuotaSnapshot on the session in either attr or dict form.
+
+    Sessions in this codebase are not always typed (the MCP server uses a
+    dataclass, the tests use a SimpleNamespace, callers may use a dict).
+    Look in the common spots and normalise to a LocalQuotaSnapshot before
+    returning. Returns None if no quota info is attached at all (caller
+    decides whether to treat that as "allow" or "block").
+    """
+    if session is None:
+        return None
+
+    candidate = None
+    if isinstance(session, dict):
+        candidate = session.get("quota_snapshot") or session.get("local_quota")
+    else:
+        candidate = getattr(session, "quota_snapshot", None) or getattr(
+            session, "local_quota", None
+        )
+
+    if candidate is None:
+        return None
+    if isinstance(candidate, LocalQuotaSnapshot):
+        return candidate
+    if isinstance(candidate, dict):
+        try:
+            return LocalQuotaSnapshot(
+                tier=str(candidate["tier"]),
+                runs_used=int(candidate["runs_used"]),
+                runs_limit=int(candidate["runs_limit"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
+def check_local_quota(tool_name: str, session: Any) -> None:
+    """Raise QuotaExceededError when the cached quota for ``session`` is exhausted.
+
+    Wave 2 calls this from inside the MCP tool dispatch
+    (``simdrive/server.py``) BEFORE invoking the tool body. The check
+    is intentionally cheap and network-free — it reads only from the
+    session-local snapshot maintained by the auth/refresh bootstrap.
+
+    Behaviour:
+      - ``session`` has no snapshot at all (e.g. a brand-new session that
+        has not yet refreshed): returns None so the tool proceeds. The
+        authoritative cloud-side gate (``make_quota_gate``) still
+        enforces the limit on the next /v1/runs/increment, so missing
+        snapshots can never grant unlimited access.
+      - ``session`` has a snapshot with ``runs_used >= runs_limit``:
+        raises :class:`QuotaExceededError` with details containing the
+        tool name, tier, and the used/limit counters.
+      - Anything else: returns None.
+
+    Parameters
+    ----------
+    tool_name:
+        Name of the MCP tool being dispatched (e.g. "record_start").
+        Surfaced in the error message so the user knows which call was
+        blocked.
+    session:
+        The MCP session object. May be a dict, a dataclass, or a
+        ``SimpleNamespace`` — anything with either a
+        ``quota_snapshot`` / ``local_quota`` attribute or item.
+
+    Raises
+    ------
+    QuotaExceededError
+        When the cached snapshot indicates the quota is exhausted.
+    """
+    snapshot = _resolve_snapshot(session)
+    if snapshot is None:
+        return None
+
+    if snapshot.over_limit:
+        raise quota_exceeded(
+            tool_name=tool_name,
+            tier=snapshot.tier,
+            runs_used=snapshot.runs_used,
+            runs_limit=snapshot.runs_limit,
+        )
+
+    return None
+
+
+__all__ = [
+    "LocalQuotaSnapshot",
+    "QuotaExceededError",
+    "check_local_quota",
+    "make_quota_gate",
+    "make_usage_checker",
+]

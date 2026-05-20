@@ -1,8 +1,8 @@
 # SimDrive Coverage Ratchet
 
 **Status:** Active
-**Owner:** INIT-2026-549 (W1 floor, W2 climb)
-**Last updated:** 2026-05-17
+**Owner:** INIT-2026-549 (W1 floor, W2 wire-up, W3 climb to 80)
+**Last updated:** 2026-05-20
 
 ## Policy
 
@@ -11,45 +11,55 @@ Coverage on the hot-path modules is governed by a **ratchet floor** in
 moves **up** — never down. As tests are added and the aggregate climbs, the
 floor is raised in stages so the gain cannot regress.
 
-The long-term target is **80%** aggregate on the hot-path modules. We chose a
-staged climb (rather than a single 80% gate) because writing 13 percentage
-points of test debt in the foundation PR would balloon scope and violate the
-"test debt deserves its own initiative" rule.
+The long-term target is **80%** aggregate on the hot-path modules. Hit
+**2026-05-20** in INIT-2026-549 Wave 3 (`hardening/coverage-gate`).
 
 ## Current floor
 
 | Floor    | Set in                          | Date       |
 |----------|---------------------------------|------------|
-| **65%**  | INIT-2026-549 W1                | 2026-05-17 |
+| 65%      | INIT-2026-549 W1                | 2026-05-17 |
+| **80%**  | INIT-2026-549 W3                | 2026-05-20 |
 
-Aggregate measured at floor-set time: **67.18%** (CI run `25982013410`).
+Aggregate measured at floor-set time: **82%** (hot-path modules, local run).
+Floor set 2pp below measured so a small flake doesn't break CI.
 
-## Per-module baseline (CI run 25982013410)
+## Per-module status after Wave 3
 
-| Module                | Today | Target | Gap   |
-|-----------------------|-------|--------|-------|
-| `simdrive.sim`        | 38%   | 80%    | -42pp |
-| `simdrive.act`        | 42%   | 80%    | -38pp |
-| `simdrive.server`     | 66%   | 80%    | -14pp |
-| `simdrive.device`     | 67%   | 80%    | -13pp |
-| `simdrive.recorder`   | 76%   | 80%    |  -4pp |
-| `simdrive.observe`    | 77%   | 80%    |  -3pp |
-| `simdrive.session`    | 79%   | 80%    |  -1pp |
-| **Aggregate**         | 67.18% | 80%   | -12.82pp |
+| Module                | W1 baseline | W3 measured | Target |
+|-----------------------|-------------|-------------|--------|
+| `simdrive.sim`        | 38%         | **100%**    | 80%    |
+| `simdrive.act`        | 42%         | **100%**    | 80%    |
+| `simdrive.session`    | 79%         | **100%**    | 80%    |
+| `simdrive.observe`    | 77%         | **97%**     | 80%    |
+| `simdrive.device`     | 67%         | **94%**     | 80%    |
+| `simdrive.recorder`   | 76%         | **85%**     | 80%    |
+| `simdrive.server`     | 66%         | **70%**     | 80%    |
+| **Aggregate**         | 67.18%      | **82%**     | 80%    |
 
-## Planned climb
+`simdrive.server` did not reach 80% — it's a 1000+ statement module with
+substantial per-handler subprocess and live-sim code paths. The Wave 3 tests
+added cover the dispatcher (`call_tool`, `call_tool_async`, version drift,
+quota wire-up), `tool_clear_field`, `_session_scale`, and `_wda_client_for`.
+Pushing server.py to 80% requires either (a) running the actual MCP server
+loop in tests, or (b) extensive mocking of every tool handler — both are
+out of scope for the ratchet effort and best tackled as their own initiative.
 
-The W2 follow-up initiative will land tests in this order (biggest gap first,
-since that's where added tests have the highest marginal impact on the
-aggregate):
+## Planned climb (closed)
 
-1. `simdrive.sim` 38 -> 70
-2. `simdrive.act` 42 -> 70
-3. `simdrive.server` 66 -> 80
-4. `simdrive.device` 67 -> 80
-5. Raise floor to **75%** once aggregate sustainably >= 77%.
-6. Close remaining gaps on `recorder` / `observe` / `session`.
-7. Raise floor to **80%** once aggregate sustainably >= 82%.
+W3 closed the climb. The remaining work is per-module — see the "Future
+work" section if you want to raise the floor above 80%.
+
+## Future work — push toward 85%
+
+Realistic next gains, in order of marginal impact:
+
+1. `simdrive.server` 70 → 80 (would need a subprocess-mock-heavy suite for
+   tap/swipe/observe/dismiss_first_launch_alerts handlers).
+2. `simdrive.window` (currently 69%) — small file, easy lift.
+3. `simdrive.perf` (currently 44%) — subprocess-heavy but tractable.
+4. Raise floor to 82% once aggregate sustainably >= 84%.
+5. Raise floor to 85% once aggregate sustainably >= 87%.
 
 ## Rules
 
