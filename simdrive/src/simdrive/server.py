@@ -35,7 +35,6 @@ from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
-from ._wait import wait_until
 from .license.gate import gate as _entitlement_gate
 from .observability.logger import get_logger
 
@@ -60,6 +59,17 @@ def _get_current_mcp_session():
         return None
 
 _log = get_logger(__name__)
+
+
+# ── Empirically-tuned settle delays ─────────────────────────────────────────
+# These are not arbitrary — each was chosen by observing real simulators on
+# Apple Silicon macOS and tightening until intermittent failures stopped.
+# Reducing them risks races; raising them slows every typing/focus operation.
+# If a future predicate-based wait (see simdrive._wait.wait_until) is available
+# for any of these, prefer that over the bare sleep.
+_KEYBOARD_SETTLE_SEC = 0.6   # tap-to-focus -> keyboard slides up (sim + device)
+_FOCUS_SETTLE_SEC = 0.5      # tap-to-focus -> field becomes first responder
+_ALERT_DISMISS_INTERVAL_SEC = 0.2  # throttle between observe+tap cycles in dismissal loop
 
 
 def _now() -> float:
@@ -715,8 +725,7 @@ def tool_type_text(arguments: dict) -> dict:
             tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
             scale = _session_scale(s)  # px->pt for tap-to-focus; type_text has no coords (F-006)
             wda.tap(float(tx) / scale, float(ty) / scale)
-            import time as _t
-            _t.sleep(0.6)
+            time.sleep(_KEYBOARD_SETTLE_SEC)
         if clear_first:
             wda.clear_field()
         # Pass target="device" so observe uses the WDA/devicectl screenshot path.
@@ -757,8 +766,7 @@ def tool_type_text(arguments: dict) -> dict:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
         act.tap(tx, ty, sw, sh, udid=s.device.udid)
-        import time as _t
-        _t.sleep(0.6)  # give the keyboard a moment to come up
+        time.sleep(_KEYBOARD_SETTLE_SEC)
 
     # v0.3.0a3 — clear_first sends Cmd-A then delete BEFORE typing the new text.
     # Replaces the five-press_key idiom for resetting search fields. Done after
@@ -1151,7 +1159,6 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
     closes that window without inflating the no-alert path.
     """
     _entitlement_gate()
-    import time as _t
     s = session.get(arguments["session_id"])
     if s.target == "device":
         raise errors.device_input_unavailable("dismiss_first_launch_alerts")
@@ -1180,7 +1187,7 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
             dismissed += 1
         except Exception:
             pass
-        _t.sleep(0.2)
+        time.sleep(_ALERT_DISMISS_INTERVAL_SEC)
         if attempts > retries:
             break
     s.last_action_at = _now()
@@ -1318,8 +1325,7 @@ def tool_clear_field(arguments: dict) -> dict:
             tx, ty, _, _ = _resolve_target_xy(s, target)
             scale = _session_scale(s)  # px->pt for tap-to-focus; clear_field has no coords (F-006)
             wda.tap(float(tx) / scale, float(ty) / scale)
-            import time as _t
-            _t.sleep(0.5)
+            time.sleep(_FOCUS_SETTLE_SEC)
         wda.clear_field()
         s.last_action_at = _now()
         session.append_action(s, {
@@ -1334,8 +1340,7 @@ def tool_clear_field(arguments: dict) -> dict:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _, _ = _resolve_target_xy(s, target)
         act.tap(tx, ty, sw, sh, udid=s.device.udid)
-        import time as _t
-        _t.sleep(0.5)  # let focus settle before the chord
+        time.sleep(_FOCUS_SETTLE_SEC)
     cleared = False
     try:
         hid_inject.chord(s.device.udid, "cmd", "a")
