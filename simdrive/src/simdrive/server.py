@@ -356,7 +356,7 @@ def tool_observe(arguments: dict) -> dict:
         if bool(arguments.get("annotate", True)):
             from .wda.som_device import annotate_device_screenshot
             wda_annotate = s.wda_client or wda
-            point_scale: float = float(getattr(s, "pixel_per_point_scale", None) or 1.0)
+            point_scale: float = float(s.pixel_per_point_scale or 1.0)
             marks, annotated_path = annotate_device_screenshot(
                 screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
             )
@@ -412,7 +412,7 @@ def _ensure_screenshot_dims(s) -> tuple[int, int]:
         # flip where _ensure_screenshot_dims on a device session would store sim-path
         # marks (points, 440-wide) in last_marks, conflicting with device-path marks
         # (pixels, 1320-wide) stored by the previous tool_observe call.
-        if getattr(s, "target", "simulator") == "device":
+        if s.target == "device":
             try:
                 tool_observe({"session_id": s.session_id, "annotate": True})
             except Exception:
