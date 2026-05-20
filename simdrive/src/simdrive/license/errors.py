@@ -9,6 +9,8 @@ Error codes surfaced here:
   - license_expired
   - license_offline_grace_exhausted
   - license_tier_insufficient
+  - license_key_rotation_required  (signed under a key_id this client doesn't trust)
+  - license_clock_skew_detected    (system clock drifted too far from last known server time)
   - trial_already_used
   - license_not_found
   - trial_rate_limited
@@ -77,6 +79,21 @@ class LicenseError(SimdriveError):
                 "auth_command_hint": AUTH_COMMAND_HINT,
             },
         }
+
+
+@dataclass
+class KeyRotationError(LicenseError):
+    """Raised when a license's ``key_id`` is not in TRUSTED_PUBLIC_KEYS.
+
+    Distinct subclass so callers (CLI, MCP wrapper) can render a
+    "your simdrive is too old" upsell that differs from generic
+    invalid-signature messaging.
+    """
+
+
+@dataclass
+class ClockSkewError(LicenseError):
+    """Raised when the local clock cannot be trusted for offline-grace evaluation."""
 
 
 # ---- Constructor functions (mirroring errors.py pattern) ----
@@ -166,6 +183,58 @@ def cloud_unreachable(detail: str) -> LicenseError:
             "to self-issue a local dev trial without network access."
         ),
         details={"detail": detail},
+    )
+
+
+def license_key_rotation_required(key_id: str, trusted_ids: list[str]) -> "KeyRotationError":
+    """Raised when the payload's key_id is unknown to this client.
+
+    The likely cause is that the license was signed with a freshly-rotated
+    key whose public counterpart ships in a newer simdrive release. The
+    recovery is to upgrade simdrive (so the new trusted public key is in
+    the embedded ``TRUSTED_PUBLIC_KEYS`` list) and re-run the command.
+    """
+    return KeyRotationError(
+        code="license_key_rotation_required",
+        message=(
+            f"Your license was signed with key {key_id!r} but this simdrive build only "
+            f"trusts {trusted_ids!r}. Recovery: upgrade simdrive (`pip install -U simdrive`) "
+            "so it picks up the new signing key, then retry. If you cannot upgrade, "
+            "contact support@synctek.io to re-issue the license under an older key."
+        ),
+        details={"key_id": key_id, "trusted_key_ids": trusted_ids},
+    )
+
+
+def license_clock_skew_detected(
+    reason: str,
+    *,
+    system_clock: int,
+    last_known_server_time: int,
+) -> "ClockSkewError":
+    """Raised when the local clock cannot be trusted for the offline-grace check.
+
+    Two ways this can trigger:
+      - system clock moved backwards > 6 hours behind last known server time
+        (likely backdating attack or clock reset),
+      - system clock has not seen a server check in > 30 days
+        (offline for too long to trust local time for grace decisions).
+
+    Recovery is the same in both cases: connect to the internet and run
+    `simdrive license status` to refresh the trusted server timestamp.
+    """
+    return ClockSkewError(
+        code="license_clock_skew_detected",
+        message=(
+            f"Refusing offline grace window: {reason}. "
+            "Recovery: connect to the internet and run `simdrive license status` to "
+            "refresh the trusted server timestamp, then retry."
+        ),
+        details={
+            "reason": reason,
+            "system_clock": system_clock,
+            "last_known_server_time": last_known_server_time,
+        },
     )
 
 
