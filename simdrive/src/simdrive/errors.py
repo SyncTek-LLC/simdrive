@@ -268,3 +268,80 @@ def cloud_rate_limited(retry_after_seconds: int) -> dict:
         "Recovery: reduce request frequency or upgrade to a higher-tier plan.",
         {"retry_after_seconds": retry_after_seconds},
     )
+
+
+# ── HID / keyboard / focus / wait subclasses ─────────────────────────────────
+#
+# These four subclasses pair with the polling helpers in ``simdrive._wait`` and
+# the native HID injection path. They follow the existing ``code`` + ``message``
+# convention (each message ends with a ``Recovery: ...`` clause) but are exposed
+# as classes so callers can ``except WaitTimeoutError`` / ``except
+# HIDUnavailableError`` instead of switching on ``.code`` strings.
+
+
+class WaitTimeoutError(SimdriveError):
+    """Raised when a polled condition does not become truthy before its deadline.
+
+    Carries the original ``description`` and ``elapsed`` seconds so the MCP
+    envelope identifies *what* we were waiting on (e.g. "keyboard visible").
+    """
+
+    def __init__(self, description: str, elapsed: float) -> None:
+        super().__init__(
+            code="wait_timeout",
+            message=(
+                f"timed out waiting for {description} after {elapsed:.2f}s. "
+                "Recovery: increase the timeout, call `observe` to confirm the expected "
+                "state is reachable, or check the simulator for an unexpected dialog."
+            ),
+            details={"description": description, "elapsed": elapsed},
+        )
+
+
+class HIDUnavailableError(SimdriveError):
+    """Raised when the native HID helper cannot be invoked.
+
+    Mirrors the existing :func:`hid_unavailable` constructor in class form so
+    callers can write ``except HIDUnavailableError``.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            code="hid_unavailable",
+            message=(
+                f"native HID helper unavailable: {reason}. "
+                "Recovery: run `simdrive doctor` to diagnose, reinstall simdrive "
+                "(the bundled binary is required), or `cd simdrive/native && make`."
+            ),
+            details={"reason": reason},
+        )
+
+
+class KeyboardNotReadyError(SimdriveError):
+    """Raised when type_text is attempted but the on-screen keyboard is not ready."""
+
+    def __init__(self, reason: str = "keyboard not visible") -> None:
+        super().__init__(
+            code="keyboard_not_ready",
+            message=(
+                f"keyboard not ready for input: {reason}. "
+                "Recovery: wait longer for the keyboard to animate in, or ensure the "
+                "focused field is a text input (call `observe` to confirm focus)."
+            ),
+            details={"reason": reason},
+        )
+
+
+class FocusNotReadyError(SimdriveError):
+    """Raised when an action requires focus on a specific element but focus is absent."""
+
+    def __init__(self, reason: str = "no focused element") -> None:
+        super().__init__(
+            code="focus_not_ready",
+            message=(
+                f"focus not ready: {reason}. "
+                "Recovery: check that a prior tap landed on the intended element; "
+                "call `observe` to inspect current focus, then retry the tap."
+            ),
+            details={"reason": reason},
+        )
