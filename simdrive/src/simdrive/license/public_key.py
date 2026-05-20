@@ -3,11 +3,11 @@
 WHY a module-level constant: avoids filesystem reads at import time;
 the public key is not secret — it's safe to embed in client code.
 
-PRODUCTION: SIMDRIVE_PUBLIC_KEY_HEX below is the live license-signing
-public key for SimDrive paid tiers. Matching private key lives in the
-BusinessAtlas vault at `simdrive/license_signing_private_key` (scope
-DeployAtlas) and is bound to the Cloudflare Worker license issuer via
-`wrangler secret put LICENSE_SIGNING_PRIVATE_KEY`.
+PRODUCTION: TRUSTED_PUBLIC_KEYS below is the live license-signing
+public key set for SimDrive paid tiers. The first entry is the
+*current* production key; additional entries support smooth rotation
+where licenses already issued under an older key keep validating until
+their natural expiry.
 
 DEV KEY NOTE:
 The DEV_VERIFY_KEY_HEX / DEV_SIGNING_KEY_HEX pair is intentionally
@@ -15,8 +15,21 @@ embedded in the package — it lets anyone self-issue a local offline
 trial (simdrive trial start --email x --offline-dev) without a server.
 The validator enforces that dev-key-signed licenses MUST have
 subject="dev-trial"; the dev key cannot forge enterprise / pro licenses.
+
+KEY ROTATION (INIT-2026-549 W-F):
+TRUSTED_PUBLIC_KEYS is a list of (key_id, hex_pubkey) tuples. When a
+license is signed, the issuer SHOULD embed the matching ``key_id`` in
+the payload so the validator picks the correct key without trying each
+one in turn. Licenses without ``key_id`` are validated against the
+first trusted key (backwards compatible with legacy issued licenses).
+
+To rotate: prepend the new (key_id, hex) tuple to TRUSTED_PUBLIC_KEYS,
+keep the old one for the duration of the longest-lived in-the-wild
+license, then remove it on the next release.
 """
 from __future__ import annotations
+
+from typing import List, Tuple
 
 from nacl.signing import SigningKey, VerifyKey
 
@@ -37,6 +50,23 @@ SIMDRIVE_PUBLIC_KEY_HEX: str = (
     "6de89dc03064c3fd50a916d08e2d4a68a52082c804b4eceaa0be241c247749c6"
 )
 
+# Stable id for the current production key. Bump the date suffix on
+# every coordinated rotation. Tools and licenses reference keys by this
+# id so the validator can find the right pubkey without trial-and-error.
+PROD_KEY_ID: str = "prod-2026-05"
+
+
+# Ordered list of (key_id, hex_pubkey) tuples. The FIRST entry is the
+# active production key — that's the one used for legacy licenses
+# without a ``key_id`` field and the one fresh signers should pick.
+# To add a rotation key: prepend its (key_id, hex) tuple and keep the
+# prior entries around until all licenses signed under them have
+# expired (typically: one full year past the rotation).
+TRUSTED_PUBLIC_KEYS: List[Tuple[str, str]] = [
+    (PROD_KEY_ID, SIMDRIVE_PUBLIC_KEY_HEX),
+]
+
+
 # Ed25519 dev-only keypair for offline self-issued trial licenses.
 # Generated 2026-05-04. Both keys are intentionally embedded — the dev
 # signing key only issues licenses with subject="dev-trial" and the
@@ -54,8 +84,21 @@ def get_public_key() -> VerifyKey:
 
     The cloud API and client both call this to get the authoritative key.
     In production the constant above is replaced with the real 64-char hex.
+
+    Returns the FIRST trusted key (the current production key). Callers
+    that need to support multiple keys for rotation should use
+    :func:`get_trusted_verify_keys` instead.
     """
-    return verify_key_from_hex(SIMDRIVE_PUBLIC_KEY_HEX)
+    return verify_key_from_hex(TRUSTED_PUBLIC_KEYS[0][1])
+
+
+def get_trusted_verify_keys() -> List[Tuple[str, VerifyKey]]:
+    """Return all trusted (key_id, VerifyKey) tuples in priority order.
+
+    The first entry is the active production key — the validator falls
+    back to it for legacy licenses that do not carry a ``key_id`` field.
+    """
+    return [(kid, verify_key_from_hex(hex_str)) for kid, hex_str in TRUSTED_PUBLIC_KEYS]
 
 
 def get_dev_verify_key() -> VerifyKey:
