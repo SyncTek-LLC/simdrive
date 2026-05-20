@@ -14,7 +14,7 @@ from typing import Optional
 from nacl.signing import VerifyKey
 
 from simdrive.license.errors import license_not_found
-from simdrive.license.trial import load_license_data
+from simdrive.license.trial import assert_trial_clock_trustworthy, load_license_data
 from simdrive.license.validator import validate_license
 from simdrive.license.public_key import get_public_key
 
@@ -108,6 +108,12 @@ def check_entitlement(
 
     license_key: str = data.get("license_key", "")
     last_known_server_time = data.get("last_known_server_time")
+
+    # Clock-skew guard: if the on-disk last_known_server_time is set,
+    # refuse to even attempt validation when the system clock is too far
+    # off (either backwards >6h or no contact >30d). This stops a user
+    # from extending an expired trial by backdating their machine.
+    assert_trial_clock_trustworthy(data)
 
     vk: VerifyKey = verify_key if verify_key is not None else get_public_key()
 
