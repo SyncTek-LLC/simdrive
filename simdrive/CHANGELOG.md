@@ -37,8 +37,10 @@
 
 ### Tests + CI
 
-- **+102 new tests** across the sprint (WS-Helper: 26, WS-D: 16, WS-E: 8, WS-F: 46, Wave 2 integration: 6). Total non-live test count: 1051 → continues climbing in Wave 3 (coverage gate work).
-- **Sprint structure** — five hardening branches merged via no-ff into `hardening/INIT-2026-549-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, plus integrated Wave 2 work directly on the trunk.
+- **+359 new tests** across the sprint, total **1308 passing** (was 949 at sprint start). Distribution: Wave 1 wait_until/HID errors 26, Wave 1 WDA resilience 16, Wave 1 recorder integrity 8, Wave 1 license+cloud 46, Wave 2 integration 6, Wave 3 chaos 7, Wave 3 coverage push 250.
+- **Coverage 76% → 82% overall** with hot-path modules at 85–100%: `sim.py` 100%, `act.py` 100%, `session.py` 100%, `observe.py` 97%, `device.py` 94%, `wda/client.py` 85%, `recorder.py` 85%. `server.py` 67% → 70% (full 80% would require running the MCP server in tests — deferred).
+- **CI ratchet floor raised 65% → 80%** in `.github/workflows/simdrive-ci.yml`. Climb-to-85 plan documented in `simdrive/docs/COVERAGE_RATCHET.md`.
+- **Sprint structure** — six hardening branches merged via no-ff into `hardening/INIT-2026-549-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, `chaos-test`, `coverage-gate`, plus integrated Wave 2 work directly on the trunk.
 
 ### Backwards compatibility
 
