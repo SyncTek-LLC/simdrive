@@ -66,14 +66,20 @@ def test_status_raises_on_http_error():
 
 
 def test_status_raises_wda_unreachable():
-    """TransportError → wda_unreachable."""
+    """TransportError → wda_unreachable (when backoff retries are disabled).
+
+    The client now retries TransportError with exponential backoff by default
+    (see test_wda_resilience.py for the loop behaviour). This test pins the
+    underlying single-attempt error code by constructing the client with
+    max_transport_attempts=1 so we still cover the immediate-raise path.
+    """
     from simdrive.errors import SimdriveError
 
     def _failing(request):
         raise httpx.ConnectError("refused")
 
     from simdrive.wda.client import WdaClient
-    client = WdaClient(host="localhost", port=8100)
+    client = WdaClient(host="localhost", port=8100, max_transport_attempts=1)
     client._replace_transport(httpx.MockTransport(_failing))
     with pytest.raises(SimdriveError) as exc:
         client.status()
@@ -384,7 +390,9 @@ def test_check_alive_raises_session_lost():
         raise httpx.ConnectError("refused")
 
     from simdrive.wda.client import WdaClient
-    client = WdaClient("localhost", 8100)
+    # max_transport_attempts=1 keeps the test fast — we only care that the
+    # SimdriveError surfaced by _request is rewrapped as wda_session_lost.
+    client = WdaClient("localhost", 8100, max_transport_attempts=1)
     client._replace_transport(httpx.MockTransport(_failing))
     with pytest.raises(SimdriveError) as exc:
         client.check_alive("DEAD-UDID")

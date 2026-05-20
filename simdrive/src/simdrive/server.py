@@ -26,6 +26,7 @@ import asyncio
 import base64
 import inspect
 import json
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -34,6 +35,7 @@ from . import (
     __version__, act, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
+from .cloud.middleware.quotas import check_local_quota
 from .license.gate import gate as _entitlement_gate
 from .observability.logger import get_logger
 
@@ -58,6 +60,17 @@ def _get_current_mcp_session():
         return None
 
 _log = get_logger(__name__)
+
+
+# ── Empirically-tuned settle delays ─────────────────────────────────────────
+# These are not arbitrary — each was chosen by observing real simulators on
+# Apple Silicon macOS and tightening until intermittent failures stopped.
+# Reducing them risks races; raising them slows every typing/focus operation.
+# If a future predicate-based wait (see simdrive._wait.wait_until) is available
+# for any of these, prefer that over the bare sleep.
+_KEYBOARD_SETTLE_SEC = 0.6   # tap-to-focus -> keyboard slides up (sim + device)
+_FOCUS_SETTLE_SEC = 0.5      # tap-to-focus -> field becomes first responder
+_ALERT_DISMISS_INTERVAL_SEC = 0.2  # throttle between observe+tap cycles in dismissal loop
 
 
 def _now() -> float:
@@ -354,7 +367,7 @@ def tool_observe(arguments: dict) -> dict:
         if bool(arguments.get("annotate", True)):
             from .wda.som_device import annotate_device_screenshot
             wda_annotate = s.wda_client or wda
-            point_scale: float = float(getattr(s, "pixel_per_point_scale", None) or 1.0)
+            point_scale: float = float(s.pixel_per_point_scale or 1.0)
             marks, annotated_path = annotate_device_screenshot(
                 screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
             )
@@ -410,7 +423,7 @@ def _ensure_screenshot_dims(s) -> tuple[int, int]:
         # flip where _ensure_screenshot_dims on a device session would store sim-path
         # marks (points, 440-wide) in last_marks, conflicting with device-path marks
         # (pixels, 1320-wide) stored by the previous tool_observe call.
-        if getattr(s, "target", "simulator") == "device":
+        if s.target == "device":
             try:
                 tool_observe({"session_id": s.session_id, "annotate": True})
             except Exception:
@@ -713,8 +726,7 @@ def tool_type_text(arguments: dict) -> dict:
             tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
             scale = _session_scale(s)  # px->pt for tap-to-focus; type_text has no coords (F-006)
             wda.tap(float(tx) / scale, float(ty) / scale)
-            import time as _t
-            _t.sleep(0.6)
+            time.sleep(_KEYBOARD_SETTLE_SEC)
         if clear_first:
             wda.clear_field()
         # Pass target="device" so observe uses the WDA/devicectl screenshot path.
@@ -755,8 +767,7 @@ def tool_type_text(arguments: dict) -> dict:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
         act.tap(tx, ty, sw, sh, udid=s.device.udid)
-        import time as _t
-        _t.sleep(0.6)  # give the keyboard a moment to come up
+        time.sleep(_KEYBOARD_SETTLE_SEC)
 
     # v0.3.0a3 — clear_first sends Cmd-A then delete BEFORE typing the new text.
     # Replaces the five-press_key idiom for resetting search fields. Done after
@@ -765,12 +776,16 @@ def tool_type_text(arguments: dict) -> dict:
         if s.device.udid:
             try:
                 hid_inject.chord(s.device.udid, "cmd", "a")
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                raise errors.HIDUnavailableError(
+                    f"clear_first cmd-a chord failed: {e}"
+                ) from e
             try:
                 act.press_key("delete", udid=s.device.udid)
-            except Exception:
-                pass
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                raise errors.KeyboardNotReadyError(
+                    f"clear_first delete keypress failed: {e}"
+                ) from e
 
     # Safety guard: the simulator path must never be reached on a device session.
     # If this assertion fires, a new code path is routing device sessions here.
@@ -1145,7 +1160,6 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
     closes that window without inflating the no-alert path.
     """
     _entitlement_gate()
-    import time as _t
     s = session.get(arguments["session_id"])
     if s.target == "device":
         raise errors.device_input_unavailable("dismiss_first_launch_alerts")
@@ -1174,7 +1188,7 @@ def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
             dismissed += 1
         except Exception:
             pass
-        _t.sleep(0.2)
+        time.sleep(_ALERT_DISMISS_INTERVAL_SEC)
         if attempts > retries:
             break
     s.last_action_at = _now()
@@ -1312,8 +1326,7 @@ def tool_clear_field(arguments: dict) -> dict:
             tx, ty, _, _ = _resolve_target_xy(s, target)
             scale = _session_scale(s)  # px->pt for tap-to-focus; clear_field has no coords (F-006)
             wda.tap(float(tx) / scale, float(ty) / scale)
-            import time as _t
-            _t.sleep(0.5)
+            time.sleep(_FOCUS_SETTLE_SEC)
         wda.clear_field()
         s.last_action_at = _now()
         session.append_action(s, {
@@ -1328,14 +1341,17 @@ def tool_clear_field(arguments: dict) -> dict:
         sw, sh = _ensure_screenshot_dims(s)
         tx, ty, _, _ = _resolve_target_xy(s, target)
         act.tap(tx, ty, sw, sh, udid=s.device.udid)
-        import time as _t
-        _t.sleep(0.5)  # let focus settle before the chord
+        time.sleep(_FOCUS_SETTLE_SEC)
     cleared = False
     try:
         hid_inject.chord(s.device.udid, "cmd", "a")
         act.press_key("delete", udid=s.device.udid)
         cleared = True
-    except Exception:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+        _log.warning(
+            "clear_field.hid_failed",
+            extra={"session_id": s.session_id, "cause": str(e)},
+        )
         cleared = False
     s.last_action_at = _now()
     session.append_action(s, {
@@ -2096,6 +2112,25 @@ def list_tools() -> list[dict]:
     return [{k: v for k, v in t.items() if k != "handler"} for t in _TOOLS]
 
 
+def _check_quota_for_call(name: str, arguments: dict) -> None:
+    """Defense-in-depth local quota check before dispatching a tool.
+
+    Cheap, network-free: reads only the cached snapshot stored on the
+    Session by the auth/refresh bootstrap. Authoritative enforcement
+    still happens cloud-side on /v1/runs/increment — this just catches
+    over-limit calls before they touch the cloud, so the user gets a
+    fast, structured QuotaExceededError instead of an opaque 429.
+    """
+    sid = (arguments or {}).get("session_id")
+    if not sid:
+        return
+    try:
+        s = session.get(sid)
+    except errors.SimdriveError:
+        return
+    check_local_quota(name, s)
+
+
 def call_tool(name: str, arguments: dict) -> dict:
     """Sync tool dispatcher — for non-MCP callers (CLI smokes, direct test calls).
 
@@ -2109,6 +2144,7 @@ def call_tool(name: str, arguments: dict) -> dict:
                     f"Tool '{name}' has an async handler — use call_tool_async "
                     "inside an async context (MCP server) instead of call_tool."
                 )
+            _check_quota_for_call(name, arguments or {})
             result = handler(arguments or {})
             # v0.3.0a3 — inject `_simdrive_warning` side-channel field when the
             # running server is stale relative to the on-disk wheel. Doesn't
@@ -2130,6 +2166,7 @@ async def call_tool_async(name: str, arguments: dict) -> dict:
     for t in _TOOLS:
         if t["name"] == name:
             handler = t["handler"]
+            _check_quota_for_call(name, arguments or {})
             if inspect.iscoroutinefunction(handler):
                 result = await handler(arguments or {})
             else:

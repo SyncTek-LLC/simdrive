@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 _DEFAULT_LICENSE_PATH = Path.home() / ".simdrive" / "license.json"
@@ -86,3 +86,40 @@ def update_server_check_time(
     data["last_server_check"] = int(time.time())
     data["last_known_server_time"] = server_time
     save_license_data(data, license_path)
+
+
+def assert_trial_clock_trustworthy(
+    license_data: dict[str, Any],
+    *,
+    system_clock: Optional[int] = None,
+) -> None:
+    """Refuse to grant offline grace when the system clock is untrustworthy.
+
+    Wraps :func:`simdrive.license.validator.check_clock_skew_for_grace`
+    with the on-disk ``last_known_server_time`` field — entitlement.py
+    calls this right before validating an expired trial license so the
+    7-day grace window cannot be exploited via clock backdating or
+    indefinite-offline operation.
+
+    Parameters
+    ----------
+    license_data:
+        Dict loaded from ``license.json`` (see :func:`load_license_data`).
+        Reads the ``last_known_server_time`` field.
+    system_clock:
+        Override for the system clock — defaults to ``time.time()``.
+        Tests pass an explicit value to simulate skew.
+
+    Raises
+    ------
+    ClockSkewError(code="license_clock_skew_detected")
+        Either: system clock moved back > 6h relative to last known
+        server time, OR no successful cloud check in > 30d.
+    """
+    from simdrive.license.validator import check_clock_skew_for_grace
+
+    last_known = license_data.get("last_known_server_time")
+    check_clock_skew_for_grace(
+        last_known_server_time=last_known,
+        system_clock=system_clock,
+    )

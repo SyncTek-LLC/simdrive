@@ -32,6 +32,7 @@ def sign_license(
     customer_email: str,
     issued_at: int,
     expires_at: int,
+    key_id: str | None = None,
 ) -> str:
     """Sign a license payload and return a compact key string.
 
@@ -49,6 +50,12 @@ def sign_license(
         Unix timestamp of issue.
     expires_at:
         Unix timestamp of expiry. Must be > issued_at.
+    key_id:
+        Optional id of the public key the signature should be verified
+        against (must match an entry in TRUSTED_PUBLIC_KEYS on the client).
+        When omitted the payload does not carry a key_id and the client
+        falls back to the first trusted key — this is the behaviour of
+        every license issued before INIT-2026-549.
 
     Returns
     -------
@@ -73,6 +80,8 @@ def sign_license(
         "issued_at": issued_at,
         "expires_at": expires_at,
     }
+    if key_id is not None:
+        payload["key_id"] = key_id
     # Compact JSON with sorted keys for deterministic encoding
     payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     payload_b64 = _b64url_encode(payload_bytes)
