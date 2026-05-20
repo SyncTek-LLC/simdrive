@@ -237,3 +237,36 @@ def wda_session_lost(udid: str, last_seen_at: Optional[float] = None) -> Simdriv
         ),
         details={"udid": udid, "last_seen_at": last_seen_at},
     )
+
+
+def wda_recovery_exhausted(
+    method: str,
+    path: str,
+    attempts: int,
+    history: list[dict],
+) -> SimdriveError:
+    """Raised when the WDA auto-recovery loop hits its max-attempt cap.
+
+    ``history`` is a list of per-attempt dicts (attempt index, trigger code,
+    action taken, outcome, error excerpt) so callers can post-mortem the
+    sequence of failures without re-running the request.
+    """
+    last = history[-1] if history else {}
+    last_excerpt = last.get("error") or last.get("status") or "<unknown>"
+    return SimdriveError(
+        code="wda_recovery_exhausted",
+        message=(
+            f"WDA auto-recovery for {method} {path} gave up after {attempts} "
+            f"attempts. Last failure: {last_excerpt}. "
+            "Recovery: inspect details.history for the per-attempt log; if WDA "
+            "is genuinely unreachable run `simdrive bootstrap-device <udid> "
+            "--rebuild` to restart the runner, or set "
+            "SIMDRIVE_NO_AUTO_REBUILD=1 to opt out and handle recovery yourself."
+        ),
+        details={
+            "method": method,
+            "path": path,
+            "attempts": attempts,
+            "history": history,
+        },
+    )
