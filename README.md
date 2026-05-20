@@ -1,6 +1,12 @@
-# SimDrive
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/SyncTek-LLC/simdrive/raw/main/docs/brand/wordmark-dark.svg">
+    <img alt="simdrive" src="https://github.com/SyncTek-LLC/simdrive/raw/main/docs/brand/wordmark.svg" width="320">
+  </picture>
+</p>
 
-**Reproduce and validate iOS bugs in 60 seconds with Claude.**
+<p align="center"><strong>Reproduce and validate iOS bugs in 60 seconds with Claude.</strong></p>
+
 
 SimDrive is the MCP-native iOS automation toolkit your AI agent already knows
 how to drive. Paste a Linear ticket into Cursor or Claude Code; SimDrive opens
