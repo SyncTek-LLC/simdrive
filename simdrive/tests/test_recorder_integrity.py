@@ -366,5 +366,212 @@ def test_persisted_recording_invariant_pre_and_post_always_present(
     )
 
 
-# Audit item 3 (drift hysteresis + DEBUG logging) tests live in a follow-up
-# commit alongside the implementation change in replay().
+# ─── Audit item 3: replay drift hysteresis + DEBUG logging ──────────────
+
+
+def _write_single_step_recording(rec_dir: Path, *, pre_fill=(200, 200, 200),
+                                  post_fill=(180, 180, 180)) -> Path:
+    """Lay out a minimal 1-step recording on disk."""
+    snaps = rec_dir / "snapshots"
+    snaps.mkdir(parents=True, exist_ok=True)
+    pre = snaps / "001_pre.png"
+    post = snaps / "001_post.png"
+    Image.new("RGB", (64, 64), pre_fill).save(pre)
+    Image.new("RGB", (64, 64), post_fill).save(post)
+    payload = {
+        "name": rec_dir.name,
+        "created_at": 0.0,
+        "device": "iPhone Test",
+        "os_version": "18.4",
+        "app_bundle_id": None,
+        "steps": [
+            {
+                "id": 1,
+                "action": "tap",
+                "args": {"x": 10, "y": 10, "screenshot_w": 64, "screenshot_h": 64},
+                "pre_screenshot": "snapshots/001_pre.png",
+                "post_screenshot": "snapshots/001_post.png",
+                "captured_at": 0.0,
+            }
+        ],
+    }
+    (rec_dir / "recording.yaml").write_text(yaml.safe_dump(payload, sort_keys=False))
+    return rec_dir / "recording.yaml"
+
+
+def _install_alternating_observe(monkeypatch, paths: list[Path]) -> dict:
+    """Patch observe() to return each given screenshot path in sequence.
+
+    Returns the call-count state dict (mutated in place) so callers can
+    assert how many recaptures the replay engine triggered.
+    """
+    from simdrive.observe import Observation
+    from simdrive import observe as obs_mod
+
+    state = {"i": 0}
+
+    def _fake_observe(udid, out_dir, **kwargs):
+        idx = min(state["i"], len(paths) - 1)
+        state["i"] += 1
+        return Observation(
+            screenshot_path=paths[idx],
+            annotated_path=None,
+            screenshot_w=64,
+            screenshot_h=64,
+            window_bounds=None,
+            captured_at=0.0,
+            marks=[],
+        )
+
+    monkeypatch.setattr(obs_mod, "observe", _fake_observe)
+    return state
+
+
+def test_drift_hysteresis_single_subthreshold_then_normal_does_not_halt(
+    tmp_path, monkeypatch, caplog,
+):
+    """One noisy sub-threshold frame followed by a normal frame must NOT
+    halt the replay. The recheck samples a fresh screenshot and finds the UI
+    stable — the recheck score is above threshold so we proceed."""
+    from simdrive import recorder as rec_mod, act
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+
+    rec_dir = tmp_path / "recordings" / "hysteresis-recover"
+    _write_single_step_recording(rec_dir, pre_fill=(200, 200, 200))
+
+    # Live frames: first one is wildly different (forces sub-threshold SSIM),
+    # second matches the recorded pre — recheck passes → no halt.
+    noisy = tmp_path / "noisy.png"
+    Image.new("RGB", (64, 64), (10, 10, 10)).save(noisy)
+    clean = tmp_path / "clean.png"
+    Image.new("RGB", (64, 64), (200, 200, 200)).save(clean)
+    _install_alternating_observe(monkeypatch, [noisy, clean])
+
+    monkeypatch.setattr(act, "tap", lambda *a, **kw: (0, 0))
+
+    s = _make_session(tmp_path)
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="simdrive.recorder"):
+        result = rec_mod.replay(
+            "hysteresis-recover",
+            s,
+            on_drift="halt",
+            drift_threshold=0.85,
+            halt_on_state_mismatch=False,
+        )
+
+    assert result["ok"] is True, f"replay should not halt on single noisy frame: {result}"
+    assert result["halt_reason"] is None
+
+    # Two DEBUG ssim_compare records expected (sample=1 then sample=2).
+    debug_records = [
+        r for r in caplog.records
+        if r.name == "simdrive.recorder" and r.message == "replay.ssim_compare"
+    ]
+    samples = sorted(getattr(r, "sample", None) for r in debug_records)
+    assert samples == [1, 2], (
+        f"Expected two DEBUG ssim_compare records (sample=1,2), got {samples}"
+    )
+
+
+def test_drift_hysteresis_two_consecutive_subthreshold_frames_halts(
+    tmp_path, monkeypatch, caplog,
+):
+    """Two consecutive sub-threshold frames DO halt — the error message must
+    include BOTH scores so a triaging operator can see both samples were
+    bad."""
+    from simdrive import recorder as rec_mod, act
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+
+    rec_dir = tmp_path / "recordings" / "hysteresis-halt"
+    _write_single_step_recording(rec_dir, pre_fill=(200, 200, 200))
+
+    # Both live frames are wildly different from the recorded pre — both
+    # samples fall below threshold → halt.
+    noisy_a = tmp_path / "noisy_a.png"
+    noisy_b = tmp_path / "noisy_b.png"
+    Image.new("RGB", (64, 64), (10, 10, 10)).save(noisy_a)
+    Image.new("RGB", (64, 64), (15, 15, 15)).save(noisy_b)
+    _install_alternating_observe(monkeypatch, [noisy_a, noisy_b])
+
+    monkeypatch.setattr(act, "tap", lambda *a, **kw: (0, 0))
+
+    s = _make_session(tmp_path)
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="simdrive.recorder"):
+        result = rec_mod.replay(
+            "hysteresis-halt",
+            s,
+            on_drift="halt",
+            drift_threshold=0.85,
+            halt_on_state_mismatch=False,
+        )
+
+    assert result["ok"] is False
+    assert result["halt_reason"] == "drift"
+    assert result["halted_at"] == 1
+
+    # The failing step's error must mention "2 consecutive sub-threshold
+    # samples" and quote both score numbers.
+    failing_step = result["steps"][-1]
+    err = failing_step["error"]
+    assert "2 consecutive sub-threshold samples" in err, err
+    # Both scores quoted: the message is "SSIM <a> then <b> < 0.85 …"
+    assert " then " in err, f"Error must include both samples: {err}"
+
+    # Two DEBUG samples on the halting step (sample 1 + recheck sample 2).
+    debug_records = [
+        r for r in caplog.records
+        if r.name == "simdrive.recorder" and r.message == "replay.ssim_compare"
+    ]
+    samples = sorted(getattr(r, "sample", None) for r in debug_records)
+    assert samples == [1, 2], (
+        f"Halting step must log both samples at DEBUG: got {samples}"
+    )
+
+
+def test_drift_hysteresis_single_subthreshold_when_on_drift_force_still_logs_both(
+    tmp_path, monkeypatch, caplog,
+):
+    """When ``on_drift='force'`` the replay never halts, but the hysteresis
+    recapture and DEBUG logs must still happen — operators triaging a flaky
+    replay want to see both samples in the logs regardless of halt policy."""
+    from simdrive import recorder as rec_mod, act
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+
+    rec_dir = tmp_path / "recordings" / "force-with-hysteresis"
+    _write_single_step_recording(rec_dir, pre_fill=(200, 200, 200))
+
+    noisy = tmp_path / "n.png"
+    Image.new("RGB", (64, 64), (10, 10, 10)).save(noisy)
+    clean = tmp_path / "c.png"
+    Image.new("RGB", (64, 64), (200, 200, 200)).save(clean)
+    _install_alternating_observe(monkeypatch, [noisy, clean])
+
+    monkeypatch.setattr(act, "tap", lambda *a, **kw: (0, 0))
+
+    s = _make_session(tmp_path)
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="simdrive.recorder"):
+        result = rec_mod.replay(
+            "force-with-hysteresis",
+            s,
+            on_drift="force",
+            drift_threshold=0.85,
+            halt_on_state_mismatch=False,
+        )
+
+    assert result["ok"] is True
+
+    debug_records = [
+        r for r in caplog.records
+        if r.name == "simdrive.recorder" and r.message == "replay.ssim_compare"
+    ]
+    samples = sorted(getattr(r, "sample", None) for r in debug_records)
+    assert samples == [1, 2]

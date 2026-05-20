@@ -1355,6 +1355,22 @@ completely different screen) even when SSIM passes (e.g. similar background colo
 Surfaced as ``marks_count_drift`` in step_result; halts when ``on_drift="halt"``.
 """
 
+_DRIFT_HYSTERESIS_FRAMES = 2
+"""Number of consecutive sub-threshold SSIM frames required to declare drift.
+
+A single noisy frame (transient animation, status-bar tick, brief loading flash)
+shouldn't halt a replay — we require two consecutive sub-threshold captures
+before halting. When the first sample is below threshold, the replay engine
+recaptures a fresh screenshot and re-compares; only when *both* samples fall
+below the threshold do we treat it as real drift. Marks-count drift remains a
+single-frame check because a structural mark drop is far harder to fluke than
+a pixel-level SSIM dip.
+
+(INIT-2026-549) — set to 2; raising this would lengthen recovery time on
+genuinely drifted screens without meaningfully improving false-positive rate.
+"""
+
+
 def replay(name: str, session: Session, on_drift: str = "halt",
            drift_threshold: Optional[float] = None,
            mask_regions: Optional[list] = None,
@@ -1451,7 +1467,44 @@ def replay(name: str, session: Session, on_drift: str = "halt",
         live_obs = _observe_for_replay(session)
         rec_pre = rec_dir / step["pre_screenshot"]
         score = _ssim_or_fallback(live_obs["screenshot_path"], rec_pre, masks=masks)
-        drifted = score < effective_threshold
+        log.debug(
+            "replay.ssim_compare",
+            extra={
+                "recording_name": name,
+                "step_id": step["id"],
+                "action": step["action"],
+                "ssim": round(score, 4),
+                "threshold": effective_threshold,
+                "sample": 1,
+            },
+        )
+        # Hysteresis (INIT-2026-549): a single noisy sub-threshold frame
+        # shouldn't halt replay. When the first sample is under threshold we
+        # recapture a fresh screenshot, recompute, and only declare drift when
+        # *both* samples fail. We retain the lower of the two scores as the
+        # reported similarity so step_result still surfaces the worst-case dip.
+        first_score: float = score
+        recheck_score: Optional[float] = None
+        if score < effective_threshold:
+            live_obs = _observe_for_replay(session)
+            recheck_score = _ssim_or_fallback(
+                live_obs["screenshot_path"], rec_pre, masks=masks
+            )
+            log.debug(
+                "replay.ssim_compare",
+                extra={
+                    "recording_name": name,
+                    "step_id": step["id"],
+                    "action": step["action"],
+                    "ssim": round(recheck_score, 4),
+                    "threshold": effective_threshold,
+                    "sample": 2,
+                },
+            )
+            score = min(first_score, recheck_score)
+            drifted = recheck_score < effective_threshold
+        else:
+            drifted = False
 
         # Marks-count drift check (a13): structural UI change that SSIM misses.
         # Only fires when BOTH the recording has marks AND live has some marks (> 0).
@@ -1491,10 +1544,20 @@ def replay(name: str, session: Session, on_drift: str = "halt",
 
         if (drifted or marks_count_drift) and on_drift == "halt":
             if drifted:
-                step_result["error"] = (
-                    f"replay_drift_detected: SSIM {score:.3f} < {effective_threshold} "
-                    f"at step {step['id']} ({step['action']}); halted"
-                )
+                if recheck_score is not None:
+                    # Hysteresis halt: include both consecutive sub-threshold
+                    # scores so a triaging operator can see we didn't fluke it.
+                    step_result["error"] = (
+                        f"replay_drift_detected: SSIM {first_score:.3f} then "
+                        f"{recheck_score:.3f} < {effective_threshold} "
+                        f"(2 consecutive sub-threshold samples) "
+                        f"at step {step['id']} ({step['action']}); halted"
+                    )
+                else:
+                    step_result["error"] = (
+                        f"replay_drift_detected: SSIM {score:.3f} < {effective_threshold} "
+                        f"at step {step['id']} ({step['action']}); halted"
+                    )
             else:
                 step_result["error"] = (
                     f"replay_drift_detected: marks count dropped from "
