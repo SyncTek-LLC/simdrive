@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.0.0b2] — 2026-05-20
+
+**Production-readiness hardening sprint.** Closes the daylight between b1 (first publishable beta) and customer-grade reliability. Focused on the three surfaces where racy I/O meets real simulators — HID dispatch, WDA bridge, and recording integrity — plus key rotation and defense-in-depth quota enforcement. No new MCP tools; no public-API breaks. Existing licenses validate unchanged.
+
+### Added — resilience primitives
+
+- **`simdrive._wait` polling helper** — `wait_until(predicate, timeout, …)` and async `await_until(...)` for condition-based waits. Sync + async variants, exponential backoff, structured `WaitTimeoutError` with a description so timeouts are diagnosable.
+- **Typed HID/keyboard/focus errors** — new `HIDUnavailableError`, `KeyboardNotReadyError`, `FocusNotReadyError`, `WaitTimeoutError` subclasses of `SimdriveError`. Existing `hid_unavailable()` factory preserved for backward compat.
+- **`wda_recovery_exhausted` error** — surfaces from `WdaClient` when exponential-backoff retries hit `max_transport_attempts` (default 3). Includes the full attempt history for diagnostics.
+
+### Added — license & cloud paranoia
+
+- **Multi-key license validator** — `TRUSTED_PUBLIC_KEYS: list[tuple[str, str]]` enables key rotation without forcing a client upgrade for existing licenses. Payloads carry an optional `key_id` field; legacy payloads route to the first trusted key. New `KeyRotationError` when an unknown key id appears.
+- **Trial clock-skew gate** — `assert_trial_clock_trustworthy()` refuses to grant the 7-day offline grace window if the system clock moved backwards >6h or forward >30d from `last_known_server_time`. Forces a fresh cloud check instead of silently granting access on a tampered or wildly-drifted clock.
+- **Cloud privacy scrub** — `cloud/privacy.py:scrub_body()` masks sensitive fields (`email`, `license_key`, `token`, `signature`, `bearer`) before logging or storing any HTTP response body. Wired into `cloud/auth.py`.
+- **Defense-in-depth local quota check** — every MCP tool dispatch now runs `check_local_quota(tool_name, session)` before the handler body. Cheap, network-free; reads the session-local snapshot from the auth/refresh bootstrap. Cloud-side `make_quota_gate` remains the authoritative enforcer.
+
+### Changed — WDA bridge
+
+- **Per-phase `httpx.Timeout`** on the WDA HTTP client lifecycle (connect=5s, read=caller, write=10s, pool=5s). Session-level hangs no longer block forever.
+- **Exponential backoff on transport errors** — `WdaClient(max_transport_attempts=3)` retries `httpx.TransportError` with backoff 0.2s → 5s ×1.6. Structured logs per attempt (attempt #, trigger code, action, outcome). Backward-compatible default; existing tests pin `max_transport_attempts=1` where they assert the legacy `wda_unreachable` code.
+- **Tightened Code 41 detection** — regex `Code[= ]41(?!\d)` rejects false positives like `Code=410`. Previously a permissive `Code[= ]41` could trigger entitlement-revoke recovery on unrelated 410 Gone responses.
+- **Body-truncation + scrub in error logs** — WDA error bodies are now capped at 256 chars in logs; bodies from `/wda/typing` and `/wda/keys` are scrubbed entirely (no user input leaks into observability output).
+
+### Changed — recording integrity
+
+- **No more partial steps** — `Recorder.add_step()` drops the step and emits a `recorder.dropped_step_partial_capture` WARNING when either pre- or post-action screenshot fails (None / missing / zero-byte all count as failure). Return type widened to `Optional[int]`.
+- **Drift detection hysteresis** — replay drift halt now requires **2 consecutive sub-threshold SSIM frames** before stopping, defeating false positives from a single noisy frame under sim load. DEBUG-level `replay.ssim_compare` event logged on every comparison for diagnosability.
+
+### Changed — server.py hygiene
+
+- **Surface HID failures** — `tool_type_text(clear_first=True)` no longer silently swallows `hid_inject.chord` / `act.press_key` failures. They now raise `HIDUnavailableError` / `KeyboardNotReadyError` so the agent sees the real cause instead of typing into an unfocused field. `tool_clear_field` keeps its `cleared=False` fallback for caller branching but logs the cause at WARNING.
+- **Schema enforcement** — vestigial `getattr(s, "pixel_per_point_scale", None) or 1.0` and `getattr(s, "target", "simulator")` fallbacks removed in favor of direct attribute access. The `Session` dataclass already declares both fields with defaults; the getattr fallbacks were noise.
+- **Named sleep constants** — five `time.sleep(0.6)` / `0.5` / `0.2` magic numbers in `server.py` and five 0.15s / 0.05s rate-limit sleeps in `act.py` promoted to module-level constants (`_KEYBOARD_SETTLE_SEC`, `_FOCUS_SETTLE_SEC`, `_ALERT_DISMISS_INTERVAL_SEC`, `_WINDOW_ACTIVATE_SETTLE_SEC`, `_PASTEBOARD_SETTLE_SEC`) with comments documenting which race each value defeats.
+
+### Tests + CI
+
+- **+102 new tests** across the sprint (WS-Helper: 26, WS-D: 16, WS-E: 8, WS-F: 46, Wave 2 integration: 6). Total non-live test count: 1051 → continues climbing in Wave 3 (coverage gate work).
+- **Sprint structure** — five hardening branches merged via no-ff into `hardening/INIT-2026-549-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, plus integrated Wave 2 work directly on the trunk.
+
+### Backwards compatibility
+
+- Existing licenses (no `key_id` field) validate against `TRUSTED_PUBLIC_KEYS[0]` unchanged.
+- `verify_key=` parameter on `validate_license` preserved with identical semantics when `trusted_keys=` is not also passed.
+- `WdaClient(host, port)` ctor unchanged; new `max_transport_attempts=3` is a keyword default.
+- `Recorder.add_step()` return type widened (`int` → `Optional[int]`); the one in-tree caller in `server.py` already guarded for `None`.
+- No MCP tool schema changes. The 32-tool surface is unchanged.
+
+---
+
 ## [1.0.0b1] — 2026-05-18
 
 **First beta release.** Trial+paywall model live; bug-reproduction positioning. Six months of alpha development consolidated into a publishable, monetizable beta.
