@@ -43,11 +43,12 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://synctek.io/products/simdrive"
-Repository = "https://github.com/SyncTek-LLC/specterqa-ios"
-Issues = "https://github.com/SyncTek-LLC/specterqa-ios/issues"
-# NOTE: GitHub repository rename to `simdrive` is pending Chairman action (INIT-2026-549).
-# After rename, update Repository and Issues URLs to `SyncTek-LLC/simdrive`.
+Homepage = "https://simdrive.dev"
+Documentation = "https://simdrive.dev"
+Repository = "https://github.com/SyncTek-LLC/simdrive"
+Source = "https://github.com/SyncTek-LLC/simdrive"
+Issues = "https://github.com/SyncTek-LLC/simdrive/issues"
+Logo = "https://simdrive.dev/brand/og-image.png"
 
 [project.optional-dependencies]
 ssim = ["scikit-image>=0.22"]
