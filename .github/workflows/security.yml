@@ -29,7 +29,11 @@ permissions:
 jobs:
   pip-audit:
     name: pip-audit (HIGH blocks)
-    runs-on: ubuntu-latest
+    # INIT-2026-549 cleanup: must be macOS — requirements.lock pins pyobjc-core,
+    # which has a source-build dep on macOS frameworks (Quartz/Vision). On
+    # ubuntu-latest the audit step fails at the install phase with "PyObjC
+    # requires macOS to build" before pip-audit can even read the lock.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
