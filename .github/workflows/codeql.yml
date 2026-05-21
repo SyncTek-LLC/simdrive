@@ -1,15 +1,24 @@
 name: CodeQL (Python)
 
-# INIT-2026-549 W1: static analysis baseline for simdrive's Python surface.
-# Runs on PR + push to main and on a weekly schedule so newly published rules
-# get picked up even when the tree is quiet. Hot-path is the simdrive package
-# under simdrive/src/.
+# INIT-2026-549 cleanup: salvaged — switched to build-mode: none and scoped
+# analysis to simdrive/src/. Original failure cause: autobuild ran `pip install`
+# from repo root where no pyproject.toml exists (metadata lives at
+# simdrive/pyproject.toml). Python doesn't need a build for CodeQL extraction,
+# so `build-mode: none` is the documented escape hatch. Also added a `paths`
+# filter so the analyzer ignores legacy src/specterqa/ dead code on push/PR
+# events. Weekly scheduled run remains so newly published rules get picked up.
 
 on:
   push:
     branches: [main]
+    paths:
+      - "simdrive/src/**"
+      - ".github/workflows/codeql.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "simdrive/src/**"
+      - ".github/workflows/codeql.yml"
   schedule:
     # Mondays 07:00 UTC — covers the weekly Anthropic/Apple update cycle.
     - cron: "0 7 * * 1"
@@ -37,10 +46,15 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
+          # build-mode: none — Python is an interpreted language; CodeQL
+          # extracts directly from sources without needing `pip install`.
+          # This avoids the root-level setup.py shim trying to install a
+          # package whose metadata lives at simdrive/pyproject.toml.
+          build-mode: none
+          # Scope extraction to the live simdrive package; ignore the
+          # defunct src/specterqa/ tree that still sits in the repo.
+          source-root: simdrive/src
           queries: security-extended,security-and-quality
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
