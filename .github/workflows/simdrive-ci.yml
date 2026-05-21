@@ -68,7 +68,7 @@ jobs:
             --cov=simdrive.device \
             --cov-report=xml \
             --cov-report=term-missing \
-            --cov-fail-under=80  # Ratchet floor — INIT-2026-549 W3 reached the 80% target (measured 82% aggregate; floor set 2pp below per flake-safety policy).
+            --cov-fail-under=90  # Ratchet floor — INIT-2026-549 W4 push to 85% reached 92% on hot-path modules (server.py 70%->94%); floor set 2pp below measured per flake-safety policy.
 
       - name: Upload coverage artifact
         if: always()
