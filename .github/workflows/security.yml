@@ -5,6 +5,13 @@ name: Security baseline (pip-audit + gitleaks)
 # - gitleaks: blocks on any detected secret in the diff.
 # CodeQL lives in .github/workflows/codeql.yml (separate workflow for the
 # distinct GitHub Code Scanning permissions model).
+#
+# INIT-2026-549 cleanup (review): paths verified post repo restructure.
+# pip-audit consumes simdrive/requirements.lock (exists; pinned in PR #113).
+# gitleaks scans full history via fetch-depth: 0. No `pip install -e .`
+# step here, so the missing-root-pyproject failure mode does NOT apply.
+# If this workflow is red on main, the cause is a real CVE finding in
+# simdrive/requirements.lock — investigate and bump pin, do not mask.
 
 on:
   push:
