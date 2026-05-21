@@ -1,15 +1,24 @@
-name: Security baseline (pip-audit + gitleaks)
+name: Security baseline (pip-audit)
 
 # INIT-2026-549 W1: security CI baseline.
 # - pip-audit: blocks on HIGH-severity vulns in the resolved dep graph.
-# - gitleaks: blocks on any detected secret in the diff.
 # CodeQL lives in .github/workflows/codeql.yml (separate workflow for the
 # distinct GitHub Code Scanning permissions model).
 #
+# Secret detection: handled by GitHub's native Secret Scanning + Push
+# Protection (enabled at the repo level on 2026-05-21 alongside Advanced
+# Security). The previous gitleaks-action job was removed because:
+#   - On an org account, gitleaks-action@v2 requires a paid GITLEAKS_LICENSE
+#     repo secret. GitHub native scanning is free with the Advanced Security
+#     tier we now have on.
+#   - Coverage is equivalent for our threat model (commit + push-time scan).
+#   - Findings now route to repo Security tab instead of CI red/green.
+# To re-enable a pre-commit scan, prefer `trufflehog` (OSS, no license) or
+# wire up gitleaks with a license — see docs/security/secret-scanning.md
+# if/when that's added.
+#
 # INIT-2026-549 cleanup (review): paths verified post repo restructure.
 # pip-audit consumes simdrive/requirements.lock (exists; pinned in PR #113).
-# gitleaks scans full history via fetch-depth: 0. No `pip install -e .`
-# step here, so the missing-root-pyproject failure mode does NOT apply.
 # If this workflow is red on main, the cause is a real CVE finding in
 # simdrive/requirements.lock — investigate and bump pin, do not mask.
 
@@ -61,19 +70,3 @@ jobs:
             --vulnerability-service osv \
             --ignore-vuln PYSEC-2025-183 \
             --strict
-
-  gitleaks:
-    name: gitleaks (secrets detection)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # gitleaks needs full history to scan since-tag
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # GITLEAKS_LICENSE: not required for the GHA action on public repos.
-          GITLEAKS_ENABLE_COMMENTS: "true"
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
-          GITLEAKS_ENABLE_SUMMARY: "true"
