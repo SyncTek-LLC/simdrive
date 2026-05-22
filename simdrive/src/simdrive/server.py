@@ -4,7 +4,7 @@ Exposes the MCP tool surface to any compatible host (Claude, Cline, etc.):
 
   Lifecycle:  session_start, session_end, session_status
   Observe:    observe
-  Act:        tap, swipe, type_text, press_key
+  Act:        tap, swipe, type_text, press_key, tap_and_wait_keyboard
   Record:     record_start, record_stop, replay
   Utility:    logs
 
@@ -19,6 +19,43 @@ Add to .mcp.json:
         "simdrive": { "command": "simdrive" }
       }
     }
+
+## Agent workflow patterns (these chain well)
+
+  Find-and-tap a labelled element:
+    1. observe()                          -> get marks
+    2. tap({stable_id: <mark.stable_id>}) -> tap by stable id, NOT mark id
+
+  Fill a text field:
+    1. tap_and_wait_keyboard({stable_id: <field>})  # atomic; saves 2 hops
+    2. type_text({text: "..."})
+
+  Reset a search field before retyping:
+    type_text({tap_first: {stable_id: <field>}, clear_first: true,
+               text: "new query"})
+
+  Scroll then verify the result settled:
+    swipe({x1: 200, y1: 700, x2: 200, y2: 200, settle_ms: 300})
+    observe()
+
+  Token-efficient observe on a dense screen:
+    observe({compact: true, confidence_floor: "high", mark_limit: 20})
+
+  Pick a real device to attach to:
+    list_devices({compact: true}) -> {udid, name, state, hid_supported}
+    session_start({target: "device", udid: <pick one with hid_supported=true>})
+
+## Magic the agent gets for free
+
+- observe coordinates are screenshot pixels; the tap/swipe handlers
+  convert to logical points internally on device sessions (F-006).
+- Recording: if a record_start() session is active, every tap / swipe /
+  type_text / press_key is automatically appended to the recording —
+  the agent doesn't have to wire anything.
+- Session.last_marks stores the UNFILTERED mark set even when observe()
+  is called with confidence_floor / mark_limit. The resolver (tap by
+  text / stable_id) sees every detected element regardless of the
+  token-efficient view returned to the agent.
 """
 from __future__ import annotations
 
@@ -942,10 +979,18 @@ def tool_replay(arguments: dict) -> dict:
 
 
 def tool_list_devices(arguments: dict) -> dict:
-    """Enumerate real devices reachable via Apple devicectl + libimobiledevice."""
+    """Enumerate real devices reachable via Apple devicectl + libimobiledevice.
+
+    Args (all optional):
+        compact: bool — when true, each device entry is just {udid, name, state,
+            hid_supported}. Drops model / transport / last_seen / unavailable_reason
+            and the top-level libimobiledevice_ready / missing_tools / hid_note
+            fields. Lower token cost when the agent only needs to pick a device.
+    """
     _entitlement_gate()
     from . import device
     from .wda import registry as wda_registry
+    compact = bool(arguments.get("compact", False))
     ok, missing = device.libimobiledevice_available()
     devs = []
     err: dict | None = None
@@ -955,18 +1000,33 @@ def tool_list_devices(arguments: dict) -> dict:
             # (i.e. `simdrive bootstrap-device` has been run and WDA is ready).
             # tap/swipe/type_text/press_key all route through WDA on real devices.
             reg = wda_registry.load(d.udid)
-            devs.append({
-                "udid": d.udid,
-                "name": d.name,
-                "model": d.model,
-                "transport": d.transport,
-                "state": d.state,
-                "hid_supported": reg is not None,
-                "last_seen": d.last_seen,
-                "unavailable_reason": d.unavailable_reason,
-            })
+            if compact:
+                devs.append({
+                    "udid": d.udid,
+                    "name": d.name,
+                    "state": d.state,
+                    "hid_supported": reg is not None,
+                })
+            else:
+                devs.append({
+                    "udid": d.udid,
+                    "name": d.name,
+                    "model": d.model,
+                    "transport": d.transport,
+                    "state": d.state,
+                    "hid_supported": reg is not None,
+                    "last_seen": d.last_seen,
+                    "unavailable_reason": d.unavailable_reason,
+                })
     except device.DeviceError as exc:
         err = {"code": "discovery_failed", "message": str(exc)}
+    if compact:
+        # Slim top-level payload too: skip the hid_note string + diagnostics.
+        return {
+            "ok": err is None,
+            "devices": devs,
+            "error": err,
+        }
     return {
         "ok": err is None,
         "devices": devs,
@@ -1769,9 +1829,17 @@ _TOOLS: list[dict] = [
             "udid in session_start({target: 'device', udid: ...}) to attach. "
             "Devices with hid_supported=true have a bootstrapped WebDriverAgent "
             "and support tap/swipe/type_text/press_key. Run "
-            "`simdrive bootstrap-device <udid>` once to enable HID on a device."
+            "`simdrive bootstrap-device <udid>` once to enable HID on a device. "
+            "Pass compact=true to slim per-device entries to {udid, name, state, "
+            "hid_supported} — useful when you only need to pick one to attach to."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "compact": {"type": "boolean", "default": False,
+                            "description": "Slim per-device entries + drop diagnostic top-level fields."},
+            },
+        },
         "handler": tool_list_devices,
     },
     {
