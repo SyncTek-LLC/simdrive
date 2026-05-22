@@ -444,6 +444,49 @@ def find_by_text(marks: "list[Mark | dict]", query: str) -> "Optional[Mark | dic
     return None
 
 
+def find_text_candidates(
+    marks: "list[Mark | dict]", query: str
+) -> "tuple[list[Mark | dict], str]":
+    """Return every mark tied at the best-matching precedence tier + tier name.
+
+    F#6 — ``find_by_text`` silently picked the first match when duplicate labels
+    existed (e.g. SimDrive Demo screen title and submit button both reading
+    "Sign In"). This helper exposes the full candidate set at the *winning* tier
+    so callers can raise an ``ambiguous_text_target`` error when more than one
+    mark ties at that tier.
+
+    Tier precedence: ``exact`` > ``prefix`` > ``substring`` > ``alias``. Only
+    the highest non-empty tier is returned — if there is 1 exact match and 5
+    prefix matches, only the exact match is returned (single candidate, no
+    ambiguity). If 2 exact matches exist, only those 2 are returned, and any
+    prefix/substring matches fall through.
+
+    Returns ``([], "")`` when no marks match at any tier.
+    """
+    q = query.strip().lower()
+    if not q or not marks:
+        return [], ""
+
+    exact = [m for m in marks if (_mark_get(m, "text") or "").strip().lower() == q]
+    if exact:
+        return exact, "exact"
+    prefix = [m for m in marks if (_mark_get(m, "text") or "").strip().lower().startswith(q)]
+    if prefix:
+        return prefix, "prefix"
+    sub = [m for m in marks if q in (_mark_get(m, "text") or "").lower()]
+    if sub:
+        return sub, "substring"
+    aliases = _ICON_GLYPH_ALIASES.get(q)
+    if aliases:
+        alias_set = {a.lower() for a in aliases}
+        alias_cands = [
+            m for m in marks if (_mark_get(m, "text") or "").strip().lower() in alias_set
+        ]
+        if alias_cands:
+            return alias_cands, "alias"
+    return [], ""
+
+
 def find_by_mark_id(marks: "list[Mark | dict]", mark_id: int) -> "Optional[Mark | dict]":
     """a12 — accepts both Mark dataclasses and dict marks."""
     for m in marks:
