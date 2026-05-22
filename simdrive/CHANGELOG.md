@@ -2,19 +2,41 @@
 
 ## [1.0.0b4] — 2026-05-22
 
-**Hotfix release.** Fixes a fresh-`pip install` regression introduced in 1.0.0b2 and present in b3. No new features; no API changes.
+**Reliability + dogfood-fix release.** Addresses the four bugs the Example Reader iOS team surfaced against b3 dogfood (F-B3-007, F-B3-009, F-B3-010, F-B3-011) and hardens the build harness so this class of regression cannot ship again. No breaking API changes.
 
-### Fixed
+### Fixed — install path (F-B3-007, blocker)
 
-- **Fresh `pip install simdrive` was broken on b2 and b3.** Importing any `simdrive.*` module raised `ModuleNotFoundError: No module named 'fastapi'` because `simdrive.cloud.middleware.quotas` had a top-level `from fastapi import ...`. The Wave 2 quota wire-up in b2 (PR #125) caused `simdrive.server` to import this module on the client path, dragging in a `[cloud]`-extra dep that the core install does not require.
+- **Fresh `pip install simdrive` was broken on b2 and b3.** Any `simdrive.*` import raised `ModuleNotFoundError: No module named 'fastapi'`. Root cause: the Wave 2 quota wire-up (PR #125) made `simdrive.server` import `simdrive.cloud.middleware.quotas`, which had a top-level `from fastapi import …`. `fastapi` lives in the `[cloud]` extra, not the core install. **Fix:** `fastapi`, `simdrive.cloud.auth`, and `simdrive.cloud.db.*` imports moved inside the server-side factory functions (`make_usage_checker`, `make_quota_gate`) that actually need them. The client surface (`check_local_quota`, `LocalQuotaSnapshot`) now imports only stdlib + `simdrive.cloud.errors`.
 
-  **Fix:** `from fastapi import …`, `simdrive.cloud.auth`, and `simdrive.cloud.db.*` imports moved inside the server-side factory functions (`make_usage_checker`, `make_quota_gate`) that actually need them. The client surface (`check_local_quota`, `LocalQuotaSnapshot`) now imports only stdlib + `simdrive.cloud.errors`.
+### Fixed — recording integrity (F-B3-009, F-B3-010)
 
-  This was missed in b2/b3 testing because the local dev environment had fastapi installed for the test suite. No CI step exercised a clean-env install of just the core deps. **b4 adds `tests/test_no_fastapi_in_client_path.py`** — 5 regression-guard tests that mask `fastapi` in `sys.modules` and verify the client surface imports cleanly, so this class of regression cannot ship to PyPI again.
+- **`clear_field` calls were not recorded.** A session running N actions including a `clear_field` produced a recording with N-1 steps; the clear was silently absent on replay. Pre-fix, `tool_clear_field` only emitted to the audit log, not the recorder. **Fix:** both device and sim branches now call `_record_act_step("clear_field", ...)` with proper pre/post screenshots. Failed clears (HID dispatch error) are NOT recorded — a lying step is worse than a missing one.
+
+- **`tap_and_wait_keyboard` was serialized as bare `tap`.** The composite delegates to `tool_tap` internally, which recorded itself as `action: tap` in `recording.yaml`. Replays lost the keyboard-wait semantic and tapped-then-immediately-acted. **Fix:** new `Recorder.upgrade_step_action(step_id, new_action)` method; the composite tool calls it after `tool_tap` returns so the persisted step carries the right action name.
+
+### Fixed — response disambiguation (F-B3-011)
+
+- **`type_text` returned `keyboard_visible: false` when the type actually succeeded.** Example Reader's instant-search field auto-commits and dismisses the keyboard on the first keystroke. By the time the post-type observe ran, the keyboard chrome was gone — the heuristic false-negatived. Agents using `keyboard_visible` as a retry signal would double-type. **Fix:** when `dispatch_succeeded=true` and `keyboard_visible=false`, the response now includes a `keyboard_visible_reason` string explaining the auto-collapse scenario and stating explicitly: "Treat dispatch_succeeded as ground truth; do NOT retry on this signal."
+
+### Hardened — build harness (so this never happens again)
+
+- **Fixed the smoke-test masking bug** that let b2/b3 through. `specterqa-ios-publish.yml`'s "Fresh-venv install smoke test" used `simdrive --version || python -c "import simdrive; …"`. The fallback ran `__init__.py` (bare-package, just sets `__version__`) — works fine even when `import simdrive.server` is broken. The OR-fallback masked the real failure. **Fix:** rebuilt as three explicit checks with no fallback — CLI version, full `simdrive.server` import, tool registry shape.
+
+- **New `cleanroom-install.yml` workflow runs on every PR.** Installs `simdrive` core-only (no `[dev]`/`[cloud]`/`[claude]` extras) in a fresh venv, then verifies CLI works + `simdrive.server` imports + tool registry intact + `fastapi`/`anthropic` did NOT get pulled in. If red, do not merge.
+
+- **New `tests/test_no_fastapi_in_client_path.py`** — 5 regression-guard tests that mask `fastapi` in a subprocess `sys.modules` and verify every client-side import target still works. Subprocess isolation was necessary; in-process masking leaks wiped modules to every test that follows.
+
+- **New `docs/RELEASE_CHECKLIST.md`** codifies pre-merge, pre-publish, manual, and post-publish gates. The Example Reader b3 incidents are listed as concrete post-mortems so future releases see the failures, not just the abstract policies.
+
+### Tests added
+
+- 6 new tests in `tests/test_b4_Example Reader_dogfood_fixes.py` — one per fix above + happy-path counterpart
+- 5 new tests in `tests/test_no_fastapi_in_client_path.py` (regression guard)
+- Total non-live test count: 1514 → **1525**
 
 ### Upgrade note
 
-If you installed 1.0.0b2 or 1.0.0b3 from PyPI and ran into the `ModuleNotFoundError: fastapi` error, upgrade with `pip install --upgrade simdrive==1.0.0b4`. No other changes; everything else from b3's polish sprint is intact.
+If you installed `1.0.0b2` or `1.0.0b3` from PyPI you likely hit one or more of these bugs. Upgrade with `pip install --upgrade simdrive==1.0.0b4`. b2 and b3 will be yanked from PyPI; existing pinned installs keep working, but new installations will pick up b4 by default.
 
 ---
 
