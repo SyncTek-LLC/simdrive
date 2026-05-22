@@ -30,21 +30,23 @@ import pytest
 pytestmark = pytest.mark.dogfood
 
 REPO_ROOT = Path(__file__).parent.parent.parent
+# pyproject.toml moved into simdrive/ subdirectory at commit a0abf0b
+SIMDRIVE_ROOT = REPO_ROOT / "simdrive"
 TESTKIT_BUNDLE_ID = "io.synctek.specterqa.testkit"
 
 
 def _get_local_version() -> str:
-    """Return the package version from pyproject.toml or importlib.metadata."""
+    """Return the package version from simdrive/pyproject.toml or importlib.metadata."""
     try:
         from importlib.metadata import version
 
-        return version("specterqa-ios")
+        return version("simdrive")
     except Exception:
         pass
     try:
         import tomllib
 
-        with open(REPO_ROOT / "pyproject.toml", "rb") as f:
+        with open(SIMDRIVE_ROOT / "pyproject.toml", "rb") as f:
             data = tomllib.load(f)
         return data["project"]["version"]
     except Exception:
@@ -77,15 +79,16 @@ def fresh_install_venv(tmp_path_factory):
     )
 
     venv_python = venv_dir / "bin" / "python"
-    venv_specterqa = venv_dir / "bin" / "specterqa-ios"
+    # CLI was renamed from specterqa-ios to simdrive when the project became SimDrive
+    venv_specterqa = venv_dir / "bin" / "simdrive"
 
-    # Install the local package in editable-equivalent mode (pip install .)
+    # Install from simdrive/ subdirectory (pyproject.toml moved there at commit a0abf0b)
     # Use --no-cache-dir to simulate a fresh user install
     install_result = subprocess.run(
         [
             str(venv_python), "-m", "pip", "install",
             "--no-cache-dir", "--quiet",
-            str(REPO_ROOT),
+            str(SIMDRIVE_ROOT),
         ],
         capture_output=True,
         text=True,
@@ -106,15 +109,15 @@ def fresh_install_venv(tmp_path_factory):
 
 
 def test_fresh_venv_created(fresh_install_venv):
-    """Venv must exist and specterqa-ios CLI must be importable."""
+    """Venv must exist and simdrive CLI must be importable."""
     venv_dir = fresh_install_venv["venv_dir"]
     assert venv_dir.exists(), f"Venv not found at {venv_dir}"
     cli = fresh_install_venv["cli"]
-    assert cli.exists(), f"specterqa-ios CLI not found at {cli}"
+    assert cli.exists(), f"simdrive CLI not found at {cli}"
 
 
 def test_cli_help_exits_zero(fresh_install_venv):
-    """``specterqa-ios --help`` must exit 0 — confirms entry point wiring."""
+    """``simdrive --help`` must exit 0 — confirms entry point wiring."""
     result = subprocess.run(
         [str(fresh_install_venv["cli"]), "--help"],
         capture_output=True,
@@ -122,13 +125,13 @@ def test_cli_help_exits_zero(fresh_install_venv):
         timeout=30,
     )
     assert result.returncode == 0, (
-        f"specterqa-ios --help returned non-zero.\nstdout: {result.stdout}\n"
+        f"simdrive --help returned non-zero.\nstdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
 
 
 def test_runner_build_ci(fresh_install_venv):
-    """``specterqa-ios runner build`` must exit 0 from a fresh install.
+    """``simdrive runner build`` must exit 0 from a fresh install.
 
     Skipped when xcodebuild is not available — this test is still gated
     by Xcode, but the install itself (test_fresh_venv_created) is CI-always.
@@ -143,7 +146,7 @@ def test_runner_build_ci(fresh_install_venv):
         timeout=300,
     )
     assert result.returncode == 0, (
-        f"specterqa-ios runner build failed from fresh venv install.\n"
+        f"simdrive runner build failed from fresh venv install.\n"
         f"This means the wheel is broken — the runner xcodeproj was not found.\n"
         f"stdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
     )
