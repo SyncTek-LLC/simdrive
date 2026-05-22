@@ -926,7 +926,16 @@ def tool_type_text(arguments: dict) -> dict:
         s.last_action_at = _now()
         step_id = None
         if pre_path:
-            step_id = _record_act_step(s, "type_text", {"text": text}, pre_path)
+            # F#11: persist focus context (tap_first + clear_first) alongside text so
+            # replay can faithfully reproduce a tap-then-type sequence on a multi-field
+            # form. Pre-fix this dropped tap_first entirely, leaving replay to rely on
+            # whatever field happened to be first responder.
+            rec_args: dict = {"text": text}
+            if tap_target is not None:
+                rec_args["tap_first"] = tap_target
+            if clear_first:
+                rec_args["clear_first"] = True
+            step_id = _record_act_step(s, "type_text", rec_args, pre_path)
         session.append_action(s, {
             "action": "type_text",
             "args": {"text": text, "tap_first": tap_target, "clear_first": clear_first},
@@ -989,7 +998,16 @@ def tool_type_text(arguments: dict) -> dict:
     s.last_action_at = _now()
     step_id = None
     if pre_path:
-        step_id = _record_act_step(s, "type_text", {"text": text}, pre_path)
+        # F#11: persist focus context (tap_first + clear_first) alongside text so
+        # replay can faithfully reproduce a tap-then-type sequence on a multi-field
+        # form. Pre-fix this dropped tap_first entirely, leaving replay to rely on
+        # whatever field happened to be first responder.
+        rec_args: dict = {"text": text}
+        if tap_target is not None:
+            rec_args["tap_first"] = tap_target
+        if clear_first:
+            rec_args["clear_first"] = True
+        step_id = _record_act_step(s, "type_text", rec_args, pre_path)
     session.append_action(s, {
         "action": "type_text",
         "args": {"text": text, "tap_first": tap_target, "clear_first": clear_first},
