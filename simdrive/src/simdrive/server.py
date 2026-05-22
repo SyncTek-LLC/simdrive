@@ -432,8 +432,55 @@ def tool_observe(arguments: dict) -> dict:
             marks, annotated_path = annotate_device_screenshot(
                 screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
             )
+            # Persist UNFILTERED marks to the session so resolver tools (tap by
+            # text/stable_id, etc.) still see the full set even when an observe
+            # caller filters for token efficiency.
             if marks:
                 s.last_marks = marks
+
+        # Token-efficiency knobs (parity with simulator path). The device path
+        # builds the Observation dict manually, so we apply the same filters
+        # inline rather than constructing a synthetic Observation just to call
+        # to_dict(). Marks here are list[dict] from annotate_device_screenshot.
+        compact = bool(arguments.get("compact", False))
+        confidence_floor = arguments.get("confidence_floor")
+        mark_limit = arguments.get("mark_limit")
+        capture_observability_flag = bool(arguments.get("capture_observability", False))
+
+        emitted_marks = marks
+        if confidence_floor is not None:
+            _floor_rank = {"low": 0, "med": 1, "medium": 1, "high": 2}.get(confidence_floor)
+            if _floor_rank is None:
+                raise errors.invalid_argument(
+                    "confidence_floor", confidence_floor,
+                    "must be one of low/med/medium/high",
+                )
+            _band_rank = {"low": 0, "med": 1, "medium": 1, "high": 2}
+            emitted_marks = [
+                m for m in emitted_marks
+                if _band_rank.get(m.get("confidence_band"), 0) >= _floor_rank
+            ]
+        if mark_limit is not None:
+            if int(mark_limit) < 0:
+                raise errors.invalid_argument(
+                    "mark_limit", mark_limit, "must be >= 0",
+                )
+            # Sort by band rank desc, then area desc; restore reading order in slice.
+            _band_rank = {"low": 0, "med": 1, "medium": 1, "high": 2}
+            emitted_marks = sorted(
+                emitted_marks,
+                key=lambda m: (
+                    _band_rank.get(m.get("confidence_band"), 0),
+                    int(m.get("w", 0)) * int(m.get("h", 0)),
+                ),
+                reverse=True,
+            )[:int(mark_limit)]
+            emitted_marks = sorted(emitted_marks, key=lambda m: int(m.get("id", 0)))
+        if compact:
+            _compact_keys = ("id", "stable_id", "text", "center", "bbox", "confidence_band")
+            emitted_marks = [
+                {k: m.get(k) for k in _compact_keys if k in m} for m in emitted_marks
+            ]
 
         result = {
             "screenshot_path": str(screenshot_path),
@@ -441,10 +488,23 @@ def tool_observe(arguments: dict) -> dict:
             "screenshot_size_pixels": [w, h],
             "window_bounds_macos": None,
             "captured_at": _now(),
-            "marks": marks,
+            "marks": emitted_marks,
             "recent_logs": None,
             "target": "device",
         }
+        if capture_observability_flag:
+            # One entry per emitted mark with confidence-band derivation.
+            result["_observability"] = [
+                {
+                    "mark_id": m.get("id"),
+                    "raw_confidence": m.get("raw_confidence"),
+                    "clamped_confidence": m.get("clamped_confidence"),
+                    "confidence_band": m.get("confidence_band"),
+                    "dictionary_check": m.get("dictionary_check"),
+                }
+                for m in (marks if not compact else marks)
+                if m.get("id") in {em.get("id") for em in emitted_marks}
+            ]
         # screenshot_b64 is opt-in: a 101k-char inline payload overflows the
         # MCP token budget for typical screens. Callers that need raw bytes
         # read screenshot_path from disk.
@@ -460,6 +520,10 @@ def tool_observe(arguments: dict) -> dict:
         log_lines=int(arguments.get("log_lines", 50)),
         log_predicate=arguments.get("log_predicate"),
         target=s.target,
+        compact=bool(arguments.get("compact", False)),
+        confidence_floor=arguments.get("confidence_floor"),
+        mark_limit=arguments.get("mark_limit"),
+        capture_observability=bool(arguments.get("capture_observability", False)),
     )
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h

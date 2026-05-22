@@ -278,6 +278,26 @@ class Mark:
             "confidence_band": self.confidence_band,
         }
 
+    def to_compact_dict(self) -> dict:
+        """Slim mark dict for token-efficient `observe(compact=True)` responses.
+
+        Drops OCR diagnostic fields (`raw_confidence`, `confidence`,
+        `stable_id_loose`) that most agents never read. Retains the six keys
+        agents typically need to act on a mark: identifier, stable identifier,
+        text, geometry, and quality bucket.
+
+        Token cost per mark drops from ~20 keys (to_dict) to 6 — roughly
+        5-6x reduction in JSON payload size on dense screens.
+        """
+        return {
+            "id": self.id,
+            "stable_id": self.stable_id,
+            "text": self.text,
+            "center": list(self.center),
+            "bbox": [self.x, self.y, self.w, self.h],
+            "confidence_band": self.confidence_band,
+        }
+
 
 def vision_available() -> bool:
     try:
