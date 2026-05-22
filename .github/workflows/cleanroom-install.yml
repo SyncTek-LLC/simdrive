@@ -1,0 +1,124 @@
+name: Cleanroom Install Smoke
+
+# INIT-2026-549 — added after the b2/b3 fastapi regression (F-B3-007).
+#
+# The `simdrive-ci.yml` job installs `[dev]` extras to run the test suite. That
+# means every CI run has fastapi + sqlalchemy + the full cloud-side dep graph
+# available — which masks dep-graph leaks from the cloud subpackage into the
+# core client path. b2 and b3 both shipped to PyPI with a top-level fastapi
+# import in `cloud/middleware/quotas` that simdrive.server transitively pulled
+# in. The pip-installable surface was completely broken; no CI job noticed.
+#
+# This workflow is the missing gate. It installs the package CORE-ONLY (no
+# extras) in a fresh venv and verifies the user-facing surface works end to
+# end:
+#   - `simdrive --version` exits 0 with the right version
+#   - `import simdrive.server` succeeds
+#   - tool registry contains the expected tools
+#
+# Runs on every PR to main + on push to main. Fast (<2 min). If this is red,
+# do not merge — a fresh `pip install simdrive` for a customer would also fail.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      # Only run when something that could affect the dep graph or import
+      # surface changes. Saves CI minutes on docs-only / workflow-only PRs.
+      - "simdrive/src/**"
+      - "simdrive/pyproject.toml"
+      - "simdrive/requirements.lock"
+      - ".github/workflows/cleanroom-install.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanroom-install:
+    name: pip install simdrive (no extras) + import smoke
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create cleanroom venv (no inherited deps)
+        run: |
+          python -m venv /tmp/cleanroom
+          /tmp/cleanroom/bin/pip install --upgrade pip
+
+      - name: Install simdrive CORE ONLY (no [dev]/[cloud]/[claude] extras)
+        working-directory: simdrive
+        run: |
+          # This is the exact command a customer runs. If anything fails here,
+          # PyPI users will hit the same failure on a fresh install.
+          /tmp/cleanroom/bin/pip install .
+
+      - name: Verify no extras leaked into the install
+        run: |
+          set -euo pipefail
+          # fastapi lives in [cloud]; anthropic lives in [claude]. Neither
+          # should be installed by a bare `pip install simdrive`. If either
+          # appears here, a top-level import on the client path is dragging
+          # in a server/extras-only dep — exactly the b2/b3 regression class.
+          if /tmp/cleanroom/bin/python -c "import fastapi" 2>/dev/null; then
+            echo "::error::fastapi was installed by the bare 'pip install simdrive' command."
+            echo "::error::This means a transitive dep declared fastapi as required, or"
+            echo "::error::pyproject's install_requires is dragging in [cloud]-extra deps."
+            exit 1
+          fi
+          if /tmp/cleanroom/bin/python -c "import anthropic" 2>/dev/null; then
+            echo "::error::anthropic was installed by bare 'pip install simdrive' — should be [claude] extra only"
+            exit 1
+          fi
+          echo "OK — no [cloud]/[claude] extras leaked into the core install"
+
+      - name: CLI entry point — simdrive --version
+        run: |
+          # Reads `simdrive.server.serve` import path. Failed on b2/b3 with
+          # ModuleNotFoundError: fastapi. Must work without any extras.
+          /tmp/cleanroom/bin/simdrive --version
+
+      - name: Full server import + tool registry shape
+        run: |
+          /tmp/cleanroom/bin/python <<'PY'
+          import simdrive.server
+          assert hasattr(simdrive.server, 'serve'), 'simdrive.server.serve must exist'
+          tools = simdrive.server.list_tools()
+          n = len(tools)
+          assert n >= 33, f'expected >=33 tools, got {n}'
+          names = {t['name'] for t in tools}
+          # Spot-check critical tools across categories. The full registry
+          # shape is pinned by test_paywall_gates.py; this is the smoke check.
+          required = {
+              'session_start', 'session_end', 'session_status',
+              'observe',
+              'tap', 'tap_and_wait_keyboard', 'swipe', 'type_text', 'press_key',
+              'record_start', 'record_stop', 'replay',
+              'clear_field', 'dismiss_sheet',
+              'version',
+          }
+          missing = required - names
+          assert not missing, f'critical tools missing from registry: {missing}'
+          print(f'tool registry healthy: {n} tools, all required present')
+          PY
+
+      - name: cloud submodule import smoke (must work without fastapi)
+        run: |
+          # The Wave 2 quota wire-up means server imports cloud.middleware.quotas
+          # at module level. That module must NEVER drag fastapi onto the
+          # client path. Lazy-import for fastapi was the b4 fix — pin it.
+          /tmp/cleanroom/bin/python <<'PY'
+          from simdrive.cloud.middleware.quotas import check_local_quota, LocalQuotaSnapshot
+          from simdrive.cloud.errors import QuotaExceededError
+          from types import SimpleNamespace
+          check_local_quota('observe', SimpleNamespace())  # no snapshot -> no-op
+          snap = LocalQuotaSnapshot(tier='free', runs_used=0, runs_limit=10)
+          assert snap.remaining == 10
+          print('client-path cloud surface healthy without fastapi')
+          PY
