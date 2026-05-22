@@ -9,26 +9,76 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
-### Fixed — F#2 — `session_start` falsely reports `state="active"` for an app that crashed during launch
+### Fixed — F#1 MCP host friction: server self-restarts on version drift
 
-`session_start(app_bundle_id=...)` previously returned `state: "active"` even
-when the launched app terminated within ~500 ms of launch (e.g. a build
-missing an entitlement). The Example Reader dogfood agent only discovered the
-failure after burning multiple tap/type roundtrips and calling `app_state`
-and `crashes` separately.
+`pip install -U simdrive` previously left the running MCP server stuck on
+the loaded version — every tool call emitted a `_simdrive_warning` telling
+the user to restart Claude Code by hand. The drift handler now still
+returns the in-flight tool result (with `_simdrive_warning` + a new
+`_simdrive_action: "restarting"` field), then schedules an `os.execv`
+re-exec of the `simdrive` CLI on a 100 ms background timer. Next tool call
+lands on the freshly loaded code, same PID, MCP stdio transport intact.
+Opt-out via `SIMDRIVE_NO_AUTO_RESTART=1`. Strict-upgrade-only guard
+(downgrades warn but never restart) + `SIMDRIVE_RESTART_COUNT` env-counter
+loop-guard at 3 prevent oscillation. Thread-safe latch
+(`_RESTART_LATCH = threading.Lock()`) covers concurrent sync + async
+dispatches. Tests: `tests/test_mcp_drift_self_restart.py` (20 cases).
 
-After the fix, when `app_bundle_id` is provided and `verify_launch` is
-`True` (the new default), `session_start` polls `app_state` up to
-5×300 ms after `sim.launch_app`. If foreground is observed within the
-settle window it returns `state: "active"` as before; if not, it returns:
+### Fixed — F#2 `session_start` falsely reports `state="active"` for an app that crashed during launch
 
-  - `state: "launched_then_exited"`
-  - `crash_report_path` — most recent `.ips` for the bundle in
-    `~/Library/Logs/DiagnosticReports/` since launch (or `null` if none)
-  - `recovery` — human-readable hint pointing at the crash report
+`session_start(app_bundle_id=...)` previously returned `state: "active"`
+even when the launched app terminated within ~500 ms of launch (e.g. a
+build missing an entitlement). The Example Reader dogfood agent only discovered
+the failure after burning multiple tap/type roundtrips and calling
+`app_state` and `crashes` separately. After the fix, when `app_bundle_id`
+is provided and `verify_launch=True` (default), `session_start` polls
+`app_state` for up to 3000 ms (default; configurable via
+`SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS`, clamped [500, 15000]). A single
+`not-running` poll is treated as a `launchctl` flake and retried; only
+two consecutive `not-running` polls declare crash. On crash, response is
+`state: "launched_then_exited"` plus `crash_report_path` (most recent
+`.ips`, with a 250 ms flush-race retry) and a `recovery` hint. Threaded
+through to the device target path with a graceful "verification
+unavailable" fallback. Opt out per-call with `verify_launch=False`. Tests:
+`tests/test_session_start_verify_launch.py` (15 cases).
 
-Opt out with `verify_launch=False` to keep the legacy fire-and-forget
-behaviour.
+### Fixed — F#6 `tap({text})` silent first-match on duplicate labels
+
+- **`tap({text: X})` no longer silent-picks** when >1 marks tie at the
+  winning precedence tier. Bit the SimDrive Demo "Sign In" reproducer: a
+  screen title and a submit button both OCR'd to "Sign In"; the tap landed
+  on the title and the agent thought it had submitted (wasted a screen
+  transition). Now returns structured error
+  `ambiguous_text_target` with `details.candidates` (up to 5; each carries
+  `stable_id`, `mark`, `bbox`, `confidence`, `text`, `position_hint`) and a
+  `recovery` string instructing the caller to re-call with
+  `stable_id`/`mark`/`x,y`.
+- **Tier precedence preserved.** If exactly one exact match exists, the
+  call still resolves unambiguously even when many prefix/substring
+  matches also exist — exact-singleton wins. Ambiguity is only raised
+  when ≥2 marks tie at the *winning* tier (exact > prefix > substring >
+  alias).
+- **`position_hint`** is a coarse 9-cell grid label
+  (`top-center`, `bottom-right`, `middle-left`, …) derived from bbox
+  center vs. the last observe's screen size, so the agent can distinguish
+  duplicate-label candidates at a glance.
+- New API: `som.find_text_candidates(marks, query)` exposes the full
+  candidate list at the winning tier; `errors.ambiguous_text_target(...)`
+  constructs the structured error.
+- Tests: `simdrive/tests/test_tap_ambiguous_text.py` (7 cases — covers two
+  exact matches, one exact + many prefix, zero matches, one prefix-only,
+  three exact w/ position hints, >5 cap, recovery-string contract).
+
+### Fixed — F#11 (simdrive recording): `type_text` now persists `tap_first` focus context
+
+Previously, `type_text(text="...", tap_first={text:"..."})` was recorded
+as only `{text: "..."}` — the `tap_first` (and `clear_first`) kwargs were
+dropped at record time, so multi-field forms could not be faithfully
+replayed. The recording schema is additive: pre-fix recordings without
+`tap_first` continue to replay unchanged. On replay, an `args.tap_first`
+triggers a focus tap against the live-resolved target before the
+`type_text` dispatches — same call sequence as record. Affects both sim
+and device replay paths.
 
 ---
 
