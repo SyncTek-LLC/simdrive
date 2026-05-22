@@ -24,20 +24,24 @@ session so it stays fast (no DB round-trip from inside a hot path).
 """
 from __future__ import annotations
 
+# NOTE on import shape: this module is imported by simdrive.server (client path)
+# for `check_local_quota` ONLY. The `make_usage_checker` and `make_quota_gate`
+# factories are server-only — they live alongside the FastAPI cloud-side gate
+# and pull in `fastapi`, sqlalchemy, and the rest of `simdrive.cloud.{auth,db}`.
+# Those deps are in the `[cloud]` extra, NOT in the core install.
+#
+# So: server-side imports (fastapi, cloud.auth, cloud.db.*) are LAZY — moved
+# inside the factory functions that need them. A client doing
+#   `from simdrive.cloud.middleware.quotas import check_local_quota`
+# stays on the pure-stdlib path and does NOT require fastapi at runtime.
+# Pre-1.0.0b4 these were top-level imports, which made every fresh
+# `pip install simdrive` fail with ModuleNotFoundError: fastapi.
 import calendar
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import Depends, HTTPException, Request, status
-
-from simdrive.cloud.auth import make_license_bearer
-from simdrive.cloud.db.models import get_session
-from simdrive.cloud.db.usage import (
-    get_or_create_counter,
-    get_run_limit,
-)
 from simdrive.cloud.errors import QuotaExceededError, quota_exceeded
 
 
@@ -62,7 +66,17 @@ def make_usage_checker(verify_key, db_engine):
     """Return a FastAPI dependency that reads usage without incrementing.
 
     Used by GET /v1/licenses/usage — read-only, no increment.
+
+    SERVER-SIDE ONLY. Requires the ``[cloud]`` install extra (fastapi +
+    sqlalchemy). Lazy-imports those deps so a client doing
+    ``from simdrive.cloud.middleware.quotas import check_local_quota``
+    does not need them.
     """
+    from fastapi import HTTPException, Request, status  # noqa: F401  (Request used in annotation)
+    from simdrive.cloud.auth import make_license_bearer
+    from simdrive.cloud.db.models import get_session
+    from simdrive.cloud.db.usage import get_or_create_counter, get_run_limit
+
     _auth = make_license_bearer(verify_key)
 
     def _check_usage(
@@ -122,7 +136,15 @@ def make_quota_gate(verify_key, db_engine):
 
     This dependency is used on the increment endpoint.
     Raises HTTP 429 if the tier quota is exhausted.
+
+    SERVER-SIDE ONLY. See ``make_usage_checker`` docstring for the lazy-
+    import rationale.
     """
+    from fastapi import Depends, HTTPException, Request, status
+    from simdrive.cloud.auth import make_license_bearer
+    from simdrive.cloud.db.models import get_session
+    from simdrive.cloud.db.usage import get_or_create_counter, get_run_limit
+
     _auth = make_license_bearer(verify_key)
 
     def _gate(
