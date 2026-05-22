@@ -237,6 +237,18 @@ def list_apps_device(udid: str) -> list[dict]:
     return out
 
 
+def _read_app_info_plist(path: str) -> bytes:
+    """Read the raw bytes of an app's Info.plist from the app bundle on disk.
+
+    `path` is the app bundle directory (e.g. /path/MyApp.app).  We look for
+    Info.plist directly inside that directory.  Returns the raw plist bytes so
+    callers can load them with plistlib.  Raises OSError when the file cannot
+    be read.
+    """
+    info_path = Path(path) / "Info.plist"
+    return info_path.read_bytes()
+
+
 def list_apps(udid: str) -> list[dict]:
     """Parse `xcrun simctl listapps <udid>` (returns plist) into a flat list.
 
@@ -281,12 +293,29 @@ def list_apps(udid: str) -> list[dict]:
     for bundle_id, info in data.items():
         if not isinstance(info, dict):
             continue
+        version = info.get("CFBundleShortVersionString") or ""
+        build = info.get("CFBundleVersion") or ""
+        app_path = info.get("Path") or ""
+        # F#3: simctl listapps often omits CFBundleShortVersionString. Fall back to
+        # reading Info.plist from the app bundle on disk.
+        if not version and app_path:
+            try:
+                plist_bytes = _read_app_info_plist(app_path)
+                on_disk = plistlib.loads(plist_bytes)
+                version = on_disk.get("CFBundleShortVersionString") or ""
+                if not build:
+                    build = on_disk.get("CFBundleVersion") or ""
+            except Exception:
+                pass
+        # Final fallback: use the build number as the version string.
+        if not version:
+            version = build
         out.append({
             "bundle_id": bundle_id,
             "name": info.get("CFBundleDisplayName") or info.get("CFBundleName") or "",
-            "version": info.get("CFBundleShortVersionString") or "",
-            "build": info.get("CFBundleVersion") or "",
-            "path": info.get("Path") or "",
+            "version": version,
+            "build": build,
+            "path": app_path,
         })
     out.sort(key=lambda a: a["name"].lower())
     return out

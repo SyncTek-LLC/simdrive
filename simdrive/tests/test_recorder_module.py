@@ -543,12 +543,14 @@ def test_lint_one_non_mapping(tmp_path):
 
 
 def test_lint_one_missing_requires(tmp_path):
+    # F#16: 0-step recording with no requires block is now categorized as 'empty'
+    # (not 'fail'). This test was updated to reflect the new semantic.
     rec_dir = tmp_path / "rec"
     rec_dir.mkdir()
     (rec_dir / "recording.yaml").write_text(yaml.safe_dump({"name": "r", "steps": []}))
     results = recorder.lint_recordings(tmp_path)
-    assert results[0].status == "fail"
-    assert "no requires block" in results[0].reason
+    assert results[0].status == "empty"
+    assert results[0].category == "empty"
 
 
 def test_lint_one_ok(tmp_path):
