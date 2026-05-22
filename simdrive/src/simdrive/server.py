@@ -601,10 +601,19 @@ def tool_tap(arguments: dict) -> dict:
             "screenshot_size_pixels": [sw, sh],
             "resolved_via": resolved_via,
         }
+        if matched_mark is not None:
+            resp["tapped_mark"] = {
+                "stable_id": _mark_attr(matched_mark, "stable_id"),
+                "stable_id_loose": _mark_attr(matched_mark, "stable_id_loose"),
+                "text": _mark_attr(matched_mark, "text"),
+            }
         if pre_path:
             step_id = _record_act_step(s, "tap", device_tap_args, pre_path)
             if step_id is not None:
                 resp["step_id"] = step_id
+        settle_ms = int(arguments.get("settle_ms", 0))
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
         return resp
 
     sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
@@ -635,9 +644,52 @@ def tool_tap(arguments: dict) -> dict:
         "screenshot_size_pixels": [sw, sh],
         "resolved_via": resolved_via,
     }
+    if matched_mark is not None:
+        response["tapped_mark"] = {
+            "stable_id": _mark_attr(matched_mark, "stable_id"),
+            "stable_id_loose": _mark_attr(matched_mark, "stable_id_loose"),
+            "text": _mark_attr(matched_mark, "text"),
+        }
     if step_id is not None:
         response["step_id"] = step_id
+    settle_ms = int(arguments.get("settle_ms", 0))
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
     return response
+
+
+def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
+    """Atomic composite: tap a target, wait for the keyboard, then observe.
+
+    Use this when you need to focus a text field and confirm the keyboard
+    appeared *before* sending keystrokes. Saves the agent ~2 round-trips
+    versus chaining tool_tap -> wait -> tool_observe manually.
+
+    Behavior:
+      1. Calls tool_tap with the same target resolution as tool_tap.
+      2. Sleeps for _KEYBOARD_SETTLE_SEC so the keyboard has time to slide up.
+      3. Calls tool_observe to refresh the mark cache and surface the
+         keyboard's marks to the agent.
+
+    Returns the tap response (pixel_x/y, resolved_via, tapped_mark, step_id)
+    augmented with a `post_state` key containing the post-tap observation
+    (marks, screenshot_path, ...). Agents can inspect `post_state.marks` to
+    check the keyboard appeared (look for text='delete' or similar keyboard
+    marks) before issuing type_text.
+
+    Accepts every argument tool_tap accepts. Settle duration is the same
+    documented _KEYBOARD_SETTLE_SEC server constant used by type_text's
+    own internal tap+settle path, so behavior is consistent across tools.
+    """
+    _entitlement_gate()
+    tap_response = tool_tap(arguments)
+    time.sleep(_KEYBOARD_SETTLE_SEC)
+    observe_response = tool_observe({
+        "session_id": arguments["session_id"],
+        # Default to annotate=True so the agent can spot the keyboard marks.
+        "annotate": bool(arguments.get("annotate", True)),
+    })
+    return {**tap_response, "post_state": observe_response}
 
 
 def tool_swipe(arguments: dict) -> dict:
@@ -704,6 +756,9 @@ def tool_swipe(arguments: dict) -> dict:
         response["warnings"] = warnings
     if step_id is not None:
         response["step_id"] = step_id
+    settle_ms = int(arguments.get("settle_ms", 0))
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
     return response
 
 
@@ -1216,14 +1271,25 @@ def tool_dismiss_sheet(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
     sw, sh = _ensure_screenshot_dims(s)
+    direction = str(arguments.get("direction", "down")).lower()
+    if direction not in ("down", "up"):
+        raise errors.invalid_argument(
+            "direction", direction,
+            "must be 'down' (default — drag from top toward bottom, dismisses iOS "
+            "sheets and pull-to-refresh) or 'up' (drag from bottom toward top, "
+            "dismisses ascending modals)",
+        )
     x_mid = sw // 2
-    y_start = int(sh * 0.2)
-    y_end = int(sh * 0.7)
+    # Geometry: 20% <-> 70% of screen height, centred horizontally. Direction
+    # flips the endpoints; identical magnitude either way so the swipe velocity
+    # is consistent.
+    if direction == "down":
+        y_start, y_end = int(sh * 0.2), int(sh * 0.7)
+    else:
+        y_start, y_end = int(sh * 0.7), int(sh * 0.2)
 
     if s.target == "device":
         # WDA swipe path (F-006): pixel coords -> logical points via scale.
-        # dismiss_sheet uses a swipe from 20% to 70% of screen height, centred
-        # horizontally — identical geometry to the sim path, with px->pt conversion.
         wda = s.wda_client or _wda_client_for(s.device.udid)
         scale = _session_scale(s, wda=wda)
         wda.swipe(
@@ -1234,7 +1300,7 @@ def tool_dismiss_sheet(arguments: dict) -> dict:
     else:
         act.swipe(x_mid, y_start, x_mid, y_end, sw, sh, 300, udid=s.device.udid)
     s.last_action_at = _now()
-    return {"ok": True}
+    return {"ok": True, "direction": direction}
 
 
 def tool_list_replays(arguments: dict) -> dict:
@@ -1581,7 +1647,9 @@ _TOOLS: list[dict] = [
             "{stable_id: <hash>} (stable across observes; preferred for replay), "
             "{stable_id_loose: <hash>} (coarser 60px bucket — tolerates layout drift "
             "that escapes the tight 20px stable_id), or "
-            "{text: \"...\"} (best-match against the last observe's marks)."
+            "{text: \"...\"} (best-match against the last observe's marks). "
+            "Response includes `tapped_mark` (stable_id + text echo) when a mark "
+            "target resolved, and optional `settle_ms` waits before returning."
         ),
         "inputSchema": {
             "type": "object",
@@ -1594,9 +1662,36 @@ _TOOLS: list[dict] = [
                 "stable_id": {"type": "string", "description": "Stable mark hash (text + 20px bucketed position) — survives reshuffling."},
                 "stable_id_loose": {"type": "string", "description": "Coarser stable hash (text + 60px bucketed position) — tolerates >3px layout drift that breaks the tight stable_id."},
                 "text": {"type": "string", "description": "Match a mark by visible text (exact > prefix > substring)."},
+                "settle_ms": {"type": "integer", "description": "Sleep this many ms after the tap before returning. Useful for animations. Default 0.", "default": 0},
             },
         },
         "handler": tool_tap,
+    },
+    {
+        "name": "tap_and_wait_keyboard",
+        "description": (
+            "(sim + device) Atomic composite: tap a target, wait for the keyboard "
+            "to slide up, then observe the result. Use when you need to focus a "
+            "text field and confirm the keyboard appeared BEFORE sending keystrokes "
+            "via type_text. Returns the tap response plus a `post_state` key with "
+            "the post-tap observation (marks, screenshot_path). Saves ~2 round-trips "
+            "vs chaining tap + sleep + observe manually."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "mark": {"type": "integer"},
+                "stable_id": {"type": "string"},
+                "stable_id_loose": {"type": "string"},
+                "text": {"type": "string"},
+                "annotate": {"type": "boolean", "description": "Whether the post-tap observe annotates marks. Default true.", "default": True},
+            },
+        },
+        "handler": tool_tap_and_wait_keyboard,
     },
     {
         "name": "swipe",
@@ -1616,6 +1711,7 @@ _TOOLS: list[dict] = [
                 "from": {"type": "object", "description": "Start target: {x,y}, {mark}, or {text}."},
                 "to": {"type": "object", "description": "End target: {x,y}, {mark}, or {text}."},
                 "duration_ms": {"type": "integer", "default": 300},
+                "settle_ms": {"type": "integer", "description": "Sleep this many ms after the swipe before returning. Useful for scroll/animation settle. Default 0.", "default": 0},
             },
         },
         "handler": tool_swipe,
@@ -1964,11 +2060,19 @@ _TOOLS: list[dict] = [
     },
     {
         "name": "dismiss_sheet",
-        "description": "(sim + device) Dismiss a presented sheet/modal by swiping down (20% → 70% of screen height). On sim: uses HID swipe. On device: uses WDA swipe via WebDriverAgent (F-006 point-scale applied).",
+        "description": (
+            "(sim + device) Dismiss a presented sheet/modal by swiping vertically "
+            "(20% <-> 70% of screen height). direction='down' (default) drags top "
+            "toward bottom — closes iOS sheets and pull-to-refresh affordances. "
+            "direction='up' drags bottom toward top — closes ascending modals."
+        ),
         "inputSchema": {
             "type": "object",
             "required": ["session_id"],
-            "properties": {"session_id": {"type": "string"}},
+            "properties": {
+                "session_id": {"type": "string"},
+                "direction": {"type": "string", "enum": ["down", "up"], "default": "down"},
+            },
         },
         "handler": tool_dismiss_sheet,
     },
