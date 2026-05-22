@@ -84,6 +84,17 @@ Error codes (a13)
 * ``drift`` — halt_reason when SSIM or marks-count drift halts replay (unchanged key).
 * ``state_contract_mismatch`` — halt_reason when pre-step-1 contract fails (unchanged key).
 * ``replay_state_contract_failed`` — semantic alias surfaced in ``reasons`` list.
+
+Focus-context persistence (F#11, 2026-05-22)
+--------------------------------------------
+``type_text`` steps now persist their full focus context — ``tap_first`` (a target
+dict that pre-taps a field to grab first-responder focus) and ``clear_first`` (a
+boolean that issues Cmd-A + delete before typing) — into ``step.args`` at record
+time. The replay engine reads ``args.tap_first`` and dispatches a ``tap`` against
+the resolved target before sending the ``type_text``, restoring the same focus
+context the recording was captured under. Schema is additive: pre-fix recordings
+that lack ``tap_first`` continue to replay as before (no focus re-tap; relies on
+whatever field is currently first responder).
 """
 from __future__ import annotations
 
@@ -1686,6 +1697,58 @@ def _observe_for_replay(session: Session) -> dict:
     }
 
 
+def _mark_center_compat(m) -> tuple[int, int]:
+    """Return (cx, cy) pixel centre from a Mark dataclass or dict mark.
+
+    Mirror of server._mark_center, duplicated here to avoid a server↔recorder import.
+    """
+    if isinstance(m, dict):
+        c = m.get("center")
+        if c and len(c) >= 2:
+            return int(c[0]), int(c[1])
+        bbox = m.get("bbox") or [0, 0, 0, 0]
+        return int(bbox[0] + bbox[2] // 2), int(bbox[1] + bbox[3] // 2)
+    return m.center
+
+
+def _resolve_focus_target(target: dict, marks: list) -> Optional[tuple[int, int]]:
+    """Resolve a recorded ``tap_first`` (or other focus-context) target dict to pixel (x, y).
+
+    Accepts the same shapes as ``server._resolve_target_xy``:
+      * ``{x, y}``         → returned as-is
+      * ``{mark}``         → centre of mark with matching numeric id
+      * ``{stable_id}``    → centre of mark with matching stable_id
+      * ``{stable_id_loose}`` → centre of mark with matching stable_id_loose
+      * ``{text}``         → centre of first mark whose text matches (or aliases)
+
+    Returns ``None`` when the target shape is unrecognised or the live ``marks``
+    don't contain a matching mark. The caller decides whether to fall back to
+    typing without a focus tap (legacy behaviour) or surface the miss.
+
+    F#11 (2026-05-22): introduced so the replay engine can re-tap the focus target
+    a ``type_text`` was originally recorded with — previously dropped, making
+    multi-field forms un-replayable.
+    """
+    if not isinstance(target, dict):
+        return None
+    if "x" in target and "y" in target:
+        return int(target["x"]), int(target["y"])
+    marks = marks or []
+    if "mark" in target:
+        m = som.find_by_mark_id(marks, int(target["mark"]))
+        return _mark_center_compat(m) if m is not None else None
+    if "stable_id" in target:
+        m = som.find_by_stable_id(marks, str(target["stable_id"]))
+        return _mark_center_compat(m) if m is not None else None
+    if "stable_id_loose" in target:
+        m = som.find_by_stable_id_loose(marks, str(target["stable_id_loose"]))
+        return _mark_center_compat(m) if m is not None else None
+    if "text" in target:
+        m = som.find_by_text(marks, str(target["text"]))
+        return _mark_center_compat(m) if m is not None else None
+    return None
+
+
 def _execute_step(step: dict, session: Session, live_observation: Optional[observe.Observation] = None) -> None:
     """Execute a single step against the session (sim path, legacy entry point).
 
@@ -1747,6 +1810,20 @@ def _execute_step_for_session(step: dict, session: Session, live_obs: Optional[d
             udid=udid,
         )
     elif action == "type_text":
+        # F#11: re-tap the recorded focus target before typing so multi-field forms
+        # replay faithfully. Pre-fix, tap_first was dropped at record time so this
+        # branch never saw it; legacy recordings without tap_first fall through to
+        # type_text alone, preserving the old behaviour.
+        tap_first = args.get("tap_first")
+        if tap_first:
+            live_marks = (live_obs or {}).get("marks") if live_obs else None
+            xy = _resolve_focus_target(tap_first, live_marks or [])
+            if xy is not None:
+                sw = (live_obs or {}).get("screenshot_w") if live_obs else None
+                sh = (live_obs or {}).get("screenshot_h") if live_obs else None
+                sw = sw or args.get("screenshot_w") or 0
+                sh = sh or args.get("screenshot_h") or 0
+                act.tap(xy[0], xy[1], sw, sh, udid=udid)
         act.type_text(args["text"], udid=udid)
     elif action == "press_key":
         act.press_key(args["key"], udid=udid)
@@ -1787,6 +1864,14 @@ def _execute_step_device(step: dict, session: Session) -> None:
                 udid=udid,
             )
         elif action == "type_text":
+            # F#11 (device/wda-None fallback): re-tap focus target before typing.
+            tap_first = args.get("tap_first")
+            if tap_first:
+                xy = _resolve_focus_target(tap_first, getattr(session, "last_marks", []) or [])
+                if xy is not None:
+                    sw = args.get("screenshot_w") or 0
+                    sh = args.get("screenshot_h") or 0
+                    act.tap(xy[0], xy[1], sw, sh, udid=udid)
             act.type_text(args["text"], udid=udid)
         elif action == "press_key":
             act.press_key(args["key"], udid=udid)
@@ -1813,6 +1898,15 @@ def _execute_step_device(step: dict, session: Session) -> None:
         )
 
     elif action == "type_text":
+        # F#11: re-tap the recorded focus target before typing on real devices so
+        # multi-field forms replay faithfully. Pixel coords are divided by the
+        # session's pixel-per-point scale before being sent to WDA — the same
+        # conversion tool_type_text uses at record time.
+        tap_first = args.get("tap_first")
+        if tap_first:
+            xy = _resolve_focus_target(tap_first, getattr(session, "last_marks", []) or [])
+            if xy is not None:
+                wda.tap(float(xy[0]) / scale, float(xy[1]) / scale)
         wda.type_text(args["text"])
 
     elif action == "press_key":
