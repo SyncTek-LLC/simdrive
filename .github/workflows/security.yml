@@ -65,8 +65,17 @@ jobs:
         #     simdrive does not use pyjwt directly — it's a transitive dep
         #     of `mcp` for its own auth surface, which is not in our control.
         #     [INIT-2026-549]
+        #   PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr — starlette Host header path
+        #     injection advisory (published 2026-05-22). Fix version is 1.0.1
+        #     which is not yet available on PyPI as of 2026-05-22. Awaiting
+        #     upstream release. simdrive runs as an MCP stdio server — it is
+        #     not exposed to external HTTP requests, so exploitability is
+        #     effectively zero in our threat model. Re-enable the block once
+        #     starlette>=1.0.1 is published and requirements.lock is updated.
+        #     Tracked: [INIT-2026-549]
         run: |
           pip-audit -r simdrive/requirements.lock \
             --vulnerability-service osv \
             --ignore-vuln PYSEC-2025-183 \
+            --ignore-vuln PYSEC-2026-161 \
             --strict
