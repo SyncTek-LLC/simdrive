@@ -282,3 +282,121 @@ def test_defaults_match_legacy_payload(tmp_path):
         "window_bounds_macos", "captured_at", "marks", "recent_logs",
     }
     assert set(d.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# Server-wire integration for the *device* path. The device branch of
+# tool_observe builds its Observation dict manually (does NOT call
+# observe.observe()), so the filtering helpers had to be mirrored inline.
+# These tests pin that the device branch honors the same four knobs.
+# ---------------------------------------------------------------------------
+
+
+_ONE_PX_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806"
+    "0000001f15c4890000000a49444154789c6260000000020001"
+    "e221bc330000000049454e44ae426082"
+)
+
+
+def _make_device_obs_session(tmp_path):
+    """Helper: build a device-target Session with a mocked WdaClient."""
+    from unittest.mock import MagicMock
+    from simdrive import session as session_mod
+    from simdrive.sim import Device
+
+    wda = MagicMock()
+    wda._session_id = "open"
+    wda.screenshot_any.return_value = _ONE_PX_PNG
+    d = Device(udid="DEVICE-FILT-TEST", name="Test", os_version="26.0", state="active")
+    workdir = tmp_path / "sessions" / "devfilt"
+    workdir.mkdir(parents=True, exist_ok=True)
+    s = session_mod.Session(
+        session_id="devfilt",
+        device=d,
+        workdir=workdir,
+        target="device",
+        wda_client=wda,
+    )
+    session_mod._SESSIONS["devfilt"] = s
+    return s, wda
+
+
+def _device_marks_three_bands() -> list[dict]:
+    """3 dict-shape marks (1 high, 1 med, 1 low) as annotate_device_screenshot returns."""
+    return [
+        {"id": 1, "stable_id": "s1", "text": "High", "center": (10, 10),
+         "bbox": (0, 0, 50, 30), "w": 50, "h": 30,
+         "confidence_band": "high", "raw_confidence": 0.95, "clamped_confidence": 0.95,
+         "dictionary_check": "passed"},
+        {"id": 2, "stable_id": "s2", "text": "Mid",  "center": (20, 20),
+         "bbox": (10, 10, 60, 40), "w": 50, "h": 30,
+         "confidence_band": "med", "raw_confidence": 0.75, "clamped_confidence": 0.75,
+         "dictionary_check": "passed"},
+        {"id": 3, "stable_id": "s3", "text": "Low",  "center": (30, 30),
+         "bbox": (20, 20, 70, 50), "w": 50, "h": 30,
+         "confidence_band": "low", "raw_confidence": 0.42, "clamped_confidence": 0.42,
+         "dictionary_check": "failed"},
+    ]
+
+
+def test_tool_observe_device_confidence_floor_drops_low_bands(tmp_path):
+    s, wda = _make_device_obs_session(tmp_path)
+    from simdrive import server
+    fake_marks = _device_marks_three_bands()
+    with patch("simdrive.wda.som_device.annotate_device_screenshot",
+               return_value=(fake_marks, None)):
+        result = server.tool_observe({
+            "session_id": "devfilt",
+            "confidence_floor": "high",
+        })
+    emitted_ids = [m["id"] for m in result["marks"]]
+    assert emitted_ids == [1], "only the high-band mark should survive floor='high'"
+    # Session.last_marks holds the UNFILTERED set so the resolver isn't degraded.
+    assert {m["id"] for m in s.last_marks} == {1, 2, 3}
+
+
+def test_tool_observe_device_compact_drops_diagnostic_keys(tmp_path):
+    _make_device_obs_session(tmp_path)
+    from simdrive import server
+    fake_marks = _device_marks_three_bands()
+    with patch("simdrive.wda.som_device.annotate_device_screenshot",
+               return_value=(fake_marks, None)):
+        result = server.tool_observe({"session_id": "devfilt", "compact": True})
+    for m in result["marks"]:
+        assert set(m.keys()) <= {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+        assert "raw_confidence" not in m
+        assert "dictionary_check" not in m
+
+
+def test_tool_observe_device_mark_limit_caps_results(tmp_path):
+    _make_device_obs_session(tmp_path)
+    from simdrive import server
+    fake_marks = _device_marks_three_bands()
+    with patch("simdrive.wda.som_device.annotate_device_screenshot",
+               return_value=(fake_marks, None)):
+        result = server.tool_observe({"session_id": "devfilt", "mark_limit": 1})
+    assert len(result["marks"]) == 1
+    # Top-by-(band, area): id=1 (high) wins over id=2 (med) and id=3 (low).
+    assert result["marks"][0]["id"] == 1
+
+
+def test_tool_observe_device_capture_observability_emits_per_mark(tmp_path):
+    _make_device_obs_session(tmp_path)
+    from simdrive import server
+    fake_marks = _device_marks_three_bands()
+    with patch("simdrive.wda.som_device.annotate_device_screenshot",
+               return_value=(fake_marks, None)):
+        result = server.tool_observe({
+            "session_id": "devfilt",
+            "confidence_floor": "med",
+            "capture_observability": True,
+        })
+    assert "_observability" in result
+    # One entry per *emitted* mark — floor='med' keeps ids 1 & 2.
+    obs_ids = sorted(e["mark_id"] for e in result["_observability"])
+    assert obs_ids == [1, 2]
+    # Diagnostic fields present in observability even when compact dropped them.
+    for entry in result["_observability"]:
+        assert entry["dictionary_check"] in {"passed", "failed"}
+        assert isinstance(entry["raw_confidence"], float)
