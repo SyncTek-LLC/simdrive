@@ -30,6 +30,7 @@ _CANONICAL_MARK_KEYS = frozenset({
     "confidence",
     "raw_confidence",
     "confidence_band",
+    "alternates",  # F#4 (b5): OCR alternate readings field
 })
 
 # ── Minimal 1×1 PNG (PIL-readable) ───────────────────────────────────────────

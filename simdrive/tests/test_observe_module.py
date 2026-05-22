@@ -63,18 +63,23 @@ def test_observe_with_marks_writes_annotated_png(tmp_path):
     assert obs.marks == marks
 
 
-def test_observe_annotate_false_skips_marks(tmp_path):
+def test_observe_annotate_false_still_returns_marks(tmp_path):
+    """F#7 contract: annotate=False skips annotation *rendering* but detect_marks
+    is still called so text-targeting agents always receive marks.
+    annotated_path stays None; marks are returned normally."""
     def fake_screenshot(udid, dest_path):
         _make_png(dest_path)
         return dest_path
 
-    # detect_marks must NOT be called.
+    marks = [Mark(id=1, x=5, y=5, w=30, h=10, text="Submit", confidence=0.95)]
     with patch("simdrive.observe.sim.screenshot", side_effect=fake_screenshot), \
-         patch("simdrive.observe.som.detect_marks") as mock_marks, \
+         patch("simdrive.observe.som.detect_marks", return_value=marks) as mock_marks, \
          patch("simdrive.observe.get_bounds", return_value=WindowBounds(0, 0, 100, 200)):
         obs = observe.observe("UDID", tmp_path, annotate=False)
-    assert not mock_marks.called
-    assert obs.marks == []
+    # detect_marks IS called — marks must be available for text targeting.
+    assert mock_marks.called
+    assert obs.marks == marks
+    # Annotation drawing is skipped — no SoM overlay written.
     assert obs.annotated_path is None
 
 
