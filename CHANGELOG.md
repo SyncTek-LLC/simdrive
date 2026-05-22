@@ -7,6 +7,31 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ---
 
+## [Unreleased]
+
+### Fixed — F#2 — `session_start` falsely reports `state="active"` for an app that crashed during launch
+
+`session_start(app_bundle_id=...)` previously returned `state: "active"` even
+when the launched app terminated within ~500 ms of launch (e.g. a build
+missing an entitlement). The Example Reader dogfood agent only discovered the
+failure after burning multiple tap/type roundtrips and calling `app_state`
+and `crashes` separately.
+
+After the fix, when `app_bundle_id` is provided and `verify_launch` is
+`True` (the new default), `session_start` polls `app_state` up to
+5×300 ms after `sim.launch_app`. If foreground is observed within the
+settle window it returns `state: "active"` as before; if not, it returns:
+
+  - `state: "launched_then_exited"`
+  - `crash_report_path` — most recent `.ips` for the bundle in
+    `~/Library/Logs/DiagnosticReports/` since launch (or `null` if none)
+  - `recovery` — human-readable hint pointing at the crash report
+
+Opt out with `verify_launch=False` to keep the legacy fire-and-forget
+behaviour.
+
+---
+
 ## [1.0.0a9] — 2026-05-11 (alpha — recording state contracts)
 
 Closes a class of replay failure where a divergent app state silently
