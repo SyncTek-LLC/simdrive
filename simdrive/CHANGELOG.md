@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0b4] — 2026-05-22
+
+**Hotfix release.** Fixes a fresh-`pip install` regression introduced in 1.0.0b2 and present in b3. No new features; no API changes.
+
+### Fixed
+
+- **Fresh `pip install simdrive` was broken on b2 and b3.** Importing any `simdrive.*` module raised `ModuleNotFoundError: No module named 'fastapi'` because `simdrive.cloud.middleware.quotas` had a top-level `from fastapi import ...`. The Wave 2 quota wire-up in b2 (PR #125) caused `simdrive.server` to import this module on the client path, dragging in a `[cloud]`-extra dep that the core install does not require.
+
+  **Fix:** `from fastapi import …`, `simdrive.cloud.auth`, and `simdrive.cloud.db.*` imports moved inside the server-side factory functions (`make_usage_checker`, `make_quota_gate`) that actually need them. The client surface (`check_local_quota`, `LocalQuotaSnapshot`) now imports only stdlib + `simdrive.cloud.errors`.
+
+  This was missed in b2/b3 testing because the local dev environment had fastapi installed for the test suite. No CI step exercised a clean-env install of just the core deps. **b4 adds `tests/test_no_fastapi_in_client_path.py`** — 5 regression-guard tests that mask `fastapi` in `sys.modules` and verify the client surface imports cleanly, so this class of regression cannot ship to PyPI again.
+
+### Upgrade note
+
+If you installed 1.0.0b2 or 1.0.0b3 from PyPI and ran into the `ModuleNotFoundError: fastapi` error, upgrade with `pip install --upgrade simdrive==1.0.0b4`. No other changes; everything else from b3's polish sprint is intact.
+
+---
+
 ## [1.0.0b3] — 2026-05-22
 
 **Agent-experience polish sprint.** Five PRs landing token-efficiency knobs, atomic composite tools, response-shape echoes, an onboarding command, and a cross-session perf cache. No breaking API changes; all additions are backward compatible. Tool count: 32 → **33**.
