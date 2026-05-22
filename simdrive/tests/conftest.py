@@ -120,3 +120,24 @@ def _clear_module_caches():
     _server._SCALE_CACHE_BY_UDID.clear()
     yield
     _server._SCALE_CACHE_BY_UDID.clear()
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_self_restart(monkeypatch):
+    """Globally neutralize the MCP server's drift-driven self-restart.
+
+    The drift handler (F#1) calls ``_schedule_self_restart`` which spawns a
+    Timer thread that runs ``os.execv`` — which would replace the pytest
+    process. Any pre-existing test that patches ``_check_version_drift`` to
+    return a string and then calls ``call_tool`` would trigger this. We
+    autouse-patch the helpers to no-ops and reset the latch around every
+    test so unit tests see deterministic state.
+    """
+    from simdrive import server as _server
+    monkeypatch.setattr(_server, "_schedule_self_restart", lambda: None)
+    monkeypatch.setattr(_server, "_do_self_restart", lambda: None)
+    monkeypatch.setattr(_server, "_RESTART_SCHEDULED", False, raising=False)
+    yield
+    # Reset the latch so the next test starts fresh even if the test that
+    # just ran flipped it via a deeper monkeypatch.
+    _server._RESTART_SCHEDULED = False
