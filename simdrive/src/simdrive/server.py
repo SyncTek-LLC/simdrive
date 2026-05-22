@@ -857,6 +857,41 @@ def _mark_center(m: "som.Mark | dict") -> tuple[int, int]:
     return m.center
 
 
+def _position_hint(cx: int, cy: int, screen_w: int, screen_h: int) -> str:
+    """F#6 — coarse 9-cell grid label for a bbox center.
+
+    Used by the ``ambiguous_text_target`` payload so the agent can tell
+    duplicate-label candidates apart (e.g. "Sign In" at ``top-center`` vs.
+    ``bottom-center``). The grid splits the screen into thirds on each axis.
+    Returns ``"unknown"`` when screen dims are missing (no observe yet).
+    """
+    if screen_w <= 0 or screen_h <= 0:
+        return "unknown"
+    col_third = screen_w / 3.0
+    row_third = screen_h / 3.0
+    col_idx = min(2, max(0, int(cx // col_third)))
+    row_idx = min(2, max(0, int(cy // row_third)))
+    rows = ("top", "middle", "bottom")
+    cols = ("left", "center", "right")
+    return f"{rows[row_idx]}-{cols[col_idx]}"
+
+
+def _build_text_candidate(m: "som.Mark | dict", screen_w: int, screen_h: int) -> dict:
+    """F#6 — disambiguation payload for one ambiguous text-match candidate."""
+    cx, cy = _mark_center(m)
+    bbox = _mark_attr(m, "bbox")
+    if bbox is not None and not isinstance(bbox, list):
+        bbox = list(bbox)
+    return {
+        "stable_id": _mark_attr(m, "stable_id"),
+        "mark": _mark_attr(m, "id"),
+        "bbox": bbox,
+        "confidence": _mark_attr(m, "confidence"),
+        "text": _mark_attr(m, "text"),
+        "position_hint": _position_hint(cx, cy, screen_w, screen_h),
+    }
+
+
 def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | dict | None"]:
     """Translate {x,y} | {mark} | {text} | {stable_id} into pixel coords + debug 'how' + matched mark.
 
@@ -903,10 +938,20 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | dict |
 
     if "text" in args:
         query = str(args["text"])
-        m = som.find_by_text(s.last_marks or [], query)
-        if not m:
-            available = [_mark_attr(mk, "text") for mk in (s.last_marks or [])]
+        marks = s.last_marks or []
+        candidates, tier = som.find_text_candidates(marks, query)
+        if not candidates:
+            available = [_mark_attr(mk, "text") for mk in marks]
             raise errors.target_not_found("text", query, available)
+        # F#6 — >1 marks tied at the winning tier ⇒ refuse to silent-pick.
+        # The agent must re-target by stable_id / mark / xy. Single-match (even
+        # when other tiers also have matches) still resolves unambiguously.
+        if len(candidates) > 1:
+            screen_w = getattr(s, "last_screenshot_w", 0) or 0
+            screen_h = getattr(s, "last_screenshot_h", 0) or 0
+            payload = [_build_text_candidate(c, screen_w, screen_h) for c in candidates[:5]]
+            raise errors.ambiguous_text_target(query, payload, tier)
+        m = candidates[0]
         cx, cy = _mark_center(m)
         return cx, cy, f"text:{query!r}->mark:{_mark_attr(m, 'id')}", m
 
@@ -2131,9 +2176,16 @@ _TOOLS: list[dict] = [
             "{stable_id: <hash>} (stable across observes; preferred for replay), "
             "{stable_id_loose: <hash>} (coarser 60px bucket — tolerates layout drift "
             "that escapes the tight 20px stable_id), or "
-            "{text: \"...\"} (best-match against the last observe's marks). "
+            "{text: \"...\"} (best-match against the last observe's marks; "
+            "exact > prefix > substring). "
             "Response includes `tapped_mark` (stable_id + text echo) when a mark "
-            "target resolved, and optional `settle_ms` waits before returning."
+            "target resolved, and optional `settle_ms` waits before returning. "
+            "When {text} matches >1 marks at the winning precedence tier (e.g. a "
+            "screen title and a button both reading 'Sign In'), returns error "
+            "`ambiguous_text_target` with `details.candidates` (up to 5; each "
+            "carries stable_id, mark, bbox, confidence, text, position_hint) — "
+            "re-call with stable_id, mark, or x/y to disambiguate. Single exact "
+            "match still resolves even when other prefix/substring matches exist."
         ),
         "inputSchema": {
             "type": "object",
