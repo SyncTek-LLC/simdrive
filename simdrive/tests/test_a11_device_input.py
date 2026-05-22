@@ -282,6 +282,51 @@ def test_scale_cached_across_calls(tmp_path):
     assert wda.window_size_points.call_count == 1
 
 
+def test_scale_cached_across_sessions_for_same_udid(tmp_path):
+    """A second session for the same UDID picks up the module-level cache and
+    never round-trips WDA for the scale. (Polish-sprint perf win.)"""
+    wda1 = _mock_wda(session_id="first")
+    wda1.window_size_points.return_value = (440, 956)
+    s1 = _make_device_session(
+        tmp_path, sid="first-session", screenshot_w=1320, screenshot_h=2868, wda_client=wda1,
+    )
+
+    from simdrive import server
+    server.tool_tap({"session_id": s1.session_id, "x": 300, "y": 600})
+    assert wda1.window_size_points.call_count == 1
+
+    # New session, same UDID, fresh wda mock. Should NOT re-fetch the scale.
+    wda2 = _mock_wda(session_id="second")
+    wda2.window_size_points.return_value = (440, 956)
+    s2 = _make_device_session(
+        tmp_path, sid="second-session", screenshot_w=1320, screenshot_h=2868, wda_client=wda2,
+    )
+    server.tool_tap({"session_id": s2.session_id, "x": 300, "y": 600})
+    assert wda2.window_size_points.call_count == 0, (
+        "Module-level _SCALE_CACHE_BY_UDID should short-circuit the scale "
+        "fetch for a second session on the same UDID."
+    )
+
+
+def test_scale_fallback_does_not_pollute_module_cache(tmp_path, caplog):
+    """A scale=1.0 fallback (transient WDA failure) must NOT be promoted to the
+    module-level cache — that would mask future recoveries for the same UDID."""
+    import httpx
+    wda = _mock_wda()
+    wda.window_size_points.side_effect = httpx.HTTPError("transient")
+    s = _make_device_session(
+        tmp_path, screenshot_w=1320, screenshot_h=2868, wda_client=wda,
+    )
+
+    from simdrive import server
+    with caplog.at_level(logging.WARNING):
+        server.tool_tap({"session_id": s.session_id, "x": 300, "y": 600})
+
+    # Fallback used; session cache holds 1.0 but module cache must be empty.
+    assert s.pixel_per_point_scale == 1.0
+    assert s.device.udid not in server._SCALE_CACHE_BY_UDID
+
+
 def test_scale_swipe_converts_both_endpoints(tmp_path):
     """3x device swipe: both (x1,y1) and (x2,y2) divided by 3.0."""
     wda = _mock_wda()
