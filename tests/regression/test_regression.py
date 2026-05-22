@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent.parent
+# pyproject.toml was moved into simdrive/ subdirectory at commit a0abf0b
+SIMDRIVE_ROOT = REPO_ROOT / "simdrive"
 
 
 class TestReg001TypeDoesntUseFocusedTap:
@@ -81,10 +83,11 @@ class TestReg003RunnerSourceBundled:
             "setup.py still has build_py override — Phase 2 requires removing it"
 
         # Invariant 5: pyproject.toml uses packages.find
-        pyproject = REPO_ROOT / "pyproject.toml"
+        # pyproject.toml lives in simdrive/ since the option-B packaging refactor
+        pyproject = SIMDRIVE_ROOT / "pyproject.toml"
         pyproject_content = pyproject.read_text()
         assert "[tool.setuptools.packages.find]" in pyproject_content, \
-            "pyproject.toml missing packages.find section — Phase 2 requires auto-discovery"
+            "simdrive/pyproject.toml missing packages.find section — Phase 2 requires auto-discovery"
 
 
 class TestReg004GreedyLabelMatch:

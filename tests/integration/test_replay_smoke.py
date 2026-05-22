@@ -283,15 +283,17 @@ class TestMCPServerProtocol:
                 tool_names = {t["name"] for t in msg["result"]["tools"]}
                 break
 
+        # v16.0.0a1 deleted the SpecterQA AX-tree selector layer (ios_screenshot,
+        # ios_tap, ios_elements, ios_swipe, ios_type) and replaced them with the
+        # vision-first primitives ios_observe + ios_act. The required set below
+        # reflects the SimDrive MCP surface (1.0.0+).
         required = {
             "ios_start_session",
             "ios_stop_session",
-            "ios_tap",
-            "ios_screenshot",
-            "ios_elements",
-            "ios_swipe",
-            "ios_type",
-            "ios_stop_recording",  # ios_save_replay removed in v14.0.0a1 (OQ-4)
+            "ios_observe",
+            "ios_act",
+            "ios_start_recording",
+            "ios_stop_recording",
         }
         missing = required - tool_names
         assert not missing, f"MCP server missing required tools: {missing}"
@@ -489,28 +491,34 @@ class TestValidatorWithExamples:
 
 
 class TestPyPIPackageStructure:
-    """Verify the package metadata and build configuration are correct."""
+    """Verify the package metadata and build configuration are correct.
+
+    NOTE: pyproject.toml moved to simdrive/ subdirectory at commit a0abf0b
+    (option-B packaging). All reads here go through fresh_install / "simdrive".
+    Entry points were renamed specterqa-ios → simdrive, specterqa-ios-mcp → simdrive-mcp
+    when the project was renamed to SimDrive.
+    """
 
     def test_pyproject_has_correct_version(self, fresh_install):
-        pyproject = (fresh_install / "pyproject.toml").read_text()
+        pyproject = (fresh_install / "simdrive" / "pyproject.toml").read_text()
         match = re.search(r'version\s*=\s*"([^"]+)"', pyproject)
-        assert match, "version field not found in pyproject.toml"
+        assert match, "version field not found in simdrive/pyproject.toml"
         version = match.group(1)
         assert version and version[0].isdigit(), f"Expected valid semver, got {version}"
 
     def test_console_script_entry_points(self, fresh_install):
-        pyproject = (fresh_install / "pyproject.toml").read_text()
-        assert "specterqa-ios" in pyproject, "specterqa-ios entry point missing"
-        assert "specterqa-ios-mcp" in pyproject, "specterqa-ios-mcp entry point missing"
+        pyproject = (fresh_install / "simdrive" / "pyproject.toml").read_text()
+        assert "simdrive" in pyproject, "simdrive entry point missing"
+        assert "simdrive-mcp" in pyproject, "simdrive-mcp entry point missing"
 
     def test_pyproject_has_build_backend(self, fresh_install):
         """pyproject.toml must declare a PEP 517 build backend."""
-        pyproject = (fresh_install / "pyproject.toml").read_text()
+        pyproject = (fresh_install / "simdrive" / "pyproject.toml").read_text()
         assert "build-backend" in pyproject
 
     def test_pyproject_declares_python_requires(self, fresh_install):
         """Minimum Python version constraint must be present."""
-        pyproject = (fresh_install / "pyproject.toml").read_text()
+        pyproject = (fresh_install / "simdrive" / "pyproject.toml").read_text()
         assert "requires-python" in pyproject
 
     def test_license_file_exists(self, fresh_install):

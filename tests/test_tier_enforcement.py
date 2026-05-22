@@ -295,9 +295,16 @@ class TestAsyncDecorator:
     def teardown_method(self):
         os.environ.pop("SPECTERQA_LICENSE_BYPASS", None)
 
-    @pytest.mark.asyncio
-    async def test_async_tool_blocked_by_tier(self, monkeypatch):
-        """Async tool decorated with @require_tier returns json.dumps error when blocked."""
+    def test_async_tool_blocked_by_tier(self, monkeypatch):
+        """Async tool decorated with @require_tier returns json.dumps error when blocked.
+
+        NOTE: originally written as `async def` + @pytest.mark.asyncio, but
+        pytest-asyncio is absent from the homebrew Python 3.13 env used by the
+        root test suite.  Converted to a sync wrapper using asyncio.run() which
+        is functionally identical and requires no extra plugin.
+        """
+        import asyncio
+
         from specterqa.ios.mcp import tier_gate
         from specterqa.ios.mcp.tier_gate import require_tier
 
@@ -309,8 +316,8 @@ class TestAsyncDecorator:
         async def ios_async_pro_tool():
             return json.dumps({"cpu_percent": 5.0})
 
-        # Await it — should be blocked
-        result = await ios_async_pro_tool()
+        # Run synchronously — should be blocked
+        result = asyncio.run(ios_async_pro_tool())
 
         # Assert returns json.dumps({"error": "tier_required", ...})
         assert isinstance(result, str), f"Expected JSON string, got {type(result)}: {result!r}"
@@ -320,9 +327,14 @@ class TestAsyncDecorator:
         assert parsed["current_tier"] == "trial"
         assert parsed["tool_name"] == "ios_async_pro_tool"
 
-    @pytest.mark.asyncio
-    async def test_async_tool_allowed_matching_tier(self, monkeypatch):
-        """Async tool passes gate and returns real result when tier matches."""
+    def test_async_tool_allowed_matching_tier(self, monkeypatch):
+        """Async tool passes gate and returns real result when tier matches.
+
+        NOTE: converted from async def + @pytest.mark.asyncio to sync asyncio.run()
+        — see test_async_tool_blocked_by_tier for rationale.
+        """
+        import asyncio
+
         from specterqa.ios.mcp import tier_gate
         from specterqa.ios.mcp.tier_gate import require_tier
 
@@ -332,7 +344,7 @@ class TestAsyncDecorator:
         async def ios_async_pro_tool():
             return json.dumps({"cpu_percent": 5.0})
 
-        result = await ios_async_pro_tool()
+        result = asyncio.run(ios_async_pro_tool())
         assert result == json.dumps({"cpu_percent": 5.0})
 
 

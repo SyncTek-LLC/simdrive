@@ -40,15 +40,22 @@ pytestmark = pytest.mark.dogfood
 REPO_ROOT = Path(__file__).parent.parent.parent
 TESTKIT_BUNDLE_ID = "io.synctek.specterqa.testkit"
 
+# v16.0.0a1 deleted the SpecterQA AX-tree AI-debug tools (ios_capture_state,
+# ios_action_with_logs) and replaced them with the vision-first primitives
+# ios_observe + ios_act.  The list below reflects the surviving SimDrive tools
+# (1.0.0+); the two deleted names are kept as comments for audit traceability.
 AI_DEBUG_TOOLS = [
     "ios_app_relaunch",
     "ios_logs_tail",
-    "ios_capture_state",
-    "ios_action_with_logs",
+    # "ios_capture_state",    # deleted v16.0.0a1 — replaced by ios_observe
+    # "ios_action_with_logs", # deleted v16.0.0a1 — replaced by ios_act
     "ios_promote_session_to_test",
 ]
 
-MINIMUM_TOOL_COUNT = 43
+# Tool count floor for SimDrive 1.0.0b5 MCP surface (35 tools registered).
+# Original value was 43 (SpecterQA v14 target); the deletion of ~8 tools in
+# v16.0.0a1 legitimately reduced the surface.
+MINIMUM_TOOL_COUNT = 35
 
 
 def _xcode_available() -> bool:
@@ -77,7 +84,12 @@ def mcp_server():
 @pytest.fixture(scope="module")
 def tool_names(mcp_server) -> set[str]:
     """Return the set of registered tool names."""
-    tools = asyncio.get_event_loop().run_until_complete(mcp_server.list_tools())
+    # WHY asyncio.run() instead of get_event_loop().run_until_complete():
+    # When the full test suite runs, prior tests may close or replace the current
+    # event loop. asyncio.run() creates a fresh event loop for this call, avoiding
+    # RuntimeError from a closed/missing loop — and is the preferred idiom in Python
+    # 3.10+ which deprecated get_event_loop() when no running loop exists.
+    tools = asyncio.run(mcp_server.list_tools())
     return {t.name for t in tools}
 
 
@@ -88,9 +100,10 @@ def tool_names(mcp_server) -> set[str]:
 
 @pytest.mark.parametrize("tool_name", AI_DEBUG_TOOLS)
 def test_ai_debug_tool_registered(tool_names: set[str], tool_name: str):
-    """All 5 AI debugging tools must be registered in the MCP tool manager.
+    """AI debugging tools that survive in the SimDrive MCP surface must be registered.
 
-    If any of these fail, the AI debugging loop workflow is broken for users.
+    ios_capture_state and ios_action_with_logs were removed in v16.0.0a1 and are
+    no longer in this list. If any remaining tool disappears, something is broken.
     """
     assert tool_name in tool_names, (
         f"AI debugging tool '{tool_name}' is not registered in the MCP tool manager.\n"
@@ -99,10 +112,12 @@ def test_ai_debug_tool_registered(tool_names: set[str], tool_name: str):
 
 
 def test_mcp_tool_count_at_least_43(tool_names: set[str]):
-    """MCP tool count must be >= 43 (v14.0.0 adds 5 tools, removes 3: net +3 from v13.3.0).
+    """MCP tool count must be >= MINIMUM_TOOL_COUNT (currently 35 for SimDrive 1.0.0).
 
     This is the regression guard for the tool-surface. If someone accidentally
-    removes a tool without updating this test, it fails loudly.
+    removes a tool without updating this test, it fails loudly. The original
+    threshold was 43 (SpecterQA v14); v16.0.0a1 legitimately deleted ~8 tools
+    (AX-tree selector layer), reducing the floor to 35.
     """
     count = len(tool_names)
     assert count >= MINIMUM_TOOL_COUNT, (
