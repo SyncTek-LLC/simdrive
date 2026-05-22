@@ -573,6 +573,7 @@ def _build_requires_block(
     # band high|medium, text >= 2 chars.
     # For device marks (list[dict] from annotate_device_screenshot), use dict access.
     required: list[str] = []
+    _seen: set[str] = set()
     for m in marks:
         if len(required) >= 10:
             break
@@ -587,6 +588,9 @@ def _build_requires_block(
             continue
         if len(text) < 2:
             continue
+        if text in _seen:
+            continue
+        _seen.add(text)
         required.append(text)
 
     primary_label: Optional[str] = None
