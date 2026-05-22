@@ -63,7 +63,10 @@ import asyncio
 import base64
 import inspect
 import json
+import os
 import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -273,21 +276,263 @@ def _disk_version() -> str | None:
     return v
 
 
+# F#1 — MCP server self-restart on version drift.
+#
+# Background: when `pip install --upgrade simdrive` refreshes the wheel on
+# disk, the running MCP server is still serving the previously loaded
+# in-memory code. Pre-fix, drift was warned-only and users had to restart
+# Claude Code (the MCP host) by hand. That's heavy friction during a beta
+# sprint.
+#
+# The fix: after the current tool call returns its result, schedule a
+# background thread that re-execs the simdrive CLI via os.execv inside the
+# same process. The next tool call lands on the freshly loaded code.
+#
+# Opt-out: set SIMDRIVE_NO_AUTO_RESTART=1 (or any truthy value) to fall
+# back to warn-only legacy behaviour.
+
+_RESTART_LATCH = threading.Lock()       # guards the latch; thread-safe check+set
+_RESTART_SCHEDULED: bool = False        # latch — only schedule one re-exec per process
+_RESTART_DELAY_SEC: float = 0.1         # give the current tool call time to ship its response
+_RESTART_LOOP_GUARD_MAX: int = 3        # halt auto-restart after this many consecutive restarts
+_RESTART_COUNT_ENV: str = "SIMDRIVE_RESTART_COUNT"  # carried across execv to detect loops
+
+
+def _is_upgrade(disk: str | None, loaded: str | None) -> bool:
+    """Return True only when ``disk`` parses strictly greater than ``loaded``.
+
+    Used to gate auto-restart on UPGRADES only. Downgrades and unparseable
+    versions still emit the warning (see _check_version_drift) but never
+    trigger an automatic re-exec — avoids oscillation when a wheel reports
+    inconsistent versions or a developer pins an older copy on disk.
+    """
+    if not disk or not loaded:
+        return False
+    try:
+        from packaging.version import parse as _parse  # type: ignore
+        return _parse(disk) > _parse(loaded)
+    except Exception:
+        # If packaging is missing or parsing fails, refuse to auto-restart —
+        # conservative fallback rather than risk an oscillation loop.
+        return False
+
+
 def _check_version_drift() -> str | None:
     """Return a warning string when loaded != disk; else None.
 
     Mounted on every call_tool response so an agent stuck on a stale server
     sees the issue on the very next tool call after `pip install --upgrade`.
+
+    The warning text is context-aware:
+      - On UPGRADE with auto-restart enabled → "auto-restarting" language.
+      - On UPGRADE with auto-restart disabled → "restart manually" language.
+      - On DOWNGRADE → never auto-restart; warning notes the version skew.
     """
     disk = _disk_version()
     if disk is None:
         return None
     if disk == _LOADED_VERSION:
         return None
+    if _is_upgrade(disk, _LOADED_VERSION):
+        if _auto_restart_disabled():
+            return (
+                f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
+                f"Restart manually to pick up version {disk} (auto-restart is disabled)."
+            )
+        return (
+            f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
+            f"Auto-restarting to pick up disk version {disk}. "
+            "Set SIMDRIVE_NO_AUTO_RESTART=1 to disable and restart manually."
+        )
+    # Disk version is older than (or not strictly newer than) loaded — likely a
+    # downgrade or unparseable. Warn but never auto-restart.
     return (
         f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
-        "Restart the MCP server (or your agent host) to pick up the upgrade."
+        "Disk has an older (or unparseable) version; not auto-restarting. "
+        "Restart manually if this is intentional."
     )
+
+
+def _auto_restart_disabled() -> bool:
+    """Check the SIMDRIVE_NO_AUTO_RESTART env opt-out.
+
+    Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything
+    else — including unset — means auto-restart is ENABLED.
+    """
+    val = os.environ.get("SIMDRIVE_NO_AUTO_RESTART", "")
+    return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _try_claim_restart() -> bool:
+    """Atomically claim the right to schedule a restart.
+
+    Returns True for exactly one caller per process; False for every other
+    concurrent caller. Replaces the previous read-then-set pattern, which
+    raced between concurrent ``call_tool_async`` dispatches and could
+    schedule two timers.
+    """
+    global _RESTART_SCHEDULED
+    with _RESTART_LATCH:
+        if _RESTART_SCHEDULED:
+            return False
+        _RESTART_SCHEDULED = True
+        return True
+
+
+def _release_restart_claim() -> None:
+    """Reset the claim — used when scheduling fails so we can retry next call."""
+    global _RESTART_SCHEDULED
+    with _RESTART_LATCH:
+        _RESTART_SCHEDULED = False
+
+
+def _restart_count() -> int:
+    """Return the cumulative auto-restart count carried across exec() boundaries."""
+    try:
+        return max(0, int(os.environ.get(_RESTART_COUNT_ENV, "0") or "0"))
+    except Exception:
+        return 0
+
+
+def _restart_loop_guard_tripped() -> bool:
+    """True when we've auto-restarted too many times in this process tree."""
+    return _restart_count() >= _RESTART_LOOP_GUARD_MAX
+
+
+def _resolve_exec_target() -> tuple[str, list[str]]:
+    """Pick the right binary to re-exec so the running entrypoint is preserved.
+
+    Production launches via the ``simdrive`` console_script (declared in
+    pyproject.toml: ``simdrive = "simdrive.server:serve"``). Re-execing the
+    raw Python interpreter with ``-m simdrive.server`` works but changes
+    argv[0] and breaks any host that pinned the wrapper path.
+
+    Resolution order:
+      1. If ``sys.argv[0]`` ends in ``simdrive`` (the installed wrapper),
+         re-exec it directly via ``execv`` so argv[0] is preserved verbatim.
+      2. Else fall back to ``execvp("simdrive", ...)`` — PATH lookup finds
+         the wheel-installed wrapper without depending on argv[0].
+      3. Final fallback: re-exec the current interpreter with
+         ``-m simdrive.server`` (covers ``python -m simdrive.server``
+         dev invocations).
+
+    Returns a (executable, argv) tuple where ``executable`` may be a path
+    (use ``os.execv``) or a bare program name (use ``os.execvp``). The
+    caller distinguishes by checking for a path separator.
+    """
+    argv0 = sys.argv[0] or ""
+    argv0_name = Path(argv0).name if argv0 else ""
+    if argv0_name == "simdrive" and argv0 and (os.path.isabs(argv0) or os.sep in argv0):
+        # Case 1: explicit path to the console_script — execv preserves argv[0].
+        return argv0, [argv0, *sys.argv[1:]]
+    # Case 2: try PATH lookup for the wrapper. Most reliable when the wrapper
+    # was launched via `simdrive` without a full path.
+    if argv0_name == "simdrive" or not argv0:
+        return "simdrive", ["simdrive", *sys.argv[1:]]
+    # Case 3: dev invocation via `python -m simdrive.server`.
+    return sys.executable, [sys.executable, "-m", "simdrive.server", *sys.argv[1:]]
+
+
+def _do_self_restart() -> None:
+    """Replace the current process with a fresh simdrive CLI invocation.
+
+    Uses ``os.execv`` / ``os.execvp`` to keep the same PID, file descriptors
+    (stdin/stdout/stderr are inherited — critical for MCP's stdio transport),
+    and parent process relationship. The MCP host sees a momentary blip and
+    the next tool call is served by the new code.
+
+    Bumps ``SIMDRIVE_RESTART_COUNT`` in the inherited environment before
+    exec so the loop guard can detect runaway restart loops across process
+    generations.
+    """
+    try:
+        _log.warning("simdrive: auto-restarting on version drift (os.execv)")
+    except Exception:
+        pass
+    # Increment the restart counter in our own env so the child inherits it.
+    try:
+        os.environ[_RESTART_COUNT_ENV] = str(_restart_count() + 1)
+    except Exception:
+        pass
+    target, new_argv = _resolve_exec_target()
+    try:
+        if os.path.isabs(target) or os.sep in target:
+            os.execv(target, new_argv)
+        else:
+            os.execvp(target, new_argv)
+    except Exception as exc:  # pragma: no cover — exec replaces the process on success
+        try:
+            _log.error("simdrive: exec failed during self-restart: %s", exc)
+        except Exception:
+            pass
+
+
+def _schedule_self_restart() -> None:
+    """Schedule a self-restart on a background timer thread.
+
+    The 100ms delay gives the current tool dispatch enough headroom to push
+    its response back over the MCP transport before the process is replaced.
+    Idempotent — multiple drifted calls in flight only ever queue one
+    re-exec via the ``_RESTART_LATCH`` (claimed by ``_try_claim_restart``).
+    """
+    timer = threading.Timer(_RESTART_DELAY_SEC, _do_self_restart)
+    timer.daemon = True
+    timer.start()
+
+
+def _maybe_handle_drift(result: dict) -> None:
+    """Annotate ``result`` with the drift warning + action and schedule re-exec.
+
+    Called by both call_tool and call_tool_async after the handler returns.
+    No-op when there's no drift, when the result isn't a dict, or when the
+    handler already set its own ``_simdrive_warning`` field.
+
+    Auto-restart is gated by THREE conditions, all must hold:
+      1. Disk version is strictly newer than loaded version (upgrade only).
+      2. ``SIMDRIVE_NO_AUTO_RESTART`` is not set to a truthy value.
+      3. We have not already restarted ≥ ``_RESTART_LOOP_GUARD_MAX`` times
+         (carried across execv via ``SIMDRIVE_RESTART_COUNT``).
+
+    Uses the thread-safe latch (``_try_claim_restart``) so concurrent async
+    dispatches can never schedule two re-execs.
+    """
+    if not isinstance(result, dict):
+        return
+    warning = _check_version_drift()
+    if not warning:
+        return
+    if "_simdrive_warning" not in result:
+        result["_simdrive_warning"] = warning
+    if _auto_restart_disabled():
+        return
+    disk = _disk_version()
+    if not _is_upgrade(disk, _LOADED_VERSION):
+        # Downgrade or unparseable — never auto-restart.
+        return
+    if _restart_loop_guard_tripped():
+        # We've already restarted too many times this process tree — refuse
+        # to schedule another and surface a clear warning instead.
+        result["_simdrive_warning"] = (
+            f"{warning} Auto-restart loop guard tripped after "
+            f"{_restart_count()} restarts — refusing further restarts. "
+            "Restart the MCP host manually."
+        )
+        return
+    # Upgrade + auto-restart enabled + under loop guard => mark the response
+    # and try to claim the restart slot. The action is "restarting" (future
+    # tense) because the actual exec happens after the response flushes.
+    result["_simdrive_action"] = "restarting"
+    if _try_claim_restart():
+        try:
+            _schedule_self_restart()
+        except Exception as exc:
+            # If scheduling fails, release the claim so a subsequent call
+            # can retry.
+            _release_restart_claim()
+            try:
+                _log.error("simdrive: failed to schedule self-restart: %s", exc)
+            except Exception:
+                pass
 
 
 # --------------------------- Tool implementations --------------------------- #
@@ -2448,13 +2693,13 @@ def call_tool(name: str, arguments: dict) -> dict:
                 )
             _check_quota_for_call(name, arguments or {})
             result = handler(arguments or {})
-            # v0.3.0a3 — inject `_simdrive_warning` side-channel field when the
-            # running server is stale relative to the on-disk wheel. Doesn't
-            # replace the tool result, just rides along so the agent sees it
-            # on every tool call after a `pip install --upgrade`.
-            warning = _check_version_drift()
-            if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
-                result["_simdrive_warning"] = warning
+            # F#1 — inject `_simdrive_warning` + `_simdrive_action` and
+            # schedule a re-exec when the running server is stale relative
+            # to the on-disk wheel. The handler's response still ships
+            # before the re-exec lands (100ms delay), so the caller sees
+            # the result + the "restarted" notice and the NEXT tool call
+            # hits the new code.
+            _maybe_handle_drift(result)
             return result
     raise ValueError(f"unknown tool: {name}")
 
@@ -2473,9 +2718,7 @@ async def call_tool_async(name: str, arguments: dict) -> dict:
                 result = await handler(arguments or {})
             else:
                 result = handler(arguments or {})
-            warning = _check_version_drift()
-            if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
-                result["_simdrive_warning"] = warning
+            _maybe_handle_drift(result)
             return result
     raise ValueError(f"unknown tool: {name}")
 
