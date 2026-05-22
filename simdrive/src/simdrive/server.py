@@ -63,7 +63,10 @@ import asyncio
 import base64
 import inspect
 import json
+import os
 import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -286,8 +289,111 @@ def _check_version_drift() -> str | None:
         return None
     return (
         f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
-        "Restart the MCP server (or your agent host) to pick up the upgrade."
+        f"Auto-restarting to pick up disk version {disk}. "
+        "Set SIMDRIVE_NO_AUTO_RESTART=1 to disable and restart manually."
     )
+
+
+# F#1 — MCP server self-restart on version drift.
+#
+# Background: when `pip install --upgrade simdrive` refreshes the wheel on
+# disk, the running MCP server is still serving the previously loaded
+# in-memory code. Pre-fix, drift was warned-only and users had to restart
+# Claude Code (the MCP host) by hand. That's heavy friction during a beta
+# sprint.
+#
+# The fix: after the current tool call returns its result, schedule a
+# background thread that re-execs the simdrive CLI via os.execv inside the
+# same process. The next tool call lands on the freshly loaded code.
+#
+# Opt-out: set SIMDRIVE_NO_AUTO_RESTART=1 (or any truthy value) to fall
+# back to warn-only legacy behaviour.
+
+_RESTART_SCHEDULED: bool = False  # latch — only schedule one re-exec per process
+_RESTART_DELAY_SEC: float = 0.1   # give the current tool call time to ship its response
+
+
+def _auto_restart_disabled() -> bool:
+    """Check the SIMDRIVE_NO_AUTO_RESTART env opt-out.
+
+    Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything
+    else — including unset — means auto-restart is ENABLED.
+    """
+    val = os.environ.get("SIMDRIVE_NO_AUTO_RESTART", "")
+    return val.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _do_self_restart() -> None:
+    """Replace the current process with a fresh simdrive CLI invocation.
+
+    Uses os.execv to keep the same PID, file descriptors (stdin/stdout/stderr
+    are inherited — critical for MCP's stdio transport), and parent process
+    relationship. The MCP host sees a momentary blip and the next tool call
+    is served by the new code.
+    """
+    try:
+        _log.warning("simdrive: auto-restarting on version drift (os.execv)")
+    except Exception:
+        pass
+    # Re-exec the same Python interpreter running the same simdrive module.
+    # sys.argv[0] is preserved so the new process keeps its identity.
+    try:
+        os.execv(sys.executable, [sys.executable, "-m", "simdrive.server", *sys.argv[1:]])
+    except Exception as exc:  # pragma: no cover — exec replaces the process on success
+        try:
+            _log.error("simdrive: os.execv failed during self-restart: %s", exc)
+        except Exception:
+            pass
+
+
+def _schedule_self_restart() -> None:
+    """Schedule a self-restart on a background timer thread.
+
+    The 100ms delay gives the current tool dispatch enough headroom to push
+    its response back over the MCP transport before the process is replaced.
+    Idempotent — multiple drifted calls in flight only ever queue one
+    re-exec via the ``_RESTART_SCHEDULED`` latch (checked by the caller).
+    """
+    timer = threading.Timer(_RESTART_DELAY_SEC, _do_self_restart)
+    timer.daemon = True
+    timer.start()
+
+
+def _maybe_handle_drift(result: dict) -> None:
+    """Annotate ``result`` with the drift warning + action and schedule re-exec.
+
+    Called by both call_tool and call_tool_async after the handler returns.
+    No-op when there's no drift, when the result isn't a dict, or when the
+    handler already set its own ``_simdrive_warning`` field.
+
+    Honors the ``SIMDRIVE_NO_AUTO_RESTART`` env-var opt-out — when set, the
+    warning is still attached but no ``_simdrive_action`` field is added and
+    no re-exec is scheduled.
+    """
+    global _RESTART_SCHEDULED
+    if not isinstance(result, dict):
+        return
+    warning = _check_version_drift()
+    if not warning:
+        return
+    if "_simdrive_warning" not in result:
+        result["_simdrive_warning"] = warning
+    if _auto_restart_disabled():
+        return
+    # Drift + auto-restart enabled => mark the response and schedule re-exec.
+    result["_simdrive_action"] = "restarted"
+    if not _RESTART_SCHEDULED:
+        _RESTART_SCHEDULED = True
+        try:
+            _schedule_self_restart()
+        except Exception as exc:
+            # If scheduling fails, surface the action change but reset the
+            # latch so a subsequent call can retry.
+            _RESTART_SCHEDULED = False
+            try:
+                _log.error("simdrive: failed to schedule self-restart: %s", exc)
+            except Exception:
+                pass
 
 
 # --------------------------- Tool implementations --------------------------- #
@@ -2448,13 +2554,13 @@ def call_tool(name: str, arguments: dict) -> dict:
                 )
             _check_quota_for_call(name, arguments or {})
             result = handler(arguments or {})
-            # v0.3.0a3 — inject `_simdrive_warning` side-channel field when the
-            # running server is stale relative to the on-disk wheel. Doesn't
-            # replace the tool result, just rides along so the agent sees it
-            # on every tool call after a `pip install --upgrade`.
-            warning = _check_version_drift()
-            if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
-                result["_simdrive_warning"] = warning
+            # F#1 — inject `_simdrive_warning` + `_simdrive_action` and
+            # schedule a re-exec when the running server is stale relative
+            # to the on-disk wheel. The handler's response still ships
+            # before the re-exec lands (100ms delay), so the caller sees
+            # the result + the "restarted" notice and the NEXT tool call
+            # hits the new code.
+            _maybe_handle_drift(result)
             return result
     raise ValueError(f"unknown tool: {name}")
 
@@ -2473,9 +2579,7 @@ async def call_tool_async(name: str, arguments: dict) -> dict:
                 result = await handler(arguments or {})
             else:
                 result = handler(arguments or {})
-            warning = _check_version_drift()
-            if warning and isinstance(result, dict) and "_simdrive_warning" not in result:
-                result["_simdrive_warning"] = warning
+            _maybe_handle_drift(result)
             return result
     raise ValueError(f"unknown tool: {name}")
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed — MCP host friction (F#1)
+
+- **MCP server now self-restarts on version drift** instead of just warning. Pre-fix, after `pip install -U simdrive`, every tool call returned a `_simdrive_warning` telling the user to restart Claude Code by hand to pick up the new code — heavy friction during a beta-train sprint. Post-fix, the drift handler still returns the in-flight tool result (with `_simdrive_warning` + a new `_simdrive_action: "restarted"` field), then schedules an `os.execv` re-exec of the simdrive CLI on a 100 ms background timer. The next tool call lands on the freshly loaded code, same PID, MCP stdio transport intact.
+- **Opt-out via `SIMDRIVE_NO_AUTO_RESTART=1`** (also accepts `true`, `yes`, `on`). When set, the warning is still attached but no re-exec is scheduled and no `_simdrive_action` field is added — preserves legacy warn-only behaviour for debug / pinned-version users.
+- Drift-warning text updated to mention the new behaviour: `"Auto-restarting to pick up disk version X.Y.Z."`
+- New `tests/test_mcp_drift_self_restart.py` — 8 unit tests covering sync + async dispatch, opt-out, no-drift no-op, single-fire latch, and warning-text content.
+- Conftest autouse fixture neutralizes the real `os.execv` for the whole test suite so pre-existing drift tests can't accidentally replace the pytest process.
+
 ## [1.0.0b4] — 2026-05-22
 
 **Reliability + dogfood-fix release.** Addresses the four bugs the Palace iOS team surfaced against b3 dogfood (F-B3-007, F-B3-009, F-B3-010, F-B3-011) and hardens the build harness so this class of regression cannot ship again. No breaking API changes.
