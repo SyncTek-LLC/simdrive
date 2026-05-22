@@ -942,7 +942,14 @@ def _resolve_target_xy(s, args: dict) -> tuple[int, int, str, "som.Mark | dict |
         candidates, tier = som.find_text_candidates(marks, query)
         if not candidates:
             available = [_mark_attr(mk, "text") for mk in marks]
-            raise errors.target_not_found("text", query, available)
+            err = errors.target_not_found("text", query, available)
+            # F#5 — include fuzzy suggestion so agents know the closest real mark.
+            import difflib
+            available_texts = [t for t in available if t]
+            matches = difflib.get_close_matches(query, available_texts, n=1, cutoff=0.5)
+            if matches:
+                err.details["suggestion"] = matches[0]
+            raise err
         # F#6 — >1 marks tied at the winning tier ⇒ refuse to silent-pick.
         # The agent must re-target by stable_id / mark / xy. Single-match (even
         # when other tiers also have matches) still resolves unambiguously.

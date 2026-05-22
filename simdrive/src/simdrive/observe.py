@@ -206,17 +206,19 @@ def observe(
 
     marks: list[Mark] = []
     annotated_path: Path | None = None
-    if annotate:
-        marks = som.detect_marks(raw_path)
-        if marks:
-            annotated_path = out_dir / f"observe-{ts}-som.png"
-            # Annotate the *unfiltered* image so the on-disk PNG keeps the full
-            # context for human review — filtering is for the JSON payload only.
-            som.annotate(raw_path, marks, annotated_path)
-        # Apply token-efficiency filters AFTER annotation so the PNG retains
-        # every detected mark, but the in-memory + JSON `marks` list reflects
-        # what the agent actually receives.
-        marks = _apply_filters(marks, confidence_floor, mark_limit)
+    # F#7 (b5): always detect marks so text targeting works regardless of annotate flag.
+    # When annotate=True, also draw the SoM overlay and set annotated_path.
+    # When annotate=False, skip drawing — marks are still returned, annotated_path stays None.
+    marks = som.detect_marks(raw_path)
+    if annotate and marks:
+        annotated_path = out_dir / f"observe-{ts}-som.png"
+        # Annotate the *unfiltered* image so the on-disk PNG keeps the full
+        # context for human review — filtering is for the JSON payload only.
+        som.annotate(raw_path, marks, annotated_path)
+    # Apply token-efficiency filters AFTER annotation so the PNG retains
+    # every detected mark, but the in-memory + JSON `marks` list reflects
+    # what the agent actually receives.
+    marks = _apply_filters(marks, confidence_floor, mark_limit)
 
     logs_text: str | None = None
     if capture_logs:

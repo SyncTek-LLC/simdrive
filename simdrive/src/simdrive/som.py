@@ -76,6 +76,15 @@ _ENGLISH_WORDS: frozenset[str] = frozenset(
         # misc UI
         "welcome", "hello", "goodbye", "logout", "trial", "free", "premium",
         "upgrade", "subscribe", "subscription",
+        # iOS settings / system UI vocabulary (F#18 — Apple Preferences labels)
+        "general", "privacy", "bluetooth", "wi-fi", "wifi", "notifications",
+        "sounds", "haptics", "focus", "screen", "time", "accessibility",
+        "siri", "safari", "maps", "health", "wallet", "facetime", "photos",
+        "camera", "messages", "mail", "calendar", "contacts", "reminders",
+        "notes", "icloud", "itunes", "store", "appstore", "airdrop", "airplay",
+        "display", "brightness", "battery", "storage", "privacy", "security",
+        "passcode", "touchid", "faceid", "cellular", "vpn", "hotspot",
+        "language", "region", "keyboard", "reset", "update", "software",
         # common content nouns / verbs that show up in titles & cells
         "dance", "partner", "story", "tale", "world", "people", "person",
         "place", "thing", "year", "day", "way", "man", "woman", "child",
@@ -190,6 +199,11 @@ class Mark:
     raw_confidence: Optional[float] = None
     # `confidence_band` is the dictionary-gated quality bucket. None = compute lazily.
     _band: Optional[str] = field(default=None, repr=False)
+    # F#4 — b5: alternate OCR readings for this element seen across consecutive
+    # observations. Populated by the OCR smoothing layer when consecutive observes
+    # produce different text for the same spatial region. Defaults to empty list;
+    # callers may set this after construction.
+    alternates: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         # If callers constructed a Mark with only `confidence`, that value is
@@ -276,6 +290,8 @@ class Mark:
             "raw_confidence": round(float(self.raw_confidence or 0.0), 3),
             # `confidence_band` is the human-readable quality bucket.
             "confidence_band": self.confidence_band,
+            # F#4 — alternate OCR readings seen across consecutive observations.
+            "alternates": list(self.alternates),
         }
 
     def to_compact_dict(self) -> dict:
