@@ -17,6 +17,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from PIL import Image
 
@@ -27,6 +28,21 @@ from .som import Mark
 from .window import WindowBounds, get_bounds
 
 log = get_logger("simdrive.observe")
+
+# Confidence-band ordering for `confidence_floor` filtering. A floor of "med"
+# keeps marks whose band rank >= rank("med"); a floor of "high" keeps only
+# the top tier. Anything ranked below is dropped.
+_BAND_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+# Public-facing floor aliases — "med" is the common shorthand callers reach
+# for; we accept it alongside the canonical "medium".
+_FLOOR_ALIASES: dict[str, str] = {
+    "low": "low",
+    "med": "medium",
+    "medium": "medium",
+    "high": "high",
+}
+
+ConfidenceFloor = Literal["low", "med", "medium", "high"]
 
 
 @dataclass
@@ -39,9 +55,17 @@ class Observation:
     captured_at: float
     marks: list[Mark] = field(default_factory=list)
     recent_logs: str | None = None
+    # Token-efficiency knobs (PR A, INIT-2026-549). Default off so every existing
+    # caller keeps the legacy behavior — server.py routes new args through here.
+    compact: bool = False
+    capture_observability: bool = False
 
     def to_dict(self) -> dict:
-        return {
+        if self.compact:
+            mark_dicts: list[dict] = [m.to_compact_dict() for m in self.marks]
+        else:
+            mark_dicts = [m.to_dict() for m in self.marks]
+        payload: dict = {
             "screenshot_path": str(self.screenshot_path),
             "annotated_path": str(self.annotated_path) if self.annotated_path else None,
             "screenshot_size_pixels": [self.screenshot_w, self.screenshot_h],
@@ -56,9 +80,79 @@ class Observation:
                 else None
             ),
             "captured_at": self.captured_at,
-            "marks": [m.to_dict() for m in self.marks],
+            "marks": mark_dicts,
             "recent_logs": self.recent_logs,
         }
+        if self.capture_observability:
+            # One entry per *returned* mark, ordered to align with `marks[i]`.
+            # Audit finding #10: agents debugging "why is this low-confidence?"
+            # get the band derivation without reading the OCR-gating source.
+            payload["_observability"] = [_mark_observability(m) for m in self.marks]
+        return payload
+
+
+def _mark_observability(m: Mark) -> dict:
+    """Per-mark derivation breadcrumb for `capture_observability=True`.
+
+    Surfaces the inputs the band classifier used (raw OCR score + dictionary
+    fence outcome) so callers can reason about why a mark landed in `low`
+    even when the OCR engine reported raw_confidence ~= 1.0.
+    """
+    raw = float(m.raw_confidence or 0.0)
+    english_like = som._english_likeness(m.text or "")
+    dictionary_check = "passed" if english_like else "failed"
+    if not english_like:
+        reason = "dictionary gate failed — text does not read as English"
+    elif raw >= 0.85:
+        reason = "raw_confidence >= 0.85 and dictionary gate passed"
+    else:
+        reason = "raw_confidence < 0.85; clamped to medium"
+    return {
+        "mark_id": m.id,
+        "raw_confidence": round(raw, 3),
+        "clamped_confidence": round(float(m.confidence), 3),
+        "confidence_band": m.confidence_band,
+        "dictionary_check": dictionary_check,
+        "reason": reason,
+    }
+
+
+def _apply_filters(
+    marks: list[Mark],
+    confidence_floor: ConfidenceFloor | None,
+    mark_limit: int | None,
+) -> list[Mark]:
+    """Apply `confidence_floor` then `mark_limit` to a list of marks.
+
+    `confidence_floor`: drop marks whose band ranks below the requested floor.
+    None (default) keeps everything. Accepts "low", "med"/"medium", "high".
+    `mark_limit`: keep only the top-N marks sorted by (band rank desc, area desc).
+    Applied AFTER floor filtering so callers asking for `floor="high",
+    mark_limit=10` get the 10 highest-area high-confidence marks.
+    """
+    out = marks
+    if confidence_floor is not None:
+        canonical = _FLOOR_ALIASES.get(confidence_floor)
+        if canonical is None:
+            raise ValueError(
+                f"confidence_floor must be one of low/med/medium/high; got {confidence_floor!r}"
+            )
+        floor_rank = _BAND_RANK[canonical]
+        out = [m for m in out if _BAND_RANK.get(m.confidence_band, 0) >= floor_rank]
+    if mark_limit is not None:
+        if mark_limit < 0:
+            raise ValueError(f"mark_limit must be >= 0; got {mark_limit}")
+        # Sort by band rank (desc), then area (desc) as tie-break — bigger marks
+        # are usually more agent-actionable than a stray pixel of OCR noise.
+        out = sorted(
+            out,
+            key=lambda m: (_BAND_RANK.get(m.confidence_band, 0), m.w * m.h),
+            reverse=True,
+        )[:mark_limit]
+        # Restore original (reading-order) sort within the truncated slice so
+        # downstream `marks[i].id` semantics still match top-to-bottom intuition.
+        out.sort(key=lambda m: m.id)
+    return out
 
 
 def observe(
@@ -69,10 +163,28 @@ def observe(
     log_lines: int = 50,
     log_predicate: str | None = None,
     target: str = "simulator",
+    compact: bool = False,
+    confidence_floor: ConfidenceFloor | None = None,
+    mark_limit: int | None = None,
+    capture_observability: bool = False,
 ) -> Observation:
     """Capture a screenshot + measure it; optionally annotate with SoM marks; optionally tail logs.
 
     `target` selects the backend: "simulator" (default) or "device" (real iPhone/iPad).
+
+    Token-efficiency knobs (PR A, INIT-2026-549) — all default off / no-op so
+    existing callers see no behavior change:
+    * `compact`: emit the slim 6-key mark dict (`to_compact_dict`) instead of the
+      full 9-key diagnostic dict. ~5-6x reduction in JSON payload on dense screens.
+    * `confidence_floor`: drop marks whose band ranks below "low"/"med"/"high".
+      Default None keeps every band; "high" is the common agent setting.
+    * `mark_limit`: cap the returned mark list to the top-N by (band, area).
+      Applied AFTER `confidence_floor`, so `floor="high", limit=10` returns the
+      10 largest high-confidence marks.
+    * `capture_observability`: include a `_observability` array on the
+      ``to_dict()`` payload — one entry per *returned* mark, surfacing the
+      band derivation (raw confidence, dictionary-check outcome, reason).
+      Default off; useful for debugging unexpected band assignments.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     _t_start = time.time()
@@ -98,7 +210,13 @@ def observe(
         marks = som.detect_marks(raw_path)
         if marks:
             annotated_path = out_dir / f"observe-{ts}-som.png"
+            # Annotate the *unfiltered* image so the on-disk PNG keeps the full
+            # context for human review — filtering is for the JSON payload only.
             som.annotate(raw_path, marks, annotated_path)
+        # Apply token-efficiency filters AFTER annotation so the PNG retains
+        # every detected mark, but the in-memory + JSON `marks` list reflects
+        # what the agent actually receives.
+        marks = _apply_filters(marks, confidence_floor, mark_limit)
 
     logs_text: str | None = None
     if capture_logs:
@@ -129,6 +247,8 @@ def observe(
         captured_at=captured_at,
         marks=marks,
         recent_logs=logs_text,
+        compact=compact,
+        capture_observability=capture_observability,
     )
 
     # Persist a sidecar JSON next to the screenshot so anyone reading the
