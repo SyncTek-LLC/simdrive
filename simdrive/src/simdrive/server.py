@@ -3154,7 +3154,12 @@ def _cmd_lint_recordings(args: list[str]) -> None:
 
 
 def _cmd_migrate_recording(args: list[str]) -> None:
-    """Handle `simdrive migrate-recording <name> [--force] [--dry-run]` CLI subcommand."""
+    """Handle `simdrive migrate-recording <name> [--force] [--dry-run]` CLI subcommand.
+
+    Batch flags:
+      --all               Migrate every recording under the recordings root.
+      --missing-contract  Migrate only recordings that lack a `requires:` block.
+    """
     import argparse
     import sys
 
@@ -3167,12 +3172,62 @@ def _cmd_migrate_recording(args: list[str]) -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("name", help="Recording name (directory under recordings root).")
+    # Positional name is optional when --all / --missing-contract is used.
+    parser.add_argument("name", nargs="?", default=None,
+                        help="Recording name (directory under recordings root). "
+                             "Omit when using --all or --missing-contract.")
     parser.add_argument("--force", action="store_true", default=False,
                         help="Re-migrate even if the recording already has `requires:`.")
     parser.add_argument("--dry-run", action="store_true", default=False,
                         help="Print what would be written; do not modify the file.")
+    parser.add_argument("--all", dest="all_recordings", action="store_true", default=False,
+                        help="Migrate every recording found under the recordings root.")
+    parser.add_argument("--missing-contract", action="store_true", default=False,
+                        help="Migrate only recordings that do not yet have a `requires:` block.")
     ns = parser.parse_args(args)
+
+    # --- Batch modes ---
+    if ns.all_recordings or ns.missing_contract:
+        import yaml as _yaml
+        root = recorder.recordings_root()
+        if not root.exists():
+            print("Migrated 0 recordings.")
+            sys.exit(0)
+
+        candidates = sorted(p for p in root.iterdir() if p.is_dir())
+        migrated_count = 0
+        for rec_dir in candidates:
+            yaml_path = rec_dir / "recording.yaml"
+            if not yaml_path.exists():
+                continue
+            # --missing-contract: skip recordings that already have requires.
+            if ns.missing_contract:
+                try:
+                    payload = _yaml.safe_load(yaml_path.read_text()) or {}
+                except Exception:
+                    payload = {}
+                if "requires" in payload:
+                    continue
+
+            try:
+                result = recorder.migrate_recording(rec_dir.name, force=ns.force, dry_run=ns.dry_run)
+            except recorder.MigrationError as exc:
+                print(f"Error migrating {rec_dir.name}: {exc}", file=sys.stderr)
+                continue
+
+            suffix = " (dry-run)" if result.dry_run else ""
+            if result.migrated:
+                print(f"Migrated {result.name}{suffix}: {result.text_mark_count} text marks.")
+                migrated_count += 1
+            else:
+                print(f"Skipped {result.name}: {result.reason}")
+
+        print(f"Done. {migrated_count} recording(s) migrated.")
+        sys.exit(0)
+
+    # --- Single-recording mode ---
+    if not ns.name:
+        parser.error("Recording name is required unless --all or --missing-contract is specified.")
 
     try:
         result = recorder.migrate_recording(ns.name, force=ns.force, dry_run=ns.dry_run)
