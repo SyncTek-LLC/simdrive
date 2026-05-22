@@ -24,6 +24,15 @@
 
 - **`tap_and_wait_keyboard` was serialized as bare `tap`.** The composite delegates to `tool_tap` internally, which recorded itself as `action: tap` in `recording.yaml`. Replays lost the keyboard-wait semantic and tapped-then-immediately-acted. **Fix:** new `Recorder.upgrade_step_action(step_id, new_action)` method; the composite tool calls it after `tool_tap` returns so the persisted step carries the right action name.
 
+### Fixed — launch verification (F#2, INIT-2026-549)
+
+- **`session_start` now verifies the launched app actually reached foreground before returning `state: "active"`.** Pre-fix, an app that crashed within ~500 ms of launch (missing entitlement, signing mismatch) yielded `state: "active"` and the agent burned multiple blind tap/type roundtrips before discovering the crash via separate `app_state` and `crashes` calls. **Fix:** when `app_bundle_id` is provided and `verify_launch=True` (default), `session_start` polls `app_state` (sim) / `app_state_device` (device) after launch. If two consecutive polls show `not-running`, returns `state: "launched_then_exited"` with `crash_report_path` (most recent `.ips` for the bundle, sim only) and a `recovery:` hint on the FIRST response.
+- **Settle budget bumped to 3000 ms (10 × 300 ms), env-tunable via `SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS`** (clamped to [500, 15000] ms). Default chosen to cover real SwiftUI cold-start + first-launch onboarding; the previous 1500 ms produced false `launched_then_exited` verdicts on legitimately slow cold-starts.
+- **Two-consecutive-not-running rule for crash declaration.** `app_state` is a presence-based heuristic over `launchctl list`; a single transient `not-running` (launchctl flake) can no longer trip the verdict. Per-poll exceptions are caught and retried — never propagated. Crash-report file-system flush race handled with a 250 ms retry on `list_crashes`.
+- **Device path: graceful fallback.** When `app_state_device` can't query devicectl's process list (no DDI, older Xcode), the response falls back to `state: "active"` with a `verification_available: False` warning rather than mis-declaring a crash.
+- **Schema consistency.** `crash_report_path` and `recovery` keys are now ALWAYS present on the `session_start` response (None on success) so MCP clients can assume the schema.
+- **Opt-out.** Pass `verify_launch=False` to preserve the legacy fire-and-forget behaviour.
+
 ### Fixed — response disambiguation (F-B3-011)
 
 - **`type_text` returned `keyboard_visible: false` when the type actually succeeded.** Palace's instant-search field auto-commits and dismisses the keyboard on the first keystroke. By the time the post-type observe ran, the keyboard chrome was gone — the heuristic false-negatived. Agents using `keyboard_visible` as a retry signal would double-type. **Fix:** when `dispatch_succeeded=true` and `keyboard_visible=false`, the response now includes a `keyboard_visible_reason` string explaining the auto-collapse scenario and stating explicitly: "Treat dispatch_succeeded as ground truth; do NOT retry on this signal."
