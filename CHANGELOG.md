@@ -9,6 +9,22 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## [Unreleased]
 
+---
+
+## 1.0.0b5 (2026-05-22)
+
+18-finding fix wave from b4 dogfood report. See CompanyState/research/simdrive-dogfood/b4/REPORT.md.
+
+### Highlights
+- MCP server now self-restarts on disk-version drift (F#1)
+- session_start detects launch-crash and returns crash report path (F#2)
+- Ambiguous text-targets and stale text refs now surface alternates + fuzzy suggestions (F#5, F#6)
+- SSIM compute auto-masks iOS status bar; recordings auto-include device-class masks (F#14, F#15)
+- `verify_change: true` on tap returns screen_changed + ssim_delta (F#8)
+- apps() populates version from CFBundleShortVersionString (F#3)
+- migrate-recording gains --all and --missing-contract flags (F#17)
+- Plus 10 polish items: logs() raw mode, perf windowed sampling, list_replays filter, lint categorization, OCR alternates, confidence-band relabel, recording text dedup, type_text tap_first persistence, observe(annotate=False) marks
+
 ### Fixed — F#1 MCP host friction: server self-restarts on version drift
 
 `pip install -U simdrive` previously left the running MCP server stuck on
