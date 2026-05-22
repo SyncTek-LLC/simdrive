@@ -105,3 +105,18 @@ def _session_license(request: pytest.FixtureRequest):
     finally:
         _SESSION_LICENSE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _SESSION_LICENSE_PATH.write_bytes(_SESSION_LICENSE_BYTES)
+
+
+@pytest.fixture(autouse=True)
+def _clear_module_caches():
+    """Reset module-level caches between tests so a value computed in one
+    test (often against a mock UDID like 'TESTUDID') can't leak into the
+    next. Cheap; only the dict is cleared, not the modules.
+
+    Currently scoped to ``server._SCALE_CACHE_BY_UDID``. Add other module
+    caches here as they're introduced.
+    """
+    from simdrive import server as _server
+    _server._SCALE_CACHE_BY_UDID.clear()
+    yield
+    _server._SCALE_CACHE_BY_UDID.clear()

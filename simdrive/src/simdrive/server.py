@@ -106,6 +106,13 @@ def _wda_client_for(udid: str):
     return WdaClient(host=host, port=port)
 
 
+# Module-level scale cache keyed by UDID. Pixel/point ratio is a stable physical
+# property of the device hardware — it does not change across sessions for the
+# same UDID. Caching at the module level avoids a WDA round-trip on the first
+# input call of each new session for a device we've talked to before.
+_SCALE_CACHE_BY_UDID: dict[str, float] = {}
+
+
 def _session_scale(s, wda=None) -> float:
     """Return the pixel-per-logical-point scale for a device session (F-006).
 
@@ -115,8 +122,12 @@ def _session_scale(s, wda=None) -> float:
     Every device-branch input tool MUST divide pixel coords by this scale before
     calling wda.tap / wda.swipe.
 
-    The scale is computed once per session and cached on Session.pixel_per_point_scale
-    to avoid a WDA round-trip on every input call.
+    Two-level cache:
+      1. Session.pixel_per_point_scale — populated on first call within a session.
+      2. _SCALE_CACHE_BY_UDID — populated on first successful compute for any
+         session on that UDID, persists across session recreation.
+    A new session for a known UDID picks up the module-level cache on first
+    call and never round-trips WDA for the scale.
 
     Args:
         s: The Session object.
@@ -130,7 +141,9 @@ def _session_scale(s, wda=None) -> float:
         in logical points / pixel-equal-to-point).
       - HTTP error fetching WDA window size: falls back to 1.0 with a warning;
         better to attempt a likely-wrong tap than to fail-shut the input tool.
-      - Invalid window size (0x0): falls back to 1.0 with a warning.
+        Fallback values are NOT promoted to the module-level cache.
+      - Invalid window size (0x0): same — fall back without polluting the
+        per-UDID cache.
       - Width-derived scale is preferred; if width and height scales differ by
         more than 5%, log a warning (unexpected orientation) and use width.
     """
@@ -142,29 +155,39 @@ def _session_scale(s, wda=None) -> float:
     if s.pixel_per_point_scale is not None:
         return s.pixel_per_point_scale
 
+    # Module-level cache: same UDID across sessions. Populate the session
+    # cache from it so subsequent calls in this session also short-circuit.
+    udid = s.device.udid
+    cached = _SCALE_CACHE_BY_UDID.get(udid)
+    if cached is not None:
+        s.pixel_per_point_scale = cached
+        return cached
+
     # Ensure screenshot dims are populated so we have the pixel size.
     sw, sh = _ensure_screenshot_dims(s)
 
     # Use the caller-supplied client (avoids a second _wda_client_for() call
     # when the caller already resolved it) or fall back to session / registry.
     if wda is None:
-        wda = s.wda_client or _wda_client_for(s.device.udid)
+        wda = s.wda_client or _wda_client_for(udid)
     try:
         w_pts, h_pts = wda.window_size_points()
     except Exception as exc:
         _log.warning(
             "Failed to fetch WDA window size for scale computation "
             "(udid=%r): %s. Falling back to scale=1.0.",
-            s.device.udid, exc,
+            udid, exc,
         )
         s.pixel_per_point_scale = 1.0
+        # Do NOT populate the module cache with a fallback — it would mask
+        # transient WDA failures forever for this UDID.
         return 1.0
 
     if w_pts <= 0 or h_pts <= 0:
         _log.warning(
             "WDA returned invalid window size (%dx%d) for udid=%r. "
             "Falling back to scale=1.0.",
-            w_pts, h_pts, s.device.udid,
+            w_pts, h_pts, udid,
         )
         s.pixel_per_point_scale = 1.0
         return 1.0
@@ -175,9 +198,10 @@ def _session_scale(s, wda=None) -> float:
         _log.warning(
             "Width scale (%.3f) and height scale (%.3f) differ for udid=%r "
             "-- device may be in an unexpected orientation. Using width-derived scale.",
-            scale_w, scale_h, s.device.udid,
+            scale_w, scale_h, udid,
         )
     s.pixel_per_point_scale = scale_w
+    _SCALE_CACHE_BY_UDID[udid] = scale_w
     return scale_w
 
 
