@@ -57,19 +57,32 @@ def snapshot(udid: str, bundle_id: str) -> dict:
             "captured_at": captured_at,
         }
 
-    # macOS `ps` has no thcount column — get cpu/rss here, threads separately.
-    res = _run(["ps", "-p", str(pid), "-o", "pcpu=", "-o", "rss="])
-    cpu_pct = 0.0
+    # F#9: Sample CPU over a ~200 ms window (3 samples ~100 ms apart) and
+    # average the results. A single instant sample often returns 0.0 for an
+    # app that is active but currently idle — the window captures bursts that
+    # a snapshot would miss.
+    _SAMPLE_WINDOW_MS = 200
+    _SAMPLE_COUNT = 3
+    _SAMPLE_SLEEP_S = (_SAMPLE_WINDOW_MS / 1000.0) / max(_SAMPLE_COUNT - 1, 1)
+
+    cpu_samples: list[float] = []
     rss_mb = 0.0
     threads = 0
-    if res.returncode == 0 and res.stdout.strip():
-        parts = res.stdout.split()
-        if len(parts) >= 2:
-            try:
-                cpu_pct = float(parts[0])
-                rss_mb = round(float(parts[1]) / 1024.0, 2)
-            except ValueError:
-                pass
+
+    for i in range(_SAMPLE_COUNT):
+        res = _run(["ps", "-p", str(pid), "-o", "pcpu=", "-o", "rss="])
+        if res.returncode == 0 and res.stdout.strip():
+            parts = res.stdout.split()
+            if len(parts) >= 2:
+                try:
+                    cpu_samples.append(float(parts[0]))
+                    rss_mb = round(float(parts[1]) / 1024.0, 2)
+                except ValueError:
+                    pass
+        if i < _SAMPLE_COUNT - 1:
+            time.sleep(_SAMPLE_SLEEP_S)
+
+    cpu_pct = round(sum(cpu_samples) / len(cpu_samples), 2) if cpu_samples else 0.0
 
     # `ps -M -p <pid>` lists each thread on its own line; first line is the
     # process header, remaining lines are threads.
@@ -84,6 +97,7 @@ def snapshot(udid: str, bundle_id: str) -> dict:
         "memory_rss_mb": rss_mb,
         "threads": threads,
         "captured_at": captured_at,
+        "sample_window_ms": _SAMPLE_WINDOW_MS,
     }
 
 
