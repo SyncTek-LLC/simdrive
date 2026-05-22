@@ -506,6 +506,11 @@ class Recorder:
         }
         if self.requires_block is not None:
             payload["requires"] = self.requires_block.to_dict()
+        # F#15 — auto-populate ssim_masks for recognized device classes so every
+        # replay automatically masks the status bar without caller intervention.
+        auto_masks = _default_status_bar_mask(self.session.device.name)
+        if auto_masks is not None:
+            payload["ssim_masks"] = auto_masks
         if self.capture_warning:
             payload["_capture_warning"] = self.capture_warning
         with self.yaml_path.open("w") as f:
@@ -945,6 +950,34 @@ def migrate_recording(name: str, *, force: bool = False,
 
 # ---------- Replay ---------- #
 
+# F#15 — device-class → (width_px, status_bar_h_px) for auto-masking.
+# Status bar height: ~60 logical px * device scale (3x for Pro models, 2x for standard).
+DEVICE_STATUS_BAR_MASKS: dict[str, tuple[int, int]] = {
+    "iPhone 17 Pro":      (1206, 180),  # 3x scale
+    "iPhone 17 Pro Max":  (1320, 180),
+    "iPhone 17":          (1179, 160),  # 2x scale
+    "iPhone 16 Pro":      (1206, 180),
+    "iPhone 16 Pro Max":  (1320, 180),
+    "iPhone 16":          (1179, 160),
+    "iPhone 16 Plus":     (1290, 160),
+    "iPhone 15 Pro":      (1179, 180),
+    "iPhone 15 Pro Max":  (1290, 180),
+    "iPhone 15":          (1179, 160),
+}
+
+
+def _default_status_bar_mask(device_name: str) -> "list[dict] | None":
+    """Return a one-element ssim_masks list for the device's status bar, or None.
+
+    The returned dict uses the schema expected by _normalize_masks:
+    {"x": int, "y": int, "w": int, "h": int, "label": str}
+    """
+    entry = DEVICE_STATUS_BAR_MASKS.get(device_name)
+    if not entry:
+        return None
+    w, h = entry
+    return [{"x": 0, "y": 0, "w": w, "h": h, "label": "status_bar"}]
+
 
 MaskRect = tuple[int, int, int, int]
 
@@ -975,14 +1008,22 @@ def _apply_masks_pil(im, masks: Optional[list[MaskRect]]):
     return out
 
 
-def _ssim_or_fallback(a: Path, b: Path, masks: Optional[list[MaskRect]] = None) -> float:
+def _ssim_or_fallback(a: Path, b: Path, masks: Optional[list[MaskRect]] = None,
+                      device_name: Optional[str] = None) -> float:
     """Return a similarity score in [0, 1].
 
     Uses skimage SSIM if available (strictly better at detecting structural
     changes); otherwise falls back to a perceptual-hash–style block-difference
     metric. Both metrics yield ~1.0 for identical screens and drop sharply for
     visually different ones.
+
+    If *masks* is None and *device_name* is a recognised device class,
+    the status-bar mask is auto-applied (F#14).
     """
+    if masks is None and device_name is not None:
+        default = _default_status_bar_mask(device_name)
+        if default:
+            masks = _normalize_masks(default)
     try:
         from skimage.metrics import structural_similarity as ssim  # type: ignore
         from PIL import Image
