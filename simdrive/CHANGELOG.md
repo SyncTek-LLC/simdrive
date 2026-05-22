@@ -1,5 +1,59 @@
 # Changelog
 
+## [1.0.0b3] — 2026-05-22
+
+**Agent-experience polish sprint.** Five PRs landing token-efficiency knobs, atomic composite tools, response-shape echoes, an onboarding command, and a cross-session perf cache. No breaking API changes; all additions are backward compatible. Tool count: 32 → **33**.
+
+### Added — onboarding
+
+- **`simdrive demo` CLI subcommand** — 30-second sanity check that boots an iPhone simulator, opens Settings, runs a single `observe()`, and prints a structured summary. Closes the biggest onboarding gap between `pip install simdrive` and the agent-driven flow. New module `src/simdrive/_demo.py`; 13 tests.
+
+### Added — atomic / composite tools
+
+- **`tap_and_wait_keyboard`** (new MCP tool, brings count to 33) — atomic composite of `tap` + `_KEYBOARD_SETTLE_SEC` sleep + `observe`. Use to focus a text field and confirm the keyboard appeared *before* sending keystrokes via `type_text`. Saves the agent ~2 round-trips vs chaining manually. Returns the tap response augmented with a `post_state` key containing the post-tap observation.
+- **`tool_tap` — `tapped_mark` response field** — when a tap resolves via mark / stable_id / text, the response now echoes the matched mark's `stable_id` and `text`. Mirrors what `type_text` already does with `focused_field`; agents can log the same audit trail across input tools.
+- **`tool_tap` + `tool_swipe` — `settle_ms` optional param** — when > 0, sleep that many ms after the action before returning. Useful for animations and scroll-settle.
+- **`tool_dismiss_sheet` — `direction` param** — `"down"` (default — drags top to bottom; dismisses iOS sheets) or `"up"` (drags bottom to top; dismisses ascending modals). Response includes the resolved direction.
+
+### Added — token efficiency on `observe`
+
+Four new params on `observe.observe()` and `tool_observe`, all backward compatible with defaults preserving legacy shape:
+
+- **`compact: bool`** — return slim mark dict (6 keys: `id`, `stable_id`, `text`, `center`, `bbox`, `confidence_band`) instead of the full ~9-key diagnostic shape. New `Mark.to_compact_dict()` method.
+- **`confidence_floor: "low" | "med" | "high"`** — drop marks below the floor. Most common agent use: `"high"` filters out OCR misreads.
+- **`mark_limit: int`** — cap to top-N marks (sorted by band desc, then area desc).
+- **`capture_observability: bool`** — append `_observability` array with per-mark band-derivation breadcrumbs (`raw_confidence`, `clamped_confidence`, `dictionary_check`). Default off.
+
+On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduces mark token cost from ~1,250 to ~150–300 (**4–8× reduction**). The annotated PNG on disk preserves every detected mark, and `Session.last_marks` stores the unfiltered set so the resolver is undegraded.
+
+### Added — `tool_list_devices` compact mode
+
+- **`compact: bool` arg** — slims per-device entries to `{udid, name, state, hid_supported}` and drops top-level diagnostic fields (`libimobiledevice_ready`, `missing_tools`, `hid_note`). Useful when the agent only needs to pick a device.
+
+### Changed — perf
+
+- **Cross-session scale cache** — module-level `_SCALE_CACHE_BY_UDID` short-circuits the WDA `window_size_points()` round-trip when a new session attaches to a device we've talked to before. Pixel/point ratio is a stable physical property of the hardware; per-Session caching alone wasted ~50–150ms on every session start. Fallback scale=1.0 (transient WDA failure) populates only the Session cache, never the module cache — so a flaky moment can't poison future sessions.
+
+### Changed — agent-facing docs
+
+- **`server.py` module docstring** — adds two new sections: **"Agent workflow patterns"** with runnable chain snippets (find-and-tap, fill-text-field, reset-search, token-efficient observe, pick-real-device), and **"Magic the agent gets for free"** documenting implicit behaviors (coord conversion on device, auto-record during recording sessions, `last_marks` invariance under observe filters).
+
+### Tests + CI
+
+- **+56 new tests across 5 PRs** (1458 → **1514 passing**). Hot-path coverage aggregate: **92.30%** (well above the 90% CI gate).
+- New test files: `test_composite_tools.py` (10 tests), `test_demo_cli.py` (13 tests), `test_observe_compact.py` (28 tests, sim + device branch). Plus additions to `test_list_devices_hid_flags.py` (+2), `test_a11_device_input.py` (+2).
+- Tool-count pin tests updated 32 → 33 in `test_unit.py` and `test_paywall_gates.py`.
+- Autouse `_clear_module_caches` fixture in `tests/conftest.py` resets module-level caches between tests so the new cross-session scale cache can't leak across tests using mock UDIDs.
+
+### Backwards compatibility
+
+- All new params default to `False` / `None` — existing callers see identical behavior and response shapes.
+- `tool_observe` legacy payload preserved when no new params are passed.
+- `tool_list_devices({})` (no args) returns the legacy 8-field-per-device shape.
+- New `tap_and_wait_keyboard` is purely additive; no existing tool changed signature.
+
+---
+
 ## [1.0.0b2] — 2026-05-20
 
 **Production-readiness hardening sprint.** Closes the daylight between b1 (first publishable beta) and customer-grade reliability. Focused on the three surfaces where racy I/O meets real simulators — HID dispatch, WDA bridge, and recording integrity — plus key rotation and defense-in-depth quota enforcement. No new MCP tools; no public-API breaks. Existing licenses validate unchanged.
