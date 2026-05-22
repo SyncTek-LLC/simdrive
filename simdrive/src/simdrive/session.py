@@ -66,12 +66,48 @@ def append_action(s: "Session", record: dict) -> None:
         pass  # never fail the act tool because of audit logging
 
 
-# F#2 — launch-verification settle parameters. Total budget: ~1500 ms.
-# Five attempts of 300 ms each so a fast app exits the loop on the first
-# poll while an immediate-crash case still surfaces within ~1.5s instead
-# of returning a misleading state="active".
-_VERIFY_LAUNCH_ATTEMPTS = 5
+# F#2 — launch-verification settle parameters.
+#
+# Default total budget: ~3000 ms (10×300 ms). Real iOS apps on fresh sims with
+# SwiftUI cold start + first-launch onboarding routinely take 2-4s before
+# `launchctl list` shows the bundle. The previous 1500 ms budget produced
+# false `launched_then_exited` verdicts on legitimately slow cold-starts.
+#
+# Configurable via env var ``SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS`` (default 3000,
+# clamped to [500, 15000]). Per-poll sleep is fixed at 300 ms; attempts is
+# derived as ``ceil(budget_ms / 300)``.
 _VERIFY_LAUNCH_SLEEP_S = 0.3
+_VERIFY_LAUNCH_BUDGET_DEFAULT_MS = 3000
+_VERIFY_LAUNCH_BUDGET_MIN_MS = 500
+_VERIFY_LAUNCH_BUDGET_MAX_MS = 15000
+# F#2 — crash-report flush race: `ReportCrash` writes .ips asynchronously.
+# After we conclude "never reached foreground", give the filesystem one short
+# retry before reporting crash_report_path=None.
+_CRASH_REPORT_FLUSH_RETRY_S = 0.25
+
+
+def _verify_launch_attempts() -> int:
+    """Read ``SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS`` (clamped) and return the
+    number of 300 ms attempts that fit in the budget."""
+    raw = os.environ.get("SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS")
+    try:
+        budget_ms = int(raw) if raw is not None else _VERIFY_LAUNCH_BUDGET_DEFAULT_MS
+    except (TypeError, ValueError):
+        budget_ms = _VERIFY_LAUNCH_BUDGET_DEFAULT_MS
+    budget_ms = max(
+        _VERIFY_LAUNCH_BUDGET_MIN_MS,
+        min(_VERIFY_LAUNCH_BUDGET_MAX_MS, budget_ms),
+    )
+    # Per-poll sleep is 300 ms; ceil-divide so the budget is a lower bound.
+    attempts = (budget_ms + 299) // 300
+    return max(1, int(attempts))
+
+
+# Back-compat constant (tests / external callers may import it). Reflects the
+# default budget, not the env-overridden value.
+_VERIFY_LAUNCH_ATTEMPTS = (
+    _VERIFY_LAUNCH_BUDGET_DEFAULT_MS + 299
+) // 300
 
 
 def start(
@@ -88,15 +124,26 @@ def start(
     target="device": resolve a connected real device by udid.
 
     verify_launch (F#2): when True (default) and ``app_bundle_id`` is
-    provided, poll ``diagnostics.app_state`` up to 5×300 ms after
-    ``sim.launch_app``. The Session is created either way, but its
-    ``state`` will be set to ``"launched_then_exited"`` (with a
-    ``crash_report_path`` populated from the most recent .ips for the
-    bundle) when the app never reaches foreground. Pass False to keep
-    the legacy fire-and-forget behaviour.
+    provided, poll ``diagnostics.app_state`` (sim) or
+    ``diagnostics.app_state_device`` (device) up to ~3000 ms after launch.
+    Settle budget is env-tunable via ``SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS``
+    (default 3000, clamped to [500, 15000]).  Crash declaration requires
+    TWO consecutive ``not-running`` polls — single launchctl flakes never
+    trip the verdict, and per-poll exceptions are caught and retried.
+    The Session is created either way, but its ``state`` will be set to
+    ``"launched_then_exited"`` (with a ``crash_report_path`` populated
+    from the most recent .ips for the bundle — simulator path only) when
+    the app never reaches foreground. On device, when devicectl's process
+    list is unavailable, falls back to ``state="active"`` with a
+    verification-unavailable warning rather than mis-declaring a crash.
+    Pass False to keep the legacy fire-and-forget behaviour.
     """
     if target == "device":
-        return _start_device(udid=udid, app_bundle_id=app_bundle_id)
+        return _start_device(
+            udid=udid,
+            app_bundle_id=app_bundle_id,
+            verify_launch=verify_launch,
+        )
 
     if udid:
         d = sim.find_device(udid=udid)
@@ -159,40 +206,65 @@ def _verify_launch(udid: str, bundle_id: str, launch_ts: float) -> Optional[dict
     the settle budget — the caller stamps these onto the Session and the
     tool surface so the agent sees the failure on the first roundtrip.
 
+    Crash declaration rules (review feedback, PR #144):
+      * `app_state` is a presence-based heuristic over `launchctl list`. A
+        single transient `not-running` (launchctl flake, race with the
+        forking guest process) is NOT enough to declare a crash.
+      * Require TWO CONSECUTIVE `not-running` polls before concluding
+        ``launched_then_exited``. Any `foreground` resets the streak.
+      * Per-poll exceptions are caught and retried — never propagate the
+        first `app_state` failure.
+
     Imports are local so this stays cheap for callers that pass
     ``verify_launch=False``.
     """
     from . import diagnostics as _diag
 
-    last_state = "not-running"
-    for attempt in range(_VERIFY_LAUNCH_ATTEMPTS):
+    attempts = _verify_launch_attempts()
+    last_state = "unknown"
+    consecutive_not_running = 0
+    crashed = False
+    for attempt in range(attempts):
         try:
             info = _diag.app_state(udid, bundle_id)
+            last_state = info.get("state", "not-running")
         except Exception:
-            info = {"state": "not-running", "bundle_id": bundle_id, "pid": None}
-        last_state = info.get("state", "not-running")
+            # Soft-fail on the underlying helper — DO NOT propagate.
+            # Treat as "unknown" so it neither confirms foreground nor
+            # advances the not-running streak; the next poll decides.
+            last_state = "unknown"
+
         if last_state == "foreground":
             return None
+        if last_state == "not-running":
+            consecutive_not_running += 1
+            if consecutive_not_running >= 2:
+                crashed = True
+                break
+        else:
+            # Any non-foreground, non-not-running result (e.g. "unknown" from
+            # a transient exception) does NOT advance the crash streak.
+            consecutive_not_running = 0
+
         # Don't sleep after the final poll — we're about to return.
-        if attempt < _VERIFY_LAUNCH_ATTEMPTS - 1:
+        if attempt < attempts - 1:
             time.sleep(_VERIFY_LAUNCH_SLEEP_S)
 
-    # Never reached foreground. Look for a crash report newer than launch.
-    crash_path: Optional[str] = None
-    try:
-        crashes = _diag.list_crashes(
-            since_ts=launch_ts,
-            bundle_id=bundle_id,
-            max_results=1,
-        )
-        if crashes:
-            crash_path = crashes[0].get("path")
-    except Exception:
-        crash_path = None
+    if not crashed:
+        # Budget exhausted without two consecutive not-running polls. The app
+        # is slow but apparently alive (or app_state is flaky). Don't declare
+        # a crash — leave the session active so the agent can proceed.
+        return None
 
-    budget_ms = int(
-        _VERIFY_LAUNCH_ATTEMPTS * _VERIFY_LAUNCH_SLEEP_S * 1000
-    )
+    # Two consecutive not-running polls = real crash. Look for a crash report
+    # newer than launch. ReportCrash writes asynchronously, so on a fresh
+    # miss retry once after a short flush window.
+    crash_path = _find_crash_report(_diag, launch_ts, bundle_id)
+    if crash_path is None:
+        time.sleep(_CRASH_REPORT_FLUSH_RETRY_S)
+        crash_path = _find_crash_report(_diag, launch_ts, bundle_id)
+
+    budget_ms = int(attempts * _VERIFY_LAUNCH_SLEEP_S * 1000)
     recovery = (
         f"App crashed within {budget_ms}ms of launch. "
         "See crash_report_path for stack."
@@ -205,7 +277,29 @@ def _verify_launch(udid: str, bundle_id: str, launch_ts: float) -> Optional[dict
     }
 
 
-def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
+def _find_crash_report(
+    diag_mod, launch_ts: float, bundle_id: str,
+) -> Optional[str]:
+    """Best-effort lookup of the most recent crash .ips for ``bundle_id`` since
+    ``launch_ts``. Returns the path string or None. Never raises."""
+    try:
+        crashes = diag_mod.list_crashes(
+            since_ts=launch_ts,
+            bundle_id=bundle_id,
+            max_results=1,
+        )
+    except Exception:
+        return None
+    if crashes:
+        return crashes[0].get("path")
+    return None
+
+
+def _start_device(
+    udid: Optional[str],
+    app_bundle_id: Optional[str],
+    verify_launch: bool = True,
+) -> Session:
     """Start a real-device WDA session.
 
     Reads the WDA registry entry written by ``simdrive bootstrap-device`` to
@@ -213,6 +307,13 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
     Session pointing at that endpoint.  Never calls ``devicectl list`` — the
     registry is the single source of truth for device connectivity once WDA has
     been bootstrapped.
+
+    ``verify_launch`` (F#2, review feedback PR #144): when True and a bundle
+    is provided, poll ``diagnostics.app_state_device`` after the launch using
+    the same 2-consecutive-not-running rule as the simulator path. If WDA /
+    devicectl can't answer (e.g. process list unavailable), gracefully fall
+    back to ``state="active"`` with a verification-unavailable warning rather
+    than misreport a crash.
     """
     from .wda import registry as wda_registry
     from .wda.client import WdaClient
@@ -247,6 +348,7 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
         state="active",
     )
 
+    launch_ts = time.time()
     if app_bundle_id:
         try:
             from . import device as _device_mod
@@ -276,8 +378,95 @@ def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:
         target="device",
         wda_client=wda,
     )
+
+    # F#2 — device launch verification using app_state_device (devicectl
+    # process list). If the helper can't answer (no DDI / older Xcode), we
+    # surface a warning rather than mis-declaring a crash.
+    if app_bundle_id and verify_launch:
+        result = _verify_launch_device(
+            hardware_udid, app_bundle_id, launch_ts,
+        )
+        if result is not None:
+            s.state = result["state"]
+            s.launch_verification = result  # type: ignore[attr-defined]
+
     _SESSIONS[sid] = s
     return s
+
+
+def _verify_launch_device(
+    hardware_udid: str, bundle_id: str, launch_ts: float,
+) -> Optional[dict]:
+    """Device counterpart to ``_verify_launch``.
+
+    Polls ``diagnostics.app_state_device`` (which scans devicectl's
+    process list). The success state for the device path is ``"running"``
+    rather than ``"foreground"`` — devicectl can't distinguish fg/bg.
+
+    Same 2-consecutive-not-running rule as the simulator path. If every
+    poll raises (e.g. DDI not mounted), returns a verification-unavailable
+    result with ``state="active"`` — we do NOT mis-declare a crash when
+    we simply can't see the process list.
+    """
+    from . import diagnostics as _diag
+
+    attempts = _verify_launch_attempts()
+    last_state = "unknown"
+    consecutive_not_running = 0
+    crashed = False
+    exception_streak = 0
+    for attempt in range(attempts):
+        try:
+            info = _diag.app_state_device(hardware_udid, bundle_id)
+            last_state = info.get("state", "not-running")
+            exception_streak = 0
+        except Exception:
+            last_state = "unknown"
+            exception_streak += 1
+
+        # Device helper returns "running" for foreground/background indistinct.
+        if last_state == "running":
+            return None
+        if last_state == "not-running":
+            consecutive_not_running += 1
+            if consecutive_not_running >= 2:
+                crashed = True
+                break
+        else:
+            consecutive_not_running = 0
+
+        if attempt < attempts - 1:
+            time.sleep(_VERIFY_LAUNCH_SLEEP_S)
+
+    # If every poll raised we have no real signal — fall back to active with
+    # a warning rather than claim a crash we never observed.
+    if exception_streak >= attempts:
+        return {
+            "state": "active",
+            "crash_report_path": None,
+            "recovery": (
+                "Launch verification unavailable on this device "
+                "(devicectl process list could not be queried). "
+                "Session is active but the launch was not verified."
+            ),
+            "last_observed_state": last_state,
+            "verification_available": False,
+        }
+
+    if not crashed:
+        return None
+
+    budget_ms = int(attempts * _VERIFY_LAUNCH_SLEEP_S * 1000)
+    recovery = (
+        f"App appears to have exited within {budget_ms}ms of launch on the "
+        "real device. Pull a sysdiagnose / crash log via Xcode → Devices."
+    )
+    return {
+        "state": "launched_then_exited",
+        "crash_report_path": None,  # devicectl doesn't surface .ips on-device
+        "recovery": recovery,
+        "last_observed_state": last_state,
+    }
 
 
 def get(session_id: str) -> Session:
