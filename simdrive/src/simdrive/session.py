@@ -37,6 +37,11 @@ class Session:
     started_at: float = field(default_factory=time.time)  # used by `crashes` to filter .ips by mtime
     wda_client: Optional[object] = None  # WdaClient instance for target="device" sessions
     pixel_per_point_scale: Optional[float] = None  # cached px/pt scale for WDA coord conversion (F-002/F-006)
+    # F#2 — populated when session_start launches an app and verify_launch
+    # detects it never reached foreground (i.e. crashed during settle). The
+    # tool surface lifts these into the session_start response so the agent
+    # sees the failure on the first roundtrip instead of after multiple taps.
+    launch_verification: Optional[dict] = None
 
 
 def _workroot() -> Path:
@@ -61,17 +66,34 @@ def append_action(s: "Session", record: dict) -> None:
         pass  # never fail the act tool because of audit logging
 
 
+# F#2 — launch-verification settle parameters. Total budget: ~1500 ms.
+# Five attempts of 300 ms each so a fast app exits the loop on the first
+# poll while an immediate-crash case still surfaces within ~1.5s instead
+# of returning a misleading state="active".
+_VERIFY_LAUNCH_ATTEMPTS = 5
+_VERIFY_LAUNCH_SLEEP_S = 0.3
+
+
 def start(
     device_name: Optional[str] = None,
     os_version: Optional[str] = None,
     udid: Optional[str] = None,
     app_bundle_id: Optional[str] = None,
     target: str = "simulator",
+    verify_launch: bool = True,
 ) -> Session:
     """Find or boot a sim/device, start a session.
 
     target="simulator" (default): existing simulator behavior.
     target="device": resolve a connected real device by udid.
+
+    verify_launch (F#2): when True (default) and ``app_bundle_id`` is
+    provided, poll ``diagnostics.app_state`` up to 5×300 ms after
+    ``sim.launch_app``. The Session is created either way, but its
+    ``state`` will be set to ``"launched_then_exited"`` (with a
+    ``crash_report_path`` populated from the most recent .ips for the
+    bundle) when the app never reaches foreground. Pass False to keep
+    the legacy fire-and-forget behaviour.
     """
     if target == "device":
         return _start_device(udid=udid, app_bundle_id=app_bundle_id)
@@ -96,6 +118,7 @@ def start(
         if refreshed:
             d = refreshed
 
+    launch_ts = time.time()
     if app_bundle_id:
         try:
             sim.launch_app(d.udid, app_bundle_id)
@@ -112,8 +135,74 @@ def start(
         app_bundle_id=app_bundle_id,
         target="simulator",
     )
+
+    # F#2 — verify the launched app actually reached foreground. Without
+    # this, an app that crashes within ~500 ms of launch (e.g. missing
+    # entitlement) yielded state="active" and burned multiple agent
+    # roundtrips before the failure was visible.
+    if app_bundle_id and verify_launch:
+        result = _verify_launch(d.udid, app_bundle_id, launch_ts)
+        if result is not None:
+            s.state = result["state"]
+            s.launch_verification = result  # type: ignore[attr-defined]
+
     _SESSIONS[sid] = s
     return s
+
+
+def _verify_launch(udid: str, bundle_id: str, launch_ts: float) -> Optional[dict]:
+    """Poll app_state to confirm the launched app reached foreground.
+
+    Returns None on success (caller leaves state="active" alone). Returns
+    a dict ``{"state": "launched_then_exited", "crash_report_path": ...,
+    "recovery": "..."}`` when the app never reached foreground within
+    the settle budget — the caller stamps these onto the Session and the
+    tool surface so the agent sees the failure on the first roundtrip.
+
+    Imports are local so this stays cheap for callers that pass
+    ``verify_launch=False``.
+    """
+    from . import diagnostics as _diag
+
+    last_state = "not-running"
+    for attempt in range(_VERIFY_LAUNCH_ATTEMPTS):
+        try:
+            info = _diag.app_state(udid, bundle_id)
+        except Exception:
+            info = {"state": "not-running", "bundle_id": bundle_id, "pid": None}
+        last_state = info.get("state", "not-running")
+        if last_state == "foreground":
+            return None
+        # Don't sleep after the final poll — we're about to return.
+        if attempt < _VERIFY_LAUNCH_ATTEMPTS - 1:
+            time.sleep(_VERIFY_LAUNCH_SLEEP_S)
+
+    # Never reached foreground. Look for a crash report newer than launch.
+    crash_path: Optional[str] = None
+    try:
+        crashes = _diag.list_crashes(
+            since_ts=launch_ts,
+            bundle_id=bundle_id,
+            max_results=1,
+        )
+        if crashes:
+            crash_path = crashes[0].get("path")
+    except Exception:
+        crash_path = None
+
+    budget_ms = int(
+        _VERIFY_LAUNCH_ATTEMPTS * _VERIFY_LAUNCH_SLEEP_S * 1000
+    )
+    recovery = (
+        f"App crashed within {budget_ms}ms of launch. "
+        "See crash_report_path for stack."
+    )
+    return {
+        "state": "launched_then_exited",
+        "crash_report_path": crash_path,
+        "recovery": recovery,
+        "last_observed_state": last_state,
+    }
 
 
 def _start_device(udid: Optional[str], app_bundle_id: Optional[str]) -> Session:

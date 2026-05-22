@@ -302,6 +302,10 @@ def tool_session_start(arguments: dict) -> dict:
     app_bundle_id = arguments.get("app_bundle_id")
     target = arguments.get("target", "simulator")
     replace_existing = bool(arguments.get("replace_existing", False))
+    # F#2 — verify the launched app reached foreground before returning
+    # state="active". Default True; pass False to keep the legacy
+    # fire-and-forget behaviour.
+    verify_launch = bool(arguments.get("verify_launch", True))
     if target not in ("simulator", "device"):
         raise errors.invalid_argument("target", target,
                                        "must be 'simulator' or 'device'")
@@ -336,8 +340,9 @@ def tool_session_start(arguments: dict) -> dict:
     s = session.start(
         device_name=device_name, os_version=os_version, udid=udid,
         app_bundle_id=app_bundle_id, target=target,
+        verify_launch=verify_launch,
     )
-    return {
+    out = {
         "session_id": s.session_id,
         "udid": s.device.udid,
         "device": s.device.name,
@@ -346,6 +351,14 @@ def tool_session_start(arguments: dict) -> dict:
         "state": s.state,
         "target": s.target,
     }
+    # F#2 — surface launch-verification failure on the session_start
+    # response so the agent sees the crash on the first roundtrip
+    # instead of after multiple blind tap/type calls.
+    if getattr(s, "launch_verification", None):
+        lv = s.launch_verification
+        out["crash_report_path"] = lv.get("crash_report_path")
+        out["recovery"] = lv.get("recovery")
+    return out
 
 
 def tool_session_end(arguments: dict) -> dict:
@@ -1767,7 +1780,13 @@ _TOOLS: list[dict] = [
         "name": "session_start",
         "description": (
             "(sim + device) Boot/find an iOS simulator (or attach to a real device), optionally "
-            "launch an app, and start a simdrive session. Returns session_id."
+            "launch an app, and start a simdrive session. Returns session_id.\n\n"
+            "When app_bundle_id is provided and verify_launch is True (default), simdrive polls "
+            "app_state for up to 1500 ms (5x300 ms) after launch. If the app reaches foreground "
+            "state='active' is returned; if it never does (e.g. crashes within the settle window) "
+            "state='launched_then_exited' is returned along with crash_report_path (most recent .ips "
+            "matching the bundle) and a recovery hint. Pass verify_launch=False to keep the legacy "
+            "fire-and-forget behaviour."
         ),
         "inputSchema": {
             "type": "object",
@@ -1779,6 +1798,7 @@ _TOOLS: list[dict] = [
                 "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
                 "app_bundle_id": {"type": "string", "description": "Optional bundle id to launch after boot, e.g. 'com.apple.Preferences'."},
                 "replace_existing": {"type": "boolean", "default": False, "description": "When True, end any existing session for the same UDID before starting a new one (app stays foreground). Avoids the 'session already active' error on reconnect."},
+                "verify_launch": {"type": "boolean", "default": True, "description": "When True (default) and app_bundle_id is provided, poll app_state up to 5x300 ms after launch. If the app never reaches foreground, return state='launched_then_exited' with crash_report_path and recovery hint instead of misleadingly returning state='active' for a crashed process. Pass False to skip the poll (legacy fire-and-forget)."},
             },
         },
         "handler": tool_session_start,
