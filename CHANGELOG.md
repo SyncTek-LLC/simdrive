@@ -1359,6 +1359,16 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ## [Unreleased]
 
+### Fixed
+- **F#11 (simdrive recording): `type_text` now persists `tap_first` focus context.**
+  Previously, `type_text(text="...", tap_first={text:"..."})` was recorded as
+  only `{text: "..."}` — the `tap_first` (and `clear_first`) kwargs were dropped
+  at record time, so multi-field forms could not be faithfully replayed. The
+  recording schema is additive: pre-fix recordings without `tap_first` continue
+  to replay unchanged. On replay, an `args.tap_first` triggers a focus tap
+  against the live-resolved target before the `type_text` dispatches — same
+  call sequence as record. Affects both sim and device replay paths.
+
 ## v11.5.0 (2026-04-12)
 
 ### Critical
