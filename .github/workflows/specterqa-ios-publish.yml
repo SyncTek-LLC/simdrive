@@ -111,16 +111,48 @@ jobs:
           ls -la dist/
           twine check dist/*
 
-      - name: Fresh-venv install smoke test
+      - name: Fresh-venv install smoke test (core deps only — no extras)
+        # This is the gate that should have caught the b2/b3 fastapi regression
+        # (F-B3-007). Pre-fix the smoke ran `simdrive --version || python -c
+        # "import simdrive; ..."` — the OR-fallback masked the real failure
+        # because the bare-package `import simdrive` works (just sets
+        # __version__) while `import simdrive.server` was broken.
+        #
+        # Post-fix: NO fallback. Three explicit checks that mirror the real
+        # user surface — CLI entry, server module import, tool registry shape.
+        # If any one fails, the publish is blocked.
         run: |
           set -euo pipefail
           rm -rf /tmp/simdrive-smoke-venv
           python -m venv /tmp/simdrive-smoke-venv
           /tmp/simdrive-smoke-venv/bin/pip install --upgrade pip
           /tmp/simdrive-smoke-venv/bin/pip install dist/*.whl
-          # `simdrive --version` should print the version we just published.
-          /tmp/simdrive-smoke-venv/bin/simdrive --version || \
-            /tmp/simdrive-smoke-venv/bin/python -c "import simdrive; print(simdrive.__version__)"
+
+          echo "::group::Check 1: CLI entry works (no extras)"
+          /tmp/simdrive-smoke-venv/bin/simdrive --version
+          echo "::endgroup::"
+
+          echo "::group::Check 2: simdrive.server is importable (no extras)"
+          /tmp/simdrive-smoke-venv/bin/python -c "
+          import simdrive.server
+          assert hasattr(simdrive.server, 'serve'), 'simdrive.server.serve must exist'
+          print('simdrive.server imports cleanly')
+          "
+          echo "::endgroup::"
+
+          echo "::group::Check 3: tool registry intact"
+          /tmp/simdrive-smoke-venv/bin/python -c "
+          from simdrive import server
+          tools = server.list_tools()
+          assert len(tools) >= 33, f'expected >=33 tools, got {len(tools)}'
+          names = [t['name'] for t in tools]
+          required = {'session_start','observe','tap','swipe','type_text',
+                      'tap_and_wait_keyboard','clear_field','dismiss_sheet'}
+          missing = required - set(names)
+          assert not missing, f'missing critical tools: {missing}'
+          print(f'tool registry healthy: {len(tools)} tools, all required present')
+          "
+          echo "::endgroup::"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

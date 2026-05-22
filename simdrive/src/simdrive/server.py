@@ -809,6 +809,14 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
     _entitlement_gate()
     tap_response = tool_tap(arguments)
     time.sleep(_KEYBOARD_SETTLE_SEC)
+    # Upgrade the just-recorded step's action so replays preserve the
+    # tap-and-wait-for-keyboard semantic. Without this, the recorder
+    # serializes the underlying tool_tap call as a bare 'tap' and the
+    # replay taps-then-immediately-acts (F-B3-010, Palace b3 dogfood).
+    s = session.get(arguments["session_id"])
+    step_id = tap_response.get("step_id")
+    if step_id is not None and s.recorder is not None:
+        s.recorder.upgrade_step_action(step_id, "tap_and_wait_keyboard")
     observe_response = tool_observe({
         "session_id": arguments["session_id"],
         # Default to annotate=True so the agent can spot the keyboard marks.
@@ -1031,6 +1039,20 @@ def tool_type_text(arguments: dict) -> dict:
         "keyboard_visible": keyboard_visible,
         "focused_field": focused_field,
     }
+    # b4 — disambiguate the false-negative case Palace b3 dogfood surfaced
+    # (F-B3-011). When dispatch_succeeded but the post-type observe failed to
+    # find keyboard chrome, the keyboard most likely auto-collapsed on commit
+    # (instant-search fields, single-line accept-on-Return inputs). Surface a
+    # structured reason so agents can disambiguate "dispatch failed silently"
+    # from "dispatch succeeded; the keyboard just isn't there anymore" — the
+    # latter does NOT require a retry.
+    if dispatch_succeeded and not keyboard_visible:
+        response["keyboard_visible_reason"] = (
+            "dispatched_but_keyboard_not_detected_post_type — keystrokes landed "
+            "(dispatch_succeeded=true); the absent keyboard chrome usually means "
+            "the field auto-committed and dismissed (e.g. instant-search). "
+            "Treat dispatch_succeeded as ground truth; do NOT retry on this signal."
+        )
     if step_id is not None:
         response["step_id"] = step_id
     return response
@@ -1529,6 +1551,10 @@ def tool_clear_field(arguments: dict) -> dict:
     from . import hid_inject
     s = session.get(arguments["session_id"])
     target = arguments.get("target")
+    # Capture pre-state so the recorder can serialize a clear_field step with a
+    # "before" screenshot. Without this, b3 Palace dogfood reported that
+    # clear_field calls were entirely absent from recording.yaml — F-B3-009.
+    pre_path = s.last_screenshot_path
 
     if s.target == "device":
         # Prefer the session-stored WdaClient so we reuse the open WDA session_id
@@ -1543,13 +1569,20 @@ def tool_clear_field(arguments: dict) -> dict:
             time.sleep(_FOCUS_SETTLE_SEC)
         wda.clear_field()
         s.last_action_at = _now()
+        clear_args: dict = {"target": target}
+        step_id = None
+        if pre_path:
+            step_id = _record_act_step(s, "clear_field", clear_args, pre_path)
         session.append_action(s, {
             "action": "clear_field",
-            "args": {"target": target},
+            "args": clear_args,
             "backend": "wda",
             "at": _now(),
         })
-        return {"ok": True, "cleared": True}
+        resp: dict = {"ok": True, "cleared": True}
+        if step_id is not None:
+            resp["step_id"] = step_id
+        return resp
 
     if target:
         sw, sh = _ensure_screenshot_dims(s)
@@ -1568,12 +1601,21 @@ def tool_clear_field(arguments: dict) -> dict:
         )
         cleared = False
     s.last_action_at = _now()
+    clear_args = {"target": target}
+    step_id = None
+    if pre_path and cleared:
+        # Only record successful clears — a failed HID dispatch shouldn't pollute
+        # the replay stream with a "clear" step that wasn't actually a clear.
+        step_id = _record_act_step(s, "clear_field", clear_args, pre_path)
     session.append_action(s, {
         "action": "clear_field",
-        "args": {"target": target},
+        "args": clear_args,
         "at": _now(),
     })
-    return {"ok": cleared, "cleared": cleared}
+    response: dict = {"ok": cleared, "cleared": cleared}
+    if step_id is not None:
+        response["step_id"] = step_id
+    return response
 
 
 # ─── SimDrive 1.0 — Journey runner MCP tool ──────────────────────────── #

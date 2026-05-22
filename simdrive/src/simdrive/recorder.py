@@ -447,6 +447,24 @@ class Recorder:
         self.steps.append(step)
         return idx
 
+    def upgrade_step_action(self, step_id: int, new_action: str) -> bool:
+        """Upgrade a previously-recorded step's `action` field in place.
+
+        Used by composite MCP tools (e.g. ``tap_and_wait_keyboard``) that
+        delegate to an underlying primitive (``tap``) which records itself
+        as the primitive — without this, the composite's semantics are
+        silently stripped on serialization and the replay tap-then-acts
+        instead of tap-then-waits (F-B3-010, Palace b3 dogfood 2026-05-22).
+
+        Returns True when the step was found and upgraded; False otherwise
+        (caller can decide whether to log — typical pattern is best-effort).
+        """
+        for step in self.steps:
+            if step.get("id") == step_id:
+                step["action"] = new_action
+                return True
+        return False
+
     def finalize(self) -> Path:
         from . import __version__
         self.root.mkdir(parents=True, exist_ok=True)
