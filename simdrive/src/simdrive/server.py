@@ -2259,6 +2259,10 @@ Usage: simdrive (no args)   Run as MCP server on stdio.
        simdrive --version
        simdrive --help
 
+Onboarding:
+  simdrive demo               30-second sanity check: boots iPhone sim, opens
+                              Settings, observes the screen, prints a summary.
+
 SimDrive journey subcommands:
   simdrive run  --session-id <id> --journey <path> [--persona-override <path>]
                 [--budget-override max_steps=N,max_seconds=N,max_llm_calls=N]
@@ -2722,8 +2726,23 @@ def _cmd_auth(args: list[str]) -> None:
         sys.exit(1)
 
 
+def _cmd_demo(args: list[str]) -> None:
+    """Handle `simdrive demo` — onboarding sanity check (boot sim, open Settings, observe)."""
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive demo",
+        description="30-second sanity check: boot iPhone sim, open Settings, observe.",
+    )
+    ns = parser.parse_args(args)
+    from simdrive._demo import run_demo
+    sys.exit(run_demo(ns))
+
+
 # Subcommand dispatch registry — maps the first CLI argument to its handler.
 _SUBCOMMANDS: dict = {
+    "demo": _cmd_demo,
     "run": _cmd_run,
     "ci": _cmd_ci,
     "bootstrap-device": _cmd_bootstrap_device,
