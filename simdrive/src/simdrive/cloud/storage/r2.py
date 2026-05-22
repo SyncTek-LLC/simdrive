@@ -28,10 +28,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import boto3
-from botocore.exceptions import ClientError
-
-
 class R2Client:
     """boto3-backed Cloudflare R2 object storage client.
 
@@ -53,6 +49,21 @@ class R2Client:
         endpoint_url: Optional[str] = None,
         region_name: str = "auto",
     ) -> None:
+        # WHY lazy import: boto3 is a production cloud dep, not a dev dep.
+        # Importing at module level breaks `from simdrive.cloud.storage.r2 import
+        # create_storage_backend` in test environments where boto3 is absent.
+        # R2Client is only instantiated when R2 env vars are present, so the
+        # import is deferred until it is actually needed.
+        try:
+            import boto3 as _boto3
+            from botocore.exceptions import ClientError as _ClientError
+        except ImportError as exc:  # pragma: no cover
+            raise ImportError(
+                "boto3 is required to use R2Client. "
+                "Install it with: pip install boto3"
+            ) from exc
+        self._boto3 = _boto3
+        self._ClientError = _ClientError
         self._bucket = bucket
 
         # endpoint_url resolution:
@@ -68,7 +79,7 @@ class R2Client:
         else:
             resolved_endpoint = endpoint_url
 
-        self._s3 = boto3.client(
+        self._s3 = self._boto3.client(
             "s3",
             endpoint_url=resolved_endpoint,
             aws_access_key_id=access_key_id,
@@ -89,7 +100,7 @@ class R2Client:
         try:
             response = self._s3.get_object(Bucket=self._bucket, Key=key)
             return response["Body"].read()
-        except ClientError as exc:
+        except self._ClientError as exc:
             if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
                 return None
             raise
@@ -128,7 +139,7 @@ class R2Client:
         # Verify existence before generating URL
         try:
             self._s3.head_object(Bucket=self._bucket, Key=key)
-        except ClientError as exc:
+        except self._ClientError as exc:
             if exc.response["Error"]["Code"] in ("404", "NoSuchKey"):
                 raise FileNotFoundError(f"R2Client: object not found for key {key!r}") from exc
             raise
