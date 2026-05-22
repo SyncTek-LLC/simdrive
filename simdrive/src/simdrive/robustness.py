@@ -93,8 +93,15 @@ _KNOWN_OPTIONAL_KEYS = {
 }
 
 
-def list_replays(replays_root: Path) -> list[dict]:
-    """Surface all recordings under `replays_root/<name>/recording.yaml` with metadata."""
+def list_replays(replays_root: Path, min_steps: int = 1) -> list[dict]:
+    """Surface recordings under `replays_root/<name>/recording.yaml` with metadata.
+
+    Args:
+        replays_root: Root directory containing recording subdirectories.
+        min_steps: Minimum number of steps a recording must have to be included.
+            Default is 1, which filters out 0-step placeholder recordings.
+            Pass 0 to include all recordings.
+    """
     if not replays_root.exists():
         return []
     out: list[dict] = []
@@ -106,6 +113,10 @@ def list_replays(replays_root: Path) -> list[dict]:
             continue
         if not isinstance(data, dict):
             continue
+        step_count = len(data.get("steps") or [])
+        # F#13: filter out 0-step placeholder entries by default.
+        if step_count < min_steps:
+            continue
         try:
             stat = recording_yaml.stat()
         except OSError:
@@ -113,7 +124,7 @@ def list_replays(replays_root: Path) -> list[dict]:
         out.append({
             "name": data.get("name", recording_yaml.parent.name),
             "path": str(recording_yaml),
-            "steps": len(data.get("steps") or []),
+            "steps": step_count,
             "created_at": data.get("created_at"),
             "modified_at": stat.st_mtime,
             "simdrive_version": data.get("simdrive_version", ""),

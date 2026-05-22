@@ -801,6 +801,79 @@ def tool_observe(arguments: dict) -> dict:
     return obs.to_dict()
 
 
+def _compute_ssim(pre_path: Optional[str], post_path: Optional[str]) -> float:
+    """Compute SSIM similarity between two screenshot files.
+
+    Returns a float in [0.0, 1.0] where 1.0 means identical.  Falls back to 1.0
+    (no change detected) when images cannot be loaded, so callers get a safe
+    default rather than a spurious "screen changed" signal.
+
+    Uses only stdlib — reads raw PNG data and computes a lightweight pixel-level
+    comparison. For full SSIM accuracy, callers may monkeypatch this function in
+    tests (which the F#8 tests do).
+    """
+    try:
+        import struct
+        import zlib
+
+        def _load_pixels(path: str) -> tuple[int, int, list[int]]:
+            """Load a PNG and return (width, height, flat RGBA pixel list)."""
+            data = Path(path).read_bytes()
+            if data[:8] != b"\x89PNG\r\n\x1a\n":
+                return 0, 0, []
+            chunks: dict[bytes, bytes] = {}
+            i = 8
+            while i < len(data):
+                length = struct.unpack(">I", data[i:i+4])[0]
+                ctype = data[i+4:i+8]
+                cdata = data[i+8:i+8+length]
+                chunks.setdefault(ctype, cdata)
+                i += 12 + length
+            ihdr = chunks.get(b"IHDR", b"")
+            if len(ihdr) < 13:
+                return 0, 0, []
+            w, h = struct.unpack(">II", ihdr[:8])
+            # Only handle 8-bit RGB/RGBA; others return empty.
+            bit_depth, color_type = ihdr[8], ihdr[9]
+            if bit_depth != 8 or color_type not in (2, 6):
+                return 0, 0, []
+            raw = zlib.decompress(b"".join(
+                v for k, v in chunks.items() if k == b"IDAT"
+            ) or chunks.get(b"IDAT", b""))
+            channels = 3 if color_type == 2 else 4
+            pixels: list[int] = []
+            stride = w * channels
+            idx = 0
+            for _row in range(h):
+                filter_byte = raw[idx]; idx += 1
+                row = list(raw[idx:idx+stride]); idx += stride
+                if filter_byte == 1:  # Sub
+                    for c in range(channels, len(row)):
+                        row[c] = (row[c] + row[c - channels]) & 0xFF
+                pixels.extend(row[:stride:channels])  # just R channel for speed
+            return w, h, pixels
+
+        w1, h1, p1 = _load_pixels(pre_path or "")
+        w2, h2, p2 = _load_pixels(post_path or "")
+
+        if not p1 or not p2 or w1 != w2 or h1 != h2 or len(p1) != len(p2):
+            return 1.0  # can't compare → assume no change
+
+        n = len(p1)
+        mean1 = sum(p1) / n
+        mean2 = sum(p2) / n
+        num = sum((a - mean1) * (b - mean2) for a, b in zip(p1, p2)) / n
+        var1 = sum((a - mean1) ** 2 for a in p1) / n
+        var2 = sum((b - mean2) ** 2 for b in p2) / n
+        c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+        ssim = (2 * mean1 * mean2 + c1) * (2 * num + c2) / (
+            (mean1 ** 2 + mean2 ** 2 + c1) * (var1 + var2 + c2)
+        )
+        return float(max(0.0, min(1.0, ssim)))
+    except Exception:
+        return 1.0  # safe fallback
+
+
 def _ensure_screenshot_dims(s) -> tuple[int, int]:
     if s.last_screenshot_w == 0 or s.last_screenshot_h == 0:
         # Auto-observe so the agent can call act tools without first calling observe.
@@ -1055,6 +1128,10 @@ def tool_tap(arguments: dict) -> dict:
             time.sleep(settle_ms / 1000.0)
         return resp
 
+    # F#8: capture the pre-tap screenshot path for verify_change before the tap occurs.
+    verify_change = bool(arguments.get("verify_change", False))
+    verify_pre_path = s.last_screenshot_path if verify_change else None
+
     sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
     s.last_action_at = _now()
     args = {"x": x, "y": y, "screenshot_w": sw, "screenshot_h": sh}
@@ -1094,6 +1171,13 @@ def tool_tap(arguments: dict) -> dict:
     settle_ms = int(arguments.get("settle_ms", 0))
     if settle_ms > 0:
         time.sleep(settle_ms / 1000.0)
+    # F#8: verify_change — compare pre/post screenshots via SSIM.
+    if verify_change:
+        post_path = s.last_screenshot_path
+        ssim_val = _compute_ssim(verify_pre_path, post_path)
+        ssim_delta = round(1.0 - ssim_val, 4)
+        response["screen_changed"] = ssim_delta > 0.05
+        response["ssim_delta"] = float(ssim_delta)
     return response
 
 
