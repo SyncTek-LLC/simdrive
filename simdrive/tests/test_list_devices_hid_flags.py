@@ -180,3 +180,54 @@ def test_hid_note_mentions_bootstrap_device(registry_dir):
     assert "bootstrap" in hid_note.lower() or "bootstrap-device" in hid_note, (
         f"hid_note does not mention 'bootstrap' or 'bootstrap-device': {hid_note!r}"
     )
+
+
+# ── compact mode ────────────────────────────────────────────────────────────
+
+
+def test_list_devices_compact_slims_per_device_entries(registry_dir):
+    """compact=true must drop diagnostic per-device fields (model, transport,
+    last_seen, unavailable_reason), keeping only {udid, name, state, hid_supported}.
+    """
+    udid = "00008150-COMPACT01"
+    _write_registry(registry_dir, udid)
+    device_mock = _make_real_device(udid)
+
+    with (
+        patch("simdrive.device.list_devices", return_value=[device_mock]),
+        patch("simdrive.device.libimobiledevice_available", return_value=(True, [])),
+    ):
+        from simdrive.server import tool_list_devices
+        result = tool_list_devices({"compact": True})
+
+    dev = result["devices"][0]
+    assert set(dev.keys()) == {"udid", "name", "state", "hid_supported"}
+    # Top-level diagnostic fields also dropped in compact mode.
+    assert "libimobiledevice_ready" not in result
+    assert "missing_tools" not in result
+    assert "hid_note" not in result
+    # Functional fields preserved.
+    assert result["ok"] is True
+    assert dev["udid"] == udid
+    assert dev["hid_supported"] is True
+
+
+def test_list_devices_default_keeps_full_payload(registry_dir):
+    """compact=false (default) must return the legacy shape unchanged."""
+    udid = "00008150-FULLDEF01"
+    _write_registry(registry_dir, udid)
+    device_mock = _make_real_device(udid)
+
+    with (
+        patch("simdrive.device.list_devices", return_value=[device_mock]),
+        patch("simdrive.device.libimobiledevice_available", return_value=(True, [])),
+    ):
+        from simdrive.server import tool_list_devices
+        result = tool_list_devices({})
+
+    dev = result["devices"][0]
+    # Full key set present.
+    assert {"udid", "name", "model", "transport", "state",
+            "hid_supported", "last_seen", "unavailable_reason"} <= set(dev.keys())
+    assert "hid_note" in result
+    assert "libimobiledevice_ready" in result
