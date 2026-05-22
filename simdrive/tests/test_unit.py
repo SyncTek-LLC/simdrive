@@ -36,7 +36,7 @@ def test_tool_count_is_thirty_two():
                        + lint_recordings + migrate_recording (a9.1) = 32
     """
     tools = server.list_tools()
-    assert len(tools) == 32, f"expected 32 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 33, f"expected 33 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -57,6 +57,8 @@ def test_tool_names_match_spec():
         "load_journey",
         # SimDrive a9.1 — recording state-contract maintenance tools
         "lint_recordings", "migrate_recording",
+        # SimDrive 1.0.0b3 polish — atomic tap+settle+observe composite
+        "tap_and_wait_keyboard",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
