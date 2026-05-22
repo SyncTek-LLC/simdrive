@@ -800,11 +800,13 @@ def stop(session: Session) -> Path:
 @dataclass
 class LintResult:
     path: Path
-    status: str   # "ok" | "fail"
+    status: str   # "ok" | "fail" | "empty"
     reason: str = ""
     text_mark_count: int = 0
     app_bundle_id: Optional[str] = None
     sim_device: Optional[str] = None
+    # F#16: category distinguishes failure types — "ok" | "empty" | "missing_state_contract"
+    category: str = "ok"
 
     def to_dict(self) -> dict:
         return {
@@ -814,6 +816,7 @@ class LintResult:
             "text_mark_count": self.text_mark_count,
             "app_bundle_id": self.app_bundle_id,
             "sim_device": self.sim_device,
+            "category": self.category,
         }
 
 
@@ -835,26 +838,43 @@ def _lint_one(yaml_path: Path) -> LintResult:
     try:
         payload = yaml.safe_load(yaml_path.read_text())
     except yaml.YAMLError as exc:
-        return LintResult(path=yaml_path, status="fail", reason=f"yaml parse error: {exc}")
+        return LintResult(path=yaml_path, status="fail", reason=f"yaml parse error: {exc}",
+                          category="fail")
     except OSError as exc:
-        return LintResult(path=yaml_path, status="fail", reason=f"read error: {exc}")
+        return LintResult(path=yaml_path, status="fail", reason=f"read error: {exc}",
+                          category="fail")
 
     if not isinstance(payload, dict):
         return LintResult(path=yaml_path, status="fail",
-                          reason="recording.yaml did not parse to a mapping")
+                          reason="recording.yaml did not parse to a mapping",
+                          category="fail")
 
     requires_raw = payload.get("requires")
+    steps = payload.get("steps") or []
+
+    # F#16: 0-step recordings with no requires block are placeholders — categorize
+    # as 'empty' (not 'fail'). Recordings with steps still follow normal lint rules.
+    # 0-step recordings that DO have a requires block fall through to normal lint.
+    if len(steps) == 0 and requires_raw is None:
+        return LintResult(
+            path=yaml_path,
+            status="empty",
+            reason="recording has no steps (placeholder)",
+            category="empty",
+        )
     if requires_raw is None:
         return LintResult(
             path=yaml_path,
             status="fail",
             reason=f"no requires block — run `simdrive migrate-recording {yaml_path.parent.name}` to capture one",
+            category="missing_state_contract",
         )
 
     block = RequiresBlock.from_dict(requires_raw)
     if block is None:
         return LintResult(path=yaml_path, status="fail",
-                          reason="malformed requires block (not a mapping)")
+                          reason="malformed requires block (not a mapping)",
+                          category="missing_state_contract")
 
     return LintResult(
         path=yaml_path,
@@ -862,6 +882,7 @@ def _lint_one(yaml_path: Path) -> LintResult:
         text_mark_count=len(block.initial_state.text_subset_required),
         app_bundle_id=block.app.bundle_id,
         sim_device=block.sim.device,
+        category="ok",
     )
 
 
