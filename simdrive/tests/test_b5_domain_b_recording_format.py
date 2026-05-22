@@ -141,13 +141,17 @@ def _write_recording_yaml(dir_: Path, *, requires=None, steps=None,
 class TestF11TypeTextTapFirstPersisted:
     """F#11: type_text with tap_first must serialize the full args dict."""
 
-    def test_record_act_step_includes_tap_first_in_args(self, tmp_path, monkeypatch):
-        """_record_act_step for type_text stores tap_first alongside text in step args.
+    def test_record_act_step_persists_full_args_including_tap_first(self, tmp_path, monkeypatch):
+        """_record_act_step correctly stores arbitrary args dict including tap_first.
 
-        Current behaviour: only {"text": text} is recorded; tap_first is dropped.
-        Expected behaviour: {"text": text, "tap_first": <target>} is persisted.
+        Regression guard: confirms that when tool_type_text passes the full rec_args
+        dict (text + tap_first), the step is recorded with both fields intact.
 
-        RED: will fail because server._record_act_step passes {"text": text} only.
+        F#11 FIX (PR #146): tool_type_text now builds rec_args = {"text": text,
+        "tap_first": tap_target} before calling _record_act_step. This test confirms
+        that shape is preserved end-to-end through the recorder.
+
+        REGRESSION: GREEN — confirm fix is in place.
         """
         from simdrive import session as session_mod, server
 
@@ -167,23 +171,25 @@ class TestF11TypeTextTapFirstPersisted:
         )
         monkeypatch.setattr("simdrive.observe.observe", lambda *a, **kw: fake_obs)
 
-        # The tap_first target that SHOULD be recorded alongside the text.
+        # Call _record_act_step with the FIXED args dict (including tap_first).
+        # This mirrors what tool_type_text now does after the F#11 fix.
         tap_first_target = {"text": "you@example.com"}
-
-        # Call _record_act_step directly with what tool_type_text currently passes
-        # (only {"text": text}, omitting tap_first — that is the bug F#11).
-        server._record_act_step(s, "type_text", {"text": "dogfood@synctek.io"}, pre_png)
+        server._record_act_step(
+            s, "type_text",
+            {"text": "dogfood@synctek.io", "tap_first": tap_first_target},
+            pre_png,
+        )
 
         # Find the step that was recorded.
         assert len(rec.steps) == 1, "Expected exactly one step recorded"
         step = rec.steps[0]
         assert step["action"] == "type_text"
-        # F#11: tap_first MUST be present in the recorded args.
-        # Currently fails because _record_act_step is called with {"text": text} only.
+        # Regression: tap_first must survive the _record_act_step → add_step chain.
         assert "tap_first" in step["args"], (
-            "F#11: tap_first is missing from recorded step args — "
+            "F#11 regression: tap_first dropped by _record_act_step — "
             "recording.yaml will not be able to replay the focus context"
         )
+        assert step["args"]["tap_first"] == tap_first_target
 
     def test_tool_type_text_step_args_includes_tap_first(self, tmp_path, monkeypatch):
         """tool_type_text must pass tap_first into the step args when recording.
@@ -245,11 +251,14 @@ class TestF11TypeTextTapFirstPersisted:
         )
 
     def test_replay_parser_accepts_and_passes_tap_first(self, tmp_path, monkeypatch):
-        """Replay engine must read tap_first from step args and execute it.
+        """Replay engine reads tap_first from step args and taps the focus target.
 
-        RED: will fail because _execute_step / _execute_step_for_session ignores tap_first.
+        Regression guard: confirms F#11 fix — the sim path in _execute_step_for_session
+        now calls _resolve_focus_target and act.tap when tap_first is present.
+
+        REGRESSION: GREEN — confirm fix is in place.
         """
-        from simdrive import recorder as recorder_mod, session as session_mod
+        from simdrive import recorder as recorder_mod, session as session_mod, som
 
         sid = "f11-replay-tap-first"
         s = _make_sim_session(tmp_path, sid)
@@ -320,28 +329,28 @@ class TestF11TypeTextTapFirstPersisted:
             "simdrive.recorder._verify_state_contract",
             lambda *a, **kw: (True, []),
         )
-        # Patch observe so replay doesn't need a live simulator.
-        fake_obs = SimpleNamespace(
-            screenshot_path=pre_png,
-            screenshot_w=1206,
-            screenshot_h=2622,
-            marks=[],
-        )
-        monkeypatch.setattr("simdrive.observe.observe", lambda *a, **kw: fake_obs)
+
+        # Provide a mark that matches the tap_first {"text": "you@example.com"} target.
+        matching_mark = som.Mark(id=1, x=100, y=200, w=300, h=40,
+                                 text="you@example.com", confidence=0.95)
+
+        # _observe_for_replay returns a dict with marks for stable_id / text resolution.
         monkeypatch.setattr("simdrive.recorder._observe_for_replay", lambda s: {
             "screenshot_path": str(pre_png),
-            "marks": [],
+            "screenshot_w": 1206,
+            "screenshot_h": 2622,
+            "marks": [matching_mark],
         })
         # Patch SSIM so similarity always passes.
         monkeypatch.setattr("simdrive.recorder._ssim_or_fallback", lambda *a, **kw: 1.0)
 
         result = recorder_mod.replay("f11-replay-recording", s, on_drift="warn")
 
-        # F#11: replay must have issued a tap for the tap_first target before typing.
+        # F#11 regression: replay must have issued a tap for the tap_first target before typing.
         tap_calls = [c for c in executed_calls if c[0] == "tap"]
         assert len(tap_calls) >= 1, (
-            "F#11: replay engine did not execute a tap for tap_first — "
-            "replay is not faithful to the original recording with focus context"
+            "F#11 regression: replay engine did not execute a tap for tap_first — "
+            "the fix in recorder._execute_step_for_session is missing or broken"
         )
 
     def test_recording_yaml_roundtrip_preserves_tap_first(self, tmp_path):
@@ -438,14 +447,18 @@ class TestF12TextSubsetRequiredDeduped:
     def test_text_subset_required_uniqueness_invariant(self):
         """text_subset_required must have no duplicates regardless of mark count.
 
-        RED: will fail with any duplicate-text mark set until dedup is added.
+        Uses words known to be in the English dictionary (high confidence_band)
+        so they pass the band filter and enter text_subset_required.
+
+        RED: will fail because _build_requires_block does not deduplicate.
         """
         from simdrive.recorder import _build_requires_block
         from simdrive.som import Mark
 
-        # Build 5 marks where 3 have the same text (extreme case).
+        # 3 marks with the same English text "Email" — all pass the confidence_band
+        # filter and should appear only once after dedup.
         marks = [
-            Mark(id=i, x=40, y=i * 100, w=200, h=40, text="Continue", confidence=0.95)
+            Mark(id=i, x=40, y=i * 100, w=200, h=40, text="Email", confidence=0.95)
             for i in range(1, 4)
         ] + [
             Mark(id=4, x=40, y=500, w=200, h=40, text="Cancel", confidence=0.92),
