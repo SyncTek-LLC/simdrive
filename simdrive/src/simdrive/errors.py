@@ -102,6 +102,43 @@ def target_not_found(form: str, query: Any, available: Optional[list] = None) ->
     )
 
 
+def ambiguous_text_target(query: str, candidates: list, tier: str) -> SimdriveError:
+    """F#6 — tap({text: X}) found >1 marks tied at the best-match tier.
+
+    The legacy behavior was to silently pick the first match in mark order,
+    which bit the SimDrive Demo "Sign In" reproducer (a screen title and a
+    submit button shared the same OCR text, so the tap landed on the title and
+    the agent thought it had submitted). We now raise here and let the caller
+    re-target by stable_id / mark id / (x, y).
+
+    ``candidates`` should already be capped at 5 and carry the disambiguation
+    keys (``stable_id``, ``mark``, ``bbox``, ``confidence``, ``text``,
+    ``position_hint``).
+    """
+    recovery = (
+        "Multiple marks match this text. Re-call tap with stable_id, mark, "
+        "or x/y to disambiguate."
+    )
+    preview = ", ".join(
+        f"{c.get('text')!r}@{c.get('position_hint')}(stable_id={c.get('stable_id')})"
+        for c in candidates
+    )
+    return SimdriveError(
+        code="ambiguous_text_target",
+        message=(
+            f"{len(candidates)} marks match text={query!r} at the {tier} tier: "
+            f"{preview}. Recovery: {recovery}"
+        ),
+        details={
+            "form": "text",
+            "query": query,
+            "tier": tier,
+            "candidates": candidates,
+            "recovery": recovery,
+        },
+    )
+
+
 def missing_target() -> SimdriveError:
     return SimdriveError(
         code="missing_target",
