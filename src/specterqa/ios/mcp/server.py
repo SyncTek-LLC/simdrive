@@ -84,6 +84,84 @@ _perf_baseline: dict | None = None  # Stored perf baseline for ios_perf_compare
 _ax_http_server = None  # AXHTTPServer instance (None when AX backend is not active)
 
 # ---------------------------------------------------------------------------
+# F#1 — MCP server self-restart on disk-version drift
+# ---------------------------------------------------------------------------
+#
+# When importlib.metadata reports a different version than the loaded
+# __version__, we schedule a re-exec for the NEXT stdin message (not the same
+# call that detected drift) so the current response is delivered cleanly.
+#
+# Attributes:
+#   _should_reexec : bool   — set True when drift is detected
+#   _reexec_hook   : callable — called by _pre_message_hook when flag is set
+#                    (default: os.execv; overridable for tests)
+# ---------------------------------------------------------------------------
+
+import importlib.metadata as _importlib_metadata  # noqa: E402
+import sys as _sys  # noqa: E402
+
+_should_reexec: bool = False
+
+
+def _default_reexec_hook() -> None:
+    """Re-exec this process with the same interpreter and arguments."""
+    import os as _os
+    _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+
+_reexec_hook = _default_reexec_hook
+
+
+def _check_version_drift(loaded_version: str | None = None) -> None:
+    """Compare the disk version (importlib.metadata) to the loaded version.
+
+    Sets :data:`_should_reexec` to True when a mismatch is detected so that
+    :func:`_pre_message_hook` can trigger a re-exec on the next message.
+
+    Args:
+        loaded_version: The version currently loaded in memory.  Defaults to
+            ``specterqa.__version__`` (or ``simdrive.__version__``).
+    """
+    global _should_reexec
+
+    if loaded_version is None:
+        try:
+            import specterqa.ios as _pkg
+            loaded_version = getattr(_pkg, "__version__", None)
+        except Exception:  # noqa: BLE001
+            loaded_version = None
+
+    try:
+        disk_version = _importlib_metadata.version("simdrive")
+    except Exception:  # noqa: BLE001
+        try:
+            disk_version = _importlib_metadata.version("specterqa-ios")
+        except Exception:  # noqa: BLE001
+            disk_version = None
+
+    if disk_version and loaded_version and disk_version != loaded_version:
+        logger.warning(
+            "F#1: Version drift detected — loaded %s, disk %s. "
+            "Scheduling re-exec on next message.",
+            loaded_version,
+            disk_version,
+        )
+        _should_reexec = True
+
+
+def _pre_message_hook() -> None:
+    """Called at the start of each stdin message dispatch loop iteration.
+
+    When :data:`_should_reexec` is True (drift was detected on the previous
+    message), invokes :data:`_reexec_hook` to restart the process.
+    """
+    global _should_reexec
+    if _should_reexec:
+        _should_reexec = False  # prevent re-entry if hook doesn't exec
+        _reexec_hook()
+
+
+# ---------------------------------------------------------------------------
 # Async deploy state — used by wait=False path (Issue 2)
 # ---------------------------------------------------------------------------
 
@@ -620,6 +698,83 @@ def _resize_screenshot(b64_png: str, scale: float = 0.5) -> str:
 
 
 # ---------------------------------------------------------------------------
+# F#2 — session_start verify foreground post-launch
+# ---------------------------------------------------------------------------
+
+
+def _verify_app_launched_foreground(
+    bundle_id: str,
+    udid: str,
+    poll_s: float = 1.0,
+) -> dict:
+    """Poll app_state for up to *poll_s* seconds after launch.
+
+    Returns:
+        {"state": "active"}              — app stayed foreground.
+        {"state": "launched_then_exited",
+         "crash_report_path": str|None} — app exited within the poll window.
+    """
+    import glob as _glob
+    import time as _time
+
+    deadline = _time.monotonic() + poll_s
+    interval = min(0.1, poll_s / 5)
+
+    while _time.monotonic() < deadline:
+        try:
+            if _backend is not None:
+                resp = _backend._get("/app_state")
+                state = resp.get("state", "")
+                running = resp.get("running", False)
+            else:
+                # No backend — treat as foreground (best-effort)
+                return {"state": "active"}
+        except Exception:  # noqa: BLE001
+            state = ""
+            running = False
+
+        if state in ("foreground", "active") or running:
+            return {"state": "active"}
+
+        # App not foreground — has it definitively exited?
+        if state in ("not-running", "terminated", "background", "suspended") or (
+            state and state != "foreground" and not running
+        ):
+            # App exited — find the most recent crash report.
+            crash_path: str | None = None
+            try:
+                reports_dir = os.path.expanduser("~/Library/Logs/DiagnosticReports")
+                pattern = os.path.join(reports_dir, "*.ips")
+                ips_files = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
+                if ips_files:
+                    crash_path = str(ips_files[0])
+            except Exception:  # noqa: BLE001
+                pass
+            return {
+                "state": "launched_then_exited",
+                "crash_report_path": crash_path,
+            }
+
+        _time.sleep(interval)
+
+    # Poll window exhausted without a foreground confirmation.
+    # Default: assume launched_then_exited (conservative — better than lying).
+    crash_path = None
+    try:
+        reports_dir = os.path.expanduser("~/Library/Logs/DiagnosticReports")
+        pattern = os.path.join(reports_dir, "*.ips")
+        ips_files = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        if ips_files:
+            crash_path = str(ips_files[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "state": "launched_then_exited",
+        "crash_report_path": crash_path,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Tool handler implementations
 # ---------------------------------------------------------------------------
 
@@ -1131,6 +1286,12 @@ def handle_start_session(arguments: dict) -> dict:
                     port,
                 )
                 _session_state = "running"
+
+                # F#2: Post-launch foreground verification.
+                _launch_check = _verify_app_launched_foreground(bundle_id, target_udid)
+                if _launch_check.get("state") == "launched_then_exited":
+                    return _launch_check
+
                 response: dict = {
                     "status": "ok",
                     "device_type": device_type,
@@ -1184,6 +1345,12 @@ def handle_start_session(arguments: dict) -> dict:
 
             _session_state = "running"
             _session_udid = _session._target_udid  # persist for handle_app_relaunch
+
+            # F#2: Post-launch foreground verification.
+            _launch_check = _verify_app_launched_foreground(bundle_id, _session._target_udid)
+            if _launch_check.get("state") == "launched_then_exited":
+                return _launch_check
+
             response = {
                 "status": "ok",
                 "device_type": device_type,
@@ -1354,12 +1521,35 @@ def handle_logs(arguments: dict) -> dict:
     category = arguments.get("category")
     pattern = arguments.get("pattern")
 
-    if pattern:
+    # F#10: raw mode — bypass all filters and return all buffered entries.
+    raw_mode: bool = bool(arguments.get("raw", False))
+
+    # F#10: predicate_kind/predicate — substring match on message OR subsystem.
+    predicate_kind: str | None = arguments.get("predicate_kind")
+    predicate: str | None = arguments.get("predicate")
+    predicate_applied: bool = False
+
+    if raw_mode:
+        # Return ALL buffered entries — no filter applied.
+        entries = _console_monitor.recent(seconds=seconds)
+    elif pattern:
         entries = _console_monitor.search(pattern)
     elif level and level.lower() in ("error", "fault"):
         entries = _console_monitor.errors(seconds=seconds)
     else:
         entries = _console_monitor.recent(seconds=seconds, level=level, category=category)
+
+    # F#10: Apply predicate substring filter (case-insensitive) on message OR subsystem
+    # when predicate_kind='substring' is specified and raw mode is NOT active.
+    if not raw_mode and predicate_kind == "substring" and predicate:
+        pred_lower = predicate.lower()
+        filtered = [
+            e for e in entries
+            if pred_lower in getattr(e, "message", "").lower()
+            or pred_lower in getattr(e, "subsystem", "").lower()
+        ]
+        entries = filtered
+        predicate_applied = True
 
     # Cap at 100 entries to keep MCP payloads reasonable
     log_list = []
@@ -1373,12 +1563,15 @@ def handle_logs(arguments: dict) -> dict:
             "process": getattr(entry, "process", ""),
         })
 
-    return {
+    result = {
         "count": len(log_list),
         "logs": log_list,
         "summary": _console_monitor.summary(),
-        "source": "simctl",
+        "source": "raw" if raw_mode else "simctl",
     }
+    if predicate_applied:
+        result["predicate_applied"] = True
+    return result
 
 
 def handle_crashes(arguments: dict) -> dict:
