@@ -1,0 +1,87 @@
+# Dispatch downstream sites on successful PyPI release.
+#
+# Fires AFTER `specterqa-ios-publish.yml` completes successfully on a
+# `simdrive-v*` tag. Sends `repository_dispatch` events to:
+#   - SyncTek-LLC/simdrive-site   (Astro -> Cloudflare Pages)
+#   - SyncTek-LLC/simdrive-docs   (Mintlify auto-deploy on push to main)
+#
+# Both downstream repos have a `release-update.yml` workflow that handles
+# `repository_dispatch` with `event_type: simdrive-release` and runs the
+# bump-version-and-commit flow.
+#
+# SECRETS REQUIRED (settings -> secrets):
+#   DOWNSTREAM_DISPATCH_PAT  -- fine-grained PAT with `contents: read+write`
+#                              and `metadata: read` on simdrive-site AND
+#                              simdrive-docs. Classic PAT with `repo` scope
+#                              also works but prefer fine-grained.
+#
+# OPEN QUESTION: secret name above is a placeholder -- confirm with Chairman
+# whether to use an existing PAT or mint a new one scoped only to these two
+# downstreams.
+
+name: Dispatch downstream sites on release
+
+on:
+  workflow_run:
+    workflows: ["simdrive Publish to PyPI"]
+    types: [completed]
+    branches-ignore: []
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: repository_dispatch -> site + docs
+    # Only fire when the upstream publish workflow succeeded AND was
+    # triggered by a tag push (not workflow_dispatch dry-runs).
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'simdrive-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute payload (version, urls)
+        id: payload
+        env:
+          REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          # head_branch on a tag-push run is the tag name itself.
+          TAG="$REF"
+          VERSION="${TAG#simdrive-v}"
+          echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "pypi_url=https://pypi.org/project/simdrive/${VERSION}/"        >> "$GITHUB_OUTPUT"
+          echo "changelog_url=https://github.com/SyncTek-LLC/simdrive/blob/${TAG}/simdrive/CHANGELOG.md" >> "$GITHUB_OUTPUT"
+          echo "release_url=https://github.com/SyncTek-LLC/simdrive/releases/tag/${TAG}"                >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch -> simdrive-site
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
+          repository: SyncTek-LLC/simdrive-site
+          event-type: simdrive-release
+          client-payload: |
+            {
+              "version":       "${{ steps.payload.outputs.version }}",
+              "tag":           "${{ steps.payload.outputs.tag }}",
+              "pypi_url":      "${{ steps.payload.outputs.pypi_url }}",
+              "changelog_url": "${{ steps.payload.outputs.changelog_url }}",
+              "release_url":   "${{ steps.payload.outputs.release_url }}"
+            }
+
+      - name: Dispatch -> simdrive-docs
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
+          repository: SyncTek-LLC/simdrive-docs
+          event-type: simdrive-release
+          client-payload: |
+            {
+              "version":       "${{ steps.payload.outputs.version }}",
+              "tag":           "${{ steps.payload.outputs.tag }}",
+              "pypi_url":      "${{ steps.payload.outputs.pypi_url }}",
+              "changelog_url": "${{ steps.payload.outputs.changelog_url }}",
+              "release_url":   "${{ steps.payload.outputs.release_url }}"
+            }
