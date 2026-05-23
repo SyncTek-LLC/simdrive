@@ -5,19 +5,28 @@
 #   - SyncTek-LLC/simdrive-site   (Astro -> Cloudflare Pages)
 #   - SyncTek-LLC/simdrive-docs   (Mintlify auto-deploy on push to main)
 #
-# Both downstream repos have a `release-update.yml` workflow that handles
-# `repository_dispatch` with `event_type: simdrive-release` and runs the
-# bump-version-and-commit flow.
+# Payload (client_payload):
+#   version                 e.g. "1.0.0b6"
+#   tag                     e.g. "simdrive-v1.0.0b6"
+#   pypi_url                PyPI release URL
+#   release_url             GitHub release URL
+#   changelog_section_b64   base64-encoded CHANGELOG section for this version
 #
-# SECRETS REQUIRED (settings -> secrets):
+# Why we include the CHANGELOG section in the payload:
+#   This engine repo is PRIVATE. Earlier design had downstreams fetching
+#   `raw.githubusercontent.com/.../simdrive/CHANGELOG.md` unauthenticated --
+#   that 404s on a private repo (b5 fan-out blew up this way). The
+#   DOWNSTREAM_DISPATCH_PAT is scoped to downstream contents:write only,
+#   not engine contents:read; we don't want to widen its blast radius
+#   just so two workflows can read a CHANGELOG. So the engine workflow
+#   (which has full checkout access at the tag) extracts the section
+#   and ships it in the dispatch payload. Base64 avoids the JSON-escape
+#   pain of multiline markdown.
+#
+# SECRETS REQUIRED:
 #   DOWNSTREAM_DISPATCH_PAT  -- fine-grained PAT with `contents: read+write`
 #                              and `metadata: read` on simdrive-site AND
-#                              simdrive-docs. Classic PAT with `repo` scope
-#                              also works but prefer fine-grained.
-#
-# OPEN QUESTION: secret name above is a placeholder -- confirm with Chairman
-# whether to use an existing PAT or mint a new one scoped only to these two
-# downstreams.
+#                              simdrive-docs.
 
 name: Dispatch downstream sites on release
 
@@ -52,36 +61,122 @@ jobs:
           VERSION="${TAG#simdrive-v}"
           echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
           echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
-          echo "pypi_url=https://pypi.org/project/simdrive/${VERSION}/"        >> "$GITHUB_OUTPUT"
-          echo "changelog_url=https://github.com/SyncTek-LLC/simdrive/blob/${TAG}/simdrive/CHANGELOG.md" >> "$GITHUB_OUTPUT"
-          echo "release_url=https://github.com/SyncTek-LLC/simdrive/releases/tag/${TAG}"                >> "$GITHUB_OUTPUT"
+          echo "pypi_url=https://pypi.org/project/simdrive/${VERSION}/"  >> "$GITHUB_OUTPUT"
+          echo "release_url=https://github.com/SyncTek-LLC/simdrive/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout engine at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.payload.outputs.tag }}
+          fetch-depth: 1
+
+      - name: Extract + base64-encode CHANGELOG section
+        id: section
+        env:
+          VERSION: ${{ steps.payload.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ ! -f simdrive/CHANGELOG.md ]; then
+            echo "::error::simdrive/CHANGELOG.md not found at tag"
+            exit 1
+          fi
+          # Extract the section for VERSION via Node (same regex as
+          # downstream apply-release.mjs, so behaviour is identical).
+          # Single-shot file write; no shell quoting of multiline markdown.
+          node --eval '
+            const fs = require("fs");
+            const VERSION = process.env.VERSION;
+            const text = fs.readFileSync("simdrive/CHANGELOG.md", "utf8");
+            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const re = new RegExp(
+              "(##\\s*\\[?" + escapeRegex(VERSION) + "\\]?[^\\n]*\\n[\\s\\S]*?)(?=\\n##\\s*\\[|$)",
+            );
+            const m = text.match(re);
+            if (!m) {
+              console.error("section for " + VERSION + " not found in CHANGELOG.md");
+              process.exit(2);
+            }
+            fs.writeFileSync(".release-section.md", m[1].trim() + "\n");
+            console.error("extracted " + m[1].length + " bytes for " + VERSION);
+          '
+          # Base64-encode the section. -w0 disables wrapping (GNU base64);
+          # on macOS that flag is unknown, but this runs on ubuntu-latest.
+          SECTION_B64="$(base64 -w0 .release-section.md)"
+          # Emit via heredoc to handle any unlikely shell-sensitive chars
+          # even though base64 output is shell-safe by construction.
+          {
+            echo "section_b64<<EOF_SECTION"
+            echo "$SECTION_B64"
+            echo "EOF_SECTION"
+          } >> "$GITHUB_OUTPUT"
+          echo "section bytes (encoded): ${#SECTION_B64}"
+
+      - name: Write payload JSON to file
+        id: payload_json
+        env:
+          VERSION: ${{ steps.payload.outputs.version }}
+          TAG: ${{ steps.payload.outputs.tag }}
+          PYPI_URL: ${{ steps.payload.outputs.pypi_url }}
+          RELEASE_URL: ${{ steps.payload.outputs.release_url }}
+          SECTION_B64: ${{ steps.section.outputs.section_b64 }}
+        run: |
+          set -euo pipefail
+          # Build JSON with Node to escape any control chars safely.
+          # SECTION_B64 is already base64 (shell-safe alphanumerics + /+=)
+          # but JSON.stringify ensures correctness if anything upstream
+          # changes the encoding.
+          node --eval '
+            const fs = require("fs");
+            const payload = {
+              version:               process.env.VERSION,
+              tag:                   process.env.TAG,
+              pypi_url:              process.env.PYPI_URL,
+              release_url:           process.env.RELEASE_URL,
+              changelog_section_b64: process.env.SECTION_B64,
+            };
+            fs.writeFileSync(".dispatch-payload.json", JSON.stringify(payload));
+            console.error("payload bytes: " + fs.statSync(".dispatch-payload.json").size);
+          '
 
       - name: Dispatch -> simdrive-site
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
-          repository: SyncTek-LLC/simdrive-site
-          event-type: simdrive-release
-          client-payload: |
-            {
-              "version":       "${{ steps.payload.outputs.version }}",
-              "tag":           "${{ steps.payload.outputs.tag }}",
-              "pypi_url":      "${{ steps.payload.outputs.pypi_url }}",
-              "changelog_url": "${{ steps.payload.outputs.changelog_url }}",
-              "release_url":   "${{ steps.payload.outputs.release_url }}"
-            }
+        env:
+          PAT: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
+        run: |
+          set -euo pipefail
+          # Build the dispatches API body: { event_type, client_payload }
+          BODY="$(node --eval '
+            const fs = require("fs");
+            const payload = JSON.parse(fs.readFileSync(".dispatch-payload.json", "utf8"));
+            process.stdout.write(JSON.stringify({
+              event_type: "simdrive-release",
+              client_payload: payload,
+            }));
+          ')"
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $PAT" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/SyncTek-LLC/simdrive-site/dispatches \
+            -d "$BODY"
+          echo "dispatched simdrive-release -> simdrive-site"
 
       - name: Dispatch -> simdrive-docs
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
-          repository: SyncTek-LLC/simdrive-docs
-          event-type: simdrive-release
-          client-payload: |
-            {
-              "version":       "${{ steps.payload.outputs.version }}",
-              "tag":           "${{ steps.payload.outputs.tag }}",
-              "pypi_url":      "${{ steps.payload.outputs.pypi_url }}",
-              "changelog_url": "${{ steps.payload.outputs.changelog_url }}",
-              "release_url":   "${{ steps.payload.outputs.release_url }}"
-            }
+        env:
+          PAT: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
+        run: |
+          set -euo pipefail
+          BODY="$(node --eval '
+            const fs = require("fs");
+            const payload = JSON.parse(fs.readFileSync(".dispatch-payload.json", "utf8"));
+            process.stdout.write(JSON.stringify({
+              event_type: "simdrive-release",
+              client_payload: payload,
+            }));
+          ')"
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $PAT" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/SyncTek-LLC/simdrive-docs/dispatches \
+            -d "$BODY"
+          echo "dispatched simdrive-release -> simdrive-docs"
