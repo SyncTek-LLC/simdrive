@@ -35,6 +35,25 @@ on:
     workflows: ["simdrive Publish to PyPI"]
     types: [completed]
     branches-ignore: []
+  # Manual-trigger path for end-to-end validation WITHOUT cutting a real
+  # release tag. Lets us re-fire the fan-out for an already-published
+  # version, or rehearse with `dry_run=true` to build + log the payload
+  # but skip the actual repository_dispatch calls.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0b5) — must exist as a CHANGELOG section'
+        required: true
+        type: string
+      tag:
+        description: 'Tag (e.g. simdrive-v1.0.0b5) — checkout ref + payload'
+        required: true
+        type: string
+      dry_run:
+        description: 'If true, build payload + log it but skip repository_dispatch'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,26 +62,43 @@ jobs:
   dispatch:
     name: repository_dispatch -> site + docs
     # Only fire when the upstream publish workflow succeeded AND was
-    # triggered by a tag push (not workflow_dispatch dry-runs).
+    # triggered by a tag push (workflow_run path). For workflow_dispatch
+    # the operator is explicitly invoking the workflow, so always run.
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'simdrive-v')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'simdrive-v'))
     runs-on: ubuntu-latest
     steps:
       - name: Compute payload (version, urls)
         id: payload
         env:
-          REF: ${{ github.event.workflow_run.head_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_REF: ${{ github.event.workflow_run.head_branch }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          # head_branch on a tag-push run is the tag name itself.
-          TAG="$REF"
-          VERSION="${TAG#simdrive-v}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+            VERSION="$INPUT_VERSION"
+            # Sanity: tag should encode the version (avoids operator typos
+            # silently dispatching the wrong combo).
+            if [ "$TAG" != "simdrive-v$VERSION" ]; then
+              echo "::error::tag '$TAG' does not match expected 'simdrive-v$VERSION'"
+              exit 1
+            fi
+          else
+            # head_branch on a tag-push run is the tag name itself.
+            TAG="$RUN_REF"
+            VERSION="${TAG#simdrive-v}"
+          fi
           echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
           echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
           echo "pypi_url=https://pypi.org/project/simdrive/${VERSION}/"  >> "$GITHUB_OUTPUT"
           echo "release_url=https://github.com/SyncTek-LLC/simdrive/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+          echo "resolved tag=$TAG version=$VERSION (event=$EVENT_NAME)"
 
       - name: Checkout engine at tag
         uses: actions/checkout@v4
@@ -139,6 +175,7 @@ jobs:
           '
 
       - name: Dispatch -> simdrive-site
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         env:
           PAT: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
         run: |
@@ -161,6 +198,7 @@ jobs:
           echo "dispatched simdrive-release -> simdrive-site"
 
       - name: Dispatch -> simdrive-docs
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         env:
           PAT: ${{ secrets.DOWNSTREAM_DISPATCH_PAT }}
         run: |
@@ -180,3 +218,17 @@ jobs:
             https://api.github.com/repos/SyncTek-LLC/simdrive-docs/dispatches \
             -d "$BODY"
           echo "dispatched simdrive-release -> simdrive-docs"
+
+      - name: Summary
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          VERSION: ${{ steps.payload.outputs.version }}
+          TAG: ${{ steps.payload.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: payload prepared, dispatch skipped (version=$VERSION tag=$TAG)"
+          else
+            echo "Payload sent to 2 downstream(s) with version=$VERSION tag=$TAG"
+          fi
