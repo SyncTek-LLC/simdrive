@@ -64,7 +64,7 @@ to make dep-confusion attacks visible in PR diff; pip-audit nightly on the lock;
 gitleaks blocking on every push to prevent accidentally checking in credentials
 that would let an attacker masquerade as a maintainer. Publishing requires
 human approval today (manual `git tag` push); roadmap item to require PyPI 2FA
-on the maintainer account is tracked separately as a Chairman HITL item.
+on the maintainer account is tracked separately as a maintainer HITL item.
 
 **(2) Local MCP server surface.** SimDrive runs on a developer's machine and
 drives a local iOS simulator. It does NOT open a network port for inbound
@@ -89,6 +89,6 @@ that surface ships, this section is informational only.
 ## Related Documents
 
 - `simdrive/docs/REDACTION_SPEC.md` — screenshot + recording redaction design
-  (spec only as of W1; implementation tracked in W2 of INIT-2026-549).
+  (spec only as of W1; implementation tracked in W2 of [internal-tracker]).
 - `.github/workflows/security.yml` — pip-audit + gitleaks CI.
 - `.github/workflows/codeql.yml` — CodeQL static analysis.

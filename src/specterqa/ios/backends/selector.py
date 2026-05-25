@@ -16,8 +16,8 @@ Legacy auto-select path (``get_backend()``) also probes WDA, IndigoHID, and
 CGEvents for backward-compat with CLI commands — those backends are not on the
 MCP product path.
 
-INIT-2026-500 — SpecterQA iOS Headless Driver.
-INIT-2026-525 — Consolidate backend selection; define IOSBackend Protocol.
+[internal-tracker] — SpecterQA iOS Headless Driver.
+[internal-tracker] — Consolidate backend selection; define IOSBackend Protocol.
 """
 
 from __future__ import annotations

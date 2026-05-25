@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/observe.py
-# hypothesis_version: 6.141.1
-
-[1000, '.json', 'annotated_path', 'captured_at', 'device', 'height', 'marks', 'recent_logs', 'screenshot_path', 'simulator', 'width', 'window_bounds_macos', 'x', 'y']

@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/robustness.py
-# hypothesis_version: 6.152.4
-
-[10.0, 200, '*/recording.yaml', 'action', 'all', 'allow', 'allow once', 'app_bundle_id', 'app_version', 'appearance', 'args', 'calendar', 'camera', 'cancel', 'contacts', 'contacts-limited', 'created_at', 'created_by_session', 'dark', 'deny', 'device', "don't allow", 'dont allow', 'error', 'errors', 'failed', 'grant', 'granted', 'health', 'homekit', 'id', 'light', 'location', 'location-always', 'media-library', 'medialibrary', 'microphone', 'modified_at', 'motion', 'name', 'ok', 'os_version', 'path', 'permission', 'photos', 'photos-add', 'post_screenshot', 'pre_screenshot', 'press_key', 'privacy', 'r', 'recording.yaml', 'reminders', 'requires', 'settings', 'simctl', 'simdrive_version', 'siri', 'speech', 'ssim_masks', 'stderr', 'step_count', 'steps', 'swipe', 'tags', 'tap', 'text', 'type_text', 'ui', 'utf-8', 'warnings', 'xcrun']

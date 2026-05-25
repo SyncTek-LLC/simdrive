@@ -5,7 +5,7 @@ It wires together all eight sub-modules (interaction, capture, console,
 network, perf, state, crash, ai_context) and exposes a clean ActionExecutor
 protocol plus lifecycle and context-aggregation methods.
 
-Backend selection (INIT-2026-500):
+Backend selection:
   On start(), a BackendSelector probes available touch backends in priority
   order (XCTest → IndigoHID → CGEvents) and stores the winner in
   ``self._backend``.  All gesture methods (click, scroll, fill, keyboard)
@@ -13,7 +13,7 @@ Backend selection (INIT-2026-500):
   InteractionLayer is used as a fallback so that tests that mock
   InteractionLayer continue to pass unchanged.
 
-INIT-2026-492 / INIT-2026-500 — SpecterQA iOS Simulator Driver.
+[internal-tracker] / [internal-tracker] — SpecterQA iOS Simulator Driver.
 """
 
 from __future__ import annotations

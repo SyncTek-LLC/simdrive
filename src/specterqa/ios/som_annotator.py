@@ -10,11 +10,11 @@ Element tree source:
 Research shows SoM prompting improves UI agent accuracy from ~50% to ~90%+
 by eliminating coordinate prediction entirely.
 
-INIT-2026-493 — SpecterQA SoM annotator.
-INIT-2026-506 — XCTest runner /source integration.
-INIT-2026-508 — Remove WDA fallback from SoM pipeline.
-INIT-2026-509 — Restore WDA as optional fallback with timeout guard.
-INIT-2026-R&D — Eliminate JSON→XML→parse roundtrip; direct JSON parsing.
+[internal-tracker] — SpecterQA SoM annotator.
+[internal-tracker] — XCTest runner /source integration.
+[internal-tracker] — Remove WDA fallback from SoM pipeline.
+[internal-tracker] — Restore WDA as optional fallback with timeout guard.
+[internal-tracker] — Eliminate JSON→XML→parse roundtrip; direct JSON parsing.
 """
 
 from __future__ import annotations

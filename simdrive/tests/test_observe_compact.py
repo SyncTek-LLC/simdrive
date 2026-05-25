@@ -1,6 +1,6 @@
 """Tests for the PR A token-efficiency knobs on ``observe.observe()``.
 
-Covers the four new parameters introduced under INIT-2026-549:
+Covers the four new parameters introduced under [internal-tracker]:
 * ``compact=True`` — slim mark dict via ``Mark.to_compact_dict()``
 * ``confidence_floor`` — drop marks below the requested band
 * ``mark_limit`` — cap the returned list to top-N by (band, area)

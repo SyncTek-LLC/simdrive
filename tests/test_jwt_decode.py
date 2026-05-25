@@ -6,7 +6,7 @@ TDD suite — written before the implementation fix. These tests confirm:
   3. _decode_jwt() handles base64 payloads with missing padding.
   4. _check_offline_grace() honours offline_exp / iat from the decoded payload.
 
-Initiative: INIT-2026-525
+Initiative: [internal-tracker]
 Finding: SEC-HIGH-005
 """
 

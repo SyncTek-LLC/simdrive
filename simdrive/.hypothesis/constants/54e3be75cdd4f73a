@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/journey/schema.py
-# hypothesis_version: 6.152.4
-
-[180, 'DeviceSelector', 'SuccessCriterion', 'after', 'background', 'device', 'foreground', 'name', 'not_running', 'persona', 'schema_version', 'simulator']

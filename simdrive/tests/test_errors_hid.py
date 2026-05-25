@@ -1,6 +1,6 @@
 """Verify the HID/keyboard/focus/wait error subclasses match the SimdriveError contract.
 
-The new classes (added in INIT-2026-549) are class-form companions to the
+The new classes (added in [internal-tracker]) are class-form companions to the
 existing constructor functions in ``simdrive.errors``. Each must:
 
 - Inherit from :class:`simdrive.errors.SimdriveError`.

@@ -5,7 +5,7 @@ satisfy this Protocol.  Because it is marked ``@runtime_checkable``, callers can
 use ``isinstance(obj, IOSBackend)`` as a sanity check, though the primary value
 is static-type-checked duck typing.
 
-INIT-2026-525 — SpecterQA iOS Protocol refactor.
+[internal-tracker] — SpecterQA iOS Protocol refactor.
 """
 
 from __future__ import annotations

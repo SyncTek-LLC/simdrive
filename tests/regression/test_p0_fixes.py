@@ -1,6 +1,6 @@
 """Tests verifying the P0 Xcode 16 / injector fixes are correctly applied.
 
-INIT-2026-511
+[internal-tracker]
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Regression tests for Bug 1 — run_journey license gate (INIT-2026-543).
+"""Regression tests for Bug 1 — run_journey license gate.
 
 Three failure stacks:
   (a) serve() dispatcher does not route `trial` subcommand
@@ -8,7 +8,7 @@ Three failure stacks:
 
 TDD: written BEFORE the fix. All tests must FAIL on current code.
 
-INIT-2026-544 update: tool_run_journey is now async after the MCP sampling
+[internal-tracker] update: tool_run_journey is now async after the MCP sampling
 refactor.  test_run_journey_works_with_offline_dev_license updated to use
 asyncio.run() when calling tool_run_journey.
 """
@@ -75,7 +75,7 @@ class TestServeDispatchesTrial:
 def isolate_trial_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect ``trial_history`` so tests don't pollute ``~/.simdrive``.
 
-    INIT-2026-549 W1.5 added an (email, machine) uniqueness check that reads
+    [internal-tracker].5 added an (email, machine) uniqueness check that reads
     ``~/.simdrive/trial_history.json`` on every ``trial start``. Without this
     fixture the second test in the suite would always see ``trial_already_used``.
     """
@@ -218,7 +218,7 @@ class TestTrialOfflineDev:
         #   (b) a plain return dict — PASS
         #   (c) LicenseError — FAIL (this is the bug)
         #
-        # INIT-2026-544: tool_run_journey is now async — wrap with asyncio.run().
+        # [internal-tracker]: tool_run_journey is now async — wrap with asyncio.run().
         try:
             result = asyncio.run(server.tool_run_journey({"session_id": "fake-sess-001"}))
             # If it returned a dict, license gate passed (other error in result is fine)

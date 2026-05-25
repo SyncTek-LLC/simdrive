@@ -212,7 +212,7 @@ def test_record_writes_requires_block_with_device_state(tmp_path, monkeypatch):
 
     req = payload["requires"]
 
-    # a13 device requires block shape (from CodeAtlas a13 implementation):
+    # a13 device requires block shape (from engineering a13 implementation):
     #   requires:
     #     target: "device"
     #     app:

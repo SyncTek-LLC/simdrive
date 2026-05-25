@@ -1,4 +1,4 @@
-"""`simdrive demo` CLI subcommand tests — INIT-2026-549 polish/demo-cli.
+"""`simdrive demo` CLI subcommand tests — [internal-tracker] polish/demo-cli.
 
 Covers the onboarding entry point introduced for PR D. The function under
 test is :func:`simdrive._demo.run_demo`; we mock the sim/observe layer so

@@ -23,7 +23,7 @@ Circuit breaker::
     # After 3 consecutive failures, _POLICY.is_open() == True
     # _POLICY.call(...) raises SessionCrashedError immediately
 
-INIT-2026-525 — SpecterQA iOS retry/timeout policy.
+[internal-tracker] — SpecterQA iOS retry/timeout policy.
 """
 
 from __future__ import annotations

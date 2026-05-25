@@ -1,6 +1,6 @@
 name: simdrive CI
 
-# INIT-2026-549 W1: expanded test gate.
+# [internal-tracker]: expanded test gate.
 # - Runs `pytest simdrive/tests -m "not live"` (was: tests/test_unit.py only).
 # - Enforces a coverage ratchet floor on the hot-path modules (see simdrive/docs/COVERAGE_RATCHET.md).
 # - Installs simdrive[dev] (which already pins pytest-cov, moto[s3], hypothesis).
@@ -68,7 +68,7 @@ jobs:
             --cov=simdrive.device \
             --cov-report=xml \
             --cov-report=term-missing \
-            --cov-fail-under=90  # Ratchet floor — INIT-2026-549 W4 push to 85% reached 92% on hot-path modules (server.py 70%->94%); floor set 2pp below measured per flake-safety policy.
+            --cov-fail-under=90  # Ratchet floor — [internal-tracker] push to 85% reached 92% on hot-path modules (server.py 70%->94%); floor set 2pp below measured per flake-safety policy.
 
       - name: Upload coverage artifact
         if: always()

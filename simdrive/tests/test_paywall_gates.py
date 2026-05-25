@@ -1,4 +1,4 @@
-"""Paywall gate tests — INIT-2026-549 W1.5.
+"""Paywall gate tests — [internal-tracker].5.
 
 Every MCP tool handler must call ``check_entitlement()`` at its entry. When the
 entitlement check raises a ``LicenseError`` the tool MUST propagate the error

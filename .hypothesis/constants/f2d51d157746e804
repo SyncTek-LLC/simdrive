@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/routes/licenses.py
-# hypothesis_version: 6.152.4
-
-[0.0, 100.0, 365, 86400, '/licenses/activate', '/licenses/status', '/licenses/usage', 'customer_email', 'enterprise', 'expires_at', 'pro', 'solo', 'team', 'tier', 'trial', 'unknown']

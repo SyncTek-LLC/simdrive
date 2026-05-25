@@ -23,7 +23,7 @@ Usage::
     b64, w, h = driver.screenshot()
     driver.tap(196, 400)   # screenshot-pixel coords
 
-INIT-2026-493 — SpecterQA WDA touch backend.
+[internal-tracker] — SpecterQA WDA touch backend.
 """
 
 from __future__ import annotations

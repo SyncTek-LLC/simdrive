@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/license/cli.py
-# hypothesis_version: 6.152.4
-
-[b'=', 429, 86400, ',', '.simdrive', '1', ':', 'SIMDRIVE_OFFLINE_DEV', 'ascii', 'code', 'customer_email', 'dev-trial', 'email', 'expires_at', 'installed_at', 'issued_at', 'key', 'last_server_check', 'license.json', 'license_key', 'message', 'mode', 'no_license', 'offline', 'online', 'read_error', 'seats', 'server_time', 'subject', 'tier', 'trial', 'utf-8', 'valid']

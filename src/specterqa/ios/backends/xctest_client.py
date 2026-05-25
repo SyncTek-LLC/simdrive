@@ -8,7 +8,7 @@ Coordinate system: device logical points (e.g. 390×844 for iPhone 16 Pro).
 The caller is responsible for any pixel→point conversion; this client
 forwards coordinates as-is.
 
-INIT-2026-500 — SpecterQA iOS Headless Driver.
+[internal-tracker] — SpecterQA iOS Headless Driver.
 """
 
 from __future__ import annotations

@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/session.py
-# hypothesis_version: 6.152.4
-
-[8100, '.simdrive', 'Real Device', 'Recorder', 'SIMDRIVE_HOME', 'Session', 'a', 'actions.jsonl', 'active', 'any_booted', 'device', 'device_name', 'hardware_udid', 'host', 'ip', 'launch_failed', 'localhost', 'os_version', 'port', 'sessions', 'simulator', 'target', 'udid']

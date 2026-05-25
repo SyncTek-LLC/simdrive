@@ -52,7 +52,7 @@ The message is wrapped in an NSData and handed to:
 
     [SimDeviceLegacyHIDClient sendWithDevice:data error:&error]
 
-INIT-2026-500 — SpecterQA iOS Headless Driver.
+[internal-tracker] — SpecterQA iOS Headless Driver.
 """
 
 from __future__ import annotations
@@ -1001,7 +1001,7 @@ class IndigoHIDBackend:
         Previously this method returned ``True`` as soon as frameworks loaded,
         which caused :class:`BackendSelector` to pick IndigoHID on Xcode 16+
         machines and then crash on first use.  This fix was added in
-        INIT-2026-493 (auto-closeout pipeline).
+        [internal-tracker] (auto-closeout pipeline).
 
         Returns:
             bool: ``True`` only when HID client creation is expected to succeed.

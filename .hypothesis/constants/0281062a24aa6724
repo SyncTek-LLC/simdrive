@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/app.py
-# hypothesis_version: 6.152.4
-
-['/health', '/v1', 'SELECT 1', 'SimDrive Cloud API', 'db_reachable', 'ok', 'simdrive', 'simdrive_r2_', 'sqlite://', 'status', 'storage_backend', 'unknown', 'version']

@@ -9,7 +9,7 @@ CRITICAL: this module MUST NOT import `anthropic`. It only depends on the
 mcp SDK types (TextContent, ImageContent, SamplingMessage, ModelPreferences,
 CreateMessageResult).
 
-INIT-2026-544.
+[internal-tracker].
 """
 from __future__ import annotations
 

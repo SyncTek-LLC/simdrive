@@ -16,9 +16,9 @@ No cursor movement, no window focus.
 Research: SoM prompting improves UI agent accuracy from ~50% to ~90%+
 by eliminating coordinate prediction entirely.
 
-INIT-2026-493 — SpecterQA SoM test runner.
-INIT-2026-506 — XCTest runner integration, non-blocking mode.
-INIT-2026-508 — Remove WDA fallback from SoM pipeline.
+[internal-tracker] — SpecterQA SoM test runner.
+[internal-tracker] — XCTest runner integration, non-blocking mode.
+[internal-tracker] — Remove WDA fallback from SoM pipeline.
 """
 
 from __future__ import annotations

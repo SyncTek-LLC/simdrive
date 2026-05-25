@@ -6,7 +6,7 @@ If this test fails, the README front-door has regressed — the quickstart was
 moved or removed, or a stale string was re-introduced. Fix the README, not the
 test.
 
-Source: INIT-2026-546. Added in 1.0.0a6 to pin the discoverability polish.
+Source: [internal-tracker]. Added in 1.0.0a6 to pin the discoverability polish.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ def _readme_full() -> str:
 def test_quickstart_pip_install_in_first_100_lines() -> None:
     """`pip install simdrive` must appear in the first 100 lines of the README.
 
-    INIT-2026-549 W1.5: the package is now a paywalled trial+paid product
+    [internal-tracker].5: the package is now a paywalled trial+paid product
     rather than a pre-release alpha, so the install command no longer carries
     the ``--pre`` flag. The presence of the install command itself is the
     invariant under test.
@@ -50,7 +50,7 @@ def test_quickstart_pip_install_in_first_100_lines() -> None:
 def test_quickstart_trial_start_in_first_100_lines() -> None:
     """`simdrive trial start --email` must appear in the first 100 lines.
 
-    INIT-2026-549 W1.5: trial issuance is now the canonical first step after
+    [internal-tracker].5: trial issuance is now the canonical first step after
     install — every gated tool returns ``license_required`` until a trial or
     paid key is on disk.
     """

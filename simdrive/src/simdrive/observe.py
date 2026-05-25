@@ -55,7 +55,7 @@ class Observation:
     captured_at: float
     marks: list[Mark] = field(default_factory=list)
     recent_logs: str | None = None
-    # Token-efficiency knobs (PR A, INIT-2026-549). Default off so every existing
+    # Token-efficiency knobs (PR A). Default off so every existing
     # caller keeps the legacy behavior — server.py routes new args through here.
     compact: bool = False
     capture_observability: bool = False
@@ -172,7 +172,7 @@ def observe(
 
     `target` selects the backend: "simulator" (default) or "device" (real iPhone/iPad).
 
-    Token-efficiency knobs (PR A, INIT-2026-549) — all default off / no-op so
+    Token-efficiency knobs (PR A) — all default off / no-op so
     existing callers see no behavior change:
     * `compact`: emit the slim 6-key mark dict (`to_compact_dict`) instead of the
       full 9-key diagnostic dict. ~5-6x reduction in JSON payload on dense screens.

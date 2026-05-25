@@ -15,7 +15,7 @@ All tests FAIL RED on main because:
   - recorder.start() / Recorder.finalize() write no ssim_masks key.
   - No DEVICE_STATUS_BAR_MASKS lookup table exists yet.
 
-All tests PASS after CodeAtlas implements:
+All tests PASS after engineering implements:
   - simdrive.recorder.DEVICE_STATUS_BAR_MASKS: dict mapping device-class name
     to (w, h) tuple for the status bar mask region.
   - simdrive.recorder._default_status_bar_mask(device_name) -> list[dict] | None
@@ -108,7 +108,7 @@ class TestF14SSIMStatusBarMask:
     # mask region, but to create a detectable SSIM drop in the unmasked case
     # we use a much larger altered region (800 px) — SSIM is structurally
     # insensitive to small localised changes in a large uniform image.
-    STATUS_BAR_H_PX = 180      # mask height (what CodeAtlas must produce)
+    STATUS_BAR_H_PX = 180      # mask height (what engineering must produce)
     FIXTURE_STRIPE_H = 800     # exaggerated changed region to ensure SSIM < 0.85
 
     def _make_screenshot_pair_unmasked(self, tmp_path: Path):
@@ -170,13 +170,13 @@ class TestF14SSIMStatusBarMask:
         score = _ssim_or_fallback(ref, live, masks=masks)
         assert score >= 0.85, (
             f"With mask covering changed region, SSIM should be >= 0.85 but got {score:.4f}. "
-            "CodeAtlas: verify _apply_masks_pil blanks the stripe before compare."
+            "engineering: verify _apply_masks_pil blanks the stripe before compare."
         )
 
     def test_default_status_bar_mask_lookup_exists(self):
         """recorder.DEVICE_STATUS_BAR_MASKS must exist and contain iPhone 17 Pro.
 
-        CodeAtlas: add DEVICE_STATUS_BAR_MASKS = {
+        engineering: add DEVICE_STATUS_BAR_MASKS = {
             'iPhone 17 Pro': (1206, 180),  # (width_px, status_bar_h_px)
             ...
         } to simdrive/src/simdrive/recorder.py.
@@ -212,7 +212,7 @@ class TestF14SSIMStatusBarMask:
     def test_default_status_bar_mask_helper_returns_list(self):
         """recorder._default_status_bar_mask(device_name) -> list[dict] with one entry.
 
-        CodeAtlas: implement
+        engineering: implement
             def _default_status_bar_mask(device_name: str) -> list[dict] | None:
                 entry = DEVICE_STATUS_BAR_MASKS.get(device_name)
                 if not entry:
@@ -224,7 +224,7 @@ class TestF14SSIMStatusBarMask:
 
         assert hasattr(recorder, "_default_status_bar_mask"), (
             "recorder._default_status_bar_mask() helper does not exist. "
-            "CodeAtlas: add it to simdrive/src/simdrive/recorder.py."
+            "engineering: add it to simdrive/src/simdrive/recorder.py."
         )
         result = recorder._default_status_bar_mask("iPhone 17 Pro")
         assert result is not None, (
@@ -257,7 +257,7 @@ class TestF14SSIMStatusBarMask:
     def test_ssim_with_auto_mask_via_device_name(self, tmp_path: pytest.TempPathFactory):
         """_ssim_or_fallback should accept a device_name kwarg and auto-apply the mask.
 
-        CodeAtlas: add optional `device_name: str | None = None` param to
+        engineering: add optional `device_name: str | None = None` param to
         _ssim_or_fallback. When masks is None and device_name is known,
         auto-populate masks from DEVICE_STATUS_BAR_MASKS.
         """
@@ -273,7 +273,7 @@ class TestF14SSIMStatusBarMask:
         sig = inspect.signature(recorder._ssim_or_fallback)
         assert "device_name" in sig.parameters, (
             "_ssim_or_fallback must accept a `device_name` keyword argument. "
-            "CodeAtlas: add `device_name: str | None = None` to its signature and "
+            "engineering: add `device_name: str | None = None` to its signature and "
             "auto-resolve the status-bar mask when masks=None and device_name is known."
         )
 
@@ -281,7 +281,7 @@ class TestF14SSIMStatusBarMask:
                                             device_name="iPhone 17 Pro")
         assert score >= 0.85, (
             f"With device_name='iPhone 17 Pro', auto-mask should raise SSIM to >= 0.85. "
-            f"Got {score:.4f}. CodeAtlas: look up DEVICE_STATUS_BAR_MASKS and apply mask."
+            f"Got {score:.4f}. engineering: look up DEVICE_STATUS_BAR_MASKS and apply mask."
         )
 
 
@@ -328,7 +328,7 @@ class TestF15RecordTimeSSIMMask:
         )
         assert "ssim_masks" in payload, (
             "recording.yaml is missing 'ssim_masks' key for iPhone 17 Pro recording. "
-            "CodeAtlas: Recorder.finalize() must call _default_status_bar_mask(device.name) "
+            "engineering: Recorder.finalize() must call _default_status_bar_mask(device.name) "
             "and write the result as payload['ssim_masks']."
         )
 
@@ -379,7 +379,7 @@ class TestF15RecordTimeSSIMMask:
         assert m.get("y") == 0, f"mask.y must be 0, got {m.get('y')}"
         assert m.get("w") == 1206, (
             f"mask.w must equal device width 1206 px, got {m.get('w')}. "
-            "CodeAtlas: use DEVICE_STATUS_BAR_MASKS['iPhone 17 Pro'] width."
+            "engineering: use DEVICE_STATUS_BAR_MASKS['iPhone 17 Pro'] width."
         )
         h = m.get("h")
         assert isinstance(h, int) and h > 0, (
@@ -398,7 +398,7 @@ class TestF15RecordTimeSSIMMask:
         )
         assert "ssim_masks" in payload, (
             "recording.yaml is missing 'ssim_masks' for iPhone 16 Pro recording. "
-            "CodeAtlas: DEVICE_STATUS_BAR_MASKS must include 'iPhone 16 Pro'."
+            "engineering: DEVICE_STATUS_BAR_MASKS must include 'iPhone 16 Pro'."
         )
 
     def test_iphone_16_pro_ssim_masks_label(self, tmp_path: pytest.TempPathFactory):
@@ -429,7 +429,7 @@ class TestF15RecordTimeSSIMMask:
             masks = payload["ssim_masks"]
             assert masks is None or masks == [], (
                 f"Unknown device should produce no ssim_masks or an empty list, got {masks!r}. "
-                "CodeAtlas: skip writing ssim_masks when _default_status_bar_mask returns None."
+                "engineering: skip writing ssim_masks when _default_status_bar_mask returns None."
             )
 
     # ── Replay picks up auto-masks from YAML ───────────────────────────────
