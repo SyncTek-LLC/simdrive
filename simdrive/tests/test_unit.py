@@ -29,7 +29,7 @@ def test_version_present():
 
 
 def test_tool_count_is_thirty_two():
-    """Canonical MCP tool surface = 32 tools (INIT-2026-549).
+    """Canonical MCP tool surface = 32 tools.
 
     Sourced from server._TOOLS. The categorized human-readable inventory lives
     in docs/MCP_TOOL_SURFACE.md; llms.txt mirrors the same list. Any change

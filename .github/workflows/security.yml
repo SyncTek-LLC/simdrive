@@ -1,6 +1,6 @@
 name: Security baseline (pip-audit)
 
-# INIT-2026-549 W1: security CI baseline.
+# [internal-tracker]: security CI baseline.
 # - pip-audit: blocks on HIGH-severity vulns in the resolved dep graph.
 # CodeQL lives in .github/workflows/codeql.yml (separate workflow for the
 # distinct GitHub Code Scanning permissions model).
@@ -17,7 +17,7 @@ name: Security baseline (pip-audit)
 # wire up gitleaks with a license — see docs/security/secret-scanning.md
 # if/when that's added.
 #
-# INIT-2026-549 cleanup (review): paths verified post repo restructure.
+# [internal-tracker] cleanup (review): paths verified post repo restructure.
 # pip-audit consumes simdrive/requirements.lock (exists; pinned in PR #113).
 # If this workflow is red on main, the cause is a real CVE finding in
 # simdrive/requirements.lock — investigate and bump pin, do not mask.
@@ -38,7 +38,7 @@ permissions:
 jobs:
   pip-audit:
     name: pip-audit (HIGH blocks)
-    # INIT-2026-549 cleanup: must be macOS — requirements.lock pins pyobjc-core,
+    # [internal-tracker] cleanup: must be macOS — requirements.lock pins pyobjc-core,
     # which has a source-build dep on macOS frameworks (Quartz/Vision). On
     # ubuntu-latest the audit step fails at the install phase with "PyObjC
     # requires macOS to build" before pip-audit can even read the lock.
@@ -64,7 +64,7 @@ jobs:
         #     responsibility, not the library's). No fix version available.
         #     simdrive does not use pyjwt directly — it's a transitive dep
         #     of `mcp` for its own auth surface, which is not in our control.
-        #     [INIT-2026-549]
+        #
         #   PYSEC-2026-161 / GHSA-86qp-5c8j-p5mr — starlette Host header path
         #     injection advisory (published 2026-05-22). Fix version is 1.0.1
         #     which is not yet available on PyPI as of 2026-05-22. Awaiting
@@ -72,7 +72,7 @@ jobs:
         #     not exposed to external HTTP requests, so exploitability is
         #     effectively zero in our threat model. Re-enable the block once
         #     starlette>=1.0.1 is published and requirements.lock is updated.
-        #     Tracked: [INIT-2026-549]
+        #     Tracked:
         run: |
           pip-audit -r simdrive/requirements.lock \
             --vulnerability-service osv \

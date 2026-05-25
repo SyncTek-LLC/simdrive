@@ -1,5 +1,4 @@
-"""Regression tests for Bug 3 — tool_run_journey MCP error contract divergence
-(INIT-2026-543).
+"""Regression tests for Bug 3 — tool_run_journey MCP error contract divergence.
 
 _call_tool in server.py catches errors.SimdriveError but LicenseError lives in
 license/errors.py as its own class hierarchy — NOT a subclass of SimdriveError.
@@ -102,7 +101,7 @@ class TestMcpWrapperErrorEnvelope:
     def test_license_error_to_dict_is_superset_of_simdrive_error_schema(self) -> None:
         """LicenseError.to_dict() must remain compatible with SimdriveError consumers.
 
-        INIT-2026-549 W1.5: LicenseError adds UX-affordance fields
+        [internal-tracker].5: LicenseError adds UX-affordance fields
         (``error: "license_required"``, ``pricing_url``, command hints) so
         agent hosts can surface a copy-pasteable upsell. Existing fields
         (``code``, ``message``, ``details``) are preserved — the envelope is a

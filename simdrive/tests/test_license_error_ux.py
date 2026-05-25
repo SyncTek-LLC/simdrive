@@ -1,4 +1,4 @@
-"""LicenseError UX-envelope tests — INIT-2026-549 W1.5 workstream 4.
+"""LicenseError UX-envelope tests — [internal-tracker].5 workstream 4.
 
 When ANY gated tool raises LicenseError, the structured envelope returned to
 the MCP client MUST include:

@@ -1,6 +1,6 @@
 """Trial-history bookkeeping — prevents infinite trial extension.
 
-INIT-2026-549 W1.5: a brand-new user can self-issue a 14-day trial without
+[internal-tracker].5: a brand-new user can self-issue a 14-day trial without
 talking to the cloud. To stop the same user re-running ``simdrive trial start``
 forever, we record a one-way hash of (email, machine_fingerprint) in
 ``~/.simdrive/trial_history.json`` and reject subsequent issuance for the

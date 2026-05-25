@@ -4,7 +4,7 @@ _Canonical URL: https://synctek.io/products/simdrive_
 _Last updated: 2026-05-17 | Version: 1.0.0a13_
 
 > **STATUS: DEPRECATED in favor of the upcoming `simdrive-site` repo.** This file is preserved
-> as a content reference for the new marketing site fork being spun up under INIT-2026-549.
+> as a content reference for the new marketing site fork being spun up under [internal-tracker].
 > Authoritative product copy lives in `README.md` and `llms.txt`. Brand strings here have been
 > updated from the legacy `SpecterQA iOS` name; numbers (tool count, pricing) may lag — treat
 > `docs/MCP_TOOL_SURFACE.md` and `pyproject.toml` as canonical.

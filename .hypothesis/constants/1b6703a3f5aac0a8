@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/observability/logger.py
-# hypothesis_version: 6.141.1
-
-['%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ', '1', 'SIMDRIVE_DEBUG', 'args', 'created', 'exc_info', 'exc_text', 'filename', 'funcName', 'level', 'levelname', 'levelno', 'lineno', 'message', 'module', 'msecs', 'msg', 'name', 'pathname', 'process', 'processName', 'relativeCreated', 'simdrive', 'stack_info', 'thread', 'threadName', 'timestamp']

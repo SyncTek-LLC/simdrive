@@ -9,7 +9,7 @@ Asserts that:
 These are pure unit tests — no live simulator, no network, no MCP transport.
 The FastMCP instance is constructed in process and list_tools() is queried directly.
 
-INIT-2026-525 — SpecterQA iOS v14.0.0a1 Phase 1 audit.
+[internal-tracker] — SpecterQA iOS v14.0.0a1 Phase 1 audit.
 """
 from __future__ import annotations
 

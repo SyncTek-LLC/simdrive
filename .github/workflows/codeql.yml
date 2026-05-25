@@ -1,6 +1,6 @@
 name: CodeQL (Python)
 
-# INIT-2026-549 cleanup: salvaged — switched to build-mode: none and scoped
+# [internal-tracker] cleanup: salvaged — switched to build-mode: none and scoped
 # analysis to simdrive/src/. Original failure cause: autobuild ran `pip install`
 # from repo root where no pyproject.toml exists (metadata lives at
 # simdrive/pyproject.toml). Python doesn't need a build for CodeQL extraction,

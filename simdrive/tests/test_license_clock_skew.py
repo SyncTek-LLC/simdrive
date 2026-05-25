@@ -1,4 +1,4 @@
-"""Tests for the tightened offline-grace clock-skew check (INIT-2026-549 W-F).
+"""Tests for the tightened offline-grace clock-skew check.
 
 The check refuses offline grace when:
   - the system clock moved BACKWARDS > 6h relative to last_known_server_time

@@ -21,7 +21,7 @@ environments where the framework is absent) a lightweight stub is injected so
 that this module is always importable.  Tests mock ``Quartz.*`` at call-time
 and rely on the stub being present at the ``Quartz`` global name.
 
-INIT-2026-492 / INIT-2026-493.
+[internal-tracker] / [internal-tracker].
 """
 
 from __future__ import annotations

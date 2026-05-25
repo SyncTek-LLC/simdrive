@@ -7,7 +7,7 @@ simulator and cursor are never touched.
 For physical devices: skips all simctl operations, deploys the runner via
 xcodebuild, and connects to the device over USB/WiFi.
 
-INIT-2026-506 — SpecterQA iOS v3 session manager.
+[internal-tracker] — SpecterQA iOS v3 session manager.
 """
 
 from __future__ import annotations

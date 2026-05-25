@@ -1,4 +1,4 @@
-"""Recorder integrity tests (INIT-2026-549 / WS-E).
+"""Recorder integrity tests.
 
 Covers three audit hardenings of ``simdrive.recorder``:
 

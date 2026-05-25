@@ -16,7 +16,7 @@ trial (simdrive trial start --email x --offline-dev) without a server.
 The validator enforces that dev-key-signed licenses MUST have
 subject="dev-trial"; the dev key cannot forge enterprise / pro licenses.
 
-KEY ROTATION (INIT-2026-549 W-F):
+KEY ROTATION:
 TRUSTED_PUBLIC_KEYS is a list of (key_id, hex_pubkey) tuples. When a
 license is signed, the issuer SHOULD embed the matching ``key_id`` in
 the payload so the validator picks the correct key without trying each
@@ -39,11 +39,9 @@ from simdrive.license.keypair import verify_key_from_hex, signing_key_from_hex
 # Ed25519 license-signing public key for SimDrive 1.0 paid tiers.
 # Generated 2026-05-18 (rotated from 2026-05-02 placeholder — no licenses
 # were ever issued under the prior key, so rotation has no customer impact).
-# Private key lives in BusinessAtlas vault: `simdrive/license_signing_private_key`
-# (scope: DeployAtlas). Retrieve for Cloudflare Worker deploy via:
-#   cd /Users/atlas/BusinessAtlas
-#   .venv/bin/python v2/ba vault get --service simdrive --key license_signing_private_key
-# Then: wrangler secret put LICENSE_SIGNING_PRIVATE_KEY (paste hex at prompt).
+# Private key is held in the operator secrets store; see the internal ops
+# runbook for the Cloudflare Worker deploy procedure (paste hex into
+# `wrangler secret put LICENSE_SIGNING_PRIVATE_KEY` at the prompt).
 # DO NOT regenerate without coordinated key rotation — every issued
 # license becomes invalid the instant this constant changes.
 SIMDRIVE_PUBLIC_KEY_HEX: str = (

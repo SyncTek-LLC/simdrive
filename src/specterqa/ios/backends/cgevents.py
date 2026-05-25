@@ -9,7 +9,7 @@ Requires:
   - Simulator.app running and visible (CGEvents target the window)
   - No Accessibility permission required (unlike Accessibility Inspector tools)
 
-INIT-2026-500 — SpecterQA iOS Headless Driver.
+[internal-tracker] — SpecterQA iOS Headless Driver.
 """
 
 from __future__ import annotations

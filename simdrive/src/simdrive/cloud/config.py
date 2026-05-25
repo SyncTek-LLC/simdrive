@@ -1,7 +1,7 @@
 """Cloud API configuration — loaded from environment variables.
 
 WHY environment-based config: no secrets in code; Railway injects env vars
-at deploy time. The same pattern used by forgeos-engine.
+at deploy time.
 """
 from __future__ import annotations
 

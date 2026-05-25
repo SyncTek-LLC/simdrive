@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/window.py
-# hypothesis_version: 6.141.1
-
-[5.0, ',', '-e', 'no_process', 'no_window', 'osascript']

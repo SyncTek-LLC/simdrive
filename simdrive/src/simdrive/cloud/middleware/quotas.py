@@ -16,7 +16,7 @@ FastAPI route level via `Depends(make_quota_gate(...))`, not in a
 Starlette middleware. This lets us return structured 429 responses and
 skip the gate on public endpoints (GET /health, /v1/licenses/status).
 
-INIT-2026-549 W-F:
+[internal-tracker] W-F:
 Also exposes :func:`check_local_quota`, a network-free per-tool check
 that Wave 2 wires into the MCP tool dispatch inside server.py. The
 check reads from a locally-cached quota snapshot attached to the

@@ -4,7 +4,7 @@ Captures screenshots via ``xcrun simctl io <device> screenshot``, optionally
 resizes them, and provides pixel-diff and polling utilities for visual
 change detection.
 
-INIT-2026-492.
+[internal-tracker].
 """
 
 from __future__ import annotations

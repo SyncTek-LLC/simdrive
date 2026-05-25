@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/device.py
-# hypothesis_version: 6.141.1
-
-[2.0, 5.0, 10.0, 15.0, 30.0, 120.0, '-', '--bundle-id', '--device', '--json-output', '--match', '--quiet', '--signal', '-u', '.json', '/dev/null', '/dev/stdout', '; ', '<unknown>', 'Developer disk image', 'Invalid service', 'SIGTERM', 'app', 'available', 'connectionProperties', 'developerModeStatus', 'device', 'device offline', 'deviceProperties', 'devicectl', 'devices', 'disabled', 'disconnected', 'hardwareProperties', 'idevice_id', 'ideviceimagemounter', 'idevicescreenshot', 'idevicesyslog', 'install', 'lastConnectionDate', 'launch', 'list', 'marketingName', 'name', 'no transport', 'not paired', 'pairingState', 'process', 'processIdentifier', 'productType', 'result', 'signal', 'transportType', 'tunnel disconnected', 'tunnelState', 'udid', 'unavailable', 'unpaired', 'xcrun']

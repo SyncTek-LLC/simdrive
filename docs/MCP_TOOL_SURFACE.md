@@ -81,4 +81,4 @@ assert len(server.list_tools()) == 32
 | pre-2026-04 | Initial 29 tools                                                        | 29        |
 | 2026-04 (1.0.0a7) | + `load_journey`                                                  | 30        |
 | 2026-04 (1.0.0a9.1) | + `lint_recordings`, `migrate_recording`                       | 32        |
-| 2026-05-17 | Documented canonical count in MCP_TOOL_SURFACE.md (INIT-2026-549)       | 32        |
+| 2026-05-17 | Documented canonical count in MCP_TOOL_SURFACE.md       | 32        |

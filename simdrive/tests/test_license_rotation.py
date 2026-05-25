@@ -1,4 +1,4 @@
-"""Tests for multi-key license validator support (INIT-2026-549 W-F).
+"""Tests for multi-key license validator support.
 
 The validator must:
   - Accept a payload signed under the FIRST trusted key when no key_id

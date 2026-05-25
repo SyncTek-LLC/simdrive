@@ -111,7 +111,7 @@ class LLMClient(Protocol):
     the Anthropic SDK (ClaudeLLMClient) or via MCP sampling (MCPSamplingLLMClient).
     Tests substitute a fake client that returns scripted StepDecision objects.
 
-    INIT-2026-544: call() is now an async def so the runner can await both
+    [internal-tracker]: call() is now an async def so the runner can await both
     ClaudeLLMClient (wraps blocking SDK in asyncio.to_thread) and
     MCPSamplingLLMClient (natively async via session.create_message).
     """

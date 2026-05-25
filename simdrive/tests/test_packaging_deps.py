@@ -229,7 +229,7 @@ def test_declared_deps_contains_requests() -> None:
     """
     Test 1: requests must appear in [project.dependencies].
 
-    This is the specific regression test for the gap DeployAtlas caught:
+    This is the specific regression test for the gap release pipeline caught:
     license/cli.py imports `requests` at module top, but it was absent from
     the declared deps. Clean install → ModuleNotFoundError.
     """
@@ -337,8 +337,8 @@ def test_httpx_pinned_below_1_0() -> None:
     `pip install --pre`, the resolver picks `httpx 1.0.dev3` (a real
     pre-release on PyPI), which breaks `httpx-sse` and the MCP transport
     layer. Until upstream mcp adds an upper bound, simdrive must defend
-    its users with a top-level pin. Caught by DeployAtlas pre-publish
-    smoke for 1.0.0a4 (INIT-2026-544).
+    its users with a top-level pin. Caught by release pipeline pre-publish
+    smoke for 1.0.0a4.
     """
     deps = _load_project_dependencies()
     httpx_specs = [d for d in deps if d.startswith("httpx")]

@@ -12,7 +12,7 @@ Requirements:
     - pyobjc-framework-Cocoa and pyobjc-framework-Quartz installed
     - iOS Simulator running with an app
 
-INIT-2026-525 — SpecterQA iOS AXUIElement backend.
+[internal-tracker] — SpecterQA iOS AXUIElement backend.
 """
 
 from __future__ import annotations

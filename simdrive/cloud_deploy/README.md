@@ -1,7 +1,7 @@
 # SimDrive Cloud API — Railway Deployment
 
 Private API for SimDrive replay archive + license management.
-Hosted at `cloud.simdrive.dev` (confirm with chairman before first production deploy).
+Hosted at `cloud.simdrive.dev` (confirm with maintainer before first production deploy).
 
 ## Prerequisites
 

@@ -1,4 +1,4 @@
-"""Chaos integration tests for the SimDrive resilience stack (INIT-2026-549).
+"""Chaos integration tests for the SimDrive resilience stack.
 
 These tests prove the resilience hardening from Wave 1 + Wave 2 holds up
 under failures that happen *during* a replay, not just at isolated call

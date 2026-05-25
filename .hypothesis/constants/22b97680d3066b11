@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/license/signer.py
-# hypothesis_version: 6.141.1
-
-[b'=', ',', ':', 'ascii', 'customer_email', 'enterprise', 'expires_at', 'issued_at', 'pro', 'seats', 'solo', 'team', 'tier', 'trial', 'utf-8']

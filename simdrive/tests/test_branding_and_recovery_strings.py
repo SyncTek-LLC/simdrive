@@ -1,4 +1,4 @@
-"""Regression tests for Bug 4 — stale rename strings (INIT-2026-543).
+"""Regression tests for Bug 4 — stale rename strings.
 
 Stale strings that must be purged:
   - ios_observe, ios_start_session, ios_devices, ios_stop_recording,

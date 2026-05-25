@@ -1,4 +1,4 @@
-"""Regression tests for Bug 2 — _disk_version() reads wrong package name (INIT-2026-543).
+"""Regression tests for Bug 2 — _disk_version() reads wrong package name.
 
 server.py:_disk_version() calls importlib.metadata.version("specterqa-ios")
 but the package is now named "simdrive".  In the Palace dogfood environment

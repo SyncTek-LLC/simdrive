@@ -18,7 +18,7 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# INIT-2026-525: Tier-gate bypass for existing tests
+# [internal-tracker]: Tier-gate bypass for existing tests
 # ---------------------------------------------------------------------------
 #
 # Tier enforcement (tier_gate.py) gates MCP tool functions behind license checks.

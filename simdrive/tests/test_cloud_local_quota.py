@@ -1,4 +1,4 @@
-"""Tests for the network-free per-tool quota check (INIT-2026-549 W-F).
+"""Tests for the network-free per-tool quota check.
 
 Wave 2 calls ``check_local_quota(tool_name, session)`` from inside the
 MCP tool dispatch — the check must:

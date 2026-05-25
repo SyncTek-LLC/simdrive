@@ -7,8 +7,7 @@ messages, or the response surface.
 WHY this module: at the cloud edge, an HTTP response body or upstream
 exception may carry credentials (license keys, bearer tokens, email
 addresses). When we log them — even at DEBUG — those values end up in
-log aggregators, crash reporters, and PR comments. The audit
-(INIT-2026-549 W-F) flagged this as the highest-impact privacy issue
+log aggregators, crash reporters, and PR comments. The audit flagged this as the highest-impact privacy issue
 in the cloud module.
 
 USAGE

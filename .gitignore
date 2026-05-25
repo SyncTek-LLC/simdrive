@@ -13,6 +13,9 @@ venv/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.hypothesis/
+.coverage
+coverage.xml
 *.ips
 
 # LapsApp — Xcode user-specific state (project.pbxproj IS committed)

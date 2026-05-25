@@ -1,4 +1,4 @@
-"""Session-wide test bootstrap — INIT-2026-549 W1.5 paywall test fixture.
+"""Session-wide test bootstrap — [internal-tracker].5 paywall test fixture.
 
 After PR #115 every MCP tool handler calls ``check_entitlement()`` which raises
 ``LicenseError [license_not_found]`` when ``~/.simdrive/license.json`` is absent.
