@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/routes/recordings.py
-# hypothesis_version: 6.141.1
-
-[3600, '/recordings', 'customer_email', 'unknown', 'utf-8']

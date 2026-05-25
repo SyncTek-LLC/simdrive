@@ -9,11 +9,10 @@ from every message response; we price them at the claude-opus-4-7 rates used
 at model selection time. If usage is unavailable we fall back to the
 ``_APPROX_COST_PER_CALL_USD`` estimate defined in runner.py.
 
-Model: ``claude-opus-4-7`` (most capable, per BusinessAtlas memory).
+Model: ``claude-opus-4-7`` (most capable available at integration time).
 
-INIT-2026-544: call() is now async, wrapping the blocking SDK call in
-asyncio.to_thread() so the event loop is not blocked during the Anthropic
-API call.
+call() is async, wrapping the blocking SDK call in asyncio.to_thread() so
+the event loop is not blocked during the Anthropic API call.
 """
 from __future__ import annotations
 
@@ -117,8 +116,8 @@ class ClaudeLLMClient:
         vision block before the text prompt. The model is instructed to return
         a single JSON object.
 
-        INIT-2026-544: The blocking Anthropic SDK call is now wrapped in
-        asyncio.to_thread() so the coroutine does not block the event loop.
+        The blocking Anthropic SDK call is wrapped in asyncio.to_thread()
+        so the coroutine does not block the event loop.
         """
         messages: list[dict] = []
 

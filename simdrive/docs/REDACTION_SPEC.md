@@ -1,6 +1,6 @@
 # SimDrive Screenshot & Recording Redaction Spec
 
-> **Status:** SPEC ONLY. INIT-2026-549 W1 ships this document. W2 ships the
+> **Status:** SPEC ONLY. [internal-tracker] ships this document. W2 ships the
 > implementation in `simdrive/src/simdrive/redact.py` and wires it into
 > `recorder.py`, `observe.py`, and the on-disk recording writer.
 

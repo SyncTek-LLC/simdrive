@@ -657,7 +657,7 @@ class TestShutdownEdgeCases:
 
 
 class TestRegistryFailedReacquisition:
-    """OQ-1 Chairman decision: get_or_create on FAILED returns the SAME failed instance
+    """OQ-1 maintainer decision: get_or_create on FAILED returns the SAME failed instance
     (callers must explicitly stop() to recycle). Validate this semantic."""
 
     def setup_method(self):

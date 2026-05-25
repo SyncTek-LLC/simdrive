@@ -26,7 +26,7 @@ def test_version_matches_installed_package_metadata():
 
     Fails on 3a22bd4: __version__ = "1.0.0a9" is a literal; it will differ
     from the installed package metadata version (which may be "1.0.0a11" or
-    similar once CodeAtlas bumps pyproject.toml).
+    similar once engineering bumps pyproject.toml).
     """
     # Get what the installed package reports independently.
     try:

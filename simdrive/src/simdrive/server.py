@@ -80,7 +80,7 @@ from .license.gate import gate as _entitlement_gate
 from .observability.logger import get_logger
 
 
-# ── MCP session holder (INIT-2026-544) ──────────────────────────────────────
+# ── MCP session holder ──────────────────────────────────────
 # Populated by _serve_async when the MCP server starts so that async tool
 # handlers (e.g. tool_run_journey) can retrieve the active ServerSession.
 _MCP_SERVER: Optional[object] = None
@@ -1055,7 +1055,7 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
     # marks_count: embed in args AND pass to add_step for replay drift detection (a13).
-    # Stored in both locations so TestAtlas fixtures (args.marks_count) and the
+    # Stored in both locations so test engineering fixtures (args.marks_count) and the
     # recorder's step-level field (step.marks_count) are both populated.
     marks_count = len(s.last_marks) if s.last_marks else None
     if marks_count is not None:
@@ -2900,7 +2900,7 @@ async def call_tool_async(name: str, arguments: dict) -> dict:
     """Async-aware tool dispatcher — supports both sync and coroutine handlers.
 
     Used by the MCP server's _call_tool handler so async tools (like
-    tool_run_journey after INIT-2026-544) are properly awaited.
+    tool_run_journey after [internal-tracker]) are properly awaited.
     """
     for t in _TOOLS:
         if t["name"] == name:

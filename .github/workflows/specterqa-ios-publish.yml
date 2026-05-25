@@ -1,6 +1,6 @@
 name: simdrive Publish to PyPI
 
-# INIT-2026-549 W1: tag scheme migrated from `specterqa-ios-v*` to `simdrive-v*`.
+# [internal-tracker]: tag scheme migrated from `specterqa-ios-v*` to `simdrive-v*`.
 # Three pre-publish gates run before the build, in order:
 #   1. version-match    — git tag == simdrive-v<pyproject.version>
 #   2. CHANGELOG head   — first `## [X.Y.Z]` heading == pyproject version

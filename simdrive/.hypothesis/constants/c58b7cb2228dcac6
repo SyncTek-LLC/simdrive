@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/journey/persona.py
-# hypothesis_version: 6.152.4
-
-['^[a-z0-9_-]+$', 'advanced', 'en-US', 'expert', 'high', 'intermediate', 'low', 'medium', 'name', 'novice', 'role', 'schema_version', 'slug']

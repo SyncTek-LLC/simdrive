@@ -1,4 +1,4 @@
-"""Resilience tests for simdrive.wda.client (INIT-2026-549).
+"""Resilience tests for simdrive.wda.client.
 
 Covers the five audit items from the hardening sprint:
 

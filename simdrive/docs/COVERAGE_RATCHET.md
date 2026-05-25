@@ -1,7 +1,7 @@
 # SimDrive Coverage Ratchet
 
 **Status:** Active
-**Owner:** INIT-2026-549 (W1 floor, W2 wire-up, W3 climb to 80, W4 push to 85)
+**Owner:** [internal-tracker] (W1 floor, W2 wire-up, W3 climb to 80, W4 push to 85)
 **Last updated:** 2026-05-21
 
 ## Policy
@@ -12,16 +12,16 @@ moves **up** — never down. As tests are added and the aggregate climbs, the
 floor is raised in stages so the gain cannot regress.
 
 The long-term target is **85%** aggregate. Hit **2026-05-21** in
-INIT-2026-549 Wave 4 (`test/coverage-server-85`) — hot-path measured
+[internal-tracker] Wave 4 (`test/coverage-server-85`) — hot-path measured
 **92%** (well above 85%); overall package coverage **86%**.
 
 ## Current floor
 
 | Floor    | Set in                          | Date       |
 |----------|---------------------------------|------------|
-| 65%      | INIT-2026-549 W1                | 2026-05-17 |
-| 80%      | INIT-2026-549 W3                | 2026-05-20 |
-| **90%**  | INIT-2026-549 W4                | 2026-05-21 |
+| 65%      | [internal-tracker]                | 2026-05-17 |
+| 80%      | [internal-tracker]                | 2026-05-20 |
+| **90%**  | [internal-tracker]                | 2026-05-21 |
 
 Hot-path aggregate measured at floor-set time: **92%** (local run).
 Overall package coverage at floor-set time: **86%**.
@@ -93,7 +93,7 @@ Realistic next gains, in order of marginal impact:
 
 ## References
 
-- INIT-2026-549 — SimDrive coverage initiative (W1 → W4)
+- [internal-tracker] — SimDrive coverage initiative (W1 → W4)
 - W4 PR: `test/coverage-server-85` (this branch)
 - Failing CI run that motivated the original ratchet: `25982013410`
 - Memory: `feedback_pr_whack_a_mole_test_debt` — test debt is its own initiative

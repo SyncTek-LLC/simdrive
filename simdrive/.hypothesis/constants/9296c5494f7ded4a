@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/diagnostics.py
-# hypothesis_version: 6.152.4
-
-[0.0, 5.0, 10.0, 15.0, 200, '-', '--json', '-convert', '-o', '-p', '.ips', 'CFBundleDisplayName', 'CFBundleName', 'CFBundleVersion', 'DiagnosticReports', 'Library', 'Logs', 'Path', 'app_name', 'backtrace', 'booted', 'bug_type', 'bundleID', 'bundle_id', 'checks', 'crashing_thread', 'detail', 'devices', 'exception', 'foreground', 'frames', 'hid_helper', 'id', 'json', 'launchctl', 'list', 'listapps', 'mtime', 'name', 'no path', 'not-running', 'ok', 'path', 'pid', 'plutil', 'r', 'replace', 'runtimes', 'simctl', 'simctl_runtimes', 'spawn', 'state', 'threads', 'timestamp', 'triggered', 'udid', 'utf-8', 'version', 'xcode-select', 'xcode_select', 'xcrun']

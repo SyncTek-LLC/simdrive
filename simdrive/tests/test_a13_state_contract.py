@@ -20,7 +20,7 @@ The a13 requires block uses a nested schema:
       foreground: <bool>
       ...
 
-Verification rules (a13 CodeAtlas implementation):
+Verification rules (a13 engineering implementation):
   - target mismatch → halt (replay_state_contract_failed in reasons)
   - app.bundle_id mismatch → halt (existing a9 behavior)
   - device.os_major mismatch → halt (new a13 behavior)
@@ -93,7 +93,7 @@ def _write_recording(rec_dir: Path, *,
     Image.new("RGB", (1170, 2532), (210, 210, 210)).save(pre)
     Image.new("RGB", (1170, 2532), (200, 200, 200)).save(post)
 
-    # a13 nested requires block (matches CodeAtlas DeviceRequires schema)
+    # a13 nested requires block (matches engineering DeviceRequires schema)
     payload = {
         "name": rec_dir.name,
         "created_at": 0.0,

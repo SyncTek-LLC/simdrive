@@ -1,6 +1,6 @@
 """Tier enforcement tests for MCP tool surface.
 
-TDD tests for INIT-2026-525: verify that MCP tools enforce license tier gating.
+TDD tests for [internal-tracker]: verify that MCP tools enforce license tier gating.
 These tests are pure unit tests — no live simulator, no network required.
 The LicenseValidator is mocked so tests run hermetically.
 

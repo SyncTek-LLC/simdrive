@@ -1,4 +1,4 @@
-"""Regression test: MCP code path must NOT import anthropic — INIT-2026-544.
+"""Regression test: MCP code path must NOT import anthropic — [internal-tracker].
 
 WHY THIS MATTERS
 ----------------

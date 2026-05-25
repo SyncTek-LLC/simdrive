@@ -1,10 +1,10 @@
-"""TDD tests for the async contract of run_journey — INIT-2026-544.
+"""TDD tests for the async contract of run_journey — [internal-tracker].
 
 The MCP sampling refactor converts run_journey from a synchronous function
 to an async coroutine so it can await MCPSamplingLLMClient.call(). These
 tests pin the new async contract.
 
-ALL tests in this file must FAIL until CodeAtlas:
+ALL tests in this file must FAIL until engineering:
   1. Makes LLMClient.call an async def
   2. Makes run_journey an async def (coroutine function)
   3. Updates the runner loop to `await llm_client.call(...)`
@@ -126,7 +126,7 @@ class TestRunJourneyIsAsync:
         assert inspect.iscoroutinefunction(run_journey), (
             "run_journey must be an async def (coroutine function) after the "
             "MCP sampling refactor.  Currently it is a sync function.  "
-            "CodeAtlas: convert `def run_journey(...)` to `async def run_journey(...)`."
+            "engineering: convert `def run_journey(...)` to `async def run_journey(...)`."
         )
 
     def test_run_journey_returns_awaitable(self):
@@ -176,7 +176,7 @@ class TestLLMClientProtocolIsAsync:
         assert is_async, (
             "LLMClient.call must be declared as `async def call(...)` in the Protocol. "
             "This allows mypy to enforce that all implementations are async. "
-            "Currently it is a sync def — CodeAtlas: change to `async def call(...)`."
+            "Currently it is a sync def — engineering: change to `async def call(...)`."
         )
 
 

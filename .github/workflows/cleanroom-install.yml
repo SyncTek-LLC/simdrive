@@ -1,6 +1,6 @@
 name: Cleanroom Install Smoke
 
-# INIT-2026-549 — added after the b2/b3 fastapi regression (F-B3-007).
+# [internal-tracker] — added after the b2/b3 fastapi regression (F-B3-007).
 #
 # The `simdrive-ci.yml` job installs `[dev]` extras to run the test suite. That
 # means every CI run has fastapi + sqlalchemy + the full cloud-side dep graph

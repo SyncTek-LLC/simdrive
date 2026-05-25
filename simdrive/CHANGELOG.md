@@ -40,7 +40,7 @@
 
 - **`tap_and_wait_keyboard` was serialized as bare `tap`.** The composite delegates to `tool_tap` internally, which recorded itself as `action: tap` in `recording.yaml`. Replays lost the keyboard-wait semantic and tapped-then-immediately-acted. **Fix:** new `Recorder.upgrade_step_action(step_id, new_action)` method; the composite tool calls it after `tool_tap` returns so the persisted step carries the right action name.
 
-### Fixed — launch verification (F#2, INIT-2026-549)
+### Fixed — launch verification (F#2)
 
 - **`session_start` now verifies the launched app actually reached foreground before returning `state: "active"`.** Pre-fix, an app that crashed within ~500 ms of launch (missing entitlement, signing mismatch) yielded `state: "active"` and the agent burned multiple blind tap/type roundtrips before discovering the crash via separate `app_state` and `crashes` calls. **Fix:** when `app_bundle_id` is provided and `verify_launch=True` (default), `session_start` polls `app_state` (sim) / `app_state_device` (device) after launch. If two consecutive polls show `not-running`, returns `state: "launched_then_exited"` with `crash_report_path` (most recent `.ips` for the bundle, sim only) and a `recovery:` hint on the FIRST response.
 - **Settle budget bumped to 3000 ms (10 × 300 ms), env-tunable via `SIMDRIVE_VERIFY_LAUNCH_BUDGET_MS`** (clamped to [500, 15000] ms). Default chosen to cover real SwiftUI cold-start + first-launch onboarding; the previous 1500 ms produced false `launched_then_exited` verdicts on legitimately slow cold-starts.
@@ -169,7 +169,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 - **+359 new tests** across the sprint, total **1308 passing** (was 949 at sprint start). Distribution: Wave 1 wait_until/HID errors 26, Wave 1 WDA resilience 16, Wave 1 recorder integrity 8, Wave 1 license+cloud 46, Wave 2 integration 6, Wave 3 chaos 7, Wave 3 coverage push 250.
 - **Coverage 76% → 82% overall** with hot-path modules at 85–100%: `sim.py` 100%, `act.py` 100%, `session.py` 100%, `observe.py` 97%, `device.py` 94%, `wda/client.py` 85%, `recorder.py` 85%. `server.py` 67% → 70% (full 80% would require running the MCP server in tests — deferred).
 - **CI ratchet floor raised 65% → 80%** in `.github/workflows/simdrive-ci.yml`. Climb-to-85 plan documented in `simdrive/docs/COVERAGE_RATCHET.md`.
-- **Sprint structure** — six hardening branches merged via no-ff into `hardening/INIT-2026-549-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, `chaos-test`, `coverage-gate`, plus integrated Wave 2 work directly on the trunk.
+- **Sprint structure** — six hardening branches merged via no-ff into `hardening/[internal-tracker]-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, `chaos-test`, `coverage-gate`, plus integrated Wave 2 work directly on the trunk.
 
 ### Backwards compatibility
 
@@ -281,7 +281,7 @@ Seven tools flip from `(sim only)` → `(sim + device)`:
 
 ### Source
 
-INIT-2026-542. Recording shape is a strict superset of a12 — pre-a13 sim
+[internal-tracker]. Recording shape is a strict superset of a12 — pre-a13 sim
 recordings still load via `RequiresBlock.from_dict` (forward-compatible).
 20 new regression tests; 851 pass on the merged suite.
 
@@ -391,7 +391,7 @@ also failed).
 
 ### Source
 
-INIT-2026-542. Files: `simdrive/src/simdrive/server.py`, `som.py`,
+[internal-tracker]. Files: `simdrive/src/simdrive/server.py`, `som.py`,
 `observe.py`, `device.py`, `diagnostics.py`, `session.py`,
 `simdrive/src/simdrive/wda/client.py`, `wda/som_device.py`, `wda/bootstrap.py`,
 `wda/errors.py`, plus 12 new test files under `simdrive/tests/test_a12_*.py`.
@@ -466,7 +466,7 @@ step is removed from every future release.
 
 ### Source
 
-INIT-2026-542 + INIT-2026-540 + INIT-2026-548. Files changed: new
+[internal-tracker] + [internal-tracker] + [internal-tracker]. Files changed: new
 `simdrive/wda/som_device.py`; `simdrive/wda/client.py` (new `source()`, `window_size_points()`),
 `simdrive/wda/bootstrap.py` (Code 41 smoke probe), `simdrive/wda/errors.py`
 (`wda_ui_automation_disabled`), `simdrive/server.py` (every device-branch input tool
@@ -518,11 +518,11 @@ Admin account and held the matching cert, yet bootstrap rejected with
 "Xcode is not signed in for team X". When the strict check misses, we now confirm
 any Apple-ID account is signed in (`identifier = "..."` probe), log the deferral,
 and let `xcodebuild -allowProvisioningUpdates` own the final team verification.
-The strict path remains primary for older Xcodes. (INIT-2026-548)
+The strict path remains primary for older Xcodes.
 
 ### Source
 
-INIT-2026-540 + INIT-2026-548. Files changed: `wda/bootstrap.py` (new functions
+[internal-tracker] + [internal-tracker]. Files changed: `wda/bootstrap.py` (new functions
 `auto_detect_team_id`, `_wda_bundle_id_for_team`, `patch_wda_bundle_id`,
 `_xcode_account_output_has_any_account`; updated `build_wda`, `install_wda`,
 `bootstrap_device`, `verify_xcode_account_for_team`), `server.py` (`tool_list_devices`,
@@ -541,7 +541,7 @@ two schema description strings), `pyproject.toml` (version bump).
 - **WDA port discovery timeout extended from 15s to 60s.** First-launch xcodebuild test-without-building can take 30s+ on real devices; 15s was too aggressive.
 - **Locked-device detection.** When xcodebuild reports "Unlock \<device\> to Continue", bootstrap now raises `wda_device_locked` with explicit recovery steps (unlock + optionally extend Auto-Lock) instead of the generic `wda_port_discovery_timeout`.
 
-### Fixed — WDA real-device bootstrap (6 bugs, INIT-2026-547)
+### Fixed — WDA real-device bootstrap (6 bugs)
 
 All 6 bugs identified in the live-validation report are resolved in `simdrive/wda/bootstrap.py`:
 
@@ -625,7 +625,7 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 
 ### Source
 
-INIT-2026-547. First release with WDA real-device bootstrap correctly implemented.
+[internal-tracker]. First release with WDA real-device bootstrap correctly implemented.
 536 unit tests pass; 0 failures.
 
 ---
@@ -648,20 +648,20 @@ INIT-2026-547. First release with WDA real-device bootstrap correctly implemente
 - `tests/test_readme_quickstart.py` — regression test pinning quickstart commands' presence in README first 100 lines, and absence of stale/misleading strings.
 
 ### Source
-INIT-2026-546. Closes the polish loop after 1.0.0a3 (dogfood fixes), 1.0.0a4 (MCP sampling), 1.0.0a5 (httpx defensive pin).
+[internal-tracker]. Closes the polish loop after 1.0.0a3 (dogfood fixes), 1.0.0a4 (MCP sampling), 1.0.0a5 (httpx defensive pin).
 
 ---
 
 ## [1.0.0a5] — 2026-05-04
 
 ### Fixed (defensive)
-- **Pin `httpx<1.0` to defend against `mcp` ecosystem pre-release leak.** The published `mcp==1.27.0` declares `httpx>=0.27.1` with no upper bound. `pip install --pre simdrive` would resolve to `httpx 1.0.dev3` (a real pre-release on PyPI) which breaks `httpx-sse` and the MCP transport layer. Caught by DeployAtlas pre-publish smoke for 1.0.0a4 (INIT-2026-544). Pin removable once upstream `mcp` adds its own upper bound.
+- **Pin `httpx<1.0` to defend against `mcp` ecosystem pre-release leak.** The published `mcp==1.27.0` declares `httpx>=0.27.1` with no upper bound. `pip install --pre simdrive` would resolve to `httpx 1.0.dev3` (a real pre-release on PyPI) which breaks `httpx-sse` and the MCP transport layer. Caught by release pipeline pre-publish smoke for 1.0.0a4. Pin removable once upstream `mcp` adds its own upper bound.
 
 ### Added
 - Regression test `tests/test_packaging_deps.py::test_httpx_pinned_below_1_0` so this defensive pin can't be silently removed.
 
 ### Source
-INIT-2026-545. Defensive follow-up to 1.0.0a4 from DeployAtlas's smoke.
+[internal-tracker]. Defensive follow-up to 1.0.0a4 from release pipeline's smoke.
 
 ---
 
@@ -676,13 +676,13 @@ INIT-2026-545. Defensive follow-up to 1.0.0a4 from DeployAtlas's smoke.
 - **`SimdriveError(code="mcp_sampling_unavailable")`** raised when `tool_run_journey` is invoked outside an MCP context (e.g. an MCP client that doesn't support sampling). Recovery hint points to `simdrive run` standalone CLI.
 
 ### Fixed
-- **MCP flow no longer requires an Anthropic API key.** All 31 MCP tools, including `run_journey`, work with `pip install simdrive` (no extras) when the driving agent supports MCP sampling. Per Chairman directive 2026-05-04.
+- **MCP flow no longer requires an Anthropic API key.** All 31 MCP tools, including `run_journey`, work with `pip install simdrive` (no extras) when the driving agent supports MCP sampling. Per maintainer directive 2026-05-04.
 
 ### Packaging
 - `anthropic>=0.30` confirmed in `[project.optional-dependencies]` only. `pip install simdrive` (no extras) works for MCP. `pip install simdrive[claude]` adds the Anthropic SDK for the standalone `simdrive run` / `simdrive ci` CLI paths.
 
 ### Source
-INIT-2026-544. Architectural follow-up to 1.0.0a3 (INIT-2026-543) — agent-first per Chairman directive.
+[internal-tracker]. Architectural follow-up to 1.0.0a3 — agent-first per maintainer directive.
 
 ---
 
@@ -701,7 +701,7 @@ INIT-2026-544. Architectural follow-up to 1.0.0a3 (INIT-2026-543) — agent-firs
 - **Dev Ed25519 keypair** embedded in package (`license/public_key.py:DEV_VERIFY_KEY_HEX` + `DEV_SIGNING_KEY_HEX`). Validator only accepts dev-key-signed licenses with `subject == "dev-trial"` — dev key cannot self-issue prod licenses.
 
 ### Source
-Reported by Maurice Carrier (Example Reader iOS), 2026-05-04 dogfood report. INIT-2026-543.
+Reported by Maurice Carrier (Example Reader iOS), 2026-05-04 dogfood report. [internal-tracker].
 
 ---
 
@@ -762,7 +762,7 @@ former `specterqa-ios` 16.x line: PyPI distribution name reverted to
 - **Docs** — `OBSERVABILITY.md`, `PERFORMANCE.md`, `RECOVERY.md`
 
 ### Added — Production credentials
-- **Production Ed25519 license-signing public key** injected (private key held in Chairman's secure storage; configured as `SIMDRIVE_LICENSE_PRIVATE_KEY` env var on the Railway license server)
+- **Production Ed25519 license-signing public key** injected (private key held in maintainer's secure storage; configured as `SIMDRIVE_LICENSE_PRIVATE_KEY` env var on the Railway license server)
 
 ### Fixed
 - `recordings.py` DELETE 204 + response-model `AssertionError` at router init (introduced and fixed in Cycle 2+3)

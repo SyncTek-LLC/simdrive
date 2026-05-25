@@ -1,4 +1,4 @@
-"""End-to-end trial CLI tests — INIT-2026-549 W1.5 workstream 2.
+"""End-to-end trial CLI tests — [internal-tracker].5 workstream 2.
 
 Covers the user-facing flow promised in the README and ``simdrive --help``:
 

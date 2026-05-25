@@ -1,4 +1,4 @@
-"""TDD for INIT-2026-549 W1 publish-gate logic.
+"""TDD for [internal-tracker] publish-gate logic.
 
 The publish workflow (.github/workflows/specterqa-ios-publish.yml renamed to
 trigger on `simdrive-v*` tags) enforces three pre-publish gates:

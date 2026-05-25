@@ -6,7 +6,7 @@ Instead of a standalone .xcodeproj with hardcoded signing, this module:
 3. Generates a .xctestrun plist pairing their app with our test bundle
 4. Stores the result in ~/.specterqa/runner-build/<bundle_id>/
 
-INIT-2026-506 — SpecterQA iOS v3 project-injection runner build.
+[internal-tracker] — SpecterQA iOS v3 project-injection runner build.
 """
 
 from __future__ import annotations

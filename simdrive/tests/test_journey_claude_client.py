@@ -2,7 +2,7 @@
 
 All tests use a mocked anthropic.Anthropic client — no real API calls are made.
 
-INIT-2026-544: ClaudeLLMClient.call is now async (wraps blocking SDK call in
+[internal-tracker]: ClaudeLLMClient.call is now async (wraps blocking SDK call in
 asyncio.to_thread).  All tests that call client.call() directly are updated
 to use asyncio.run() so they exercise the new async interface.
 """
@@ -80,7 +80,7 @@ def test_parse_decision_invalid_json():
 def test_client_call_returns_decision(mock_anthropic_cls):
     """Happy-path: client calls SDK and returns a parsed StepDecision.
 
-    INIT-2026-544: call() is now async — use asyncio.run() to invoke it.
+    [internal-tracker]: call() is now async — use asyncio.run() to invoke it.
     """
     fake_response = _make_response(
         '{"tool": "swipe", "args": {"direction": "up"}, "rationale": "scroll", "confidence": 0.8}',
@@ -107,7 +107,7 @@ def test_client_call_returns_decision(mock_anthropic_cls):
 def test_client_cost_accumulates(mock_anthropic_cls):
     """Cost accumulates across multiple calls.
 
-    INIT-2026-544: call() is now async — use asyncio.run() to invoke it.
+    [internal-tracker]: call() is now async — use asyncio.run() to invoke it.
     """
     fake_response = _make_response(
         '{"tool": "done", "args": {}, "rationale": "done", "confidence": 1.0}',
@@ -134,7 +134,7 @@ def test_client_cost_accumulates(mock_anthropic_cls):
 def test_client_sdk_exception_propagates(mock_anthropic_cls):
     """SDK exceptions bubble up so runner can wrap them as claude_call_failed.
 
-    INIT-2026-544: call() is now async — use asyncio.run() to invoke it.
+    [internal-tracker]: call() is now async — use asyncio.run() to invoke it.
     asyncio.to_thread propagates exceptions from the thread back to the caller.
     """
     mock_client = MagicMock()

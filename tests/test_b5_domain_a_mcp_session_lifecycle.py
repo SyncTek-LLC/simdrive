@@ -8,7 +8,7 @@ Findings covered:
 All tests MUST fail red until production code implements the features.
 No live simulator required — run via: pytest -m "not live" tests/test_b5_domain_a_mcp_session_lifecycle.py
 
-INIT-2026-549 (SimDrive Launch Sprint W1) / b5 domain-A test sprint.
+[internal-tracker] (SimDrive Launch Sprint W1) / b5 domain-A test sprint.
 """
 from __future__ import annotations
 

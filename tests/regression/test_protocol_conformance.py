@@ -4,7 +4,7 @@ Checks that each concrete backend has the required methods with compatible
 signatures.  No network connections are made; these tests exercise the class
 surface only.
 
-INIT-2026-525 — SpecterQA iOS Protocol refactor.
+[internal-tracker] — SpecterQA iOS Protocol refactor.
 """
 
 from __future__ import annotations

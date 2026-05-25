@@ -1,8 +1,8 @@
-"""TestAtlas — simdrive 1.0.0a11 device SoM tests (F-002).
+"""test engineering — simdrive 1.0.0a11 device SoM tests (F-002).
 
 All 14 tests in this file are expected to FAIL on feat/v17-claude-native HEAD
 3a22bd4 (no ``simdrive/wda/som_device.py`` module, no ``WdaClient.source()``
-method). They must all PASS after CodeAtlas lands ``fix/simdrive-a11-device-som``.
+method). They must all PASS after engineering lands ``fix/simdrive-a11-device-som``.
 
 XML fixtures are built inline with stdlib ``xml.etree.ElementTree`` so no
 disk-based fixtures are needed — tests are fully hermetic.
@@ -302,7 +302,7 @@ def test_disabled_element_included(tmp_path):
 
     assert len(marks) == 1, (
         f"Expected disabled button to be INCLUDED; got {len(marks)} marks. "
-        "If CodeAtlas decided to EXCLUDE disabled: change assertion to `== 0` "
+        "If engineering decided to EXCLUDE disabled: change assertion to `== 0` "
         "and update this docstring."
     )
     assert "Disabled Button" in marks[0]["text"]

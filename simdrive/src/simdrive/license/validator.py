@@ -9,7 +9,7 @@ Design decisions:
   7-day window past expiry before hard-rejecting. This matches the spec.
 - Dev key: licenses signed with DEV_SIGNING_KEY are accepted but MUST have
   subject="dev-trial"; the dev key cannot forge enterprise/pro licenses.
-- Multi-key rotation (INIT-2026-549): payloads may include a ``key_id``
+- Multi-key rotation: payloads may include a ``key_id``
   field naming which entry in TRUSTED_PUBLIC_KEYS signed them. Payloads
   without ``key_id`` fall back to the first trusted key (backwards compat
   with every license issued before this change).

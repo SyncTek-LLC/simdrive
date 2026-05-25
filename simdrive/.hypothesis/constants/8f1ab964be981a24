@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/perf.py
-# hypothesis_version: 6.152.4
-
-[0.0, 10.0, 15.0, 1024.0, '-M', '-o', '-p', '/usr/bin/footprint', 'B', 'GB', 'KB', 'MB', 'available', 'captured_at', 'clean_mb', 'cpu_pct', 'dirty_mb', 'footprint', 'footprint_mb', 'high', 'launchctl', 'list', 'low', 'medium', 'memory_rss_mb', 'pcpu=', 'phys_footprint', 'phys_footprint_peak', 'pid', 'ps', 'reason', 'reclaimable_mb', 'rss=', 'simctl', 'spawn', 'swapped_mb', 'threads', 'xcrun']

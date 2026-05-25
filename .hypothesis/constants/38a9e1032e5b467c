@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/license/trial.py
-# hypothesis_version: 6.152.4
-
-['.simdrive', 'email', 'expires_at', 'installed_at', 'last_server_check', 'license.json', 'license_key']

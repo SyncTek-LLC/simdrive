@@ -14,7 +14,7 @@ Simulator using two complementary data sources:
 Both sources feed into a shared :class:`NetworkSnapshot` that the MCP
 ``ios_network`` tool exposes to Claude.
 
-INIT-2026-492 — SpecterQA iOS Simulator Driver, Phase 2.
+[internal-tracker] — SpecterQA iOS Simulator Driver, Phase 2.
 """
 
 from __future__ import annotations

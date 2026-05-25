@@ -55,7 +55,7 @@ def sign_license(
         against (must match an entry in TRUSTED_PUBLIC_KEYS on the client).
         When omitted the payload does not carry a key_id and the client
         falls back to the first trusted key — this is the behaviour of
-        every license issued before INIT-2026-549.
+        every license issued before [internal-tracker].
 
     Returns
     -------

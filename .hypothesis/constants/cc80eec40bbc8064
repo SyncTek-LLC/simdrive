@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/auth.py
-# hypothesis_version: 6.141.1
-
-['Authorization', 'Bearer', 'Bearer ', 'WWW-Authenticate']

@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/specterqa_ios/journey/claude_client.py
-# hypothesis_version: 6.141.1
-
-[0.0, 0.004, 0.5, 15.0, 75.0, 200, 1024, 1000000, '.', 'ANTHROPIC_API_KEY', 'args', 'base64', 'claude-opus-4-7', 'confidence', 'content', 'data', 'fail', 'image', 'image/jpeg', 'image/png', 'jpeg', 'jpg', 'media_type', 'rationale', 'rb', 'role', 'source', 'text', 'tool', 'type', 'user']

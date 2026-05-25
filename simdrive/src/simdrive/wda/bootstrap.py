@@ -16,7 +16,7 @@ Algorithm overview:
   9. Smoke GET /status → {value: {ready: true}}
  10. Print "WDA ready" summary with any manual Trust prompts
 
-Bug fixes (INIT-2026-547):
+Bug fixes:
   Bug 1 — resolve_signing_identity now filters by team_id before raising ambiguity.
   Bug 2 — hardware UDID resolved via devicectl; coredevice UUID used only for devicectl cmds.
   Bug 3 — CODE_SIGN_IDENTITY="Apple Development" + CODE_SIGN_STYLE=Automatic + -allowProvisioningUpdates.

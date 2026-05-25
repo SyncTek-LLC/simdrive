@@ -1,9 +1,9 @@
-"""TDD tests for MCPSamplingLLMClient — INIT-2026-544.
+"""TDD tests for MCPSamplingLLMClient — [internal-tracker].
 
 These tests pin the contract for the NEW MCPSamplingLLMClient that calls
 MCP sampling (session.create_message) instead of the Anthropic SDK directly.
 
-ALL tests in this file must FAIL until CodeAtlas creates
+ALL tests in this file must FAIL until engineering creates
   simdrive/journey/mcp_sampling_client.py
 and wires up the async Protocol.
 
@@ -40,7 +40,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Import the module under test.
-# This WILL fail with ImportError until CodeAtlas creates the file.
+# This WILL fail with ImportError until engineering creates the file.
 # That is the correct TDD signal.
 # ---------------------------------------------------------------------------
 from simdrive.journey.mcp_sampling_client import MCPSamplingLLMClient  # type: ignore[import]
@@ -324,7 +324,7 @@ class TestMCPSamplingClientSessionErrors:
     Rationale: the runner's generic `except Exception` at the call site already
     converts any exception to outcome="error" with the message captured in
     failure_reason.  Wrapping in a custom exception type would lose the original
-    cause without adding debuggability.  CodeAtlas MAY choose to wrap in a
+    cause without adding debuggability.  engineering MAY choose to wrap in a
     specific simdrive.errors.SimdriveError subclass — if so, update this test
     to assert the wrapper type while still checking .cause.
     """
@@ -378,7 +378,7 @@ class TestMCPSamplingClientNoAnthropicImport:
         """The source of mcp_sampling_client.py must not contain 'import anthropic'
         or 'from anthropic'.
 
-        If this test fails after CodeAtlas creates the file, it means the
+        If this test fails after engineering creates the file, it means the
         implementation accidentally pulled in the Anthropic SDK — which would
         force every MCP user to `pip install anthropic` and set ANTHROPIC_API_KEY.
         """
@@ -387,7 +387,7 @@ class TestMCPSamplingClientNoAnthropicImport:
 
         assert module_path.exists(), (
             f"mcp_sampling_client.py not found at {module_path}. "
-            "CodeAtlas must create this file."
+            "engineering must create this file."
         )
 
         source_text = module_path.read_text(encoding="utf-8")

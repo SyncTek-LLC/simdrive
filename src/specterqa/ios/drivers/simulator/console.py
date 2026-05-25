@@ -4,7 +4,7 @@ Spawns ``xcrun simctl spawn <device> log stream --level debug --style json``
 and continuously parses JSON log lines into :class:`LogEntry` objects stored
 in a thread-safe ring buffer.
 
-INIT-2026-492 — SpecterQA iOS Simulator Driver, Phase 2.
+[internal-tracker] — SpecterQA iOS Simulator Driver, Phase 2.
 """
 
 from __future__ import annotations

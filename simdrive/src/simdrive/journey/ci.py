@@ -292,7 +292,7 @@ def run_ci(options: CIRunOptions | None = None) -> CIRunSummary:
                     break
                 continue
 
-        # Run the journey — run_journey is async after INIT-2026-544.
+        # Run the journey — run_journey is async after [internal-tracker].
         try:
             result = asyncio.run(run_journey(journey, persona, session, llm_client))
         except Exception as exc:

@@ -6,7 +6,7 @@ F-009: tool_type_text on target="device" MUST route all operations through
 
 All 6 tests FAIL on feat/v17-claude-native HEAD because F-009 is not yet
 implemented: the device branch does not exist in server.py on HEAD (the
-working assumption is that CodeAtlas will add it in fix/simdrive-a12-typetext-device).
+working assumption is that engineering will add it in fix/simdrive-a12-typetext-device).
 
 Tests confirm:
   1. No simctl call on plain type_text (device).
@@ -287,7 +287,7 @@ def test_type_text_sim_still_uses_simctl_or_hid(tmp_path):
 def test_type_text_device_guards_against_simctl_invocation(tmp_path):
     """If _simctl has a device guard, calling it with a device session raises.
 
-    Skip if no guard was added (CodeAtlas did not add a runtime assertion).
+    Skip if no guard was added (engineering did not add a runtime assertion).
     """
     from simdrive import sim
 
@@ -312,7 +312,7 @@ def test_type_text_device_guards_against_simctl_invocation(tmp_path):
 
     if not has_guard:
         pytest.skip(
-            "No simctl device-guard found in _simctl — CodeAtlas did not add one; "
+            "No simctl device-guard found in _simctl — engineering did not add one; "
             "skipping guard assertion per contract."
         )
 

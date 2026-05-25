@@ -1,4 +1,4 @@
-"""Coverage push: server.py 70% -> 85% (INIT-2026-549 Wave 4 coverage-85).
+"""Coverage push: server.py 70% -> 85%.
 
 Targets the previously uncovered tool handlers and CLI subcommand entry
 points by mocking the act/sim/wda/observe boundaries.  Every test does

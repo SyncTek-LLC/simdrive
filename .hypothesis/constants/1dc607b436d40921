@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/license/validator.py
-# hypothesis_version: 6.152.4
-
-[86400, '.', '=', 'ascii', 'customer_email', 'dev-trial', 'expires_at', 'license expired', 'license valid', 'subject', 'tier']

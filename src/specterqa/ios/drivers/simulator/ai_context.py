@@ -4,7 +4,7 @@ Collects a unified snapshot of the iOS Simulator state (logs, network,
 performance, app state, crashes) into a :class:`DriverContext` dataclass and
 formats it as markdown text suitable for injection into Claude's context window.
 
-INIT-2026-492 — SpecterQA iOS Simulator Driver, Phase 3.
+[internal-tracker] — SpecterQA iOS Simulator Driver, Phase 3.
 """
 
 from __future__ import annotations

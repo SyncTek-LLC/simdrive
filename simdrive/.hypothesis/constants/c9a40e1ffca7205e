@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/journey/loader.py
-# hypothesis_version: 6.152.4
-
-['*.yaml', '.simdrive/journeys', '.simdrive/personas']

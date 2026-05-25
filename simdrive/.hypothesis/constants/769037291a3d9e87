@@ -1,4 +1,0 @@
-# file: /Users/atlas/Documents/specterqa-ios/simdrive/src/simdrive/cloud/storage/r2.py
-# hypothesis_version: 6.152.4
-
-['/tmp/simdrive-cloud', '404', 'Body', 'Bucket', 'Code', 'Contents', 'Error', 'Key', 'NoSuchKey', 'R2_ACCESS_KEY_ID', 'R2_ACCOUNT_ID', 'R2_BUCKET', 'R2_SECRET_ACCESS_KEY', 'STORAGE_BACKEND', 'auto', 'get_object', 'list_objects_v2', 's3', 'stub']

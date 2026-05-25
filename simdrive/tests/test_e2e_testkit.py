@@ -6,7 +6,7 @@ Marked `live` — skipped in normal pytest runs. Run explicitly:
 
 Requirements:
   - A booted iOS simulator
-  - TestKitApp installed (build with /Users/atlas/Documents/specterqa-ios/TestKitApp/build.sh)
+  - TestKitApp installed (build with ./TestKitApp/build.sh from the repo root)
   - simdrive native binary built (cd native && make)
 
 Each test exercises a single tool or a small flow against a known-good

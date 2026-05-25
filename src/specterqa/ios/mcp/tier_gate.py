@@ -1,6 +1,6 @@
 """Tier-based access control for the SpecterQA MCP tool surface.
 
-INIT-2026-525 — First revenue play; enforces license tier gating so trial/indie
+[internal-tracker] — First revenue play; enforces license tier gating so trial/indie
 users cannot access premium diagnostic and parallel-session tools.
 
 Tier hierarchy (ascending privilege):

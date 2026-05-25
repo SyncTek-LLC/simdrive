@@ -132,7 +132,7 @@ def _check_capture(pre: Optional[Path], post: Optional[Path]) -> Optional[str]:
     the step; a failed post-state capture (the common case — e.g. a simulator
     hiccup right after a tap) means the recorder doesn't know what state the
     action produced. In either case the step is incomplete and replay would
-    surface confusing errors, so we drop it (INIT-2026-549).
+    surface confusing errors, so we drop it.
     """
     for label, candidate in (("pre", pre), ("post", post)):
         if candidate is None:
@@ -389,7 +389,7 @@ class Recorder:
         Stored in the step so replay can detect marks-count drift (structural UI
         change) even when SSIM passes.
 
-        Integrity guard (INIT-2026-549): if either ``pre_screenshot`` or
+        Integrity guard: if either ``pre_screenshot`` or
         ``post_screenshot`` is missing, None, or points to a missing/empty file,
         the step is **dropped entirely** with a structured warning logged. This
         prevents partially-captured steps (typically caused by a flaky simulator
@@ -1459,9 +1459,7 @@ before halting. When the first sample is below threshold, the replay engine
 recaptures a fresh screenshot and re-compares; only when *both* samples fall
 below the threshold do we treat it as real drift. Marks-count drift remains a
 single-frame check because a structural mark drop is far harder to fluke than
-a pixel-level SSIM dip.
-
-(INIT-2026-549) — set to 2; raising this would lengthen recovery time on
+a pixel-level SSIM dip. — set to 2; raising this would lengthen recovery time on
 genuinely drifted screens without meaningfully improving false-positive rate.
 """
 
@@ -1554,7 +1552,7 @@ def replay(name: str, session: Session, on_drift: str = "halt",
 
     for step in steps:
         # marks_count: stored at step level (recorder a13 path) or in step.args
-        # (TestAtlas fixture format). Read from both for compat.
+        # (test engineering fixture format). Read from both for compat.
         recorded_marks_count = (
             step.get("marks_count")
             or (step.get("args") or {}).get("marks_count")
@@ -1573,7 +1571,7 @@ def replay(name: str, session: Session, on_drift: str = "halt",
                 "sample": 1,
             },
         )
-        # Hysteresis (INIT-2026-549): a single noisy sub-threshold frame
+        # Hysteresis: a single noisy sub-threshold frame
         # shouldn't halt replay. When the first sample is under threshold we
         # recapture a fresh screenshot, recompute, and only declare drift when
         # *both* samples fail. We retain the lower of the two scores as the

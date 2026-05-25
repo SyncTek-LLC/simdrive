@@ -339,7 +339,7 @@ former `specterqa-ios` 16.x line: PyPI distribution name reverted to
 - **Docs** — `OBSERVABILITY.md`, `PERFORMANCE.md`, `RECOVERY.md`
 
 ### Added — Production credentials
-- **Production Ed25519 license-signing public key** injected (private key held in Chairman's secure storage; configured as `SIMDRIVE_LICENSE_PRIVATE_KEY` env var on the Railway license server)
+- **Production Ed25519 license-signing public key** injected (private key held in maintainer's secure storage; configured as `SIMDRIVE_LICENSE_PRIVATE_KEY` env var on the Railway license server)
 
 ### Fixed
 - `recordings.py` DELETE 204 + response-model `AssertionError` at router init (introduced and fixed in Cycle 2+3)
@@ -413,7 +413,7 @@ and `simdrive ci` CLI subcommands, and bumped the version.
 
 ### Pending for Atlas before Cycle 2
 
-- Real `SIMDRIVE_PUBLIC_KEY_HEX` keypair needs Chairman generation and injection
+- Real `SIMDRIVE_PUBLIC_KEY_HEX` keypair needs maintainer generation and injection
   into `license/public_key.py`. Current public key is a placeholder — license
   signing/verification will fail in production until this is set.
 - Live smoke against TestKitApp deferred to Cycle 4 dogfood pass.
@@ -616,7 +616,7 @@ for the tactical patches that v16 makes redundant by deletion.
   per step; optional OCR'd text near tap for human readability.
 - **Phase E — README rewrite, migration guide, real-sim integration tests
   for the new primitives.**
-- **Phase F — PR, QualityAtlas certification, DeployAtlas tag/PyPI publish.**
+- **Phase F — PR, QA review certification, release pipeline tag/PyPI publish.**
 
 ### Out-of-band signals (unchanged in v16)
 

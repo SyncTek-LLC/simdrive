@@ -1,4 +1,4 @@
-"""TestAtlas — simdrive 1.0.0a12 marks parity tests (F-007 + F-008).
+"""test engineering — simdrive 1.0.0a12 marks parity tests (F-007 + F-008).
 
 F-007: Resolver (_resolve_target_xy) must accept dict marks (as stored in
        Session.last_marks for target=device) without raising AttributeError.

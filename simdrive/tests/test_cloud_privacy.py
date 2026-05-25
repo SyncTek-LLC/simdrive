@@ -1,4 +1,4 @@
-"""Tests for cloud privacy scrubbing (INIT-2026-549 W-F).
+"""Tests for cloud privacy scrubbing.
 
 The scrubber must guarantee no sensitive value survives into logs or
 error bodies. Sensitive == any field name containing one of the

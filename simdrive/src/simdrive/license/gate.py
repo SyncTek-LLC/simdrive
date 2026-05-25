@@ -1,6 +1,6 @@
 """MCP-tool entitlement gate — single entry point for paywall enforcement.
 
-INIT-2026-549 W1.5: every MCP tool handler calls ``gate()`` at its entry. The
+[internal-tracker].5: every MCP tool handler calls ``gate()`` at its entry. The
 function delegates to ``simdrive.license.entitlement.check_entitlement`` and
 re-raises any ``LicenseError`` unchanged so the MCP envelope wrapper sees the
 structured ``license_required`` / ``license_expired`` payload.

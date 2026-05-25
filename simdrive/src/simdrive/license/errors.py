@@ -16,7 +16,7 @@ Error codes surfaced here:
   - trial_rate_limited
   - cloud_unreachable
 
-UX envelope (INIT-2026-549 W1.5):
+UX envelope:
   When the MCP-tool wrapper serialises a LicenseError to the agent host, the
   envelope is enriched with:
     error: "license_required"           - umbrella code agents switch on

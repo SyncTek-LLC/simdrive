@@ -69,7 +69,7 @@ def _make_session(session_id: str = "test-session-001") -> MagicMock:
 class FakeLLMClient:
     """Scripted LLM client that returns a predetermined sequence of decisions.
 
-    INIT-2026-544: call() converted to async def so it satisfies the new
+    [internal-tracker]: call() converted to async def so it satisfies the new
     async LLMClient Protocol after the MCP sampling refactor.  All assertions
     and scripted-decision logic are unchanged.
     """

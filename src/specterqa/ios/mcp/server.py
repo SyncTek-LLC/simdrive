@@ -37,7 +37,7 @@ ios_type, ios_press_key, ios_dismiss_keyboard, ios_wait,
 ios_wait_for_element, ios_wait_idle, ios_capture_state,
 ios_action_with_logs) — replaced by ios_observe + ios_act.
 
-INIT-2026-500 — SpecterQA iOS Headless Driver.
+[internal-tracker] — SpecterQA iOS Headless Driver.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ import logging
 import os
 import subprocess
 
-# INIT-2026-525: Tier-based access control for MCP tools.
+# [internal-tracker]: Tier-based access control for MCP tools.
 # Import is deferred-safe — tier_gate only imports from the standard library
 # and lazily imports LicenseValidator on first tool call.
 from specterqa.ios.mcp.tier_gate import require_tier  # noqa: E402
