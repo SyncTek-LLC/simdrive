@@ -119,22 +119,83 @@ jobs:
           # Extract the section for VERSION via Node (same regex as
           # downstream apply-release.mjs, so behaviour is identical).
           # Single-shot file write; no shell quoting of multiline markdown.
-          node --eval '
-            const fs = require("fs");
-            const VERSION = process.env.VERSION;
-            const text = fs.readFileSync("simdrive/CHANGELOG.md", "utf8");
-            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-            const re = new RegExp(
-              "(##\\s*\\[?" + escapeRegex(VERSION) + "\\]?[^\\n]*\\n[\\s\\S]*?)(?=\\n##\\s*\\[|$)",
-            );
-            const m = text.match(re);
-            if (!m) {
-              console.error("section for " + VERSION + " not found in CHANGELOG.md");
-              process.exit(2);
+          #
+          # Also runs sanitizeForPublic() -- a strip-filter that redacts
+          # internal context (initiative IDs, internal paths, customer
+          # codenames, internal department names) so downstream payload
+          # carries the customer-safe form even if an author writes for
+          # the internal audience by habit. This MIRRORS the same
+          # function in the simdrive-site repo's apply-release.mjs; both
+          # apply for defense-in-depth (engine-side strips before the
+          # payload leaves; site-side strips again on render). Keep the
+          # two copies in sync when adding rules.
+          #
+          # The script is written to a temp file and run with `node FILE`
+          # (rather than `node --eval`) because the sanitizer body uses
+          # both single- and double-quoted JS strings; --eval needs the
+          # whole script in one shell-quoted blob and would clash.
+          cat > /tmp/extract-section.mjs <<"NODESCRIPT"
+          import { promises as fs } from "node:fs";
+          const VERSION = process.env.VERSION;
+          const text = await fs.readFile("simdrive/CHANGELOG.md", "utf8");
+          const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(
+            "(##\\s*\\[?" + escapeRegex(VERSION) + "\\]?[^\\n]*\\n[\\s\\S]*?)(?=\\n##\\s*\\[|$)",
+          );
+          const m = text.match(re);
+          if (!m) {
+            console.error("section for " + VERSION + " not found in CHANGELOG.md");
+            process.exit(2);
+          }
+          function sanitizeForPublic(input) {
+            const DROP = [
+              /^\s*\[internal-tracker\]/,
+              /^\s*Reported by .+\(.*Example Reader.*\)/i,
+              /Reported by Maurice Carrier/i,
+            ];
+            const REDACT = [
+              [/\s*\[?INIT-\d{4}-\d+(?:\s+P\d+)?\]?\.?/g, ""],
+              [/\s*\[internal-tracker\]\.?/g, ""],
+              [/CompanyState\/[^\s).,;]+/g, "internal report"],
+              [/\/Users\/atlas\/\S+/g, "<path>"],
+              [/\b(?:Business|Code|Deploy|Security|Quality|Test|VA|TechWriter|DevRel|Legal|Operations|Product|Verify|Marketing)Atlas\b/g, "the team"],
+              [/\bAtlas CEO\b/g, "the team"],
+              [/\bforgeos(?:-engine)?\b/gi, "the build system"],
+              [/\bMaurice Carrier\b/g, "a user"],
+              [/\bMaurice(?:\s*\/\s*Example Reader)?\b/g, "a user"],
+              [/\bMoe'?s Max\b/g, "a real device"],
+              [/\bExample Reader iOS team\b/g, "early adopters"],
+              [/\bExample Reader dogfood/g, "dogfood"],
+              [/\bExample Reader's\b/g, "an early adopter's"],
+              [/\bExample Reader\b/g, "early adopters"],
+              [/\bSpecterQA(?:'s)?\b/g, "the predecessor project"],
+              [/\bsub-?agent\b/gi, "automated"],
+              [/\bbackend team\b/gi, "maintainer"],
+              [/\bChairman\b/g, "the maintainer"],
+            ];
+            const kept = [];
+            for (const line of input.split("\n")) {
+              if (DROP.some((re) => re.test(line))) continue;
+              let r = line;
+              for (const [p, repl] of REDACT) r = r.replace(p, repl);
+              r = r
+                .replace(/\(\s*[,;]?\s*\)/g, "")
+                .replace(/\[\s*\]/g, "")
+                .replace(/[ \t]{2,}/g, " ")
+                .replace(/\s+([.,;])/g, "$1")
+                .replace(/\bA\s+(automated|internal)\b/g, "An $1")
+                .replace(/\ba\s+(automated|internal)\b/g, "an $1")
+                .replace(/\s+$/g, "");
+              kept.push(r);
             }
-            fs.writeFileSync(".release-section.md", m[1].trim() + "\n");
-            console.error("extracted " + m[1].length + " bytes for " + VERSION);
-          '
+            return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+          }
+          const raw = m[1].trim();
+          const sanitized = sanitizeForPublic(raw);
+          await fs.writeFile(".release-section.md", sanitized + "\n");
+          console.error("extracted " + raw.length + " raw -> " + sanitized.length + " sanitized for " + VERSION);
+          NODESCRIPT
+          node /tmp/extract-section.mjs
           # Base64-encode the section. -w0 disables wrapping (GNU base64);
           # on macOS that flag is unknown, but this runs on ubuntu-latest.
           SECTION_B64="$(base64 -w0 .release-section.md)"
