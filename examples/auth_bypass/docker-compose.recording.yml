@@ -1,0 +1,81 @@
+# SimDrive auth_bypass recipe — backend compose override for recording
+#
+# Usage:
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f examples/auth_bypass/docker-compose.recording.yml \
+#     up
+#
+# What this override does:
+#   1. Sets RECORDING_MODE=1 — the backend should refuse to honor the
+#      AUTH_BYPASS_TOKEN header unless this is set. Belt-and-braces, defense
+#      in depth: the binary checks this AND checks the deploy environment
+#      (`ENV=dev` or `ENV=recording` only).
+#   2. Injects an AUTH_BYPASS_TOKEN — a shared secret the dev-build iOS app
+#      sends in the Authorization header on every request when launched
+#      with `SimDriveAuthInject`. The token below is the canonical "we are
+#      not in production" string; rotate per repo if you want, but DO NOT
+#      reuse a production-shape token here (it should look unmistakably
+#      unfit for prod at a glance).
+#   3. Mounts seed-dev-users.json read-only into the seed-data path. The
+#      backend's startup seeder reads this and upserts the fixture users
+#      with their fixed UUIDs.
+#   4. Pins the backend to an isolated `recording` network so it cannot
+#      reach prod databases / prod identity providers even if a config
+#      typo points it that way.
+#
+# Safety: see ../safety-checklist.md before merging changes to this file.
+
+version: "3.8"
+
+services:
+  backend:
+    environment:
+      # Defense in depth — backend MUST gate the bypass code path on BOTH
+      # of these being set AND on ENV being a non-prod value. Three locks.
+      ENV: recording
+      RECORDING_MODE: "1"
+      AUTH_BYPASS_TOKEN: "local-recording-only-not-for-prod"
+
+      # Point at the recording-only DB. NEVER use a connection string that
+      # could plausibly resolve to a prod database.
+      DATABASE_URL: "postgresql://recording:recording@db-recording:5432/recording"
+
+      # If your backend has a feature-flag service, force-disable the
+      # "production-only" flags so the recording produces deterministic
+      # screens regardless of remote flag state.
+      FEATURE_FLAGS_BACKEND: "static"
+      FEATURE_FLAGS_STATIC_FILE: "/seed/feature-flags-recording.json"
+
+    volumes:
+      # Mount the fixture-user seed file read-only. The backend startup
+      # seeder reads this on boot and upserts users with fixed UUIDs so
+      # subsequent recordings observe identical user records.
+      - ./seed-dev-users.json:/seed/seed-dev-users.json:ro
+
+    networks:
+      - recording
+
+    # The backend image's default entrypoint runs migrations, then the seed
+    # script (which reads /seed/seed-dev-users.json), then the API server.
+    # If your seed flow is different, override `command` here.
+
+  db-recording:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: recording
+      POSTGRES_PASSWORD: recording
+      POSTGRES_DB: recording
+    # tmpfs — recording DB is ephemeral; every `docker compose up` starts
+    # from a clean slate so recordings can't accumulate cross-run state.
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks:
+      - recording
+
+networks:
+  # Isolated network — no `external: true`, no bridge to the prod compose
+  # network. The backend literally cannot reach prod services from here.
+  recording:
+    driver: bridge
+    internal: false  # set to `true` if your backend doesn't need outbound
