@@ -200,7 +200,7 @@ def license_key_rotation_required(key_id: str, trusted_ids: list[str]) -> "KeyRo
             f"Your license was signed with key {key_id!r} but this simdrive build only "
             f"trusts {trusted_ids!r}. Recovery: upgrade simdrive (`pip install -U simdrive`) "
             "so it picks up the new signing key, then retry. If you cannot upgrade, "
-            "contact support@synctek.io to re-issue the license under an older key."
+            "contact support@simdrive.dev to re-issue the license under an older key."
         ),
         details={"key_id": key_id, "trusted_key_ids": trusted_ids},
     )
@@ -243,7 +243,7 @@ def trial_rate_limited(ip: str) -> LicenseError:
         code="trial_rate_limited",
         message=(
             f"Too many trial requests from {ip!r} (limit: 5/IP/day). "
-            "Recovery: try again tomorrow or contact support@synctek.io."
+            "Recovery: try again tomorrow or contact support@simdrive.dev."
         ),
         details={"ip": ip},
     )

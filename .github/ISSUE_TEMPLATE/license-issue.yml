@@ -1,0 +1,47 @@
+name: License / billing issue
+description: Report a trial, license-key, or billing problem.
+title: "license: "
+labels: ["license", "triage", "priority"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > **For sensitive billing or account details, email
+        > `support@simdrive.dev` directly rather than posting them publicly
+        > in this issue.** Use this template for surfacing the failure mode
+        > so we can fix the product; we will follow up over email for any
+        > private details (Polar order ID, payment method, refund processing).
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue type
+      options:
+        - Trial not starting
+        - Pro key not validating
+        - Lost license
+        - Refund request
+        - Billing question
+    validations:
+      required: true
+  - type: input
+    id: purchase-email
+    attributes:
+      label: Email used for purchase
+      description: The email address tied to the trial or Polar order.
+      placeholder: "you@example.com"
+    validations:
+      required: true
+  - type: input
+    id: polar-order-id
+    attributes:
+      label: Polar order ID (if known)
+      description: From your Polar receipt or account dashboard.
+      placeholder: "polar_xxx..."
+  - type: textarea
+    id: error-message
+    attributes:
+      label: Error message (verbatim)
+      description: Paste the exact CLI error or screenshot text. Include the `code:` field if shown.
+      render: shell
+    validations:
+      required: true

@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest a new capability or improvement for SimDrive.
+title: "feat: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Help us understand the problem first; we
+        prioritize based on user impact and current roadmap.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that SimDrive doesn't let you do today?
+      placeholder: "I want to ... but SimDrive currently ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: If you have an idea for how this should work, describe it. Mockups, CLI flags, MCP tool sketches all welcome.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workarounds have you tried? What other tools handle this well?
+  - type: dropdown
+    id: subscription-tier
+    attributes:
+      label: Pro/Team subscriber?
+      description: Used for prioritization only — paying customers' asks get weighted higher in roadmap planning.
+      options:
+        - Free
+        - Trial
+        - Pro
+        - Team
+    validations:
+      required: false
