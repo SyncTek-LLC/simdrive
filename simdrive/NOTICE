@@ -1,7 +1,13 @@
 SimDrive (PyPI: simdrive)
 Copyright 2026 SyncTek LLC
 
-Licensed under the MIT License (see LICENSE).
+This software is licensed under the Elastic License 2.0 (ELv2).
+See the LICENSE file in the repository root for the full license text,
+or visit https://www.elastic.co/licensing/elastic-license.
+
+Permitted uses include internal use and integrations as defined in the
+license. Hosting this software as a commercial managed service offering
+is NOT permitted without a separate commercial agreement.
 
 This product incorporates code derived from third-party MIT-licensed sources:
 

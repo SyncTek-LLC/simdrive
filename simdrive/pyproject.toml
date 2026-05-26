@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simdrive"
-version = "1.0.0b6"
+version = "1.0.0b7"
 description = "SimDrive — reproduce and validate iOS bugs in 60 seconds with Claude. MCP-native iOS automation; 32 vision-first tools; record once, replay free in CI. 14-day trial, then $29/mo Pro."
 readme = "README.md"
 license = "Elastic-2.0"
