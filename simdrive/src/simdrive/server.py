@@ -2969,8 +2969,18 @@ _HELP_TEXT = """\
 simdrive — MCP-native iOS simulator driver
 
 Usage: simdrive (no args)   Run as MCP server on stdio.
-       simdrive --version
+       simdrive --version [--json] [--required-version VERSION]
        simdrive --help
+
+Environment / version pin enforcement:
+  simdrive version [--json] [--required-version VERSION]
+                              Print the installed simdrive version. With
+                              --required-version, exit 3 on mismatch and
+                              print the pip-install command to align.
+  simdrive doctor  [--json] [--required-version VERSION]
+                              Probe Xcode CLT / simctl / booted devices /
+                              HID helper. Exit 1 if any check fails, exit 3
+                              if --required-version doesn't match.
 
 Onboarding:
   simdrive demo               30-second sanity check: boots iPhone sim, opens
@@ -3508,9 +3518,196 @@ def _cmd_demo(args: list[str]) -> None:
     sys.exit(run_demo(ns))
 
 
+# ─── INIT-2026-553 — version-pin diagnostic + JSON output ────────────────── #
+#
+# Exit codes for `simdrive version` / `simdrive doctor`:
+#   0  ok / version satisfies --required-version
+#   3  version mismatch vs --required-version (machine-parseable signal for
+#      monorepo Makefiles / CI scripts that pin a specific simdrive release).
+#
+# Why exit 3? Reserved by convention in this repo for "environment pin
+# mismatch" — distinct from 1 (generic failure) and 2 (license / argparse).
+# Operators surfaced this friction during the first sub-agent dogfood (INIT-
+# 2026-553 P2): `make ios-smoke` exited 3 with a noisy traceback and no
+# remediation hint, forcing a halt + ping the backend team. The fix below
+# prints the installed vs required versions side-by-side and the exact `pip
+# install` command to align.
+_VERSION_MISMATCH_EXIT = 3
+
+
+def _emit_version(*, required: str | None, as_json: bool) -> int:
+    """Render the version line and, if `required` is given, enforce it.
+
+    Returns the process exit code (0 = ok, 3 = mismatch).
+    """
+    import json as _json
+    import sys
+
+    installed = __version__
+    mismatch = required is not None and installed != required
+
+    if as_json:
+        payload = {
+            "version": installed,
+            "package": "simdrive",
+        }
+        if required is not None:
+            payload["required"] = required
+            payload["satisfies_required"] = not mismatch
+        print(_json.dumps(payload))
+    else:
+        if mismatch:
+            print(
+                f"simdrive version mismatch:\n"
+                f"  installed: {installed}\n"
+                f"  required:  {required}\n"
+                f"\n"
+                f"Align with:\n"
+                f"  pip install 'simdrive=={required}'\n"
+                f"\n"
+                f"Docs: https://docs.simdrive.dev/troubleshooting#version-mismatch",
+                file=sys.stderr,
+            )
+        else:
+            print(f"simdrive {installed}")
+
+    return _VERSION_MISMATCH_EXIT if mismatch else 0
+
+
+def _cmd_version(args: list[str]) -> None:
+    """Handle `simdrive version [--json] [--required-version X]`.
+
+    Polished surface for the legacy `simdrive --version` flag. Consumer
+    scripts (monorepo Makefiles, CI gates) can now parse a stable JSON
+    payload and enforce a pinned release without scraping stderr:
+
+        simdrive version --json | jq -e '.version == "1.0.0b6"'
+        simdrive version --required-version 1.0.0b6  # exit 3 on mismatch
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive version",
+        description=(
+            "Print the installed simdrive version. With --required-version, "
+            "exit 3 (with a remediation hint) if the installed version differs."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit a JSON payload instead of plain text.",
+    )
+    parser.add_argument(
+        "--required-version",
+        default=None,
+        metavar="VERSION",
+        help=(
+            "Required pinned version (e.g. 1.0.0b6). On mismatch, exit 3 and "
+            "print the exact pip-install command to align."
+        ),
+    )
+    ns = parser.parse_args(args)
+    sys.exit(_emit_version(required=ns.required_version, as_json=ns.json))
+
+
+def _cmd_doctor(args: list[str]) -> None:
+    """Handle `simdrive doctor [--json] [--required-version X]`.
+
+    Wraps :func:`diagnostics.doctor` for direct CLI consumption. Useful for
+    consumer monorepos that want a single command to validate the local
+    SimDrive environment *and* a pinned-version contract in one shot:
+
+        simdrive doctor --required-version 1.0.0b6 --json
+
+    Exit codes:
+      0 — all checks ok, version satisfies --required-version
+      1 — at least one diagnostic check failed (Xcode CLT / simctl / HID)
+      3 — version mismatch vs --required-version (takes precedence over 1)
+    """
+    import argparse
+    import json as _json
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive doctor",
+        description=(
+            "Probe local SimDrive readiness: Xcode CLT, simctl runtimes, "
+            "booted devices, native HID helper. Optionally enforce a pinned "
+            "simdrive package version with --required-version."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Emit a JSON payload instead of human-readable text.",
+    )
+    parser.add_argument(
+        "--required-version",
+        default=None,
+        metavar="VERSION",
+        help=(
+            "Required pinned simdrive version (e.g. 1.0.0b6). On mismatch, "
+            "exit 3 and print the exact pip-install command to align."
+        ),
+    )
+    ns = parser.parse_args(args)
+
+    installed = __version__
+    required = ns.required_version
+    mismatch = required is not None and installed != required
+
+    report = diagnostics.doctor()
+    checks_ok = bool(report.get("ok"))
+
+    if ns.json:
+        payload = {
+            "ok": checks_ok and not mismatch,
+            "version": installed,
+            "package": "simdrive",
+            "checks": report.get("checks", []),
+        }
+        if required is not None:
+            payload["required_version"] = required
+            payload["satisfies_required"] = not mismatch
+        print(_json.dumps(payload))
+    else:
+        # Human-readable. Version line first so the operator sees the pin
+        # state before scanning the check list.
+        if mismatch:
+            print(
+                f"simdrive version mismatch:\n"
+                f"  installed: {installed}\n"
+                f"  required:  {required}\n"
+                f"\n"
+                f"Align with:\n"
+                f"  pip install 'simdrive=={required}'\n"
+                f"\n"
+                f"Docs: https://docs.simdrive.dev/troubleshooting#version-mismatch",
+                file=sys.stderr,
+            )
+        else:
+            print(f"simdrive {installed}")
+        for check in report.get("checks", []):
+            mark = "ok " if check.get("ok") else "FAIL"
+            print(f"  [{mark}] {check.get('name')}: {check.get('detail')}")
+        print(f"\noverall: {'ok' if checks_ok else 'FAIL'}")
+
+    # Mismatch takes precedence — operators care about pin alignment first;
+    # a failing Xcode check is meaningless if the wrong simdrive is loaded.
+    if mismatch:
+        sys.exit(_VERSION_MISMATCH_EXIT)
+    sys.exit(0 if checks_ok else 1)
+
+
 # Subcommand dispatch registry — maps the first CLI argument to its handler.
 _SUBCOMMANDS: dict = {
     "demo": _cmd_demo,
+    "doctor": _cmd_doctor,
+    "version": _cmd_version,
     "run": _cmd_run,
     "ci": _cmd_ci,
     "bootstrap-device": _cmd_bootstrap_device,
@@ -3541,8 +3738,11 @@ def serve() -> None:
     if args:
         flag = args[0]
         if flag in ("--version", "-V"):
-            print(f"simdrive {__version__}")
-            sys.exit(0)
+            # Delegate to the polished `version` subcommand so `--json` and
+            # `--required-version` flags work consistently with the legacy
+            # short-flag spelling (INIT-2026-553 P2).
+            _cmd_version(args[1:])
+            return
         if flag in ("--help", "-h"):
             print(_HELP_TEXT, end="")
             sys.exit(0)
