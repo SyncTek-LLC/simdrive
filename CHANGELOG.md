@@ -13,7 +13,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ## 1.0.0b5 (2026-05-22)
 
-18-finding fix wave from b4 dogfood report. See CompanyState/research/simdrive-dogfood/b4/REPORT.md.
+18-finding fix wave from b4 dogfood report. See the internal dogfood report.
 
 ### Highlights
 - MCP server now self-restarts on disk-version drift (F#1)
@@ -21,9 +21,9 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 - Ambiguous text-targets and stale text refs now surface alternates + fuzzy suggestions (F#5, F#6)
 - SSIM compute auto-masks iOS status bar; recordings auto-include device-class masks (F#14, F#15)
 - `verify_change: true` on tap returns screen_changed + ssim_delta (F#8)
-- apps() populates version from CFBundleShortVersionString (F#3)
+- apps populates version from CFBundleShortVersionString (F#3)
 - migrate-recording gains --all and --missing-contract flags (F#17)
-- Plus 10 polish items: logs() raw mode, perf windowed sampling, list_replays filter, lint categorization, OCR alternates, confidence-band relabel, recording text dedup, type_text tap_first persistence, observe(annotate=False) marks
+- Plus 10 polish items: logs raw mode, perf windowed sampling, list_replays filter, lint categorization, OCR alternates, confidence-band relabel, recording text dedup, type_text tap_first persistence, observe(annotate=False) marks
 
 ### Fixed — F#1 MCP host friction: server self-restarts on version drift
 
@@ -37,14 +37,14 @@ lands on the freshly loaded code, same PID, MCP stdio transport intact.
 Opt-out via `SIMDRIVE_NO_AUTO_RESTART=1`. Strict-upgrade-only guard
 (downgrades warn but never restart) + `SIMDRIVE_RESTART_COUNT` env-counter
 loop-guard at 3 prevent oscillation. Thread-safe latch
-(`_RESTART_LATCH = threading.Lock()`) covers concurrent sync + async
+(`_RESTART_LATCH = threading.Lock`) covers concurrent sync + async
 dispatches. Tests: `tests/test_mcp_drift_self_restart.py` (20 cases).
 
 ### Fixed — F#2 `session_start` falsely reports `state="active"` for an app that crashed during launch
 
 `session_start(app_bundle_id=...)` previously returned `state: "active"`
 even when the launched app terminated within ~500 ms of launch (e.g. a
-build missing an entitlement). The Palace dogfood agent only discovered
+build missing an entitlement). The dogfood agent only discovered
 the failure after burning multiple tap/type roundtrips and calling
 `app_state` and `crashes` separately. After the fix, when `app_bundle_id`
 is provided and `verify_launch=True` (default), `session_start` polls
@@ -61,29 +61,29 @@ unavailable" fallback. Opt out per-call with `verify_launch=False`. Tests:
 ### Fixed — F#6 `tap({text})` silent first-match on duplicate labels
 
 - **`tap({text: X})` no longer silent-picks** when >1 marks tie at the
-  winning precedence tier. Bit the SimDrive Demo "Sign In" reproducer: a
-  screen title and a submit button both OCR'd to "Sign In"; the tap landed
-  on the title and the agent thought it had submitted (wasted a screen
-  transition). Now returns structured error
-  `ambiguous_text_target` with `details.candidates` (up to 5; each carries
-  `stable_id`, `mark`, `bbox`, `confidence`, `text`, `position_hint`) and a
-  `recovery` string instructing the caller to re-call with
-  `stable_id`/`mark`/`x,y`.
+ winning precedence tier. Bit the SimDrive Demo "Sign In" reproducer: a
+ screen title and a submit button both OCR'd to "Sign In"; the tap landed
+ on the title and the agent thought it had submitted (wasted a screen
+ transition). Now returns structured error
+ `ambiguous_text_target` with `details.candidates` (up to 5; each carries
+ `stable_id`, `mark`, `bbox`, `confidence`, `text`, `position_hint`) and a
+ `recovery` string instructing the caller to re-call with
+ `stable_id`/`mark`/`x,y`.
 - **Tier precedence preserved.** If exactly one exact match exists, the
-  call still resolves unambiguously even when many prefix/substring
-  matches also exist — exact-singleton wins. Ambiguity is only raised
-  when ≥2 marks tie at the *winning* tier (exact > prefix > substring >
-  alias).
+ call still resolves unambiguously even when many prefix/substring
+ matches also exist — exact-singleton wins. Ambiguity is only raised
+ when ≥2 marks tie at the *winning* tier (exact > prefix > substring >
+ alias).
 - **`position_hint`** is a coarse 9-cell grid label
-  (`top-center`, `bottom-right`, `middle-left`, …) derived from bbox
-  center vs. the last observe's screen size, so the agent can distinguish
-  duplicate-label candidates at a glance.
+ (`top-center`, `bottom-right`, `middle-left`, …) derived from bbox
+ center vs. the last observe's screen size, so the agent can distinguish
+ duplicate-label candidates at a glance.
 - New API: `som.find_text_candidates(marks, query)` exposes the full
-  candidate list at the winning tier; `errors.ambiguous_text_target(...)`
-  constructs the structured error.
+ candidate list at the winning tier; `errors.ambiguous_text_target(...)`
+ constructs the structured error.
 - Tests: `simdrive/tests/test_tap_ambiguous_text.py` (7 cases — covers two
-  exact matches, one exact + many prefix, zero matches, one prefix-only,
-  three exact w/ position hints, >5 cap, recovery-string contract).
+ exact matches, one exact + many prefix, zero matches, one prefix-only,
+ three exact w/ position hints, >5 cap, recovery-string contract).
 
 ### Fixed — F#11 (simdrive recording): `type_text` now persists `tap_first` focus context
 
@@ -102,76 +102,76 @@ and device replay paths.
 
 Closes a class of replay failure where a divergent app state silently
 executed dozens of blind taps. Implements the **recording state contract**
-proposed by the Palace dogfood team
+proposed by the dogfood team
 (`simdrive/docs/FEATURE_REQUEST_STATE_CONTRACT_2026_05_11.md`): every
 recording now carries a `requires:` block captured automatically at
 `record_start` and verified at replay step −1.
 
-**The bug a9 closes:** in the Palace a8 dogfood, a replay of the
+**The bug a9 closes:** in the early adopter a8 dogfood, a replay of the
 SAML-signin recording against a fresh-install state (with a notifications
 permission alert visible at step 0) silently executed 23 taps at SSIM
 0.014, reporting `ok: true`. First tap meant for "Add Library" actually
 hit "Don't Allow"; the remaining 22 landed on arbitrary UI. Drift detection
 was post hoc — by the time the user knew, the app had been touched 23
-times. Third occurrence of this failure mode against Palace; a9 closes it
+times. Third occurrence of this failure mode against early adopter; a9 closes it
 at the schema level so individual projects no longer have to invent local
 workarounds.
 
 ### Added — state contract on recordings
 
 - **`requires:` schema** in recording YAML. Captured, not authored. Three
-  sub-blocks:
-  - `requires.app.{bundle_id, version, version_match}` — `version_match`
-    is one of `exact | minor | major | any` (default `minor`).
-  - `requires.sim.{device, ios_version}` — `ios_version` accepts a raw
-    string or a semver predicate (`>=18.0`, `<19.0`, `!=18.2`, etc.).
-  - `requires.initial_state.{foreground, text_subset_required,
-    text_subset_forbidden, primary_button_label}` — captured by OCRing
-    the step-0 screen via the existing `som.detect_marks()` pipeline.
+ sub-blocks:
+ - `requires.app.{bundle_id, version, version_match}` — `version_match`
+ is one of `exact | minor | major | any` (default `minor`).
+ - `requires.sim.{device, ios_version}` — `ios_version` accepts a raw
+ string or a semver predicate (`>=18.0`, `<19.0`, `!=18.2`, etc.).
+ - `requires.initial_state.{foreground, text_subset_required,
+ text_subset_forbidden, primary_button_label}` — captured by OCRing
+ the step-0 screen via the existing `som.detect_marks` pipeline.
 - **Auto-population at `record_start`** — observes the live screen,
-  captures app bundle/version + sim device/iOS + top text marks. User
-  doesn't write the contract; the camera does.
+ captures app bundle/version + sim device/iOS + top text marks. User
+ doesn't write the contract; the camera does.
 - **Verification at replay step −1** — before any step executes, observes
-  the live state and compares against `requires:`. On mismatch, halts
-  with `halt_reason: "state_contract_mismatch"`, `halted_at: 0`,
-  structured `expected` / `actual` / `remedy` payload. If a permission
-  alert is detected in `actual.text_subset_present` (heuristic on
-  "Don't Allow" / "Allow" / "OK" / "Cancel"), the `remedy` field points
-  at `xcrun simctl privacy ... grant ...` rather than generic advice.
+ the live state and compares against `requires:`. On mismatch, halts
+ with `halt_reason: "state_contract_mismatch"`, `halted_at: 0`,
+ structured `expected` / `actual` / `remedy` payload. If a permission
+ alert is detected in `actual.text_subset_present` (heuristic on
+ "Don't Allow" / "Allow" / "OK" / "Cancel"), the `remedy` field points
+ at `xcrun simctl privacy... grant...` rather than generic advice.
 - **New `replay` parameter:** `halt_on_state_mismatch` (default `True`).
-  Today's "run anyway" behavior is now opt-in by passing `False` — a
-  warning is still emitted in the response.
+ Today's "run anyway" behavior is now opt-in by passing `False` — a
+ warning is still emitted in the response.
 - **Deprecation warning for unannotated recordings:** recordings without
-  a `requires:` block replay with `_simdrive_warning: "Recording has no
-  \`requires:\` block. State contract not verified. Run
-  \`simdrive migrate-recording <name>\` to capture one."` Existing
-  recordings continue to work.
+ a `requires:` block replay with `_simdrive_warning: "Recording has no
+ \`requires:\` block. State contract not verified. Run
+ \`simdrive migrate-recording <name>\` to capture one."` Existing
+ recordings continue to work.
 
 ### Added — lint + migrate tooling
 
 - **`simdrive lint-recordings [--path DIR] [--quiet] [--json]`** CLI
-  command. Walks the directory tree, prints `[OK]` / `[FAIL]` per
-  recording, exits non-zero on any FAIL. `--json` for programmatic
-  consumption (CI `verify-pr.sh` integration).
+ command. Walks the directory tree, prints `[OK]` / `[FAIL]` per
+ recording, exits non-zero on any FAIL. `--json` for programmatic
+ consumption (CI `verify-pr.sh` integration).
 - **`simdrive migrate-recording <name> [--force] [--dry-run]`** CLI
-  command. Re-OCRs the step-0 `pre_screenshot` of a pre-a9 recording,
-  builds a `RequiresBlock`, writes the YAML back in place with a
-  `.pre-migrate.bak` sibling for recovery.
+ command. Re-OCRs the step-0 `pre_screenshot` of a pre-a9 recording,
+ builds a `RequiresBlock`, writes the YAML back in place with a
+ `.pre-migrate.bak` sibling for recovery.
 - Both also exposed as MCP tools (`lint_recordings`, `migrate_recording`)
-  for agentic / CI consumers. Tool count: 30 → 32.
+ for agentic / CI consumers. Tool count: 30 → 32.
 
 ### Internal
 
 - Refactored `_capture_state_contract` to share `_build_requires_block`
-  (pure transform on `marks + app/sim metadata`) with
-  `migrate_recording` — capture-time and migrate-time paths produce
-  identical RequiresBlock shapes by construction.
-- `robustness.validate_replay()` now tolerates the new `requires:`
-  top-level key (was: would have rejected as unknown field).
+ (pure transform on `marks + app/sim metadata`) with
+ `migrate_recording` — capture-time and migrate-time paths produce
+ identical RequiresBlock shapes by construction.
+- `robustness.validate_replay` now tolerates the new `requires:`
+ top-level key (was: would have rejected as unknown field).
 - One e2e test (`test_replay_halts_on_drift_when_screen_diverges`)
-  updated to opt out of the new step-0 contract check — it deliberately
-  diverges state to test the per-step drift path, which a9.0 would
-  otherwise short-circuit.
+ updated to opt out of the new step-0 contract check — it deliberately
+ diverges state to test the per-step drift path, which a9.0 would
+ otherwise short-circuit.
 
 ### Tests
 - 38 new tests across a9.0 (17) + a9.1 (21).
@@ -179,15 +179,15 @@ workarounds.
 
 ### Known (carried forward from a8)
 - D6 (empty `idevicesyslog` output on real devices) still investigation-
-  only — awaiting Palace dogfood capture of
-  `idevicesyslog -u <udid> 2>&1` for root-cause selection. See
-  `simdrive/docs/D6_LOGS_INVESTIGATION.md`.
+ only — awaiting dogfood capture of
+ `idevicesyslog -u <udid> 2>&1` for root-cause selection. See
+ `simdrive/docs/D6_LOGS_INVESTIGATION.md`.
 
 ---
 
 ## [1.0.0a8] — 2026-05-06 (alpha — device session usable on real hardware)
 
-First end-to-end real-device dogfood (`a7`, iPhone 17 Pro Max "Moes Max",
+First end-to-end real-device dogfood (`a7`, iPhone 17 Pro Max "a real device",
 iOS 26.3.1, 2026-05-06) catalogued 12 device-session bugs in
 `simdrive/docs/DOGFOOD_FEEDBACK_2026_05_06_MOES_MAX.md`. a8 fixes 11 of
 12; the twelfth (D6, empty `idevicesyslog` output) ships as
@@ -200,103 +200,103 @@ device session is usable end-to-end". Suite went 678 → 711 passed.
 
 ### Fixed — priority unlock (turns "unusable" into "usable")
 - **D3** `device.launch_app` no longer passes `--start-stopped=false` —
-  modern devicectl rejected the flag, blocking every `session_start`
-  with `app_bundle_id`.
+ modern devicectl rejected the flag, blocking every `session_start`
+ with `app_bundle_id`.
 - **D2** `session_start target=device` now opens a default WDA test
-  session unconditionally (with or without `app_bundle_id`); input verbs
-  no longer hit `wda_session_not_open`.
+ session unconditionally (with or without `app_bundle_id`); input verbs
+ no longer hit `wda_session_not_open`.
 - **D1** `observe` gates `screenshot_b64` behind a new
-  `include_screenshot_b64` param (default `false`). The unconditional
-  101k-char b64 payload was overflowing the MCP token budget on real
-  devices. `screenshot_path` is still returned by default.
+ `include_screenshot_b64` param (default `false`). The unconditional
+ 101k-char b64 payload was overflowing the MCP token budget on real
+ devices. `screenshot_path` is still returned by default.
 
 ### Fixed — daemonization
 - **B3** `bootstrap-device` now passes `start_new_session=True` to the
-  xcodebuild Popen and redirects stdout/stderr to
-  `~/.simdrive/wda/<udid>.log`; PID written to
-  `~/.simdrive/wda/<udid>.pid`. WDA survives bootstrap exit; users no
-  longer need a manual `nohup` workaround.
+ xcodebuild Popen and redirects stdout/stderr to
+ `~/.simdrive/wda/<udid>.log`; PID written to
+ `~/.simdrive/wda/<udid>.pid`. WDA survives bootstrap exit; users no
+ longer need a manual `nohup` workaround.
 - **B3** new CLI: `simdrive wda-up <udid>` (relaunch from registry
-  without rebuilding) and `simdrive wda-down <udid>` (SIGTERM via
-  pidfile).
+ without rebuilding) and `simdrive wda-down <udid>` (SIGTERM via
+ pidfile).
 
 ### Fixed — simctl-leak cluster (device sessions stop using simctl)
 - **D4** Device-launch failure raises `device_launch_failed` with a
-  devicectl-aware recovery hint instead of `no_device` with a simctl
-  hint.
+ devicectl-aware recovery hint instead of `no_device` with a simctl
+ hint.
 - **D5** `tool_apps` for `target=device` now queries
-  `xcrun devicectl device info apps --device <udid> --json-output -`
-  instead of returning `{apps: []}` from a simctl-only call.
+ `xcrun devicectl device info apps --device <udid> --json-output -`
+ instead of returning `{apps: }` from a simctl-only call.
 - **D7** `tool_app_state` for `target=device` now queries
-  `xcrun devicectl device info processes ...` instead of leaking
-  simctl's "Invalid device" error string.
+ `xcrun devicectl device info processes...` instead of leaking
+ simctl's "Invalid device" error string.
 - New helper `simdrive.diagnostics._devicectl_info_json` underlies both.
 
 ### Fixed — bootstrap polish
 - **B1** `verify_xcode_account_for_team(team_id)` now scans the parsed
-  plist output of `defaults read com.apple.dt.Xcode
-  DVTDeveloperAccountManagerAppleIDLists` for an actual team binding
-  (`teamID`/`teamIDs`/`DVTDeveloperAccountTeamID`) instead of grepping
-  for the literal substring `"identifier"` (which matched any non-empty
-  account list and let bootstraps proceed when no account was bound to
-  the requested team).
+ plist output of `defaults read com.apple.dt.Xcode
+ DVTDeveloperAccountManagerAppleIDLists` for an actual team binding
+ (`teamID`/`teamIDs`/`DVTDeveloperAccountTeamID`) instead of grepping
+ for the literal substring `"identifier"` (which matched any non-empty
+ account list and let bootstraps proceed when no account was bound to
+ the requested team).
 - **B2** When multiple Apple Development certs share the requested
-  `team_id`, the most-recently-issued cert is auto-picked instead of
-  raising `wda_signing_ambiguous`. Ambiguity is still raised when
-  `team_id` was not provided.
+ `team_id`, the most-recently-issued cert is auto-picked instead of
+ raising `wda_signing_ambiguous`. Ambiguity is still raised when
+ `team_id` was not provided.
 - **B4** When `xcodebuild build-for-testing` emits a `BUILD FAILED`
-  before its `-allowProvisioningUpdates` retry succeeds, the FAILED line
-  is logged at DEBUG with a single INFO-level summary
-  ("First attempt failed pending provisioning fetch; retry succeeded
-  …expected"). Stops scaring users on first-run bootstraps.
+ before its `-allowProvisioningUpdates` retry succeeds, the FAILED line
+ is logged at DEBUG with a single INFO-level summary
+ ("First attempt failed pending provisioning fetch; retry succeeded
+ …expected"). Stops scaring users on first-run bootstraps.
 
 ### Fixed — session metadata
 - **D8** `bootstrap-device` now captures device name from
-  `xcrun devicectl device info details` and iOS version from WDA
-  `/status`; `~/.simdrive/wda/<udid>.json` carries `device_name` and
-  `os_version` keys; `tool_session_start` returns these instead of
-  `device: "Real Device"`, `os_version: ""`.
+ `xcrun devicectl device info details` and iOS version from WDA
+ `/status`; `~/.simdrive/wda/<udid>.json` carries `device_name` and
+ `os_version` keys; `tool_session_start` returns these instead of
+ `device: "Real Device"`, `os_version: ""`.
 
 ### Investigated (not fixed — gated to a9)
 - **D6** `tool_logs` returns empty on real devices. The original a7
-  report blamed simctl, but the device path actually uses
-  `idevicesyslog`. Five candidate root causes ranked
-  (1s-warmup-too-short → broken brew binary → over-aggressive predicate
-  → DEVNULL'd stderr → Developer Mode regression) in
-  `simdrive/docs/D6_LOGS_INVESTIGATION.md`. a9 will pick the right fix
-  after Lyrasis dogfood captures `idevicesyslog -u <udid> 2>&1` against
-  Palace on a real device.
+ report blamed simctl, but the device path actually uses
+ `idevicesyslog`. Five candidate root causes ranked
+ (1s-warmup-too-short → broken brew binary → over-aggressive predicate
+ → DEVNULL'd stderr → Developer Mode regression) in
+ `simdrive/docs/D6_LOGS_INVESTIGATION.md`. a9 will pick the right fix
+ after Lyrasis dogfood captures `idevicesyslog -u <udid> 2>&1` against
+ early adopter on a real device.
 
 ### Tests
 - 33 new tests across the four fix waves (1.0.0a7 baseline 678 →
-  1.0.0a8 711 passing, 1 skipped).
+ 1.0.0a8 711 passing, 1 skipped).
 - D5/D7 verified live against an iPad on iOS 26 / Xcode 26 (devicectl
-  JSON shape confirmed).
+ JSON shape confirmed).
 
 ### Known
 - CHANGELOG history for a3 → a7 not yet backfilled (gap pre-dates a8).
 - Pre-existing iOS 26 simulator TextField-focus timing flake in
-  `test_e2e_testkit.py::test_type_text_followed_by_submit_produces_result`
-  can intermittently fail on busy hosts; passes on isolated rerun and
-  full suite re-runs.
+ `test_e2e_testkit.py::test_type_text_followed_by_submit_produces_result`
+ can intermittently fail on busy hosts; passes on isolated rerun and
+ full suite re-runs.
 
 ---
 
 ## [1.0.0a2] — 2026-05-02 (alpha — post-WDA cleanup + audit-driven fixes)
 
 ### Fixed
-- **P1: `run_ci()` call-arg mismatch in `server.py`** — API drift from cycle 1 integration; runtime error when CI journey endpoint hit
+- **P1: `run_ci` call-arg mismatch in `server.py`** — API drift from cycle 1 integration; runtime error when CI journey endpoint hit
 - **P1: missing test deps in [dev]** — `anthropic`, `fastapi`, `sqlalchemy`, `hypothesis`, `moto[s3]`, `pytest-cov` were used in tests but not declared; `pip install simdrive[dev]` now collects all tests
 - **5 asserts in `journey/criteria.py`** converted to explicit `raise ValueError` (asserts get stripped under `PYTHONOPTIMIZE`)
 - **105 ruff F401/E501 errors** auto-fixed across `simdrive/src/`, `simdrive/tests/`, `scripts/`
-- **Stray `print()` calls** in `server.py` converted to logger calls
+- **Stray `print` calls** in `server.py` converted to logger calls
 - License metadata aligned to Elastic-2.0: pyproject.toml previously
-  declared `license = "MIT"` but `simdrive/LICENSE` was MIT and root
-  `LICENSE` was Elastic-2.0 — three files in three states. Standardized
-  on Elastic License 2.0 across pyproject, simdrive/LICENSE, and root
-  LICENSE. SimDrive 1.0 ships as a commercial product: free for
-  personal/internal use, prohibits offering as a competing managed
-  service. (LapsApp at repo root remains separately MIT-licensed.)
+ declared `license = "MIT"` but `simdrive/LICENSE` was MIT and root
+ `LICENSE` was Elastic-2.0 — three files in three states. Standardized
+ on Elastic License 2.0 across pyproject, simdrive/LICENSE, and root
+ LICENSE. SimDrive 1.0 ships as a commercial product: free for
+ personal/internal use, prohibits offering as a competing managed
+ service. (LapsApp at repo root remains separately MIT-licensed.)
 
 ### Added
 - `Python 3.13` classifier in `pyproject.toml`
@@ -329,7 +329,7 @@ former `specterqa-ios` 16.x line: PyPI distribution name reverted to
 - **`GET /v1/licenses/usage`** — returns runs_used / runs_limit / percent_used / period dates
 - **`GET /health`** for Railway healthcheck
 - **Auth hardening** — expired/tampered/missing-bearer rejection paths tested; per-route required-tier gates
-- **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml, .env.example, README.md}`
+- **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml,.env.example, README.md}`
 
 ### Added — Production hardening (Cycle 3)
 - **Observability package** `simdrive.observability.{logger, metrics, tracing}` — `SIMDRIVE_DEBUG=1` toggles JSON-shaped logs; counters + histograms (`journey_runs_total`, `tap_latency_ms`, `observe_latency_ms`, `claude_call_cost_usd`); span-context tracing
@@ -360,7 +360,7 @@ former `specterqa-ios` 16.x line: PyPI distribution name reverted to
 ### Pending for 1.0.0 (next alphas)
 - Real-device input via WebDriverAgent (full parity scope; in-flight)
 - Stripe webhook signature verification on `/v1/licenses/activate`
-- Cycle 4 dogfood-to-perfection (5 passes including Palace re-validation)
+- Cycle 4 dogfood-to-perfection (5 passes including customer re-validation)
 
 ---
 
@@ -381,27 +381,27 @@ and `simdrive ci` CLI subcommands, and bumped the version.
 ### Added
 
 - **Journey runner package** (`simdrive/src/specterqa_ios/journey/`) — Components
-  1, 2, 3, 8 of SimDrive spec: YAML schema + validator, Persona model, AI agent
-  loop with vision-first observe/act, success-criteria evaluator, CI orchestrator.
-  Exposes `run_journey()` as the core execution entry point.
+ 1, 2, 3, 8 of SimDrive spec: YAML schema + validator, Persona model, AI agent
+ loop with vision-first observe/act, success-criteria evaluator, CI orchestrator.
+ Exposes `run_journey` as the core execution entry point.
 - **License package** (`simdrive/src/specterqa_ios/license/`) — NaCl-signed license
-  keys, trial activation, 7-day offline grace, entitlement tier model
-  (trial/solo/pro/team/enterprise), cloud CLI helpers. Adds `pynacl>=1.6.2`
-  dependency.
+ keys, trial activation, 7-day offline grace, entitlement tier model
+ (trial/solo/pro/team/enterprise), cloud CLI helpers. Adds `pynacl>=1.6.2`
+ dependency.
 - **Cloud API scaffold** (`simdrive/src/specterqa_ios/cloud/`) — FastAPI-based
-  license + recording API with R2 stub storage, JWT auth, Stripe webhook skeleton,
-  and rate-limiting groundwork.
+ license + recording API with R2 stub storage, JWT auth, Stripe webhook skeleton,
+ and rate-limiting groundwork.
 - **LapsApp Xcode scaffold** (`LapsApp/`) — SwiftUI test-host app (iOS 17+,
-  XcodeGen) with 4 feature areas: Search, Settings, Appearance, CrashTrigger.
-  Build and test verified against iPhone 16e iOS 26.2 sim.
+ XcodeGen) with 4 feature areas: Search, Settings, Appearance, CrashTrigger.
+ Build and test verified against iPhone 16e iOS 26.2 sim.
 - **`run_journey` MCP tool** registered in `server.py:_TOOLS` — drives a
-  YAML journey against any active session via Claude. License-gated.
-- **`simdrive run` and `simdrive ci` CLI subcommands** — wired in `server.py:serve()`.
-  Both call `check_entitlement()` before proceeding. `run` dispatches to
-  `run_journey()`; `ci` dispatches to `journey.ci.run_ci()`.
+ YAML journey against any active session via Claude. License-gated.
+- **`simdrive run` and `simdrive ci` CLI subcommands** — wired in `server.py:serve`.
+ Both call `check_entitlement` before proceeding. `run` dispatches to
+ `run_journey`; `ci` dispatches to `journey.ci.run_ci`.
 - **`ClaudeLLMClient`** (`journey/claude_client.py`) — Anthropic-SDK-backed
-  implementation of the `LLMClient` Protocol. Uses `claude-opus-4-7`, tracks
-  cumulative cost via `cost_usd` property.
+ implementation of the `LLMClient` Protocol. Uses `claude-opus-4-7`, tracks
+ cumulative cost via `cost_usd` property.
 
 ### Test additions
 
@@ -414,14 +414,14 @@ and `simdrive ci` CLI subcommands, and bumped the version.
 ### Pending for Atlas before Cycle 2
 
 - Real `SIMDRIVE_PUBLIC_KEY_HEX` keypair needs maintainer generation and injection
-  into `license/public_key.py`. Current public key is a placeholder — license
-  signing/verification will fail in production until this is set.
+ into `license/public_key.py`. Current public key is a placeholder — license
+ signing/verification will fail in production until this is set.
 - Live smoke against TestKitApp deferred to Cycle 4 dogfood pass.
 - Cloud API requires database + R2 credentials before deployment.
 
 ---
 
-## [16.0.0a3] — 2026-04-28 (alpha — Maurice's a2 dogfood feedback, P0 plumbing fixes)
+## [16.0.0a3] — 2026-04-28 (alpha — an early adopter's a2 dogfood feedback, P0 plumbing fixes)
 
 **Status:** plumbing fixes from `.specterqa/dogfood/v16.0.0a2-maurice.md`. The
 v16 vision-first design was right; a2's runner-lifecycle and screenshot-delivery
@@ -430,54 +430,54 @@ layer was not. a3 fixes the load-bearing plumbing.
 ### Fixed (P0)
 
 - **P0-3: `ios_observe` no longer ships inline base64.** The screenshot is now
-  written to `/tmp/specterqa-observe-<uuid>.jpg` and the tool returns
-  `screenshot_path` instead. Drops the 188 KB / 64 KB JSON envelope problem
-  that exceeded the MCP cap (~25 KB) at every quality level. Vision agents read
-  the path with their native file-read tool. (`server.py` handle_observe)
+ written to `/tmp/specterqa-observe-<uuid>.jpg` and the tool returns
+ `screenshot_path` instead. Drops the 188 KB / 64 KB JSON envelope problem
+ that exceeded the MCP cap (~25 KB) at every quality level. Vision agents read
+ the path with their native file-read tool. (`server.py` handle_observe)
 - **P0-4: One coord space — logical points.** `ios_observe.device_w` and
-  `device_h` are now LOGICAL POINTS (e.g. 390×844 for iPhone 12), matching
-  the runner's `:8222/health` and what UIKit hit-tests against. Pixel
-  dimensions of the saved JPEG are surfaced separately as
-  `screenshot_w` / `screenshot_h`. `ios_act` `normalized=true` denormalizes to
-  the same point space via a new `_resolve_device_logical_points` helper that
-  consults a known-device → points map (iPhone 12/13/14/15/16/17 families)
-  with a 390×844 default fallback.
+ `device_h` are now LOGICAL POINTS (e.g. 390×844 for iPhone 12), matching
+ the runner's `:8222/health` and what UIKit hit-tests against. Pixel
+ dimensions of the saved JPEG are surfaced separately as
+ `screenshot_w` / `screenshot_h`. `ios_act` `normalized=true` denormalizes to
+ the same point space via a new `_resolve_device_logical_points` helper that
+ consults a known-device → points map (iPhone 12/13/14/15/16/17 families)
+ with a 390×844 default fallback.
 - **P0-1: `handle_start_session` ensures the sim is booted AND blocks on
-  health.** Previously a Shutdown sim was handed straight to runner deploy,
-  and a healthcheck timeout was warning-logged while the function fell through
-  to BackendSelector and returned `status:ok` with a dead `runner_url`.
-  v16.0.0a3 (a) calls `_ensure_sim_booted` before deploy and returns a
-  structured `sim_boot_failed` error if boot fails, (b) returns a structured
-  `runner_deploy_health_timeout` error on healthcheck failure with an iOS
-  26.0 SDK-mismatch hint and `retryable=False`. `_ensure_sim_booted` was
-  promoted to module level (was nested inside `handle_app_relaunch`).
-- **P0-1.5: orphan MCP daemon reaping on serve() startup.** `_reap_orphan_daemons`
-  pgrep's `specterqa-ios-mcp`, SIGKILLs any PID other than the current process
-  before binding the MCP transport. Eliminates the silent piggyback Maurice
-  identified where a fresh daemon was reading state from an orphan's
-  port-bound runner. Override via `SPECTERQA_ALLOW_MULTI_DAEMON=1` for
-  intentional multi-daemon setups.
+ health.** Previously a Shutdown sim was handed straight to runner deploy,
+ and a healthcheck timeout was warning-logged while the function fell through
+ to BackendSelector and returned `status:ok` with a dead `runner_url`.
+ v16.0.0a3 (a) calls `_ensure_sim_booted` before deploy and returns a
+ structured `sim_boot_failed` error if boot fails, (b) returns a structured
+ `runner_deploy_health_timeout` error on healthcheck failure with an iOS
+ 26.0 SDK-mismatch hint and `retryable=False`. `_ensure_sim_booted` was
+ promoted to module level (was nested inside `handle_app_relaunch`).
+- **P0-1.5: orphan MCP daemon reaping on serve startup.** `_reap_orphan_daemons`
+ pgrep's `specterqa-ios-mcp`, SIGKILLs any PID other than the current process
+ before binding the MCP transport. Eliminates the silent piggyback a user
+ identified where a fresh daemon was reading state from an orphan's
+ port-bound runner. Override via `SPECTERQA_ALLOW_MULTI_DAEMON=1` for
+ intentional multi-daemon setups.
 
 ### Fixed (P1)
 
-- **P1-1: `ios_session_status` now reflects daemon reality.**  v16.0.0a2 lied:
-  any daemon with a non-None `_backend` reported `"healthy"` even when the
-  runner had silently died. v16.0.0a3 distinguishes:
-  `idle` (no session configured this lifetime) | `deploying` (in-flight) |
-  `healthy` (live `/health` returned 200 just now) | `degraded` (backend
-  exists but `/health` failing) | `failed` (last deploy errored). Probe is
-  live, not cached. Also exposes `daemon_pid` so agents can correlate with
-  pgrep output.
+- **P1-1: `ios_session_status` now reflects daemon reality.** v16.0.0a2 lied:
+ any daemon with a non-None `_backend` reported `"healthy"` even when the
+ runner had silently died. v16.0.0a3 distinguishes:
+ `idle` (no session configured this lifetime) | `deploying` (in-flight) |
+ `healthy` (live `/health` returned 200 just now) | `degraded` (backend
+ exists but `/health` failing) | `failed` (last deploy errored). Probe is
+ live, not cached. Also exposes `daemon_pid` so agents can correlate with
+ pgrep output.
 
-### Deferred (still — Maurice's a2 §P0-2, §P1-2, §P1-3)
+### Deferred (still — an early adopter's a2 §P0-2, §P1-2, §P1-3)
 
 - **P0-2 — `ios_observe` returns frozen pixels when runner is stale.** Likely
-  resolved by the orphan-daemon reaping (P0-1.5) — the cached-frame
-  scenario depended on an orphan runner. If it persists in a3 dogfood,
-  add a refuse-on-stale check to the runner Swift `/screenshot` route.
+ resolved by the orphan-daemon reaping (P0-1.5) — the cached-frame
+ scenario depended on an orphan runner. If it persists in a3 dogfood,
+ add a refuse-on-stale check to the runner Swift `/screenshot` route.
 - **P1-2 — `ios_logs` returns count:0 on a dead sim** instead of erroring.
 - **P1-3 — `backend="xctest"` returns "not available" while `backend="auto"`
-  deploys xctest fine.** Code-path unification.
+ deploys xctest fine.** Code-path unification.
 
 ### Verified before ship
 
@@ -486,64 +486,64 @@ layer was not. a3 fixes the load-bearing plumbing.
 
 ---
 
-## [16.0.0a2] — 2026-04-28 (alpha — Maurice/Palace dogfood feedback)
+## [16.0.0a2] — 2026-04-28 (alpha — a user/dogfood feedback)
 
-**Status:** integration-bug fixes from Maurice's v16.0.0a1 dogfood
+**Status:** integration-bug fixes from an early adopter's v16.0.0a1 dogfood
 (`.specterqa/dogfood/v16.0.0a1-maurice.md`). The design landed correctly in
 a1; a2 is plumbing fixes.
 
 ### Fixed
 
 - **Bug #1 (P0): `RunnerProcess` no longer terminal in FAILED state.**
-  After a failed xctest deploy (e.g. iOS 26.2 `Unknown application` bug
-  causing healthcheck timeout), every subsequent `ios_start_session(backend='xctest')`
-  re-raised the cached error until MCP server restart, because
-  `ios_stop_session` only cleared the registry on success paths. v16.0.0a2
-  auto-recovers: on `deploy()` against a FAILED instance, kill any stale
-  child process, clear `_last_error`, transition to IDLE, fall through to
-  the normal deploy flow. One MCP-restart round-trip per session avoided.
-  (`runner_process.py:233-262`)
+ After a failed xctest deploy (e.g. iOS 26.2 `Unknown application` bug
+ causing healthcheck timeout), every subsequent `ios_start_session(backend='xctest')`
+ re-raised the cached error until MCP server restart, because
+ `ios_stop_session` only cleared the registry on success paths. v16.0.0a2
+ auto-recovers: on `deploy` against a FAILED instance, kill any stale
+ child process, clear `_last_error`, transition to IDLE, fall through to
+ the normal deploy flow. One MCP-restart round-trip per session avoided.
+ (`runner_process.py:233-262`)
 
 - **Bug #2 (P1): `ios_dismiss_first_launch_alerts` moved back to trial tier.**
-  The tool was at indie tier in v16.0.0a1, but on iOS 26+ simctl cannot
-  pre-grant `notifications` (OS-restricted) and `ios_act` cannot reach
-  SpringBoard alert windows (outside target-app coord scope). Trial users
-  on v16 + iOS 26.x had NO path past the first-launch notifications prompt
-  — a hard regression vs v15.x. The capability is a workaround for an
-  Apple limitation, not a premium feature; trial tier restored.
-  (`tier_gate.py`)
+ The tool was at indie tier in v16.0.0a1, but on iOS 26+ simctl cannot
+ pre-grant `notifications` (OS-restricted) and `ios_act` cannot reach
+ SpringBoard alert windows (outside target-app coord scope). Trial users
+ on v16 + iOS 26.x had NO path past the first-launch notifications prompt
+ — a hard regression vs v15.x. The capability is a workaround for an
+ Apple limitation, not a premium feature; trial tier restored.
+ (`tier_gate.py`)
 
 - **Bug #3 partial (P1): runner Swift now bails out fast and continues in
-  degraded mode when XCUIApplication binding fails.** On iOS 26.2 the
-  `Unknown application` LaunchServices bug causes XCTest's internal
-  `isApplicationStateKnown` waiter to never fulfill; previously the runner
-  burned ~30-60s on retries before the Python `_wait_for_health(90s)`
-  gave up. v16.0.0a2 attempts launch ONCE with a 5s wait, logs the failure
-  as `NSLog ERROR` (not buried in `XCTDebug`), and falls through to start
-  the HTTP server anyway. Coordinate-based `/tap` (cg_event_direct in
-  TouchInjector) does not depend on app binding and continues to work in
-  degraded mode. (`runner/Sources/SpecterQARunner.swift:82-115`)
+ degraded mode when XCUIApplication binding fails.** On iOS 26.2 the
+ `Unknown application` LaunchServices bug causes XCTest's internal
+ `isApplicationStateKnown` waiter to never fulfill; previously the runner
+ burned ~30-60s on retries before the Python `_wait_for_health(90s)`
+ gave up. v16.0.0a2 attempts launch ONCE with a 5s wait, logs the failure
+ as `NSLog ERROR` (not buried in `XCTDebug`), and falls through to start
+ the HTTP server anyway. Coordinate-based `/tap` (cg_event_direct in
+ TouchInjector) does not depend on app binding and continues to work in
+ degraded mode. (`runner/Sources/SpecterQARunner.swift:82-115`)
 
 ### Deferred to v16.0.0a3 / v16.0.0 stable
 
 - Bug #3 full: the `/elements` and `/source` endpoints currently return
-  host-chrome only (Action / Volume Up / Sleep-Wake) when the runner is
-  in degraded mode. v16.0.0a3 will add an explicit 503 + degraded marker
-  and surface the bind-failure reason via `/health`.
-- AX-backend `ios_act` for SwiftUI list cells (Maurice §P2)
+ host-chrome only (Action / Volume Up / Sleep-Wake) when the runner is
+ in degraded mode. v16.0.0a3 will add an explicit 503 + degraded marker
+ and surface the bind-failure reason via `/health`.
+- AX-backend `ios_act` for SwiftUI list cells (a user §P2)
 - Apple radar for the iOS 26.2 `Unknown application` regression
 - Replay v2 (visual SSIM diff) + recording v2
 
 ### Verified
 
 - 526 unit tests pass / 24 skipped / 0 fail (a2 changes are runner-Swift
-  + tier-map + Python state-machine; existing tests cover all three).
+ + tier-map + Python state-machine; existing tests cover all three).
 
 ---
 
 ## [16.0.0a1] — 2026-04-28 (alpha pre-release; replay rewrite + recording rewrite still pending)
 
-**Status:** Maurice/Palace dogfoodable. The vision-first primitives work
+**Status:** a user/dogfoodable. The vision-first primitives work
 end-to-end on iOS 26.x; the AX-tree selector layer is gone from the MCP
 surface. Replay v2 (visual SSIM diff) + recording v2 are deferred to
 v16.0.0a2 / v16.0.0; pre-v16 replay YAMLs do not run on this alpha.
@@ -557,7 +557,7 @@ without the version pin still installs v15.2.0 stable).
 **This is a strategic redirection, not a tweak.** The accessibility-tree
 selector layer that v15.x driving was built around has been doing negative
 work for vision-capable agents on iOS 26.x SwiftUI — lossy, brittle, and
-crash-prone (Maurice/Palace v15.2.0 dogfood, three runner deaths in one
+crash-prone (a user/early adopter v15.2.0 dogfood, three runner deaths in one
 session via `XCUIElementQuery[label]` ambiguous-match `NSException`). v16.0
 pivots to **vision-first**: the agent reads the screenshot, picks
 coordinates, dispatches via a unified action verb. Same shape as Anthropic
@@ -570,52 +570,52 @@ for the tactical patches that v16 makes redundant by deletion.
 ### Added (Phase A — landed)
 
 - **`ios_observe`** — vision-first observation primitive. Returns
-  `screenshot` (base64 PNG), `device_w`/`device_h`, `app_state`,
-  `captured_at`, and `reliable_targets`: the small set of elements with
-  explicit `accessibilityIdentifier` set by the developer. Everything
-  without an explicit identifier is intentionally absent — the screenshot
-  is the truthful representation; `reliable_targets` is an opt-in
-  semantic helper for the rare elements the developer marked scriptable.
+ `screenshot` (base64 PNG), `device_w`/`device_h`, `app_state`,
+ `captured_at`, and `reliable_targets`: the small set of elements with
+ explicit `accessibilityIdentifier` set by the developer. Everything
+ without an explicit identifier is intentionally absent — the screenshot
+ is the truthful representation; `reliable_targets` is an opt-in
+ semantic helper for the rare elements the developer marked scriptable.
 - **`ios_act`** — unified action dispatcher. Single tool with
-  `action.kind ∈ {tap, type, swipe, key, scroll, long_press, drag}`.
-  Coordinate-primary; `identifier` permitted on `tap`/`long_press` as an
-  opt-in semantic helper. `normalized=true` treats coordinates in
-  [0.0, 1.0] as fractions of device dimensions. Label-based selectors
-  are NOT supported.
+ `action.kind ∈ {tap, type, swipe, key, scroll, long_press, drag}`.
+ Coordinate-primary; `identifier` permitted on `tap`/`long_press` as an
+ opt-in semantic helper. `normalized=true` treats coordinates in
+ [0.0, 1.0] as fractions of device dimensions. Label-based selectors
+ are NOT supported.
 - **ObjC bridge for `runOnMain` defense-in-depth.**
-  `runner/Sources/SpecterQAObjCBridge.{h,m}` adds a Swift-callable
-  `@try`/`@catch` shim. Phase B will delete the dominant throw site
-  (XCUIElementQuery selector layer); the bridge stays as a safety net
-  for any other XCTest API that can throw.
+ `runner/Sources/SpecterQAObjCBridge.{h,m}` adds a Swift-callable
+ `@try`/`@catch` shim. Phase B will delete the dominant throw site
+ (XCUIElementQuery selector layer); the bridge stays as a safety net
+ for any other XCTest API that can throw.
 - **Tier enforcement on the new primitives.** `ios_observe` and
-  `ios_act` are both `trial`-tier — observation and input are free.
+ `ios_act` are both `trial`-tier — observation and input are free.
 
 ### Folded in from v15.x branches (un-shipped, now part of v16)
 
 - **PR #79 — Tier enforcement across the MCP tool surface.** Every tool
-  now declares a minimum license tier; bypass via
-  `SPECTERQA_LICENSE_BYPASS=1` (CI/dev) with module-level WARNING.
+ now declares a minimum license tier; bypass via
+ `SPECTERQA_LICENSE_BYPASS=1` (CI/dev) with module-level WARNING.
 - **PR #78 — SEC-HIGH-005 JWT offline grace decoder hardening.**
-  Hoisted imports, 2KB payload size cap, `TypeError` added to
-  `_check_offline_grace` exception tuple.
+ Hoisted imports, 2KB payload size cap, `TypeError` added to
+ `_check_offline_grace` exception tuple.
 
 ### Pending (Phases B–F)
 
 - **Phase B — demolition.** Delete `runner/Sources/SpecterQAElementQuery.swift`,
-  strip `findByLabel`/`findByIdentifier`/`waitForElement` call paths from
-  `TapRoute`/`TypeRoute`/`SwipeRoute`. Delete legacy MCP tools:
-  `ios_screenshot`, `ios_elements`, `ios_tap`, `ios_long_press`, `ios_swipe`,
-  `ios_swipe_back`, `ios_type`, `ios_press_key`, `ios_dismiss_keyboard`,
-  `ios_wait_idle`, `ios_wait_for_element`, `ios_capture_state`,
-  `ios_action_with_logs`. Net 49 → ~22 tools.
+ strip `findByLabel`/`findByIdentifier`/`waitForElement` call paths from
+ `TapRoute`/`TypeRoute`/`SwipeRoute`. Delete legacy MCP tools:
+ `ios_screenshot`, `ios_elements`, `ios_tap`, `ios_long_press`, `ios_swipe`,
+ `ios_swipe_back`, `ios_type`, `ios_press_key`, `ios_dismiss_keyboard`,
+ `ios_wait_idle`, `ios_wait_for_element`, `ios_capture_state`,
+ `ios_action_with_logs`. Net 49 → ~22 tools.
 - **Phase C — replay rewrite.** New YAML schema based on coordinate
-  actions + visual SSIM diff. PNG references stored alongside YAML.
-  Per-step region mask + threshold override. Migration tool for
-  pre-v16 replay YAMLs.
+ actions + visual SSIM diff. PNG references stored alongside YAML.
+ Per-step region mask + threshold override. Migration tool for
+ pre-v16 replay YAMLs.
 - **Phase D — recording rewrite.** Capture screenshot + tap coordinate
-  per step; optional OCR'd text near tap for human readability.
+ per step; optional OCR'd text near tap for human readability.
 - **Phase E — README rewrite, migration guide, real-sim integration tests
-  for the new primitives.**
+ for the new primitives.**
 - **Phase F — PR, QA review certification, release pipeline tag/PyPI publish.**
 
 ### Out-of-band signals (unchanged in v16)
@@ -630,69 +630,69 @@ These are operational primitives that don't depend on the selector layer.
 ### Breaking changes
 
 - Pre-v16 replay YAMLs (asserting `expect_elements: [...]`) will not run
-  under v16 once Phase C lands. A migration tool will be provided.
+ under v16 once Phase C lands. A migration tool will be provided.
 - v15.x label-based `ios_tap(label=...)` callers will see `tool not found`
-  once Phase B deletes `ios_tap`. Migrate to `ios_act({kind: 'tap', x, y})`.
+ once Phase B deletes `ios_tap`. Migrate to `ios_act({kind: 'tap', x, y})`.
 
 ---
 
 ## [15.2.0] — 2026-04-27
 
-### Fixed (iOS 26.x XCTest runner survives — Maurice/Palace dogfood cure)
+### Fixed (iOS 26.x XCTest runner survives — a user/dogfood cure)
 
 **The cure for v15.1.0 Issue #2 — replaces detection-only mitigation with the
 actual root-cause fix.**
 
 - **Runner test method now uses XCTWaiter pattern instead of CFRunLoopRunInMode
-  polling.** Maurice's v15.1.0 dogfood showed the in-sim runner test process
-  was killed by iOS 26's XCTest infrastructure within seconds of entering its
-  run loop, even though the HTTP server was healthy and replied to `/health`
-  twice. Root cause: iOS 26's `XCTRuntimeIssueDetectionManager` flags a test
-  method that polls on the main thread for tens of seconds without emitting
-  test events as "stuck/hung" and SIGKILLs it. The xcresult footer
-  (`*** If you believe this error represents a bug…`) is xcodebuild's
-  signature for that termination.
+ polling.** an early adopter's v15.1.0 dogfood showed the in-sim runner test process
+ was killed by iOS 26's XCTest infrastructure within seconds of entering its
+ run loop, even though the HTTP server was healthy and replied to `/health`
+ twice. Root cause: iOS 26's `XCTRuntimeIssueDetectionManager` flags a test
+ method that polls on the main thread for tens of seconds without emitting
+ test events as "stuck/hung" and SIGKILLs it. The xcresult footer
+ (`*** If you believe this error represents a bug…`) is xcodebuild's
+ signature for that termination.
 
-  v15.2.0 swaps the `while … { CFRunLoopRunInMode(.defaultMode, 2.0, false) }`
-  pattern in `runner/Sources/SpecterQARunner.swift` for an
-  `XCTWaiter.wait(for: [XCTestExpectation], timeout: maxDuration)` pattern.
-  A background dispatch queue fulfills the expectation on any of:
-  (a) `HTTPServer.stopSemaphore` signaled (POST `/shutdown` or `/stop`),
-  (b) the stop-sentinel file `/tmp/specterqa_runner_stop` appears, or
-  (c) `server.isRunning` flips false. `XCTWaiter.wait` pumps the main run
-  loop while waiting — so `runOnMain()` (CFRunLoopPerformBlock +
-  CFRunLoopWakeUp) continues to dispatch XCUITest calls without changes —
-  but XCTest sees the test method as legitimately blocked on an
-  expectation, not as a stuck polling loop, so the runtime-issue detector
-  no longer fires.
+ v15.2.0 swaps the `while … { CFRunLoopRunInMode(.defaultMode, 2.0, false) }`
+ pattern in `runner/Sources/SpecterQARunner.swift` for an
+ `XCTWaiter.wait(for: [XCTestExpectation], timeout: maxDuration)` pattern.
+ A background dispatch queue fulfills the expectation on any of:
+ (a) `HTTPServer.stopSemaphore` signaled (POST `/shutdown` or `/stop`),
+ (b) the stop-sentinel file `/tmp/specterqa_runner_stop` appears, or
+ (c) `server.isRunning` flips false. `XCTWaiter.wait` pumps the main run
+ loop while waiting — so `runOnMain` (CFRunLoopPerformBlock +
+ CFRunLoopWakeUp) continues to dispatch XCUITest calls without changes —
+ but XCTest sees the test method as legitimately blocked on an
+ expectation, not as a stuck polling loop, so the runtime-issue detector
+ no longer fires.
 
-  This is the same pattern WebDriverAgent uses; battle-tested across iOS
-  versions including iOS 26.
+ This is the same pattern WebDriverAgent uses; battle-tested across iOS
+ versions including iOS 26.
 
 - **Issue #1: redundant BackendSelector probe race after successful deploy.**
-  When `backend='xctest'` was explicitly requested AND the deploy block had
-  completed a successful healthcheck, the subsequent
-  `BackendSelector(...).choose(requested='xctest')` was re-probing
-  `:8222/health` and could observe a runner that died in the millisecond gap
-  between deploy success and BackendSelector probe — producing a misleading
-  `"Requested backend 'xctest' is not available on this system"` error
-  immediately after a successful deploy. v15.2.0 instantiates `XCTestBackend`
-  directly when `_mcp_runner_ref` is set; the BackendSelector path is
-  reserved for the auto-select / non-xctest cases.
+ When `backend='xctest'` was explicitly requested AND the deploy block had
+ completed a successful healthcheck, the subsequent
+ `BackendSelector(...).choose(requested='xctest')` was re-probing
+ `:8222/health` and could observe a runner that died in the millisecond gap
+ between deploy success and BackendSelector probe — producing a misleading
+ `"Requested backend 'xctest' is not available on this system"` error
+ immediately after a successful deploy. v15.2.0 instantiates `XCTestBackend`
+ directly when `_mcp_runner_ref` is set; the BackendSelector path is
+ reserved for the auto-select / non-xctest cases.
 
 ### Verified
 
 - iPhone 17 Pro / iOS 26.2 (UDID `955B199B-4F30-47F7-84E2-A9EE39E46D99`) —
-  `ios_start_session(backend='xctest')` returned `status:ok`, runner stayed
-  healthy through a 60s `/health` poll loop (12/12 polls returned 200).
-  This is Maurice's exact suggested release-gate test from his dogfood §5.1.
-  See `tests/integration/test_xctest_runner_stability_live.py`.
+ `ios_start_session(backend='xctest')` returned `status:ok`, runner stayed
+ healthy through a 60s `/health` poll loop (12/12 polls returned 200).
+ This is an early adopter's exact suggested release-gate test from his dogfood §5.1.
+ See `tests/integration/test_xctest_runner_stability_live.py`.
 
 ### Known caveats (carried from v15.1.0; remain open)
 
 - Issues #3 (replay hardwired to xctest port irrespective of session backend),
-  #4 (sibling sim shutdown), and #5 (no `--sdk` flag on `runner build`) from
-  the v15.1.0 dogfood remain open and will land in v15.3+.
+ #4 (sibling sim shutdown), and #5 (no `--sdk` flag on `runner build`) from
+ the v15.1.0 dogfood remain open and will land in v15.3+.
 
 ---
 
@@ -701,38 +701,38 @@ actual root-cause fix.**
 ### Changed (UX philosophy)
 
 - **Retry-first, forgive-transients:** `ios_capture_state`, `ios_tap`, `ios_action_with_logs`,
-  and `ios_app_state` now retry once transparently on Apple-side transient failures (runner HTTP
-  5xx, connection refused, sim state flicker) before surfacing any error to the caller. A 2s sleep
-  separates the first and second attempts. Only the second failure is returned as a user-visible error.
+ and `ios_app_state` now retry once transparently on Apple-side transient failures (runner HTTP
+ 5xx, connection refused, sim state flicker) before surfacing any error to the caller. A 2s sleep
+ separates the first and second attempts. Only the second failure is returned as a user-visible error.
 - **`_verify_sim_alive` polls for 15s before declaring a session dead.** On first Shutdown
-  detection the function enters a retry-poll loop (1s sleep between checks). This gives SpringBoard
-  5-10s to respawn before returning `sim_shutdown_during_session`. Detection is forgiving by default.
+ detection the function enters a retry-poll loop (1s sleep between checks). This gives SpringBoard
+ 5-10s to respawn before returning `sim_shutdown_during_session`. Detection is forgiving by default.
 - **`_restart_runner_for_relaunch` pre-checks runner HTTP health for up to 10s** before kicking the
-  36-42s recovery path. If the runner becomes healthy during the pre-check window, recovery is
-  skipped entirely — the sim-Shutdown signal was transient.
+ 36-42s recovery path. If the runner becomes healthy during the pre-check window, recovery is
+ skipped entirely — the sim-Shutdown signal was transient.
 
 ### Added
 
 - **`sim_settle_timeout: float = 10.0`** param on `ios_start_session`. Smart wait only when the
-  sim just booted: reads `lastBootedAt` from `simctl list devices --json`, sleeps only the
-  remaining delta (e.g. if the sim booted 3s ago, waits 7s). No wait when sim has been booted
-  longer than `sim_settle_timeout` seconds. Mitigates the SpringBoard startup race on fresh sim boot.
+ sim just booted: reads `lastBootedAt` from `simctl list devices --json`, sleeps only the
+ remaining delta (e.g. if the sim booted 3s ago, waits 7s). No wait when sim has been booted
+ longer than `sim_settle_timeout` seconds. Mitigates the SpringBoard startup race on fresh sim boot.
 - **`retryable: bool`** field on transient error payloads. Errors representing Apple-side transients
-  (`sim_shutdown_during_session`, `installcoordinationd`, `Runner did not become healthy`, etc.) now
-  carry `retryable: true`. Fatal errors (bad UDID, permissions denied) do not set this field.
+ (`sim_shutdown_during_session`, `installcoordinationd`, `Runner did not become healthy`, etc.) now
+ carry `retryable: true`. Fatal errors (bad UDID, permissions denied) do not set this field.
 
 ### Known caveats
 
 - **`ios_tap` is not idempotent under retry.** When the first tap dispatches successfully but the
-  runner returns a transient error before the result reaches the caller, the auto-retry will
-  fire the tap a second time. The tradeoff is deliberate — short-lived sim hiccups recover on
-  retry — but callers performing irreversible actions (delete, send, confirm purchase) should
-  probe state first rather than relying on `ios_tap` alone.
+ runner returns a transient error before the result reaches the caller, the auto-retry will
+ fire the tap a second time. The tradeoff is deliberate — short-lived sim hiccups recover on
+ retry — but callers performing irreversible actions (delete, send, confirm purchase) should
+ probe state first rather than relying on `ios_tap` alone.
 - **`ios_action_with_logs` is not idempotent under retry, and the first attempt's log window is
-  discarded.** If the first attempt executes the UI action but a transient error is returned,
-  the retry re-executes the action and re-collects logs from a fresh cursor — the original
-  log window is lost. Same destructive-action caveat as `ios_tap` applies. Callers needing a
-  guaranteed-once-only action should call the underlying primitive without the retry wrapper.
+ discarded.** If the first attempt executes the UI action but a transient error is returned,
+ the retry re-executes the action and re-collects logs from a fresh cursor — the original
+ log window is lost. Same destructive-action caveat as `ios_tap` applies. Callers needing a
+ guaranteed-once-only action should call the underlying primitive without the retry wrapper.
 
 ---
 
@@ -741,80 +741,80 @@ actual root-cause fix.**
 ### BREAKING CHANGES
 
 - **`ios_start_session` gains `wait: bool = True` param.** Default behavior (synchronous, blocks
-  until runner is healthy) is unchanged. Async callers should adopt `wait=False` +
-  `ios_wait_for_session` for sub-2s response. (Maurice Issue 3)
+ until runner is healthy) is unchanged. Async callers should adopt `wait=False` +
+ `ios_wait_for_session` for sub-2s response. (a user Issue 3)
 
 ### Added
 
-- **Env propagation fallback via `~/.specterqa/config.toml` (Maurice Issue 1):**
-  New CLI command `specterqa-ios mcp enable-physical` writes `[mcp] allow_physical_device = true`
-  to `~/.specterqa/config.toml`. The MCP server reads this config on every gate check, so physical
-  device support works even when Claude Code doesn't propagate the MCP server's `env:` block.
-  New Python module `specterqa.ios.config` with `_check_physical_opt_in()` (env OR config OR
-  keychain), `write_physical_opt_in()`, and `_read_physical_opt_in()`.
+- **Env propagation fallback via `~/.specterqa/config.toml` (a user Issue 1):**
+ New CLI command `specterqa-ios mcp enable-physical` writes `[mcp] allow_physical_device = true`
+ to `~/.specterqa/config.toml`. The MCP server reads this config on every gate check, so physical
+ device support works even when Claude Code doesn't propagate the MCP server's `env:` block.
+ New Python module `specterqa.ios.config` with `_check_physical_opt_in` (env OR config OR
+ keychain), `write_physical_opt_in`, and `_read_physical_opt_in`.
 
-- **Diagnostics block in `ios_get_capabilities` (Maurice Issue 1):**
-  The `physical` device entry now includes `"diagnostics": {"env_var_seen_by_process": bool,
-  "config_file_value": bool, "keychain_value": bool}` so users can see exactly where the gate
-  is blocking when `opt_in_active` is false.
+- **Diagnostics block in `ios_get_capabilities` (a user Issue 1):**
+ The `physical` device entry now includes `"diagnostics": {"env_var_seen_by_process": bool,
+ "config_file_value": bool, "keychain_value": bool}` so users can see exactly where the gate
+ is blocking when `opt_in_active` is false.
 
 - **Async session start: `wait=False` + `ios_wait_for_session` + `ios_session_status`
-  (Maurice Issue 3):**
-  `ios_start_session(wait=False)` returns immediately with `{status: "deploying", deploy_id,
-  health_url, estimated_ready_in_s: 45}`. Call `ios_wait_for_session(deploy_id, timeout_s=120)`
-  to block until healthy. `ios_session_status()` returns `{status, elapsed_ms, udid}` without
-  blocking — useful for progress polling.
+ (a user Issue 3):**
+ `ios_start_session(wait=False)` returns immediately with `{status: "deploying", deploy_id,
+ health_url, estimated_ready_in_s: 45}`. Call `ios_wait_for_session(deploy_id, timeout_s=120)`
+ to block until healthy. `ios_session_status` returns `{status, elapsed_ms, udid}` without
+ blocking — useful for progress polling.
 
-- **`auto_recover: bool = False` session option (Maurice Issue 9):**
-  When True on `ios_start_session`, a detected mid-session simulator shutdown triggers automatic
-  re-boot + runner re-deploy. Documented in tool description.
+- **`auto_recover: bool = False` session option (a user Issue 9):**
+ When True on `ios_start_session`, a detected mid-session simulator shutdown triggers automatic
+ re-boot + runner re-deploy. Documented in tool description.
 
-- **Sim shutdown detection (Maurice Issue 9):**
-  Every MCP tool that hits a `ConnectionError` from the runner now checks simulator state via
-  `_check_sim_state_for_udid()`. When Shutdown is detected, returns structured
-  `{error: "sim_shutdown_during_session", action_needed: "boot_and_reauth", sim_state,
-  recovery_hint}` instead of a generic timeout error.
+- **Sim shutdown detection (a user Issue 9):**
+ Every MCP tool that hits a `ConnectionError` from the runner now checks simulator state via
+ `_check_sim_state_for_udid`. When Shutdown is detected, returns structured
+ `{error: "sim_shutdown_during_session", action_needed: "boot_and_reauth", sim_state,
+ recovery_hint}` instead of a generic timeout error.
 
-- **`ios_dismiss_first_launch_alerts` MCP tool (Maurice methodology section 4):**
-  Coordinate-taps the "Don't Allow" or "Allow" button on iOS permission alerts.
-  `decline=True` (default) taps "Don't Allow" at `(120, 500)` scaled to actual screen size.
-  `permissions=["notifications", ...]` iterates through multiple alerts.
+- **`ios_dismiss_first_launch_alerts` MCP tool (a user methodology section 4):**
+ Coordinate-taps the "Don't Allow" or "Allow" button on iOS permission alerts.
+ `decline=True` (default) taps "Don't Allow" at `(120, 500)` scaled to actual screen size.
+ `permissions=["notifications",...]` iterates through multiple alerts.
 
 - **`specterqa-ios install-clean <app-path> [--udid <udid>]` CLI command
-  (Maurice methodology section 3):**
-  Copies the app to a temp dir, strips `PlugIns/*.xctest`, `Frameworks/XCTest*.framework`,
-  `Frameworks/Testing.framework`, and `Frameworks/libXCTest*.dylib`, then calls `simctl install`.
-  Prevents `libXCTestBundleInject` from loading bundled unit tests into the host process.
+ (a user methodology section 3):**
+ Copies the app to a temp dir, strips `PlugIns/*.xctest`, `Frameworks/XCTest*.framework`,
+ `Frameworks/Testing.framework`, and `Frameworks/libXCTest*.dylib`, then calls `simctl install`.
+ Prevents `libXCTestBundleInject` from loading bundled unit tests into the host process.
 
-- **Orphan xcodebuild reaper (Maurice Issue 6):**
-  `_reap_orphan_xcodebuild(port=8222)` scans for xcodebuild processes holding port 8222 via
-  `lsof -i :8222 -t`, sends SIGTERM then SIGKILL with 5s grace. Called on `ios_start_session`
-  entry before deploying a new runner.
+- **Orphan xcodebuild reaper (a user Issue 6):**
+ `_reap_orphan_xcodebuild(port=8222)` scans for xcodebuild processes holding port 8222 via
+ `lsof -i :8222 -t`, sends SIGTERM then SIGKILL with 5s grace. Called on `ios_start_session`
+ entry before deploying a new runner.
 
-- **`_kill_runner_graceful(process, grace_s=5)` helper (Maurice Issue 6):**
-  Used in `ios_stop_session` and all deploy-error paths to ensure TERM → KILL cleanup.
+- **`_kill_runner_graceful(process, grace_s=5)` helper (a user Issue 6):**
+ Used in `ios_stop_session` and all deploy-error paths to ensure TERM → KILL cleanup.
 
 ### Fixed
 
-- **Issue 3 / Maurice Issue 4 — runner_source/ rebuild path:** `_rebuild_runner` now uses
-  `importlib.resources.files('runner')` (v14+ wheel layout) with correct fallback chain. No more
-  `SessionError: Runner Xcode project not found` on version bump.
+- **Issue 3 / a user Issue 4 — runner_source/ rebuild path:** `_rebuild_runner` now uses
+ `importlib.resources.files('runner')` (v14+ wheel layout) with correct fallback chain. No more
+ `SessionError: Runner Xcode project not found` on version bump.
 
-- **Issue 4 / Maurice Issue 5 — AX backend iOS 26 content-group heuristic:** `_init_content_group`
-  already had the position-probe fallback from a prior fix; this release ensures
-  `_content_group_failed = True` is set when both heuristic and probe fail, so `get_elements()`
-  raises `AXContentGroupNotFoundError` instead of silently returning hardware chrome (mute/volume
-  buttons).
+- **Issue 4 / a user Issue 5 — AX backend iOS 26 content-group heuristic:** `_init_content_group`
+ already had the position-probe fallback from a prior fix; this release ensures
+ `_content_group_failed = True` is set when both heuristic and probe fail, so `get_elements`
+ raises `AXContentGroupNotFoundError` instead of silently returning hardware chrome (mute/volume
+ buttons).
 
-- **Issue 5 / Maurice Issue 6 — Stale xcodebuild processes on session failure:** Added
-  `_reap_orphan_xcodebuild` call on `ios_start_session` entry. `_kill_runner_graceful` used on
-  stop/error paths.
+- **Issue 5 / a user Issue 6 — Stale xcodebuild processes on session failure:** Added
+ `_reap_orphan_xcodebuild` call on `ios_start_session` entry. `_kill_runner_graceful` used on
+ stop/error paths.
 
-- **Issue 6 / Maurice Issue 7 — `ios_app_relaunch` Shutdown handling:** Already present from
-  14.0.3; `auto_recover` option added for session-level automatic recovery.
+- **Issue 6 / a user Issue 7 — `ios_app_relaunch` Shutdown handling:** Already present from
+ 14.0.3; `auto_recover` option added for session-level automatic recovery.
 
-- **Issue 7 / Maurice Issue 8 — `ios_apps` plist parser:** Changed default to
-  `simctl listapps -j <udid>` (JSON); plist fallback retained for older Xcode.
+- **Issue 7 / a user Issue 8 — `ios_apps` plist parser:** Changed default to
+ `simctl listapps -j <udid>` (JSON); plist fallback retained for older Xcode.
 
 ### Removed
 
@@ -827,45 +827,45 @@ actual root-cause fix.**
 ### Added
 
 - **Physical device opt-in via `device_type="physical"` + `SPECTERQA_ALLOW_PHYSICAL_DEVICE=1`:**
-  `ios_start_session` now accepts `device_type` as an explicit parameter (default `"simulator"`).
-  When `device_type="physical"` is passed without the env var set, the tool returns an opt-in
-  error with instructions rather than silently failing or proceeding. When the env var is set to
-  a truthy value (`1`, `true`, or `yes`), the call proceeds to the existing physical device path
-  in `session_manager`. Simulator path is unchanged.
+ `ios_start_session` now accepts `device_type` as an explicit parameter (default `"simulator"`).
+ When `device_type="physical"` is passed without the env var set, the tool returns an opt-in
+ error with instructions rather than silently failing or proceeding. When the env var is set to
+ a truthy value (`1`, `true`, or `yes`), the call proceeds to the existing physical device path
+ in `session_manager`. Simulator path is unchanged.
 
-- **`ios_get_capabilities()` discovery tool:** New MCP tool that returns the SpecterQA version,
-  supported backends (`xctest`, `ax`), and a `device_types` array. The `physical` entry includes
-  `available: true`, `default: false`, `opt_in_env: "SPECTERQA_ALLOW_PHYSICAL_DEVICE"`, and
-  `opt_in_active` reflecting the current env state. Agents should call this before starting a
-  session to discover what device targets are available.
+- **`ios_get_capabilities` discovery tool:** New MCP tool that returns the SpecterQA version,
+ supported backends (`xctest`, `ax`), and a `device_types` array. The `physical` entry includes
+ `available: true`, `default: false`, `opt_in_env: "SPECTERQA_ALLOW_PHYSICAL_DEVICE"`, and
+ `opt_in_active` reflecting the current env state. Agents should call this before starting a
+ session to discover what device targets are available.
 
 ### Changed
 
-- **`_restart_runner_for_relaunch` has a 120s outer timeout:** A `time.monotonic()` ceiling is
-  checked at each recovery phase. If the total recovery time exceeds 120s, the function returns
-  an error string with recovery instructions and stops the runner in a `finally` block. Previously
-  worst-case stalls (simctl/xcodebuild hang) could consume 370s+ with no ceiling.
+- **`_restart_runner_for_relaunch` has a 120s outer timeout:** A `time.monotonic` ceiling is
+ checked at each recovery phase. If the total recovery time exceeds 120s, the function returns
+ an error string with recovery instructions and stops the runner in a `finally` block. Previously
+ worst-case stalls (simctl/xcodebuild hang) could consume 370s+ with no ceiling.
 
 ### Fixed
 
 - **Concurrent MCP call race during recovery:** `_restart_runner_for_relaunch` now acquires
-  `_session_lock` on entry, so only one recovery runs at a time per MCP server. The three-global
-  update sequence (`_mcp_runner_ref`, `_session`, `_backend`) happens inside the lock, preventing
-  concurrent callers from observing partial state.
+ `_session_lock` on entry, so only one recovery runs at a time per MCP server. The three-global
+ update sequence (`_mcp_runner_ref`, `_session`, `_backend`) happens inside the lock, preventing
+ concurrent callers from observing partial state.
 
 - **`import json as _json_w` moved out of Shutdown poll loop:** The import was inside the
-  per-iteration loop body; it is now at function top, colocated with the other module-level
-  imports in `_restart_runner_for_relaunch`.
+ per-iteration loop body; it is now at function top, colocated with the other module-level
+ imports in `_restart_runner_for_relaunch`.
 
 ### Docs
 
 - **`recovery` field documented in `handle_app_relaunch` docstring:** Callers now know to expect
-  `recovery: "runner-restart"` on the recovery path (~30-45s) vs absence of the key on the happy
-  path (<2s).
+ `recovery: "runner-restart"` on the recovery path (~30-45s) vs absence of the key on the happy
+ path (<2s).
 
 - **README `Physical device support (experimental)` section:** Covers what it does, how to opt in
-  (env var + `device_type="physical"`), and known limitations (xcodebuild rough edges, no
-  stability guarantee, simulator is the supported path).
+ (env var + `device_type="physical"`), and known limitations (xcodebuild rough edges, no
+ stability guarantee, simulator is the supported path).
 
 ---
 
@@ -874,39 +874,39 @@ actual root-cause fix.**
 ### Fixed
 
 - **app_relaunch fails with "No devices are booted" after capture_state (P1):**
-  `ios_start_session(backend="xctest")` deployed a `RunnerProcess` on `:8222`
-  (stored in `_mcp_runner_ref`), then created a `TestSession` which called
-  `_find_free_port()` — returning `:8223` because `:8222` was occupied — and
-  launched a *second* xcodebuild process. Two xcodebuild instances targeting the
-  same simulator caused the first to die; its teardown shut down the simulator;
-  subsequent `simctl` calls (app_relaunch, capture_state) failed with
-  `"No devices are booted."` Fix: when `_mcp_runner_ref` is RUNNING and `clone=False`,
-  the xctest path reuses it directly as `_session` (skips `TestSession._deploy_runner`).
-  `_mcp_runner_ref` is cleared on `ios_stop_session`. New regression tests in
-  `tests/test_mcp_session_persistence.py` assert no teardown fires between calls.
+ `ios_start_session(backend="xctest")` deployed a `RunnerProcess` on `:8222`
+ (stored in `_mcp_runner_ref`), then created a `TestSession` which called
+ `_find_free_port` — returning `:8223` because `:8222` was occupied — and
+ launched a *second* xcodebuild process. Two xcodebuild instances targeting the
+ same simulator caused the first to die; its teardown shut down the simulator;
+ subsequent `simctl` calls (app_relaunch, capture_state) failed with
+ `"No devices are booted."` Fix: when `_mcp_runner_ref` is RUNNING and `clone=False`,
+ the xctest path reuses it directly as `_session` (skips `TestSession._deploy_runner`).
+ `_mcp_runner_ref` is cleared on `ios_stop_session`. New regression tests in
+ `tests/test_mcp_session_persistence.py` assert no teardown fires between calls.
 
 - **4 pre-existing live-state test failures gated properly:**
-  `TestBackendBehavioralContract` tests now handle `XCTestBackend.is_available()`
-  as an instance method (not classmethod) and gracefully skip when `AXBackend`
-  cannot be instantiated (missing `pyobjc-framework-ApplicationServices`). Discovery
-  tools tests already had `pytest.skip` guards; they now skip correctly when no
-  booted simulator is present.
+ `TestBackendBehavioralContract` tests now handle `XCTestBackend.is_available`
+ as an instance method (not classmethod) and gracefully skip when `AXBackend`
+ cannot be instantiated (missing `pyobjc-framework-ApplicationServices`). Discovery
+ tools tests already had `pytest.skip` guards; they now skip correctly when no
+ booted simulator is present.
 
 - **`_NamespacePath.insert` error on Python 3.11+ namespace packages:**
-  `specterqa.ios.__init__._ensure_namespace()` now falls back to `.append()` when
-  `_NamespacePath` doesn't support `.insert()`, fixing isolated imports of
-  `specterqa.ios.cli.commands` (e.g. in standalone test runs, `specterqa-ios --version`).
+ `specterqa.ios.__init__._ensure_namespace` now falls back to `.append` when
+ `_NamespacePath` doesn't support `.insert`, fixing isolated imports of
+ `specterqa.ios.cli.commands` (e.g. in standalone test runs, `specterqa-ios --version`).
 
 ### Added
 
 - **`specterqa-ios --version` flag:** `ios_command_group` now has
-  `@click.version_option(package_name="specterqa-ios")`. Output: `specterqa-ios, version X.Y.Z`.
-  Unit tests in `tests/test_cli_version.py` (CliRunner, hermetic).
+ `@click.version_option(package_name="specterqa-ios")`. Output: `specterqa-ios, version X.Y.Z`.
+ Unit tests in `tests/test_cli_version.py` (CliRunner, hermetic).
 
 ### Docs
 
 - **`RELEASES.md`:** Release sequence table for v14.x including the `v14.0.0b1` tag
-  gap (publish workflow correctly failed; fix folded into v14.0.0).
+ gap (publish workflow correctly failed; fix folded into v14.0.0).
 
 ---
 
@@ -914,7 +914,7 @@ actual root-cause fix.**
 
 ### Fixed
 
-- **P0 deploy conflict in MCP xctest path (v14.0.0 regression):** `ios_start_session(backend="xctest")` was broken end-to-end. The MCP layer pre-deployed a `RunnerProcess` on `:8222` (healthy, logged `v14: MCP runner deployed and healthy`), but `session_manager._kill_stale_runners()` immediately killed it (treating the owned process as an orphan). The session then waited 60 s for health and timed out. Fix (Option A): `_kill_stale_runners` now calls `RunnerProcess.owned_pids()` and skips any xcodebuild PID that belongs to a live registry entry. The new `owned_pids()` classmethod is the only addition to `RunnerProcess`.
+- **P0 deploy conflict in MCP xctest path (v14.0.0 regression):** `ios_start_session(backend="xctest")` was broken end-to-end. The MCP layer pre-deployed a `RunnerProcess` on `:8222` (healthy, logged `v14: MCP runner deployed and healthy`), but `session_manager._kill_stale_runners` immediately killed it (treating the owned process as an orphan). The session then waited 60 s for health and timed out. Fix (Option A): `_kill_stale_runners` now calls `RunnerProcess.owned_pids` and skips any xcodebuild PID that belongs to a live registry entry. The new `owned_pids` classmethod is the only addition to `RunnerProcess`.
 
 ---
 
@@ -927,23 +927,23 @@ actual root-cause fix.**
 - `RunnerProcess` class — single owner of build/deploy/start/stop/healthcheck/port-alloc. Thread-safe (state machine + lock). Shared per `(udid, port)` via class-level registry.
 - `RunnerDeployError` exception — loud XCTest failure with actionable `suggested_fix`. No silent fallback to AX.
 - 5 new MCP tools for the AI debugging loop:
-  - `ios_app_relaunch(bundle_id, app_path?)` — reinstall/relaunch user app without tearing down runner. No `app_path`: terminate+launch (<2s, `mode="terminate-launch"`). With `app_path`: simctl install+terminate+launch (~15s, `mode="reinstall-launch"`). Returns `{bundle_id, udid, elapsed_ms, foreground_verified, mode}`.
-  - `ios_logs_tail(since_last_call, filters…)` — incremental log stream with per-session ISO timestamp cursor. First call returns the last ~50 entries as the initial boundary. Returns `{logs, cursor, since_ms, count}`.
-  - `ios_capture_state(include?)` — bundles screenshot + elements + logs + app_state + perf in one MCP call. `include=["screenshot","elements","logs"]` slims the payload. Returns `{screenshot?, elements?, logs?, app_state?, perf?, captured_at}`.
-  - `ios_action_with_logs(action, log_window_ms)` — atomic: action + logs fired during it. Supports `tap`, `long_press`, `type`, `swipe`, `press_key`. Returns `{action_result, logs, log_window_ms, action_elapsed_ms}`.
-  - `ios_promote_session_to_test(name, path?)` — saves session as replay YAML + auto-validates; in-repo `./replays/` default. `validation="passed"` + `can_replay=true` = ready for CI.
+ - `ios_app_relaunch(bundle_id, app_path?)` — reinstall/relaunch user app without tearing down runner. No `app_path`: terminate+launch (<2s, `mode="terminate-launch"`). With `app_path`: simctl install+terminate+launch (~15s, `mode="reinstall-launch"`). Returns `{bundle_id, udid, elapsed_ms, foreground_verified, mode}`.
+ - `ios_logs_tail(since_last_call, filters…)` — incremental log stream with per-session ISO timestamp cursor. First call returns the last ~50 entries as the initial boundary. Returns `{logs, cursor, since_ms, count}`.
+ - `ios_capture_state(include?)` — bundles screenshot + elements + logs + app_state + perf in one MCP call. `include=["screenshot","elements","logs"]` slims the payload. Returns `{screenshot?, elements?, logs?, app_state?, perf?, captured_at}`.
+ - `ios_action_with_logs(action, log_window_ms)` — atomic: action + logs fired during it. Supports `tap`, `long_press`, `type`, `swipe`, `press_key`. Returns `{action_result, logs, log_window_ms, action_elapsed_ms}`.
+ - `ios_promote_session_to_test(name, path?)` — saves session as replay YAML + auto-validates; in-repo `./replays/` default. `validation="passed"` + `can_replay=true` = ready for CI.
 - `runner/__init__.py` — `runner/` is now a proper Python package discovered by setuptools. Eliminates the B1.x class of wheel-packaging bugs.
 - Two E2E CI dogfood tests (`tests/dogfood/`):
-  - `test_ci_replay_dogfood.py` — CI replay workflow: fresh install + `runner build` (CI-always); record/save/validate/replay against TestKitApp (live-sim only).
-  - `test_ai_debug_dogfood.py` — AI debugging workflow: tool registration + count >= 43 (CI-always); full 5-tool exercise against TestKitApp (live-sim only).
+ - `test_ci_replay_dogfood.py` — CI replay workflow: fresh install + `runner build` (CI-always); record/save/validate/replay against TestKitApp (live-sim only).
+ - `test_ai_debug_dogfood.py` — AI debugging workflow: tool registration + count >= 43 (CI-always); full 5-tool exercise against TestKitApp (live-sim only).
 - `dogfood-ci.yml` GitHub Actions workflow — `dogfood-ci-always` job runs on every PR and push to main.
 - `rm -rf build dist` step in publish workflow.
 
 ### Changed
 
 - `session_manager._deploy_runner` delegates to `RunnerProcess`.
-- `_runner_source_dir()` in `cli/commands.py` now uses `importlib.resources.files('runner')` as primary resolution — works in both installed wheels and editable installs. Eliminates B1.5 regression class.
-- `_compute_runner_source_hash()` in `session_manager.py` updated to use `importlib.resources` for runner source discovery.
+- `_runner_source_dir` in `cli/commands.py` now uses `importlib.resources.files('runner')` as primary resolution — works in both installed wheels and editable installs. Eliminates B1.5 regression class.
+- `_compute_runner_source_hash` in `session_manager.py` updated to use `importlib.resources` for runner source discovery.
 - MCP tool count: 41 → 43 (net; removed 3 and added 5).
 - `pyproject.toml` uses `packages.find` (replaces long package-data glob list). Version bumped to `14.0.0`.
 - `MANIFEST.in` simplified (no more `runner_source` mirror).
@@ -959,14 +959,14 @@ actual root-cause fix.**
 
 ### Security
 
-- `ios_promote_session_to_test` sanitizes `name` (whitelist `[a-zA-Z0-9._-]+`; rejects slashes, `..`, leading dot) and resolves `path=` against `Path.cwd()` (rejects escapes).
+- `ios_promote_session_to_test` sanitizes `name` (whitelist `[a-zA-Z0-9._-]+`; rejects slashes, `..`, leading dot) and resolves `path=` against `Path.cwd` (rejects escapes).
 
 ### Migration
 
 Users on v13.x upgrading to v14.0.0:
 
 - Replace any `ios_start_runner` call with `ios_start_session(backend="xctest")`. The session manager handles runner deploy correctly.
-- Replace any `ios_stop_runner` call with `ios_stop_session()`.
+- Replace any `ios_stop_runner` call with `ios_stop_session`.
 - Replace any `ios_save_replay(name)` with `ios_stop_recording(name=name)`.
 - Internal imports of `specterqa.ios.runner_source.*` will break. These were never public API — use the top-level `runner/` package.
 
@@ -976,14 +976,14 @@ Users on v13.x upgrading to v14.0.0:
 
 ## [13.2.1] — 2026-04-18
 
-Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfood (Maurice Carrier, 2026-04-18).
+Hotfix release addressing 5 release blockers in v13.2.0 surfaced by dogfood (a user, 2026-04-18).
 
 ### Fixed
 - **B1**: Removed stale `RequestParser.swift` references from `src/specterqa/ios/runner_source/SpecterQARunner.xcodeproj/project.pbxproj` — fresh `pip install` users no longer hit "Build input file cannot be found" on first `runner build`.
-- **B2**: `_needs_rebuild()` now uses a SHA-256 content-hash of `Sources/` + `project.pbxproj` instead of the version-string match. Patch releases that don't change Swift sources skip the rebuild.
+- **B2**: `_needs_rebuild` now uses a SHA-256 content-hash of `Sources/` + `project.pbxproj` instead of the version-string match. Patch releases that don't change Swift sources skip the rebuild.
 - **B3+B4**: CLI `validate-replay` now accepts `element_identifier` and `tapOnIdentifier` (the recorder already writes them; the engine already reads them; MCP `ios_validate_replay` already accepted them — only CLI was out of sync).
 - **B9**: MCP `ios_start_session(backend="xctest")` now deploys the runner via `xcodebuild test-without-building` before probing `:8222/health`. Restores 13.1.0 behavior. Without this fix, MCP recording was offline in 13.2.0.
-- **B1.5**: `_runner_source_dir()` now finds the runner inside installed wheels (`pkg/runner_source/`), not just the dev-tree layout (`pkg_root/runner/`). Without this, every fresh `pip install` user's `specterqa-ios runner build` failed with "xcodebuild: error: '<cwd>/SpecterQARunner.xcodeproj' does not exist".
+- **B1.5**: `_runner_source_dir` now finds the runner inside installed wheels (`pkg/runner_source/`), not just the dev-tree layout (`pkg_root/runner/`). Without this, every fresh `pip install` user's `specterqa-ios runner build` failed with "xcodebuild: error: '<cwd>/SpecterQARunner.xcodeproj' does not exist".
 
 ### Added
 - `CHANGELOG.md` now ships in the wheel (was missing in 13.2.0).
@@ -997,21 +997,21 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 - 7 new MCP tools: `ios_list_replays`, `ios_replay`, `ios_validate_replay` (record-once, replay-free workflow reachable from MCP); `ios_doctor`, `ios_devices`, `ios_apps`, `ios_license_status` (zero-arg environment observation — first tool to call when a session fails unexpectedly).
 - `IOSBackend` Protocol (`backends/protocol.py`) — every backend now conforms to one interface.
 - `RetryPolicy` (`backends/retry_policy.py`) with FAST/ACTION/IDLE route classes + circuit breaker that replaces the per-call health probe.
-- `ios_dismiss_springboard_alert` + `ios_pre_grant_permissions` tools for SpringBoard-level permission prompts (reported from Palace dogfood).
+- `ios_dismiss_springboard_alert` + `ios_pre_grant_permissions` tools for SpringBoard-level permission prompts (reported from dogfood).
 - `docs/troubleshooting.md` — compatibility matrix for simctl privacy grants and known iOS 18.4 limitations.
 - `scripts/generate_llms_txt.py` + `make llms` target + instructions-sync regression test to prevent tool-surface drift.
 
 ### Changed
 - `HTTPServer.swift` refactored from a 1,196-LOC god class into `HTTPServer.swift` (socket + dispatch only, ~470 LOC) + 23 per-route files under `runner/Sources/Routes/` implementing a `Route` protocol.
-- Backend selection consolidated behind `BackendSelector.choose()` — the previous parallel selection path in `mcp/server.py::handle_start_session` is gone (~150 LOC deleted from server.py).
-- AX backend now walks sibling AXWindows so SwiftUI `.sheet`-presented UIKit content (e.g. Palace Add Library flow) enumerates correctly (reported from Palace dogfood).
+- Backend selection consolidated behind `BackendSelector.choose` — the previous parallel selection path in `mcp/server.py::handle_start_session` is gone (~150 LOC deleted from server.py).
+- AX backend now walks sibling AXWindows so SwiftUI `.sheet`-presented UIKit content (e.g. early adopter Add Library flow) enumerates correctly (reported from dogfood).
 - Agent instructions rewritten: first-session 5-call loop, failure recovery decision tree, AX-vs-XCTest guidance, consolidated wait-tool decision tree, removed stale coordinate-fallback typing advice.
 - `ios_dismiss_keyboard` is now a real registered MCP tool (runner's `/dismiss_keyboard` endpoint was already implemented; the Python wiring was missing).
 - Runner Swift sources dedup: `runner/Sources/` is the authoritative source; `src/specterqa/ios/runner_source/Sources/` is populated at build time via `setup.py` `build_py` override.
 - `.github/workflows/publish.yml` uses `PYPI_API_TOKEN` token auth instead of broken trusted-publishing / GitHub Packages paths.
 
 ### Fixed
-- AX hydration race: first `ios_elements()` right after `ios_start_session` no longer returns empty under race (warmup poll added to session start).
+- AX hydration race: first `ios_elements` right after `ios_start_session` no longer returns empty under race (warmup poll added to session start).
 - Tool-count mismatches in README/llms.txt/landing-page (was "19 tools"; actual count now surfaced; regression test enforces sync going forward).
 
 ### Removed
@@ -1035,7 +1035,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 - iOS 18.4 SpringBoard notification alerts remain unreachable from the AX tree — `ios_pre_grant_permissions` covers location/camera/etc. but NOT notifications on 18.4. Documented in `docs/troubleshooting.md`.
 
 ### Credits
-- Palace dogfood report (Maurice Carrier, 2026-04-17) surfaced the AX sheet-enumeration gap, SpringBoard alert limitation, and the AXHTTPServer port leak that shipped in v13.1.1.
+- dogfood report (a user, 2026-04-17) surfaced the AX sheet-enumeration gap, SpringBoard alert limitation, and the AXHTTPServer port leak that shipped in v13.1.1.
 
 ---
 
@@ -1045,11 +1045,11 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 #### Fixed
 
-- `AXHTTPServer.stop()` now calls `server_close()` after `shutdown()` — port 8222 is released cleanly so subsequent `ios_start_session` calls can re-bind. Without this fix, a second session with `backend="ax"` would fail with `[Errno 48] Address already in use`. Reported from Palace dogfood report 2026-04-17.
+- `AXHTTPServer.stop` now calls `server_close` after `shutdown` — port 8222 is released cleanly so subsequent `ios_start_session` calls can re-bind. Without this fix, a second session with `backend="ax"` would fail with `[Errno 48] Address already in use`. Reported from dogfood report 2026-04-17.
 
 #### Regression test added
 
-- `tests/regression/test_ax_server_restart.py` — three tests covering port release after stop, three consecutive restart cycles, and a static source guard asserting `server_close()` is called.
+- `tests/regression/test_ax_server_restart.py` — three tests covering port release after stop, three consecutive restart cycles, and a static source guard asserting `server_close` is called.
 
 ---
 
@@ -1059,17 +1059,17 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 #### Fixed
 
-- **XCTest runner crash on Xcode 26 during UI transitions** (sheets, modals, keyboard+tab switches, notification cascades, `app.snapshot()` during transitions). Root cause: `XCSetDebugLogger` symbol lives in `XCTestCore.framework`, re-exported by `XCTest.framework`; `dlsym` on the shim handle does not walk re-exports. Fixed by resolving via `RTLD_DEFAULT`.
+- **XCTest runner crash on Xcode 26 during UI transitions** (sheets, modals, keyboard+tab switches, notification cascades, `app.snapshot` during transitions). Root cause: `XCSetDebugLogger` symbol lives in `XCTestCore.framework`, re-exported by `XCTest.framework`; `dlsym` on the shim handle does not walk re-exports. Fixed by resolving via `RTLD_DEFAULT`.
 - Added WDA-proven `XCUIApplication.doesNotHandleUIInterruptions` method swizzle via new `SpecterQASwizzler.{h,m}` ObjC bridge.
 - Added `XCTDisableAttributeKeyPathAnalysis = true`.
-- Hoisted `applyCrashMitigations()` to `class func setUp()` so mitigations fire before XCTest initializes loggers.
-- Smoke test isolation: `_tap_tab()` y-coordinate corrected (822 → 840); added `_ensure_tab()` helper with sentinel-element verification and retry; per-class `_restart_app()` cleanup for tests that leave the app in a dirty state.
+- Hoisted `applyCrashMitigations` to `class func setUp` so mitigations fire before XCTest initializes loggers.
+- Smoke test isolation: `_tap_tab` y-coordinate corrected (822 → 840); added `_ensure_tab` helper with sentinel-element verification and retry; per-class `_restart_app` cleanup for tests that leave the app in a dirty state.
 
 #### Impact
 
 - Was 22/40 live smoke tests passing. Now 40/40.
 - 5/5 new `SpecterQACrashMitigationTests` Swift unit tests pass.
-- Runner survives previously-crashing scenarios: `TestKeyboardDuringTabSwitch`, `TestSheetOverTextField`, `TestPalaceNotificationCascade`, `TestNotificationFloodResilience`, `TestXCTestCrashMitigation`.
+- Runner survives previously-crashing scenarios: `TestKeyboardDuringTabSwitch`, `TestSheetOverTextField`, `TestCustomerNotificationCascade`, `TestNotificationFloodResilience`, `TestXCTestCrashMitigation`.
 
 #### Verified on
 
@@ -1114,7 +1114,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ### 37/37 Smoke Tests Passing (Zero Crashes)
 - 19 crash pattern scenarios
 - 13 functional scenarios
-- 5 Palace-specific state mutation scenarios
+- 5 early adopter-specific state mutation scenarios
 
 ### Requirements
 - macOS Accessibility permission for the Python process (one-time system dialog)
@@ -1134,13 +1134,13 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ## v12.6.0 (2026-04-15)
 
-### PalacePatternTab — Real-World Crash Pattern Reproduction
-- New TestKitApp tab reproducing exact Palace Library crash patterns:
-  - Borrow/download/return state machine with NotificationCenter cascade (5+ rapid posts)
-  - Combine PassthroughSubject rapid progress updates (simulated download)
-  - UIViewControllerRepresentable library switcher in SwiftUI sheet modal
-  - 10-notification burst trigger button
-- All 5 Palace pattern tests pass — runner survives notification floods
+### CustomerPatternTab — Real-World Crash Pattern Reproduction
+- New TestKitApp tab reproducing exact early adopter Library crash patterns:
+ - Borrow/download/return state machine with NotificationCenter cascade (5+ rapid posts)
+ - Combine PassthroughSubject rapid progress updates (simulated download)
+ - UIViewControllerRepresentable library switcher in SwiftUI sheet modal
+ - 10-notification burst trigger button
+- All 5 early adopter pattern tests pass — runner survives notification floods
 
 ### Dogfood Issue Regression Tests
 - Screenshot parsing: valid JPEG verification + navigation screenshot survival
@@ -1150,7 +1150,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ### Test Coverage
 - 19 crash pattern scenarios across 6 categories
 - 13 functional scenarios (form, list, tabs, sheets, perf, accessibility)
-- 5 Palace-specific state mutation scenarios
+- 5 early adopter-specific state mutation scenarios
 - 28/28 UAT tool verification tests
 - 101 regression/integration tests
 
@@ -1208,8 +1208,8 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ## v12.3.0 (2026-04-14)
 
-### TestKit: Palace Sign-In Pattern
-- ListTab added to TestKitApp: SwiftUI List with TextField + SecureField rows mirroring the Palace Library sign-in form
+### TestKit: early adopter Sign-In Pattern
+- ListTab added to TestKitApp: SwiftUI List with TextField + SecureField rows mirroring the early adopter Library sign-in form
 - 3 new smoke tests: List navigation, List element discovery, multi-field List typing with sign-in verification
 - Tab navigation uses safe coordinate tap to avoid element-based tap crash during view transitions
 
@@ -1267,7 +1267,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 - No mock tests — all new tests exercise real behavior
 
 ### Critical Fix: Multi-Field Form Typing
-- Dismiss keyboard → tap target field → app.typeText() — the ONLY approach that works on SwiftUI Forms
+- Dismiss keyboard → tap target field → app.typeText — the ONLY approach that works on SwiftUI Forms
 - /dismiss_keyboard endpoint: taps above keyboard, swipe fallback
 - Element query depth 10 → 50 for deep SwiftUI Form nesting
 - Default element types expanded: secureTextField, searchField, cell, tabBar, etc.
@@ -1284,11 +1284,11 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 - The runner taps the target field first (using element-relative coordinate tap), then types
 - Solves multi-field form typing: `ios_type(text="mypass", label="Password")`
 - Without a target, types into whatever has focus (legacy behavior preserved)
-- This is the systemic fix for the Palace sign-in form focus issue
+- This is the systemic fix for the early adopter sign-in form focus issue
 
 ### Fixes
 - fix(client): HTTP timeout bumped 5s → 10s for element-based operations (element lookup + settle delays exceed 5s)
-- fix(runner): Element-relative coordinate tap (`el.coordinate(withNormalizedOffset:).tap()`) instead of `el.tap()` — prevents iOS 26 SIGABRT crashes
+- fix(runner): Element-relative coordinate tap (`el.coordinate(withNormalizedOffset:).tap`) instead of `el.tap` — prevents iOS 26 SIGABRT crashes
 - Live tested: Safari Address bar — targeted type by label, text verified in element tree ✅
 
 ---
@@ -1296,9 +1296,9 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ## v11.9.5 (2026-04-13)
 
 ### Critical Fix
-- fix(runner): Use element-relative coordinate tap instead of `el.tap()` — prevents SIGABRT crash on iOS 26
-- `el.tap()` throws ObjC NSExceptions that Swift cannot catch, killing the runner process
-- `el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()` is element-aware (proper focus transfer) but goes through XCTest's coordinate system (no crash)
+- fix(runner): Use element-relative coordinate tap instead of `el.tap` — prevents SIGABRT crash on iOS 26
+- `el.tap` throws ObjC NSExceptions that Swift cannot catch, killing the runner process
+- `el.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap` is element-aware (proper focus transfer) but goes through XCTest's coordinate system (no crash)
 - Live tested: Safari — element tap → type → verify, no crashes ✅
 
 ---
@@ -1306,8 +1306,8 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ## v11.9.4 (2026-04-13)
 
 ### Critical Fix
-- fix(runner): Safe element-based tap — prevents runner crash from `el.tap()` on non-hittable elements
-- When element is hittable: uses XCTest `el.tap()` (proper focus transfer for SecureField)
+- fix(runner): Safe element-based tap — prevents runner crash from `el.tap` on non-hittable elements
+- When element is hittable: uses XCTest `el.tap` (proper focus transfer for SecureField)
 - When element is NOT hittable: uses coordinate tap on element center (safe fallback, no crash)
 - Response includes `mode: "element"` or `"element_coord_fallback"` for transparency
 - Live tested: Safari Address bar — tap, navigate away, tap back, type, verify ✅ (2 cycles, 0 crashes)
@@ -1317,9 +1317,9 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ## v11.9.3 (2026-04-13)
 
 ### Critical Fix
-- fix(runner): Element-based tap via XCTest `element.tap()` — fixes SecureField focus transfer (#43)
+- fix(runner): Element-based tap via XCTest `element.tap` — fixes SecureField focus transfer (#43)
 - `POST /tap` now accepts `label` or `identifier` params for element-based tapping
-- When label/identifier is provided, runner uses `elementQuery.findByLabel()` → `element.tap()` instead of coordinate tap
+- When label/identifier is provided, runner uses `elementQuery.findByLabel` → `element.tap` instead of coordinate tap
 - This properly transfers first-responder focus even on SwiftUI SecureField inside List/Form cells
 - Python `handle_tap` prefers element-based tap, falls back to coordinate tap on failure
 - Response includes `tap_mode: "element"` or `"coordinate"` for transparency
@@ -1330,8 +1330,8 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ## v11.9.2 (2026-04-13)
 
 ### Critical Fix
-- fix(runner): `ios_type` focus transfer bug (#43) — `typeText()` no longer steals focus from the user's selected field
-- When a field already has `hasFocus`, skip the redundant `tap()` that was resetting focus to the first field
+- fix(runner): `ios_type` focus transfer bug (#43) — `typeText` no longer steals focus from the user's selected field
+- When a field already has `hasFocus`, skip the redundant `tap` that was resetting focus to the first field
 - Only tap to focus when NO field has focus (strategy 2 fallback)
 - Live simulator smoke test: Safari URL bar — tap, type, text verified in element tree ✅
 
@@ -1358,7 +1358,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Runner Build Pipeline
 - Runner source now packaged at `specterqa.ios.runner_source` with `RUNNER_SOURCE_DIR`, `SOURCES_DIR`, `BUILD_SCRIPT` constants
-- `session_manager._rebuild_runner()` resolves source from installed package first, falls back to repo root for development
+- `session_manager._rebuild_runner` resolves source from installed package first, falls back to repo root for development
 - Version marker ensures runner rebuilds automatically after `pip install --upgrade`
 
 ### Test Suite
@@ -1417,7 +1417,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Features
 - feat(mcp): `ios_logs` tool — real-time app console logs from iOS Simulator (level, category, pattern filters, 100-entry cap, summary stats)
-- feat(mcp): `ios_crashes` tool — crash detection from .ips files in DiagnosticReports (exception type, backtrace, app running status)
+- feat(mcp): `ios_crashes` tool — crash detection from.ips files in DiagnosticReports (exception type, backtrace, app running status)
 - Both monitors auto-start/stop with session lifecycle
 - Tool count: 22 → 24
 
@@ -1427,13 +1427,13 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Fixed
 - **F#11 (simdrive recording): `type_text` now persists `tap_first` focus context.**
-  Previously, `type_text(text="...", tap_first={text:"..."})` was recorded as
-  only `{text: "..."}` — the `tap_first` (and `clear_first`) kwargs were dropped
-  at record time, so multi-field forms could not be faithfully replayed. The
-  recording schema is additive: pre-fix recordings without `tap_first` continue
-  to replay unchanged. On replay, an `args.tap_first` triggers a focus tap
-  against the live-resolved target before the `type_text` dispatches — same
-  call sequence as record. Affects both sim and device replay paths.
+ Previously, `type_text(text="...", tap_first={text:"..."})` was recorded as
+ only `{text: "..."}` — the `tap_first` (and `clear_first`) kwargs were dropped
+ at record time, so multi-field forms could not be faithfully replayed. The
+ recording schema is additive: pre-fix recordings without `tap_first` continue
+ to replay unchanged. On replay, an `args.tap_first` triggers a focus tap
+ against the live-resolved target before the `type_text` dispatches — same
+ call sequence as record. Affects both sim and device replay paths.
 
 ## v11.5.0 (2026-04-12)
 
@@ -1442,7 +1442,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### High
 - feat(mcp): Element Resolver v2 — auto-refresh on cache miss eliminates 29% stale-cache tap failures; scored matching (exact > prefix > substring) prevents greedy label mismatches
-- fix(mcp): `ios_screenshot()` outputs JPEG (quality=85) instead of lossless PNG — 3-5x payload reduction, fits within MCP message limits
+- fix(mcp): `ios_screenshot` outputs JPEG (quality=85) instead of lossless PNG — 3-5x payload reduction, fits within MCP message limits
 - feat(runner): `isHittable` tracked in ElementDescriptor — non-hittable elements auto-fallback to coordinate tap with warning
 
 ### Medium
@@ -1466,7 +1466,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ### Added
 - `feat(mcp)`: `accessibilityIdentifier` support in `ios_tap` — find elements by exact identifier match
 - `feat(mcp)`: coordinate-based tap in `ios_tap` — tap at explicit x,y screen coordinates
-- `feat(replay)`: `element_identifier` field, `_find_by_identifier()`, `tapOnIdentifier` Maestro shortcut
+- `feat(replay)`: `element_identifier` field, `_find_by_identifier`, `tapOnIdentifier` Maestro shortcut
 - `test`: 32 new tests for identifier and coordinate tap features
 
 ---
@@ -1474,28 +1474,28 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ## [11.3.0] — 2026-04-08
 
 ### Changed
-- All diagnostic `print()` calls in production source replaced with
-  `logging.getLogger()` / `logger.debug()` / `logger.info()` — no more
-  debug noise to stdout unless the caller configures a handler.
-  Affected: `som_runner`, `sim_driver`, `wda_driver`, `project_injector`,
-  `drivers/simulator/driver`, `replay`, `cli/commands` (internal paths only;
-  user-facing CLI output via `console.print` and `plain` mode `print(file=stderr)`
-  is unchanged).
+- All diagnostic `print` calls in production source replaced with
+ `logging.getLogger` / `logger.debug` / `logger.info` — no more
+ debug noise to stdout unless the caller configures a handler.
+ Affected: `som_runner`, `sim_driver`, `wda_driver`, `project_injector`,
+ `drivers/simulator/driver`, `replay`, `cli/commands` (internal paths only;
+ user-facing CLI output via `console.print` and `plain` mode `print(file=stderr)`
+ is unchanged).
 - Bare `except Exception:` catches audited across all 22 affected modules.
-  Catches that could be narrowed now use specific exception types
-  (`OSError`, `json.JSONDecodeError`, `ET.ParseError`, `ImportError`, etc.).
-  Intentionally broad catches (plugin boundaries, ObjC bridges, background threads,
-  capability probes) retain `except Exception:` with a `# noqa: BLE001` annotation,
-  a comment explaining why, and `logger.debug` to surface failures.
+ Catches that could be narrowed now use specific exception types
+ (`OSError`, `json.JSONDecodeError`, `ET.ParseError`, `ImportError`, etc.).
+ Intentionally broad catches (plugin boundaries, ObjC bridges, background threads,
+ capability probes) retain `except Exception:` with a `# noqa: BLE001` annotation,
+ a comment explaining why, and `logger.debug` to surface failures.
 - `pyproject.toml` now includes `classifiers`, `keywords`, and `[project.urls]`.
 - `conftest.py` added: session-scoped `fresh_install` fixture replacing the
-  hardcoded `/tmp/specterqa-ios-fresh` path used by integration tests.
+ hardcoded `/tmp/specterqa-ios-fresh` path used by integration tests.
 
 ### Fixed
 - `tests/test_integration_smoke.py`: `TestMaestroExampleParses` and
-  `TestMCPServerProtocol` tests now use the `fresh_install` fixture path
-  instead of a hardcoded `/tmp` directory that only worked after an external
-  manual install step.
+ `TestMCPServerProtocol` tests now use the `fresh_install` fixture path
+ instead of a hardcoded `/tmp` directory that only worked after an external
+ manual install step.
 
 ---
 
@@ -1503,11 +1503,11 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Fixed
 - `replay.py`: `validate-replay` no longer crashes on bare-string Maestro steps
-  (e.g. `- swipe_back` without a mapping key).
+ (e.g. `- swipe_back` without a mapping key).
 - `mcp/server.py`: `ios_start_session` and `ios_stop_session` no longer raise
-  on missing optional keys in the session registry.
+ on missing optional keys in the session registry.
 - `pyproject.toml`: missing `mcp` extra dependency restored so `specterqa-ios-mcp`
-  entry point is installable.
+ entry point is installable.
 
 ---
 
@@ -1518,7 +1518,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Fixed
 - 24 pre-existing test failures resolved (mock signature mismatches, import paths,
-  assertion typos introduced in prior test additions).
+ assertion typos introduced in prior test additions).
 
 ---
 
@@ -1526,15 +1526,15 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Added
 - 179-test verification suite across three new test files:
-  - `tests/test_v11_features.py` — 68 tests covering every v11 feature.
-  - `tests/test_adversarial.py` — 68 tests for malformed input, races, and
-    resource exhaustion.
-  - `tests/test_integration_smoke.py` — 43 cross-module integration tests
-    (record → save → replay, MCP stdio protocol, JSON output, package structure).
+ - `tests/test_v11_features.py` — 68 tests covering every v11 feature.
+ - `tests/test_adversarial.py` — 68 tests for malformed input, races, and
+ resource exhaustion.
+ - `tests/test_integration_smoke.py` — 43 cross-module integration tests
+ (record → save → replay, MCP stdio protocol, JSON output, package structure).
 
 ### Fixed
 - `replay.py`: `handle_wait` clamped to `[0, 30]` seconds to prevent `ValueError`
-  from `time.sleep` on negative durations.
+ from `time.sleep` on negative durations.
 - `replay.py`: `validate-replay` now handles bare-string Maestro step aliases.
 
 ---
@@ -1543,14 +1543,14 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Added
 - `specterqa-ios ci --parallel N` flag: run N replays simultaneously via
-  `ThreadPoolExecutor`.
+ `ThreadPoolExecutor`.
 - `specterqa-ios ci --json-output PATH`: structured `results.json` for CI dashboards.
 - `specterqa-ios doctor`: full environment diagnostics (Xcode, Python, simulator,
-  runner, WDA, API key, license).
+ runner, WDA, API key, license).
 - Example replay YAML files (`examples/01-smoke-test.yaml` through
-  `04-visual-regression.yaml`).
+ `04-visual-regression.yaml`).
 - Maestro YAML compatibility aliases in `replay.py`:
-  `tapOn`, `assertVisible`, `assertNotVisible`, `inputText`, `waitFor`.
+ `tapOn`, `assertVisible`, `assertNotVisible`, `inputText`, `waitFor`.
 
 ### Changed
 - `--reuse-runner` is now the default in CI mode (opt out with `--no-reuse-runner`).
@@ -1563,15 +1563,15 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 ### Added
 - WKWebView support: hybrid apps with embedded web content now testable.
 - Conditional branching in replay YAML:
-  `if_element_visible`, `if_not_element_visible`, `skip_to`.
+ `if_element_visible`, `if_not_element_visible`, `skip_to`.
 - Visual regression diffing: `visual_diff` checkpoint action stores before/after
-  screenshots in evidence and reports pixel-change percentage.
+ screenshots in evidence and reports pixel-change percentage.
 - Runner reuse across replay steps (avoids redundant XCTest runner restarts).
 - 19 MCP tools exposed (up from 14 in v10).
 - `ios_execute_shell` MCP tool for running arbitrary simctl commands.
 
 ### Fixed
-- All dogfood gaps from the Palace Project 27-agent run resolved.
+- All dogfood gaps from the early adopter Project 27-agent run resolved.
 
 ---
 
@@ -1579,7 +1579,7 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Fixed
 - Return key delayed crash: `press_key("return")` no longer triggers a
-  post-action crash on simulators with slow keyboard animation.
+ post-action crash on simulators with slow keyboard animation.
 - `simctl` calls during an active session no longer raise `RuntimeError`.
 
 ---
@@ -1588,9 +1588,9 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by Palace dogfo
 
 ### Added
 - PoolIQ v2 runner improvements merged:
-  - BSD sockets transport for XCTest runner IPC.
-  - Snapshot query API for element-tree polling.
-  - Crash guards in runner process management.
+ - BSD sockets transport for XCTest runner IPC.
+ - Snapshot query API for element-tree polling.
+ - Crash guards in runner process management.
 
 ---
 
