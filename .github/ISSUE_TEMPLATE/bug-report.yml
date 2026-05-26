@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible bug in SimDrive (CLI, MCP server, journey runner, recordings).
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please fill out the
+        sections below so we can reproduce and triage quickly. For sensitive
+        billing or license details, email `support@simdrive.dev` instead of
+        posting publicly.
+  - type: input
+    id: simdrive-version
+    attributes:
+      label: SimDrive version
+      description: "Run `simdrive --version` and paste the output."
+      placeholder: "e.g. simdrive 1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: host-environment
+    attributes:
+      label: Host OS + Xcode + iOS version
+      description: "macOS version, Xcode version, target iOS / simulator version."
+      placeholder: "e.g. macOS 15.4, Xcode 16.2, iOS 26.3 simulator"
+    validations:
+      required: true
+  - type: dropdown
+    id: target-type
+    attributes:
+      label: Target type
+      description: Where were you driving SimDrive?
+      options:
+        - Simulator
+        - Real Device
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal reproducer. Commands, MCP calls, or a YAML journey snippet.
+      placeholder: |
+        1. `simdrive session_start --bundle-id com.acme.app`
+        2. `simdrive tap --text "Sign In"`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you think would happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include screenshots if helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stack trace
+      description: Paste relevant CLI output, simulator logs, or Python tracebacks. Redact anything sensitive.
+      render: shell
+  - type: checkboxes
+    id: code-of-conduct
+    attributes:
+      label: Code of Conduct
+      description: By submitting this issue you agree to follow the project's Code of Conduct.
+      options:
+        - label: I agree to abide by the project's Code of Conduct.
+          required: true
