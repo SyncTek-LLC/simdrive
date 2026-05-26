@@ -1,32 +1,45 @@
 # Changelog
+<!--
+ Audience note: this file is the canonical changelog and is rendered to the
+ public marketing site (simdrive.dev/changelog/) and PyPI. Write entries for
+ end users.
+
+ A sanitizer (sanitizeForPublic in the simdrive-site repo's
+ scripts/apply-release.mjs and a mirrored copy in the engine's
+.github/workflows/dispatch-downstream-on-release.yml) strips internal
+ context — initiative IDs, internal paths, internal codenames, customer
+ identifiers — on the way to the rendered site. The sanitizer is a
+ BACKSTOP, not a license: prefer to write the entry for users; let the
+ filter catch what slips through.
+-->
 
 ## [1.0.0b7] — 2026-05-26
 
 ### Fixed
 
-- **NOTICE file: declare correct Elastic-2.0 license** (was incorrectly stating MIT). The wheel and sdist `NOTICE` previously read "Licensed under the MIT License" — contradicting the root `LICENSE` (Elastic License 2.0), `pyproject.toml` (`license = "Elastic-2.0"`), and all public-facing license messaging. NOTICE now correctly states ELv2 with a link to the canonical license URL. Third-party MIT attribution (Facebook idb / FBSimulatorIndigoHID) is preserved unchanged. No code change, no runtime impact. [INIT-2026-553]
+- **NOTICE file: declare correct Elastic-2.0 license** (was incorrectly stating MIT). The wheel and sdist `NOTICE` previously read "Licensed under the MIT License" — contradicting the root `LICENSE` (Elastic License 2.0), `pyproject.toml` (`license = "Elastic-2.0"`), and all public-facing license messaging. NOTICE now correctly states ELv2 with a link to the canonical license URL. Third-party MIT attribution (Facebook idb / FBSimulatorIndigoHID) is preserved unchanged. No code change, no runtime impact.
 
 ---
 
 ## [1.0.0b6] — 2026-05-26
 
-Tightens the version-pin diagnostic surface (INIT-2026-553 P2) so consumer monorepos can enforce a pinned simdrive release without scraping stderr.
+Tightens the version-pin diagnostic surface so consumer monorepos can enforce a pinned simdrive release without scraping stderr.
 
 ### Added — `simdrive version` / `simdrive doctor` subcommands
 
 - **`simdrive version [--json] [--required-version VERSION]`** — promoted from the bare `--version` flag into a proper subcommand. `--json` emits `{"version", "package"}` (plus `required` + `satisfies_required` when a pin is supplied) for clean parsing in CI gates. `--required-version` exits **3** on mismatch with a side-by-side installed-vs-required diagnostic and the exact `pip install 'simdrive==<version>'` command to align. Docs link surfaces in the error too.
-- **`simdrive doctor [--json] [--required-version VERSION]`** — direct CLI wrapper around `diagnostics.doctor()`. Returns the same checks the MCP `doctor` tool returns; `--json` emits `{ok, version, package, checks[]}` for monorepo `make ios-smoke`-style gates that want one command for "is my env ready AND is the right simdrive installed". Exit 1 on check failure, exit 3 on version mismatch (mismatch dominates check failures — a wrong simdrive can produce spurious failures).
+- **`simdrive doctor [--json] [--required-version VERSION]`** — direct CLI wrapper around `diagnostics.doctor`. Returns the same checks the MCP `doctor` tool returns; `--json` emits `{ok, version, package, checks}` for monorepo `make ios-smoke`-style gates that want one command for "is my env ready AND is the right simdrive installed". Exit 1 on check failure, exit 3 on version mismatch (mismatch dominates check failures — a wrong simdrive can produce spurious failures).
 - **Legacy `simdrive --version` still works** and now transparently delegates to the new handler, so `simdrive --version --json` and `simdrive --version --required-version X` work via the short-flag spelling too.
 
 ### Why
 
-A sub-agent dogfood (INIT-2026-553) hit `make ios-smoke` exit 3 because the monorepo Makefile pinned `0.1.0` but `1.0.0b4` was installed. The pre-fix diagnostic was opaque enough that the operator had to halt + ping the backend team for a version bump. Post-fix: the error tells the operator the exact pip command to run, and consumer scripts can parse `simdrive version --json` instead of scraping output.
+CI gates that pin a specific simdrive version need a parseable signal when the installed version drifts. Previously the diagnostic was opaque enough that operators had to dig through stderr to figure out which version was actually loaded. Now the error tells the operator the exact `pip install` command to run, and consumer scripts can parse `simdrive version --json` instead of scraping output.
 
 ---
 
 ## [1.0.0b5] — 2026-05-22
 
-18-finding fix wave from b4 dogfood report. See CompanyState/research/simdrive-dogfood/b4/REPORT.md.
+18-finding fix wave from the b4 dogfood report.
 
 ### Highlights
 - MCP server now self-restarts on disk-version drift (F#1)
@@ -34,9 +47,9 @@ A sub-agent dogfood (INIT-2026-553) hit `make ios-smoke` exit 3 because the mono
 - Ambiguous text-targets and stale text refs now surface alternates + fuzzy suggestions (F#5, F#6)
 - SSIM compute auto-masks iOS status bar; recordings auto-include device-class masks (F#14, F#15)
 - `verify_change: true` on tap returns screen_changed + ssim_delta (F#8)
-- apps() populates version from CFBundleShortVersionString (F#3)
+- apps populates version from CFBundleShortVersionString (F#3)
 - migrate-recording gains --all and --missing-contract flags (F#17)
-- Plus 10 polish items: logs() raw mode, perf windowed sampling, list_replays filter, lint categorization, OCR alternates, confidence-band relabel, recording text dedup, type_text tap_first persistence, observe(annotate=False) marks
+- Plus 10 polish items: logs raw mode, perf windowed sampling, list_replays filter, lint categorization, OCR alternates, confidence-band relabel, recording text dedup, type_text tap_first persistence, observe(annotate=False) marks
 
 ---
 
@@ -52,7 +65,7 @@ A sub-agent dogfood (INIT-2026-553) hit `make ios-smoke` exit 3 because the mono
 
 ## [1.0.0b4] — 2026-05-22
 
-**Reliability + dogfood-fix release.** Addresses the four bugs the Palace iOS team surfaced against b3 dogfood (F-B3-007, F-B3-009, F-B3-010, F-B3-011) and hardens the build harness so this class of regression cannot ship again. No breaking API changes.
+**Reliability + dogfood-fix release.** Addresses the four bugs early adopters surfaced against the b3 dogfood (F-B3-007, F-B3-009, F-B3-010, F-B3-011) and hardens the build harness so this class of regression cannot ship again. No breaking API changes.
 
 ### Fixed — install path (F-B3-007, blocker)
 
@@ -60,7 +73,7 @@ A sub-agent dogfood (INIT-2026-553) hit `make ios-smoke` exit 3 because the mono
 
 ### Fixed — recording integrity (F-B3-009, F-B3-010)
 
-- **`clear_field` calls were not recorded.** A session running N actions including a `clear_field` produced a recording with N-1 steps; the clear was silently absent on replay. Pre-fix, `tool_clear_field` only emitted to the audit log, not the recorder. **Fix:** both device and sim branches now call `_record_act_step("clear_field", ...)` with proper pre/post screenshots. Failed clears (HID dispatch error) are NOT recorded — a lying step is worse than a missing one.
+- **`clear_field` calls were not recorded.** A session running N actions including a `clear_field` produced a recording with N-1 steps; the clear was silently absent on replay. Pre-fix, `tool_clear_field` only emitted to the audit log, not the recorder. **Fix:** both device and sim branches now call `_record_act_step("clear_field",...)` with proper pre/post screenshots. Failed clears (HID dispatch error) are NOT recorded — a lying step is worse than a missing one.
 
 - **`tap_and_wait_keyboard` was serialized as bare `tap`.** The composite delegates to `tool_tap` internally, which recorded itself as `action: tap` in `recording.yaml`. Replays lost the keyboard-wait semantic and tapped-then-immediately-acted. **Fix:** new `Recorder.upgrade_step_action(step_id, new_action)` method; the composite tool calls it after `tool_tap` returns so the persisted step carries the right action name.
 
@@ -75,7 +88,7 @@ A sub-agent dogfood (INIT-2026-553) hit `make ios-smoke` exit 3 because the mono
 
 ### Fixed — response disambiguation (F-B3-011)
 
-- **`type_text` returned `keyboard_visible: false` when the type actually succeeded.** Palace's instant-search field auto-commits and dismisses the keyboard on the first keystroke. By the time the post-type observe ran, the keyboard chrome was gone — the heuristic false-negatived. Agents using `keyboard_visible` as a retry signal would double-type. **Fix:** when `dispatch_succeeded=true` and `keyboard_visible=false`, the response now includes a `keyboard_visible_reason` string explaining the auto-collapse scenario and stating explicitly: "Treat dispatch_succeeded as ground truth; do NOT retry on this signal."
+- **`type_text` returned `keyboard_visible: false` when the type actually succeeded.** An early-adopter instant-search field auto-commits and dismisses the keyboard on the first keystroke. By the time the post-type observe ran, the keyboard chrome was gone — the heuristic false-negatived. Agents using `keyboard_visible` as a retry signal would double-type. **Fix:** when `dispatch_succeeded=true` and `keyboard_visible=false`, the response now includes a `keyboard_visible_reason` string explaining the auto-collapse scenario and stating explicitly: "Treat dispatch_succeeded as ground truth; do NOT retry on this signal."
 
 ### Hardened — build harness (so this never happens again)
 
@@ -85,7 +98,7 @@ A sub-agent dogfood (INIT-2026-553) hit `make ios-smoke` exit 3 because the mono
 
 - **New `tests/test_no_fastapi_in_client_path.py`** — 5 regression-guard tests that mask `fastapi` in a subprocess `sys.modules` and verify every client-side import target still works. Subprocess isolation was necessary; in-process masking leaks wiped modules to every test that follows.
 
-- **New `docs/RELEASE_CHECKLIST.md`** codifies pre-merge, pre-publish, manual, and post-publish gates. The Palace b3 incidents are listed as concrete post-mortems so future releases see the failures, not just the abstract policies.
+- **New `docs/RELEASE_CHECKLIST.md`** codifies pre-merge, pre-publish, manual, and post-publish gates. The b3 incidents are listed as concrete post-mortems so future releases see the failures, not just the abstract policies.
 
 ### Tests added
 
@@ -105,7 +118,7 @@ If you installed `1.0.0b2` or `1.0.0b3` from PyPI you likely hit one or more of 
 
 ### Added — onboarding
 
-- **`simdrive demo` CLI subcommand** — 30-second sanity check that boots an iPhone simulator, opens Settings, runs a single `observe()`, and prints a structured summary. Closes the biggest onboarding gap between `pip install simdrive` and the agent-driven flow. New module `src/simdrive/_demo.py`; 13 tests.
+- **`simdrive demo` CLI subcommand** — 30-second sanity check that boots an iPhone simulator, opens Settings, runs a single `observe`, and prints a structured summary. Closes the biggest onboarding gap between `pip install simdrive` and the agent-driven flow. New module `src/simdrive/_demo.py`; 13 tests.
 
 ### Added — atomic / composite tools
 
@@ -116,9 +129,9 @@ If you installed `1.0.0b2` or `1.0.0b3` from PyPI you likely hit one or more of 
 
 ### Added — token efficiency on `observe`
 
-Four new params on `observe.observe()` and `tool_observe`, all backward compatible with defaults preserving legacy shape:
+Four new params on `observe.observe` and `tool_observe`, all backward compatible with defaults preserving legacy shape:
 
-- **`compact: bool`** — return slim mark dict (6 keys: `id`, `stable_id`, `text`, `center`, `bbox`, `confidence_band`) instead of the full ~9-key diagnostic shape. New `Mark.to_compact_dict()` method.
+- **`compact: bool`** — return slim mark dict (6 keys: `id`, `stable_id`, `text`, `center`, `bbox`, `confidence_band`) instead of the full ~9-key diagnostic shape. New `Mark.to_compact_dict` method.
 - **`confidence_floor: "low" | "med" | "high"`** — drop marks below the floor. Most common agent use: `"high"` filters out OCR misreads.
 - **`mark_limit: int`** — cap to top-N marks (sorted by band desc, then area desc).
 - **`capture_observability: bool`** — append `_observability` array with per-mark band-derivation breadcrumbs (`raw_confidence`, `clamped_confidence`, `dictionary_check`). Default off.
@@ -131,7 +144,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 
 ### Changed — perf
 
-- **Cross-session scale cache** — module-level `_SCALE_CACHE_BY_UDID` short-circuits the WDA `window_size_points()` round-trip when a new session attaches to a device we've talked to before. Pixel/point ratio is a stable physical property of the hardware; per-Session caching alone wasted ~50–150ms on every session start. Fallback scale=1.0 (transient WDA failure) populates only the Session cache, never the module cache — so a flaky moment can't poison future sessions.
+- **Cross-session scale cache** — module-level `_SCALE_CACHE_BY_UDID` short-circuits the WDA `window_size_points` round-trip when a new session attaches to a device we've talked to before. Pixel/point ratio is a stable physical property of the hardware; per-Session caching alone wasted ~50–150ms on every session start. Fallback scale=1.0 (transient WDA failure) populates only the Session cache, never the module cache — so a flaky moment can't poison future sessions.
 
 ### Changed — agent-facing docs
 
@@ -160,14 +173,14 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 ### Added — resilience primitives
 
 - **`simdrive._wait` polling helper** — `wait_until(predicate, timeout, …)` and async `await_until(...)` for condition-based waits. Sync + async variants, exponential backoff, structured `WaitTimeoutError` with a description so timeouts are diagnosable.
-- **Typed HID/keyboard/focus errors** — new `HIDUnavailableError`, `KeyboardNotReadyError`, `FocusNotReadyError`, `WaitTimeoutError` subclasses of `SimdriveError`. Existing `hid_unavailable()` factory preserved for backward compat.
+- **Typed HID/keyboard/focus errors** — new `HIDUnavailableError`, `KeyboardNotReadyError`, `FocusNotReadyError`, `WaitTimeoutError` subclasses of `SimdriveError`. Existing `hid_unavailable` factory preserved for backward compat.
 - **`wda_recovery_exhausted` error** — surfaces from `WdaClient` when exponential-backoff retries hit `max_transport_attempts` (default 3). Includes the full attempt history for diagnostics.
 
 ### Added — license & cloud paranoia
 
 - **Multi-key license validator** — `TRUSTED_PUBLIC_KEYS: list[tuple[str, str]]` enables key rotation without forcing a client upgrade for existing licenses. Payloads carry an optional `key_id` field; legacy payloads route to the first trusted key. New `KeyRotationError` when an unknown key id appears.
-- **Trial clock-skew gate** — `assert_trial_clock_trustworthy()` refuses to grant the 7-day offline grace window if the system clock moved backwards >6h or forward >30d from `last_known_server_time`. Forces a fresh cloud check instead of silently granting access on a tampered or wildly-drifted clock.
-- **Cloud privacy scrub** — `cloud/privacy.py:scrub_body()` masks sensitive fields (`email`, `license_key`, `token`, `signature`, `bearer`) before logging or storing any HTTP response body. Wired into `cloud/auth.py`.
+- **Trial clock-skew gate** — `assert_trial_clock_trustworthy` refuses to grant the 7-day offline grace window if the system clock moved backwards >6h or forward >30d from `last_known_server_time`. Forces a fresh cloud check instead of silently granting access on a tampered or wildly-drifted clock.
+- **Cloud privacy scrub** — `cloud/privacy.py:scrub_body` masks sensitive fields (`email`, `license_key`, `token`, `signature`, `bearer`) before logging or storing any HTTP response body. Wired into `cloud/auth.py`.
 - **Defense-in-depth local quota check** — every MCP tool dispatch now runs `check_local_quota(tool_name, session)` before the handler body. Cheap, network-free; reads the session-local snapshot from the auth/refresh bootstrap. Cloud-side `make_quota_gate` remains the authoritative enforcer.
 
 ### Changed — WDA bridge
@@ -179,7 +192,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 
 ### Changed — recording integrity
 
-- **No more partial steps** — `Recorder.add_step()` drops the step and emits a `recorder.dropped_step_partial_capture` WARNING when either pre- or post-action screenshot fails (None / missing / zero-byte all count as failure). Return type widened to `Optional[int]`.
+- **No more partial steps** — `Recorder.add_step` drops the step and emits a `recorder.dropped_step_partial_capture` WARNING when either pre- or post-action screenshot fails (None / missing / zero-byte all count as failure). Return type widened to `Optional[int]`.
 - **Drift detection hysteresis** — replay drift halt now requires **2 consecutive sub-threshold SSIM frames** before stopping, defeating false positives from a single noisy frame under sim load. DEBUG-level `replay.ssim_compare` event logged on every comparison for diagnosability.
 
 ### Changed — server.py hygiene
@@ -193,14 +206,14 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 - **+359 new tests** across the sprint, total **1308 passing** (was 949 at sprint start). Distribution: Wave 1 wait_until/HID errors 26, Wave 1 WDA resilience 16, Wave 1 recorder integrity 8, Wave 1 license+cloud 46, Wave 2 integration 6, Wave 3 chaos 7, Wave 3 coverage push 250.
 - **Coverage 76% → 82% overall** with hot-path modules at 85–100%: `sim.py` 100%, `act.py` 100%, `session.py` 100%, `observe.py` 97%, `device.py` 94%, `wda/client.py` 85%, `recorder.py` 85%. `server.py` 67% → 70% (full 80% would require running the MCP server in tests — deferred).
 - **CI ratchet floor raised 65% → 80%** in `.github/workflows/simdrive-ci.yml`. Climb-to-85 plan documented in `simdrive/docs/COVERAGE_RATCHET.md`.
-- **Sprint structure** — six hardening branches merged via no-ff into `hardening/[internal-tracker]-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, `chaos-test`, `coverage-gate`, plus integrated Wave 2 work directly on the trunk.
+- **Sprint structure** — six hardening branches merged via no-ff into `hardening/-prod-readiness`: `wait-until-helper`, `wda-resilience`, `recorder-integrity`, `license-cloud-paranoia`, `chaos-test`, `coverage-gate`, plus integrated Wave 2 work directly on the trunk.
 
 ### Backwards compatibility
 
 - Existing licenses (no `key_id` field) validate against `TRUSTED_PUBLIC_KEYS[0]` unchanged.
 - `verify_key=` parameter on `validate_license` preserved with identical semantics when `trusted_keys=` is not also passed.
 - `WdaClient(host, port)` ctor unchanged; new `max_transport_attempts=3` is a keyword default.
-- `Recorder.add_step()` return type widened (`int` → `Optional[int]`); the one in-tree caller in `server.py` already guarded for `None`.
+- `Recorder.add_step` return type widened (`int` → `Optional[int]`); the one in-tree caller in `server.py` already guarded for `None`.
 - No MCP tool schema changes. The 32-tool surface is unchanged.
 
 ---
@@ -213,7 +226,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 
 - **14-day free trial** — `simdrive trial start --email you@example.com` issues an Ed25519-signed local license valid for 14 days, full Pro feature access. Email+machine SHA-256 de-dupe prevents infinite re-trials.
 - **License authentication** — `simdrive auth <license-key>` redeems a Polar-issued production license. Writes to `~/.simdrive/license.json`, validates against the embedded public key.
-- **Paywall enforcement on every MCP tool** — all 32 MCP tools now gate on `check_entitlement()`. Trial users get full access; after trial expiry, `LicenseError` is raised with a structured `license_required` envelope containing `pricing_url`, `auth_command_hint`, and `trial_command_hint` so the MCP client (Claude Code, Cursor, Continue) surfaces a copy-pasteable recovery path to the user.
+- **Paywall enforcement on every MCP tool** — all 32 MCP tools now gate on `check_entitlement`. Trial users get full access; after trial expiry, `LicenseError` is raised with a structured `license_required` envelope containing `pricing_url`, `auth_command_hint`, and `trial_command_hint` so the MCP client (Claude Code, Cursor, Continue) surfaces a copy-pasteable recovery path to the user.
 
 ### Added — Positioning
 
@@ -247,27 +260,27 @@ contract so replays refuse to run on the wrong device or OS major.
 
 **Recording on device**
 - `record_start` on `target=device` sessions binds a recorder that intercepts
-  every act tool call (tap/swipe/type_text/press_key/dismiss_sheet/clear_field)
-  with a WDA screenshot via `s.wda_client.screenshot_any()` and a marks count
-  via `annotate_device_screenshot`. Screenshots live under
-  `~/.simdrive/recordings/<name>/screenshots/<step_id>.png` (same layout as sim).
+ every act tool call (tap/swipe/type_text/press_key/dismiss_sheet/clear_field)
+ with a WDA screenshot via `s.wda_client.screenshot_any` and a marks count
+ via `annotate_device_screenshot`. Screenshots live under
+ `~/.simdrive/recordings/<name>/screenshots/<step_id>.png` (same layout as sim).
 - `record_stop` writes `recording.yaml` with the same schema as sim plus a
-  device-specific `requires.device` block: `{udid, device_name, os_version, os_major}`.
-- `Recorder.write_partial()` persists `recording.yaml.partial` if a mid-record
-  step raises — preserves debug context across crashes.
+ device-specific `requires.device` block: `{udid, device_name, os_version, os_major}`.
+- `Recorder.write_partial` persists `recording.yaml.partial` if a mid-record
+ step raises — preserves debug context across crashes.
 
 **Replay on device**
 - `replay <name>` against a device session: verifies the state contract first,
-  then per-step takes a live WDA screenshot + observe, SSIM-compares against
-  recorded screenshot, marks-count-compares against recorded marks_count, and
-  only then dispatches the recorded action.
+ then per-step takes a live WDA screenshot + observe, SSIM-compares against
+ recorded screenshot, marks-count-compares against recorded marks_count, and
+ only then dispatches the recorded action.
 - SSIM threshold for device: **0.80** (sim stays at 0.85). Rationale: real
-  device screenshots have hardware compositing jitter and anti-aliasing
-  variance that sim doesn't; 0.80 still halts loudly on meaningful drift
-  (the dogfood "23 blind taps at SSIM 0.014" failure mode fails by 57× margin).
+ device screenshots have hardware compositing jitter and anti-aliasing
+ variance that sim doesn't; 0.80 still halts loudly on meaningful drift
+ (the dogfood "23 blind taps at SSIM 0.014" failure mode fails by 57× margin).
 - Marks-count drift halt: when `live_marks > 0` AND `live_marks / recorded_marks
-  < 0.50`, halt with `marks_count_drift` in `drift_events`. The `> 0` guard
-  prevents false-positives when observe annotation is unavailable (test envs).
+ < 0.50`, halt with `marks_count_drift` in `drift_events`. The `> 0` guard
+ prevents false-positives when observe annotation is unavailable (test envs).
 
 **State contract enforcement**
 
@@ -293,19 +306,19 @@ Seven tools flip from `(sim only)` → `(sim + device)`:
 ### New error codes
 
 - `replay_drift_detected` — step `error` when SSIM < threshold or marks-count
-  ratio drops below the floor.
-- `replay_state_contract_failed` — listed in `reasons[]` when udid / os_major /
-  target / bundle_id mismatch before step 1.
-- `marks_count_drift` — appears in `drift_events[].kind`.
+ ratio drops below the floor.
+- `replay_state_contract_failed` — listed in `reasons` when udid / os_major /
+ target / bundle_id mismatch before step 1.
+- `marks_count_drift` — appears in `drift_events.kind`.
 
 ### Deferred to a14
 
 - `cross_device_state_matches` journey criterion still scope-cut. The
-  comparison API across two device-state snapshots isn't yet defined.
+ comparison API across two device-state snapshots isn't yet defined.
 
 ### Source
 
-[internal-tracker]. Recording shape is a strict superset of a12 — pre-a13 sim
+ Recording shape is a strict superset of a12 — pre-a13 sim
 recordings still load via `RequiresBlock.from_dict` (forward-compatible).
 20 new regression tests; 851 pass on the merged suite.
 
@@ -313,7 +326,7 @@ recordings still load via `RequiresBlock.from_dict` (forward-compatible).
 
 ## [1.0.0a12] — 2026-05-14
 
-Closes every item from the 2026-05-14 Palace iOS device-dogfood feedback —
+Closes every item from the 2026-05-14 early adopters device-dogfood feedback —
 five P0/P1 driver-path bugs and seven polish items. a12 turns the device
 target into a first-class peer of the sim target.
 
@@ -322,7 +335,7 @@ target into a first-class peer of the sim target.
 **F-007 — `tap(stable_id=...)` on device no longer raises `AttributeError`**
 Sim path emitted `Mark` dataclass instances; device path emitted dicts; the
 resolver used attribute access (`m.stable_id`) which crashed on dicts. a12
-canonicalises marks to `dict` end-to-end (sim path calls `.to_dict()` at every
+canonicalises marks to `dict` end-to-end (sim path calls `.to_dict` at every
 write site) and the resolver uses a `_mark_attr` helper that handles both
 shapes for safety. `tap(stable_id=)`, `tap(text=)`, `tap(mark=)`, and
 `tap(stable_id_loose=)` all work uniformly on sim AND device.
@@ -330,7 +343,7 @@ shapes for safety. `tap(stable_id=)`, `tap(text=)`, `tap(mark=)`, and
 **F-008 — observe coord-space invariant pinned to pixels on device**
 The dogfood reported point/pixel flipping between consecutive observes on the
 same screen. Root cause: `_ensure_screenshot_dims` on device sessions called
-`observe.observe()` (sim Vision OCR path, unscaled points), then a subsequent
+`observe.observe` (sim Vision OCR path, unscaled points), then a subsequent
 `tool_observe` returned pixel-scaled marks from `annotate_device_screenshot` —
 two different coord spaces stored in the same session. `_ensure_screenshot_dims`
 and the type_text post-observe now route through `tool_observe(target=s.target)`
@@ -338,11 +351,11 @@ so device sessions always go through the WDA `/screenshot` + pixel-scaling
 path. Coord-space contract is documented at module level in `observe.py` and
 `som_device.py`. Out-of-bounds marks (negative coords from system overlays
 like `AdditionalDimmingOverlay`) are filtered with a debug log rather than
-asserted, surfaced during Moes Max live validation.
+asserted, surfaced during a real device live validation.
 
 **WDA Code 41 auto-recovery — mid-session entitlement loss**
 If XCTDaemonErrorDomain returns `Code=41` or `Code 41` during any WDA call,
-simdrive now logs a warning, calls `bootstrap.bootstrap_device(udid, ..., rebuild=True)`,
+simdrive now logs a warning, calls `bootstrap.bootstrap_device(udid,..., rebuild=True)`,
 reloads the registry, updates the WDA client's host/port/session, and retries
 the original request once. `SIMDRIVE_NO_AUTO_REBUILD=1` opts out. Per-call
 retry counter `_recovery_attempt: int` prevents infinite loops.
@@ -356,7 +369,7 @@ the original request once. Same per-call counter; same env opt-out.
 **F-009 — `type_text` on device routes through WDA, never simctl**
 Surfaced during code-tracing: `tool_type_text` device branch was correct, but
 helpers it called (`_ensure_screenshot_dims`, `_record_act_step`, and two
-explicit `observe.observe()` calls) defaulted to `target="simulator"` and
+explicit `observe.observe` calls) defaulted to `target="simulator"` and
 hit `simctl spawn <real-udid> screenshot` → "Invalid device". Four call
 sites now pass `target=s.target` (or route through `tool_observe` for
 device). Guard `assert s.target == "simulator"` added before every `act.*`
@@ -369,7 +382,7 @@ helper so a future device-leak fails loud instead of with a cryptic simctl error
 defaulting to `"nspredicate"`. Sim NSPredicate routes to native `log show`;
 device NSPredicate downgrades to substring with a WARNING log; regex and
 substring kinds are explicit post-capture filters that work on both targets.
-Closes the dogfood report that `processImagePath CONTAINS "Palace"` returned
+Closes the dogfood report that `processImagePath CONTAINS "customer-codename"` returned
 zero lines on device.
 
 **Tool-schema per-target parity markers**
@@ -411,11 +424,11 @@ also failed).
 
 - Recording/replay-on-device — substantial standalone initiative.
 - Cross-device-state-matches journey criterion — flagged at journey/criteria.py
-  with `NotImplementedError` for now.
+ with `NotImplementedError` for now.
 
 ### Source
 
-[internal-tracker]. Files: `simdrive/src/simdrive/server.py`, `som.py`,
+ Files: `simdrive/src/simdrive/server.py`, `som.py`,
 `observe.py`, `device.py`, `diagnostics.py`, `session.py`,
 `simdrive/src/simdrive/wda/client.py`, `wda/som_device.py`, `wda/bootstrap.py`,
 `wda/errors.py`, plus 12 new test files under `simdrive/tests/test_a12_*.py`.
@@ -425,8 +438,8 @@ Total 64 new regression tests; 831 pass on the merged suite.
 
 ## [1.0.0a11] — 2026-05-13
 
-Closes six findings from the 1.0.0a10 device-dogfood feedback (Palace iOS team,
-Moes Max iPhone 17 Pro Max, iOS 26.4.2). a10's headline — "zero-config real-device
+Closes six findings from the 1.0.0a10 device-dogfood feedback (early adopters,
+a real device iPhone 17 Pro Max, iOS 26.4.2). a10's headline — "zero-config real-device
 bootstrap" — gets to actually drive the device end-to-end in a11.
 
 ### Fixed — Critical / High
@@ -442,7 +455,7 @@ session client exists. The whole `target=device` MCP input surface is unblocked.
 **F-006 — WDA inputs now receive logical points, not pixel coords**
 SimDrive's screenshot pipeline emits pixel coords (1320×2868 on Pro Max); WDA's
 `/wda/tap` expects logical points (440×956). On 3× devices taps were silently absorbed
-2680 px below the target. New `WdaClient.window_size_points()` is called once per
+2680 px below the target. New `WdaClient.window_size_points` is called once per
 session and cached; `Session.pixel_per_point_scale` holds the px/pt ratio. Every device
 input tool divides its coords by the scale before calling WDA. Simulator sessions
 fast-path to scale=1.0 with no network call. HTTP errors on `/window/size` default to
@@ -457,7 +470,7 @@ exact 9-key shape sim produces: `id`, `stable_id`, `stable_id_loose`, `bbox`, `c
 `text`, `confidence`, `raw_confidence`, `confidence_band`. `stable_id` uses the same
 blake2b 20px / 60px bucketing as the sim OCR path so cross-target recordings are
 comparable. WDA `/source` failures (HTTP error, malformed XML, empty tree) return
-`marks=[]` with a warning — never raise.
+`marks=` with a warning — never raise.
 
 ### Fixed — Medium / Low
 
@@ -490,8 +503,8 @@ step is removed from every future release.
 
 ### Source
 
-[internal-tracker] + [internal-tracker] + [internal-tracker]. Files changed: new
-`simdrive/wda/som_device.py`; `simdrive/wda/client.py` (new `source()`, `window_size_points()`),
+ Files changed: new
+`simdrive/wda/som_device.py`; `simdrive/wda/client.py` (new `source`, `window_size_points`),
 `simdrive/wda/bootstrap.py` (Code 41 smoke probe), `simdrive/wda/errors.py`
 (`wda_ui_automation_disabled`), `simdrive/server.py` (every device-branch input tool
 + corrected hid flag derivation), `simdrive/session.py` (`pixel_per_point_scale`),
@@ -506,7 +519,7 @@ pass after merge.
 ### Added — Zero-config real-device bootstrap
 
 **Auto-detect team ID (`auto_detect_team_id`)**
-`bootstrap-device` no longer requires `--team-id`. A new `auto_detect_team_id() -> str | None`
+`bootstrap-device` no longer requires `--team-id`. A new `auto_detect_team_id -> str | None`
 function in `wda/bootstrap.py` queries `security find-identity -p codesigning -v` for Apple
 Development certificates. If exactly one unique team ID appears, it is used automatically with a
 `[simdrive] Auto-detected team: <TEAM>` log line. If multiple teams are found, a clear error lists
@@ -522,8 +535,8 @@ in `WebDriverAgent.xcodeproj/project.pbxproj` to `co.synctek.simdrive.wda.<team_
 The rewrite is idempotent (safe to run twice), narrow (only `PRODUCT_BUNDLE_IDENTIFIER` lines
 are touched), and the scheme/PRODUCT_NAME remain "WebDriverAgentRunner" so xcodebuild's
 scheme resolution is unaffected. The new bundle ID is persisted to the registry JSON.
-`build_wda()` now returns `(derived_data_path, bundle_id)` instead of just `derived_data_path`.
-`install_wda()` accepts an explicit `bundle_id` and uninstalls both the new and legacy Facebook IDs.
+`build_wda` now returns `(derived_data_path, bundle_id)` instead of just `derived_data_path`.
+`install_wda` accepts an explicit `bundle_id` and uninstalls both the new and legacy Facebook IDs.
 
 **Accurate `list_devices` HID flags**
 `tool_list_devices` in `server.py` now sets `hid_supported=True` for each device that has a
@@ -537,7 +550,7 @@ the feature is implemented and live.
 `verify_xcode_account_for_team` strict B1 check was a false-negative on Xcode 16+:
 `DVTDeveloperAccountManagerAppleIDLists` no longer stores `teamID = "..."` bindings
 inline — newer Xcode caches team membership in keychain / IDEPersistentSettings.
-Surfaced during the 2026-05-12 Moes Max dogfood: user was signed into the team's
+Surfaced during the 2026-05-12 a real device dogfood: user was signed into the team's
 Admin account and held the matching cert, yet bootstrap rejected with
 "Xcode is not signed in for team X". When the strict check misses, we now confirm
 any Apple-ID account is signed in (`identifier = "..."` probe), log the deferral,
@@ -546,7 +559,7 @@ The strict path remains primary for older Xcodes.
 
 ### Source
 
-[internal-tracker] + [internal-tracker]. Files changed: `wda/bootstrap.py` (new functions
+ Files changed: `wda/bootstrap.py` (new functions
 `auto_detect_team_id`, `_wda_bundle_id_for_team`, `patch_wda_bundle_id`,
 `_xcode_account_output_has_any_account`; updated `build_wda`, `install_wda`,
 `bootstrap_device`, `verify_xcode_account_for_team`), `server.py` (`tool_list_devices`,
@@ -575,14 +588,14 @@ the function now filters to the matching certificate before raising `wda_signing
 This handles the common case of two Apple Development certs (one per team/machine).
 
 **Bug 2 — Hardware UDID vs CoreDevice UUID separation.**
-`bootstrap_device()` now resolves the hardware UDID separately via
+`bootstrap_device` now resolves the hardware UDID separately via
 `xcrun devicectl device info details --json-output - | hardwareProperties.udid`.
 The CoreDevice pairing UUID is used only for `devicectl` commands;
 the hardware UDID is used for `xcodebuild -destination id=...`.
 On iOS 17+ these are different identifiers for the same device.
 
 **Bug 3 — Correct `CODE_SIGN_IDENTITY` form for automatic signing.**
-`build_wda()` now uses the generic form (`CODE_SIGN_IDENTITY="Apple Development"`,
+`build_wda` now uses the generic form (`CODE_SIGN_IDENTITY="Apple Development"`,
 `CODE_SIGN_STYLE=Automatic`, `DEVELOPMENT_TEAM=<team-id>`) plus `-allowProvisioningUpdates`
 instead of the full certificate string, which conflicted with the WDA project's
 automatic signing setting.
@@ -635,21 +648,21 @@ Without this entry, `pip install simdrive` excluded the file from the wheel and
 New and updated tests covering all 6 WDA bugs plus the architectural change:
 
 - `test_wda_bootstrap.py` — 10 new tests: `test_resolve_signing_identity_filters_by_team_id`,
-  `test_bootstrap_resolves_hardware_udid_via_devicectl`, `test_resolve_hardware_udid_falls_back_*`,
-  `test_build_wda_uses_correct_signing_flags`, `test_launch_uses_xcodebuild_test_without_building`,
-  `test_port_discovery_parses_serverurlhere_from_xcodebuild_stdout`,
-  `test_server_url_regex_captures_host_and_port` (group 1=host, group 2=port).
-  Updated existing regex tests for new 2-group capture.
+ `test_bootstrap_resolves_hardware_udid_via_devicectl`, `test_resolve_hardware_udid_falls_back_*`,
+ `test_build_wda_uses_correct_signing_flags`, `test_launch_uses_xcodebuild_test_without_building`,
+ `test_port_discovery_parses_serverurlhere_from_xcodebuild_stdout`,
+ `test_server_url_regex_captures_host_and_port` (group 1=host, group 2=port).
+ Updated existing regex tests for new 2-group capture.
 - `test_mcp_path_no_anthropic.py` — 2 new tests: `test_run_journey_not_in_mcp_tools`,
-  `test_load_journey_in_mcp_tools`.
+ `test_load_journey_in_mcp_tools`.
 - `test_packaging_deps.py` — 2 new tests: `test_pinned_sha_in_package_data`,
-  `test_no_path_file_data_undeclared`.
+ `test_no_path_file_data_undeclared`.
 - `tests/test_tool_load_journey.py` (NEW) — 6 tests: happy path, with persona, field completeness,
-  missing path, bad path, and `test_load_journey_no_anthropic_import`.
+ missing path, bad path, and `test_load_journey_no_anthropic_import`.
 
 ### Source
 
-[internal-tracker]. First release with WDA real-device bootstrap correctly implemented.
+ First release with WDA real-device bootstrap correctly implemented.
 536 unit tests pass; 0 failures.
 
 ---
@@ -658,7 +671,7 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 
 ### Documentation
 - **README front-door rewrite.** First 200 lines now lead with: one-line summary, 30-second `--offline-dev` quickstart, agent-first MCP framing, key differentiators. The "what is this" question now answers itself in the first scroll.
-- **Known limitations + workarounds section.** Documents four behaviors observed in the 1.0.0a2 Palace dogfood: `type_text` first-character drop (workaround: `tap_first`), SSIM threshold advisory vs `structural_checks` (the actual regression gate), `dismiss_sheet` system-sheets-only limitation (workaround: `swipe` for SwiftUI half-sheets), `set_appearance` respring caveat.
+- **Known limitations + workarounds section.** Documents four behaviors observed in the 1.0.0a2 dogfood: `type_text` first-character drop (workaround: `tap_first`), SSIM threshold advisory vs `structural_checks` (the actual regression gate), `dismiss_sheet` system-sheets-only limitation (workaround: `swipe` for SwiftUI half-sheets), `set_appearance` respring caveat.
 - **`docs/LIMITATIONS.md` extended** with full detail on all four dogfood-observed limitations.
 - **Migration note** (`docs/MIGRATION.md`) for users landing from `specterqa-ios` references: tool name mapping, PyPI history, new 1.0 additions.
 
@@ -672,7 +685,7 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 - `tests/test_readme_quickstart.py` — regression test pinning quickstart commands' presence in README first 100 lines, and absence of stale/misleading strings.
 
 ### Source
-[internal-tracker]. Closes the polish loop after 1.0.0a3 (dogfood fixes), 1.0.0a4 (MCP sampling), 1.0.0a5 (httpx defensive pin).
+ Closes the polish loop after 1.0.0a3 (dogfood fixes), 1.0.0a4 (MCP sampling), 1.0.0a5 (httpx defensive pin).
 
 ---
 
@@ -685,7 +698,7 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 - Regression test `tests/test_packaging_deps.py::test_httpx_pinned_below_1_0` so this defensive pin can't be silently removed.
 
 ### Source
-[internal-tracker]. Defensive follow-up to 1.0.0a4 from release pipeline's smoke.
+ Defensive follow-up to 1.0.0a4 from release pipeline's smoke.
 
 ---
 
@@ -706,7 +719,7 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 - `anthropic>=0.30` confirmed in `[project.optional-dependencies]` only. `pip install simdrive` (no extras) works for MCP. `pip install simdrive[claude]` adds the Anthropic SDK for the standalone `simdrive run` / `simdrive ci` CLI paths.
 
 ### Source
-[internal-tracker]. Architectural follow-up to 1.0.0a3 — agent-first per maintainer directive.
+ Architectural follow-up to 1.0.0a3 — agent-first per maintainer directive.
 
 ---
 
@@ -714,7 +727,7 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 
 ### Fixed
 - **`run_journey` license gate (P0):** Wired `simdrive trial` and `simdrive license` subcommands into the CLI dispatcher (previously `cmd_trial_start` was defined but unreachable). Added `--offline-dev` flag (and `SIMDRIVE_OFFLINE_DEV=1` env var) that issues a 14-day Ed25519-signed local dev license without contacting `cloud.simdrive.dev`. Cloud unreachable now raises a clear `LicenseError(code="cloud_unreachable")` with a recovery hint pointing to `--offline-dev`. Dogfooders are no longer blocked when cloud infra is offline.
-- **`version` drift false positive (P1):** `_disk_version()` was reading `importlib.metadata.version("specterqa-ios")` (old wheel name from before the rename) and triggering `_simdrive_warning` on every tool response. Changed to `simdrive`. The drift detector now compares apples to apples.
+- **`version` drift false positive (P1):** `_disk_version` was reading `importlib.metadata.version("specterqa-ios")` (old wheel name from before the rename) and triggering `_simdrive_warning` on every tool response. Changed to `simdrive`. The drift detector now compares apples to apples.
 - **`tool_run_journey` contract divergence (P1):** `LicenseError` now inherits from `SimdriveError`, so the MCP server's existing exception wrapper catches it and returns a proper `{ok: false, error: {code, message, details}}` envelope instead of wrapping it as a generic `internal` error. Direct-Python and MCP callers now see the same shape.
 - **Stale rename strings (P2):** Swept `ios_observe` → `observe`, `ios_start_session` → `start_session`, `ios_devices` → `devices`, `ios_stop_recording` → `stop_recording`, `ios_start_recording` → `start_recording`, `ios_list_replays` → `list_replays` across error recovery messages. Replaced `_HELP_TEXT` banner `"specterqa-ios — SpecterQA for iOS MCP server. (codename: simdrive)"` with `"simdrive — MCP-native iOS simulator driver"`. `--version` now prints `simdrive <version>`. Module docstrings drop the "(Internal codename: simdrive.)" framing.
 
@@ -725,25 +738,24 @@ New and updated tests covering all 6 WDA bugs plus the architectural change:
 - **Dev Ed25519 keypair** embedded in package (`license/public_key.py:DEV_VERIFY_KEY_HEX` + `DEV_SIGNING_KEY_HEX`). Validator only accepts dev-key-signed licenses with `subject == "dev-trial"` — dev key cannot self-issue prod licenses.
 
 ### Source
-Reported by Maurice Carrier (Palace iOS), 2026-05-04 dogfood report. [internal-tracker].
 
 ---
 
 ## [1.0.0a2] — 2026-05-02 (alpha — post-WDA cleanup + audit-driven fixes)
 
 ### Fixed
-- **P1: `run_ci()` call-arg mismatch in `server.py`** — API drift from cycle 1 integration; runtime error when CI journey endpoint hit
+- **P1: `run_ci` call-arg mismatch in `server.py`** — API drift from cycle 1 integration; runtime error when CI journey endpoint hit
 - **P1: missing test deps in [dev]** — `anthropic`, `fastapi`, `sqlalchemy`, `hypothesis`, `moto[s3]`, `pytest-cov` were used in tests but not declared; `pip install simdrive[dev]` now collects all tests
 - **5 asserts in `journey/criteria.py`** converted to explicit `raise ValueError` (asserts get stripped under `PYTHONOPTIMIZE`)
 - **105 ruff F401/E501 errors** auto-fixed across `simdrive/src/`, `simdrive/tests/`, `scripts/`
-- **Stray `print()` calls** in `server.py` converted to logger calls
+- **Stray `print` calls** in `server.py` converted to logger calls
 - License metadata aligned to Elastic-2.0: pyproject.toml previously
-  declared `license = "MIT"` but `simdrive/LICENSE` was MIT and root
-  `LICENSE` was Elastic-2.0 — three files in three states. Standardized
-  on Elastic License 2.0 across pyproject, simdrive/LICENSE, and root
-  LICENSE. SimDrive 1.0 ships as a commercial product: free for
-  personal/internal use, prohibits offering as a competing managed
-  service. (LapsApp at repo root remains separately MIT-licensed.)
+ declared `license = "MIT"` but `simdrive/LICENSE` was MIT and root
+ `LICENSE` was Elastic-2.0 — three files in three states. Standardized
+ on Elastic License 2.0 across pyproject, simdrive/LICENSE, and root
+ LICENSE. SimDrive 1.0 ships as a commercial product: free for
+ personal/internal use, prohibits offering as a competing managed
+ service. (LapsApp at repo root remains separately MIT-licensed.)
 
 ### Added
 - `Python 3.13` classifier in `pyproject.toml`
@@ -776,7 +788,7 @@ former `specterqa-ios` 16.x line: PyPI distribution name reverted to
 - **`GET /v1/licenses/usage`** — returns runs_used / runs_limit / percent_used / period dates
 - **`GET /health`** for Railway healthcheck
 - **Auth hardening** — expired/tampered/missing-bearer rejection paths tested; per-route required-tier gates
-- **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml, .env.example, README.md}`
+- **Railway deploy config** — `simdrive/cloud_deploy/{Procfile, railway.toml,.env.example, README.md}`
 
 ### Added — Production hardening (Cycle 3)
 - **Observability package** `simdrive.observability.{logger, metrics, tracing}` — `SIMDRIVE_DEBUG=1` toggles JSON-shaped logs; counters + histograms (`journey_runs_total`, `tap_latency_ms`, `observe_latency_ms`, `claude_call_cost_usd`); span-context tracing
@@ -807,11 +819,11 @@ former `specterqa-ios` 16.x line: PyPI distribution name reverted to
 ### Pending for 1.0.0 (next alphas)
 - Real-device input via WebDriverAgent (full parity scope; in-flight)
 - Stripe webhook signature verification on `/v1/licenses/activate`
-- Cycle 4 dogfood-to-perfection (5 passes including Palace re-validation)
+- Cycle 4 dogfood-to-perfection (5 passes including customer re-validation)
 
 ## 0.3.0a3 — 2026-05-01
 
-Dogfood fixes from Palace's v0.3.0a2 run. One HIGH-severity issue (type_text was reporting wrong focus signal under HID), plus four quality-of-life additions and a docs starter set.
+Dogfood fixes from an early adopter's v0.3.0a2 run. One HIGH-severity issue (type_text was reporting wrong focus signal under HID), plus four quality-of-life additions and a docs starter set.
 
 ### Fixed
 - **`type_text` reports `injection_method` and `dispatch_succeeded`.** Soft-keyboard heuristic was the wrong signal under HID dispatch — the keystrokes always land but the keyboard isn't drawn. New fields are reliable; the legacy `keyboard_visible` and `focused_field` stay for cliclick-path debugging.
@@ -822,7 +834,7 @@ Dogfood fixes from Palace's v0.3.0a2 run. One HIGH-severity issue (type_text was
 - **`version` MCP tool.** Zero-arg → `{version, loaded_at, disk_version, drift}`. No more guessing whether the running server matches the on-disk package.
 - **`clear_field` MCP tool + `type_text(clear_first: true)` flag.** Sends Cmd-A then delete via HID. Replaces the five-press_key idiom for clearing search fields.
 - **Icon-glyph semantic-name aliases.** `find_by_text(marks, "search")` now matches the magnifying-glass OCR-misread "Q/". Initial whitelist covers search, back, forward, settings, menu, close, add.
-- **`docs/LIMITATIONS.md` and `docs/BEST_PRACTICES.md`.** First-pass docs covering the documentation-only items from Palace's dogfood: Dynamic Island modals, xctrace ceiling, MFA hard-wall, HID + debounce-window rule, text-resolution rapid-cycle fallback.
+- **`docs/LIMITATIONS.md` and `docs/BEST_PRACTICES.md`.** First-pass docs covering the documentation-only items from an early adopter's dogfood: Dynamic Island modals, xctrace ceiling, MFA hard-wall, HID + debounce-window rule, text-resolution rapid-cycle fallback.
 
 ## 0.3.0a2 — 2026-05-01
 
@@ -830,11 +842,11 @@ Closes the two partials from the v0.2.0a2 maintainer feedback round.
 
 ### Added
 - **`list_devices` reports `last_seen` and `unavailable_reason`.** Each real-device entry now carries `last_seen` (ISO-8601 from `devicectl`'s `lastConnectionDate`, when present) and `unavailable_reason` — a composed one-line diagnosis from `pairingState` / `tunnelState` / `transportType` / `developerModeStatus`. No more guessing why a device shows `state: unavailable`.
-- **`recording.yaml` captures `app_version`.** `recorder.finalize()` calls a new `sim.get_app_version(udid, bundle_id)` helper that pulls `CFBundleShortVersionString` (or `CFBundleVersion` fallback) out of `simctl listapps`. Replays now carry the exact app version they were recorded against — diagnosing "passed yesterday, fails today" against a newer build is one field away.
+- **`recording.yaml` captures `app_version`.** `recorder.finalize` calls a new `sim.get_app_version(udid, bundle_id)` helper that pulls `CFBundleShortVersionString` (or `CFBundleVersion` fallback) out of `simctl listapps`. Replays now carry the exact app version they were recorded against — diagnosing "passed yesterday, fails today" against a newer build is one field away.
 
 ## 0.3.0a1 — 2026-04-30
 
-SpecterQA parity sprint, round 1. simdrive grows from 13 to 27 MCP tools, closing the major capability gaps that kept Palace's full SpecterQA migration from being a clean cut. Headline: native performance monitoring on simulators, no XCTest required.
+SpecterQA parity sprint, round 1. simdrive grows from 13 to 27 MCP tools, closing the major capability gaps that kept an early adopter's full SpecterQA migration from being a clean cut. Headline: native performance monitoring on simulators, no XCTest required.
 
 ### Added — performance monitoring
 - **`perf`** — CPU%, memory RSS, thread count for the active app. simctl + ps-based; no XCTest bridge needed.
@@ -863,7 +875,7 @@ SpecterQA parity sprint, round 1. simdrive grows from 13 to 27 MCP tools, closin
 
 ## 0.2.0a2 — 2026-04-30
 
-Palace v0.2.0a1 dogfood feedback round. simdrive is now Palace's canonical iOS sim driver (SpecterQA archived). Three rough edges patched plus a maintainer-feedback follow-up: SSIM region masking, stable_id_loose, step_id correlation, list_devices HID truth, richer recording metadata, CLI flags, and richer replay halt context.
+early adopter v0.2.0a1 dogfood feedback round. simdrive is now an early adopter's canonical iOS sim driver (SpecterQA archived). Three rough edges patched plus a maintainer-feedback follow-up: SSIM region masking, stable_id_loose, step_id correlation, list_devices HID truth, richer recording metadata, CLI flags, and richer replay halt context.
 
 ### Fixed
 - **Recordings serialize `stable_id` alongside pixel coords.** Replays now prefer stable_id resolution against the live observe and fall back to the recorded pixel only when the stable_id can't be found in the current screen. Previous behavior: layout shifts of even one pixel would silently tap the wrong place.
@@ -872,12 +884,12 @@ Palace v0.2.0a1 dogfood feedback round. simdrive is now Palace's canonical iOS s
 ### Added
 - **`type_text` response now includes `keyboard_visible` and `focused_field`.** Removes the need to follow every type_text with an extra `observe` to verify focus. `focused_field` carries the `stable_id` of the `tap_first` target when one was supplied.
 - **SSIM region masking via `mask_regions` on `replay` + `ssim_masks` in `recording.yaml`.** Blank rectangles in both screenshots before the similarity compute so the iOS status-bar clock (and any other dynamic chrome) stops dragging same-screen SSIM into the 0.6s. Accepts `[x, y, w, h]` tuples or `{x, y, w, h, label?}` dicts. YAML field is consulted only when the caller passes nothing.
-- **`Mark.stable_id_loose` companion.** 60px bucket (3× the tight 20px) tolerates the >3px layout shifts that re-bucket the tight `stable_id`. Surfaced on `Mark.to_dict()`, accepted by `tap`, persisted alongside `stable_id` in recordings, and tried by replay when tight resolution misses before falling through to pixel coords.
+- **`Mark.stable_id_loose` companion.** 60px bucket (3× the tight 20px) tolerates the >3px layout shifts that re-bucket the tight `stable_id`. Surfaced on `Mark.to_dict`, accepted by `tap`, persisted alongside `stable_id` in recordings, and tried by replay when tight resolution misses before falling through to pixel coords.
 - **`step_id` returned by act tools while recording.** `tap` / `swipe` / `type_text` / `press_key` responses include the recorder step index when a recording is active (omitted otherwise) so callers can correlate live actions with the recording's step list.
 - **`list_devices` reports `hid_supported` + `hid_note`.** Each device entry now carries `hid_supported: false` (real-device input still routes through WDA, which is on the v0.3 roadmap), and the response carries a top-level `hid_note` string explaining what to use instead. No more guessing whether tap will work.
-- **Richer recording metadata.** `recording.yaml` now captures `simdrive_version`, `created_by_session`, `screenshot_size_pixels`, and a `tags: []` list. `record_start({tags: [...]})` lets callers pin free-form tags into the recording.
+- **Richer recording metadata.** `recording.yaml` now captures `simdrive_version`, `created_by_session`, `screenshot_size_pixels`, and a `tags: ` list. `record_start({tags: [...]})` lets callers pin free-form tags into the recording.
 - **`simdrive --version` / `--help`.** The CLI no longer launches an MCP server when invoked with a flag — `--version` / `-V` prints `simdrive <version>`, `--help` / `-h` prints a one-screen usage blurb.
-- **Replay halt context.** `replay()` returns now include `halt_reason` (`"drift"` | `"execute_error"` | `null`), `threshold` (the value passed in), and `steps_planned` (total steps in the recording) on every response so callers can render a useful halt message without re-loading the YAML.
+- **Replay halt context.** `replay` returns now include `halt_reason` (`"drift"` | `"execute_error"` | `null`), `threshold` (the value passed in), and `steps_planned` (total steps in the recording) on every response so callers can render a useful halt message without re-loading the YAML.
 
 ## 0.2.0a1 — 2026-04-29
 
@@ -897,10 +909,10 @@ First slice of real-device support. **Observe + logs + app lifecycle** work agai
 
 ## 0.1.0a2 — 2026-04-29
 
-Palace dogfood feedback round 1 (Maurice / PP-4164 regression workload).
+dogfood feedback round 1 (a user regression workload).
 
 ### Fixed
-- **`type_text` now correctly uppercases** — sends the Shift HID modifier for `A-Z` and shifted symbols (`!@#$%^&*()_+{}|:"<>?~`). Previous behavior typed `"A1QA"` as `"a1qa"`. Credentialed flows (basic auth, SAML, OIDC) now work.
+- **`type_text` now correctly uppercases** — sends the Shift HID modifier for `A-Z` and shifted symbols (`!@#$%^&*_+{}|:"<>?~`). Previous behavior typed `"A1QA"` as `"a1qa"`. Credentialed flows (basic auth, SAML, OIDC) now work.
 - `swipe` warns when the end y-coordinate falls in the iOS home-indicator zone (bottom ~80px). Saves an accidental "exit to home screen" gesture.
 
 ### Added
@@ -909,7 +921,7 @@ Palace dogfood feedback round 1 (Maurice / PP-4164 regression workload).
 - **`Mark.stable_id`** — short hash of `(text + bucketed-position)`. Survives mark-id reshuffling between observes. New tap form: `tap({stable_id: "abc123"})`.
 
 ### Investigation notes (not changed)
-- The "candidate-build app exits on `< Back` tap" log signature (`Failed to create a bundle instance representing '...PalaceTests.xctest'`) is iOS looking up a *Palace*-side test bundle, not anything simdrive ships. simdrive does not run XCTest. Likely candidate-side regression in scene-lifecycle teardown.
+- A "candidate-build app exits on `< Back` tap" log signature (`Failed to create a bundle instance representing '...Tests.xctest'`) is iOS looking up a host-app test bundle, not anything simdrive ships. simdrive does not run XCTest. Likely a candidate-side regression in scene-lifecycle teardown.
 - The 1-in-4 first-launch-alert miss is being investigated — likely a SpringBoard PID-handoff race during permission-alert ownership transition.
 
 ## 0.1.0a1 — 2026-04-27
