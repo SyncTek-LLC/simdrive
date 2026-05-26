@@ -1,0 +1,35 @@
+{
+  "_comment": "Fixture users for SimDrive recording/replay. Ship in the dev-build app bundle (NOT the App Store build) and seed into the recording-backend database via docker-compose.recording.yml. Fixed UUIDs keep replay diffs stable across machines and across re-records. See ../safety-checklist.md before touching.",
+  "_warning": "DO NOT reuse these UUIDs or emails in any environment that touches production data. Anyone reading this file gets the full fixture set — treat them as published.",
+  "users": [
+    {
+      "id": "u-fixture-001",
+      "uuid": "11111111-1111-4111-8111-111111111111",
+      "email": "fixture-member@fixtures.local",
+      "displayName": "Fixture Member",
+      "role": "member",
+      "createdAt": "2026-01-01T00:00:00Z",
+      "notes": "Default fixture user — basic member, no permissions, no real data attached. Most journeys should target this user."
+    },
+    {
+      "id": "u-fixture-002",
+      "uuid": "22222222-2222-4222-8222-222222222222",
+      "email": "fixture-admin@fixtures.local",
+      "displayName": "Fixture Admin",
+      "role": "admin",
+      "createdAt": "2026-01-01T00:00:00Z",
+      "notes": "Admin role — use only for recordings of admin-only journeys (user management, billing, etc.)."
+    },
+    {
+      "id": "u-fixture-003",
+      "uuid": "33333333-3333-4333-8333-333333333333",
+      "email": "fixture-newuser@fixtures.local",
+      "displayName": "Fixture New User",
+      "role": "member",
+      "createdAt": "2026-05-26T00:00:00Z",
+      "onboardingCompleted": false,
+      "notes": "Fresh-account flavor — onboarding incomplete, no data, no preferences. Use for first-run / empty-state journeys."
+    }
+  ],
+  "_replay_note": "If you add a user, give it a deterministic UUID (sequential 1...1, 2...2 is fine) and a deterministic createdAt. Random UUIDs / live timestamps cause SSIM diffs on any screen that renders user.id or 'joined X ago'."
+}
