@@ -13,7 +13,7 @@ A place for SpecterQA users to learn from each other, share journeys, discuss MC
 
 ## What this is not
 
-A support helpdesk. SpecterQA Pro and Team customers get email support against an SLA — that channel is `support@synctek.io`. Free Engine users get community support here, on the same terms as everyone else: a maintainer or a fellow user might answer; no one is on the hook.
+A support helpdesk. SpecterQA Pro and Team customers get email support against an SLA — that channel is `support@simdrive.dev`. Free Engine users get community support here, on the same terms as everyone else: a maintainer or a fellow user might answer; no one is on the hook.
 
 ---
 
@@ -67,7 +67,7 @@ Use this template in `#help`:
 
 **Expected response time:** community-best-effort. Most questions get an answer within 24 hours; some sit longer. If a question is unanswered after 72 hours, the maintainer (Maurice) will read it on the weekly community sweep. **There is no SLA on free-tier support** — this is not a guarantee, it is a community.
 
-If your question is time-critical and you are a Pro / Team / Enterprise customer, use `support@synctek.io` instead. That channel is read against an SLA. The community is faster on average; the SLA channel is faster in the worst case.
+If your question is time-critical and you are a Pro / Team / Enterprise customer, use `support@simdrive.dev` instead. That channel is read against an SLA. The community is faster on average; the SLA channel is faster in the worst case.
 
 ---
 

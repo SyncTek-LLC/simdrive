@@ -140,7 +140,7 @@ One-stop reference for every error code and its recovery step. When SimDrive rai
 **Recovery:** Run `simdrive trial start --email <you@example.com>` to begin a 14-day free trial.
 
 ### `trial_rate_limited`
-**Recovery:** Try again tomorrow or contact support@synctek.io.
+**Recovery:** Try again tomorrow or contact support@simdrive.dev.
 
 ---
 

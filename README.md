@@ -142,6 +142,13 @@ the default) remains the fully supported path.
 See [SECURITY.md](SECURITY.md) for vulnerability reporting and the
 supported-versions policy.
 
+## Support
+
+- **Docs:** <https://docs.simdrive.dev>
+- **Bugs / feature requests:** [open an issue](https://github.com/SyncTek-LLC/simdrive/issues/new/choose)
+- **Email (private — license, billing, account):** <support@simdrive.dev>
+- **Security disclosures:** <security@simdrive.dev>
+
 ## License
 
 Elastic License 2.0 — see [LICENSE](LICENSE). Free for internal use; prohibits

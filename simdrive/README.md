@@ -158,6 +158,13 @@ See `docs/LIMITATIONS.md` for: `type_text` first-character drop workaround,
 SSIM-vs-structural-check semantics, SwiftUI half-sheet dismissal,
 appearance-respring caveats, real-device input scope.
 
+## Support
+
+- **Docs:** <https://docs.simdrive.dev>
+- **Bugs / feature requests:** [open an issue](https://github.com/SyncTek-LLC/simdrive/issues/new/choose)
+- **Email (private — license, billing, account):** <support@simdrive.dev>
+- **Security disclosures:** <security@simdrive.dev>
+
 ## License
 
 Elastic License 2.0 — see `LICENSE`. Free for internal use; prohibits
