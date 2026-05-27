@@ -3399,6 +3399,31 @@ def _cmd_trial(args: list[str]) -> None:
         default=None,
         help="Override the license.json path (default: ~/.simdrive/license.json).",
     )
+    # ----- Source attribution (INIT-2026-556 W1) ---------------------------
+    # --source <channel> tags the trial start with the channel that drove
+    # the install (e.g. hn, reddit:iOSProgramming, cursor.directory). Send
+    # is fire-and-forget; only SHA-256(email) is transmitted.
+    # --no-track skips the network call for THIS invocation. A persisted
+    # opt-out at ~/.simdrive/telemetry.toml disables tracking permanently.
+    start_p.add_argument(
+        "--source",
+        default=None,
+        help=(
+            "Marketing source/channel that drove the install (e.g. hn, reddit, "
+            "cursor.directory). Sends one POST to api.simdrive.dev/trial with "
+            "SHA256(email) + source + timestamp + version + OS family. Raw email "
+            "never leaves the machine. Omit to record as 'direct'."
+        ),
+    )
+    start_p.add_argument(
+        "--no-track",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the source-attribution POST for this invocation. The trial "
+            "license is still generated locally."
+        ),
+    )
 
     ns = parser.parse_args(args)
     if ns.subcmd is None:
@@ -3408,6 +3433,7 @@ def _cmd_trial(args: list[str]) -> None:
     from pathlib import Path as _Path
     from simdrive.license.cli import cmd_trial_start, _DEFAULT_LICENSE_PATH
     from simdrive.license.errors import LicenseError
+    from simdrive.license.telemetry import maybe_send_attribution
 
     license_path = _Path(ns.license_path) if ns.license_path else _DEFAULT_LICENSE_PATH
 
@@ -3418,6 +3444,16 @@ def _cmd_trial(args: list[str]) -> None:
             license_path=license_path,
         )
         print(result["message"])
+        # Source attribution runs AFTER successful license issuance so a
+        # telemetry failure can never block the trial. Errors swallowed
+        # inside maybe_send_attribution; we just print the one-line notice.
+        notice = maybe_send_attribution(
+            ns.email,
+            source=ns.source,
+            no_track=ns.no_track,
+        )
+        if notice:
+            print(notice)
         sys.exit(0)
     except LicenseError as exc:
         print(f"Error: {exc.message}", file=sys.stderr)
