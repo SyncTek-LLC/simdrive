@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.SyncTek-LLC/simdrive -->
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://github.com/SyncTek-LLC/simdrive/raw/main/docs/brand/wordmark-dark.svg">
