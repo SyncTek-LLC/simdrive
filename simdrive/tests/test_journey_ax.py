@@ -73,6 +73,20 @@ def test_dispatch_routes_perform_accessibility_action():
 
 
 def test_step_decision_accepts_new_tool_literal():
-    # Constructing with the new tool name must not raise.
+    # Constructing with the new tool names must not raise.
     d = StepDecision(tool="perform_accessibility_action", args={}, rationale="r", confidence=0.5)
     assert d.tool == "perform_accessibility_action"
+    d2 = StepDecision(tool="set_text", args={"text": "42"}, rationale="r", confidence=0.5)
+    assert d2.tool == "set_text"
+
+
+def test_dispatch_routes_set_text():
+    decision = StepDecision(
+        tool="set_text", args={"text": "42"}, rationale="enter page", confidence=0.9
+    )
+    with patch("simdrive.journey.runner.tool_set_text", return_value={"ok": True}) as fn:
+        _dispatch_action(decision, "sess-2")
+    fn.assert_called_once()
+    passed = fn.call_args[0][0]
+    assert passed["text"] == "42"
+    assert passed["session_id"] == "sess-2"

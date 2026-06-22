@@ -93,6 +93,11 @@ def tool_get_announcements(arguments: dict) -> dict:  # pragma: no cover
     from simdrive.server import tool_get_announcements as _fn
     return _fn(arguments)
 
+
+def tool_set_text(arguments: dict) -> dict:  # pragma: no cover
+    from simdrive.server import tool_set_text as _fn
+    return _fn(arguments)
+
 # Approximate cost per LLM call (vision, claude-3-7 range); used for
 # in-flight cost tracking when the real client doesn't report token counts.
 _APPROX_COST_PER_CALL_USD = 0.004
@@ -110,7 +115,7 @@ class StepDecision:
 
     tool: Literal[
         "tap", "swipe", "type_text", "press_key", "clear_field",
-        "perform_accessibility_action", "done", "fail",
+        "perform_accessibility_action", "set_text", "done", "fail",
     ]
     args: dict
     rationale: str
@@ -219,6 +224,7 @@ def _dispatch_action(decision: StepDecision, session_id: str) -> None:
         "press_key": _self.tool_press_key,
         "clear_field": _self.tool_clear_field,
         "perform_accessibility_action": _self.tool_perform_accessibility_action,
+        "set_text": _self.tool_set_text,
     }
 
     tool_fn = tool_map.get(decision.tool)

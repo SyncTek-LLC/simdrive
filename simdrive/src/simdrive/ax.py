@@ -334,6 +334,60 @@ def perform_action(
     return {"ok": True, "action": name}
 
 
+_EDITABLE_ROLES = {"AXTextField", "AXSecureTextField", "AXTextArea"}
+
+
+def _find_text_field(root, depth=0, maxdepth=60):
+    if depth > maxdepth:
+        return None
+    if str(_attr(root, "AXRole") or "") in _EDITABLE_ROLES:
+        return root
+    for child in _children(root):
+        hit = _find_text_field(child, depth + 1, maxdepth)
+        if hit is not None:
+            return hit
+    return None
+
+
+def set_text(
+    device_name: str,
+    text: str,
+    *,
+    identifier: str | None = None,
+    label: str | None = None,
+) -> dict[str, Any]:
+    """Set a text field's value directly via host AX (`AXValue`).
+
+    The fix for fields HID `type_text` can't reach — notably `UIAlertController`
+    prompts (e.g. a "Go to Page" dialog), whose field never receives synthesized
+    keystrokes. Setting `AXValue` propagates to the field's binding (verified:
+    the app reads the value), so the app receives the input.
+
+    Resolution: scope to the device's window, then the field by *identifier* /
+    *label*, else the first editable field (text field / secure field / text
+    area) in the window — which is the alert's field when a prompt is up.
+
+    Returns ``{"ok": True, "value": text}`` or ``{"ok": False, "error": ...}``.
+    """
+    from ApplicationServices import AXUIElementSetAttributeValue  # type: ignore[import]
+
+    window = select_window(device_name)
+    if identifier:
+        field = _find_by(window, "AXIdentifier", identifier)
+    elif label:
+        field = _find_by(window, "AXDescription", label) or _find_by(window, "AXTitle", label)
+    else:
+        field = _find_text_field(window)
+
+    if field is None:
+        return {"ok": False, "error": "no editable text field found in the target window"}
+
+    err = AXUIElementSetAttributeValue(field, "AXValue", text)
+    if err != 0:
+        return {"ok": False, "error": f"AXUIElementSetAttributeValue err={err}"}
+    return {"ok": True, "value": text}
+
+
 # ---------------------------------------------------------------------------
 # Announcement observer (module singleton — one Simulator process)
 # ---------------------------------------------------------------------------
