@@ -23,7 +23,7 @@ import pytest
 # The full canonical 32-tool registry — sourced from server._TOOLS at runtime.
 # A test below pins this count so adding/removing tools without updating the
 # gate is caught immediately.
-EXPECTED_TOOL_COUNT = 33  # +1: tap_and_wait_keyboard (1.0.0b3 polish)
+EXPECTED_TOOL_COUNT = 35  # +2: perform_accessibility_action, get_announcements (host-AX a11y)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +129,8 @@ GATED_TOOLS: list[str] = [
     "version",
     "clear_field",
     "load_journey",
+    "perform_accessibility_action",
+    "get_announcements",
 ]
 
 
