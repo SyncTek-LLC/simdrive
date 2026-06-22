@@ -13,6 +13,27 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b9] — 2026-06-22
+
+### Added — accessibility automation (custom actions + VoiceOver announcements)
+
+Two new tools let you drive and assert the accessibility surface that taps and
+OCR can't reach — useful for testing VoiceOver/rotor flows (page turns,
+"Read summary", toolbar toggles, and the announcements they trigger):
+
+- **`perform_accessibility_action`** — fire a `UIAccessibilityCustomAction` by
+  name (e.g. "Read summary", "Next page"). These are normally reachable only via
+  the VoiceOver rotor. simdrive finds the action's owning element automatically
+  (it often sits on a deep, unlabelled view) or you can scope with an
+  `identifier`/`label`.
+- **`get_announcements`** — capture the spoken `UIAccessibility` announcements an
+  app posts (invisible to screenshots/OCR). Pair with the action tool — read the
+  clock, perform the action, then assert the announced text.
+
+Simulator-only (uses the macOS host Accessibility API; requires Accessibility
+permission for the host process). The target simulator's window is raised
+automatically so it works with several simulators booted.
+
 ## [1.0.0b8] — 2026-05-26
 
 ### Added
