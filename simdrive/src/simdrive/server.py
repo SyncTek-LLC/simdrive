@@ -1982,6 +1982,35 @@ def tool_perform_accessibility_action(arguments: dict) -> dict:
     return result
 
 
+def tool_set_text(arguments: dict) -> dict:
+    """Set a text field's value directly via host AX (sim-only).
+
+    For fields HID `type_text` can't reach — e.g. `UIAlertController` prompts.
+    """
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    if s.target != "simulator":
+        raise errors.invalid_argument(
+            "target", s.target, "set_text is simulator-only (host AX); use type_text on device"
+        )
+    text = arguments.get("text")
+    if text is None:
+        raise errors.invalid_argument("text", text, "text is required")
+    try:
+        result = ax.set_text(
+            s.device.name,
+            str(text),
+            identifier=arguments.get("identifier"),
+            label=arguments.get("label"),
+        )
+    except ax.AXError as exc:
+        raise errors.invalid_argument("session_id", arguments["session_id"], str(exc)) from exc
+    s.last_action_at = _now()
+    session.append_action(s, {"action": "set_text", "args": dict(arguments),
+                              "result": result, "at": _now()})
+    return result
+
+
 def tool_get_announcements(arguments: dict) -> dict:
     """Return VoiceOver announcements captured by the host AX observer (sim-only)."""
     _entitlement_gate()
@@ -2367,6 +2396,28 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_perform_accessibility_action,
+    },
+    {
+        "name": "set_text",
+        "description": (
+            "(sim only) Set a text field's value directly via the host Accessibility "
+            "API — for fields that HID `type_text` can't reach, notably "
+            "UIAlertController prompts (e.g. a 'Go to Page' dialog). Targets the field "
+            "by `identifier`/`label`, else the first editable field in the window "
+            "(which is the alert's field when a prompt is up). The value propagates to "
+            "the field's binding, so the app receives it. Returns {ok, value}."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "text"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "text": {"type": "string", "description": "Text to set into the field."},
+                "identifier": {"type": "string", "description": "Optional accessibilityIdentifier of the target field."},
+                "label": {"type": "string", "description": "Optional accessibility label/description of the target field."},
+            },
+        },
+        "handler": tool_set_text,
     },
     {
         "name": "get_announcements",

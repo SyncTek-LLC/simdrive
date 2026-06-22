@@ -39,6 +39,21 @@ class _FakeEl:
         self.children = children or []
 
 
+def test_find_text_field_recurses(monkeypatch):
+    class FE:
+        def __init__(self, role="", children=None):
+            self.role = role
+            self.children = children or []
+
+    monkeypatch.setattr(ax, "_attr", lambda e, a: e.role if a == "AXRole" else None)
+    monkeypatch.setattr(ax, "_children", lambda e: e.children)
+
+    field = FE(role="AXTextField")
+    root = FE(children=[FE(role="AXButton"), FE(children=[field])])
+    assert ax._find_text_field(root) is field
+    assert ax._find_text_field(FE(children=[FE(role="AXButton")])) is None
+
+
 def test_find_action_carrier_recurses_to_deep_child(monkeypatch):
     monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
     monkeypatch.setattr(ax, "_children", lambda e: e.children)
@@ -116,7 +131,7 @@ def test_ax_tools_registered():
     from simdrive import server
 
     names = {t["name"] for t in server._TOOLS}
-    assert {"perform_accessibility_action", "get_announcements"} <= names
+    assert {"perform_accessibility_action", "get_announcements", "set_text"} <= names
     # handlers are callable and listed without the handler key in list_tools()
     listed = {t["name"] for t in server.list_tools()}
-    assert {"perform_accessibility_action", "get_announcements"} <= listed
+    assert {"perform_accessibility_action", "get_announcements", "set_text"} <= listed

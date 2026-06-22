@@ -40,7 +40,7 @@ def test_tool_count_is_thirty_two():
                        + lint_recordings + migrate_recording (a9.1) = 32
     """
     tools = server.list_tools()
-    assert len(tools) == 35, f"expected 35 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 36, f"expected 36 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -65,6 +65,8 @@ def test_tool_names_match_spec():
         "tap_and_wait_keyboard",
         # Host-AX accessibility (internal-ticket): custom actions + VoiceOver announcements
         "perform_accessibility_action", "get_announcements",
+        # Host-AX text entry for fields HID can't reach (UIAlertController)
+        "set_text",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
