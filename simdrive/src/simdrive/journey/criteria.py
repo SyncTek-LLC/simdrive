@@ -47,6 +47,28 @@ def eval_text_visible(criterion: SuccessCriterion, obs: dict) -> CriterionEval:
     )
 
 
+def eval_announcement_heard(criterion: SuccessCriterion, obs: dict) -> CriterionEval:
+    """Check that criterion.announcement_heard was posted as a VoiceOver announcement.
+
+    The runner injects the announcements captured so far into ``obs["announcements"]``
+    (list of ``{text, ...}``); matching is case-insensitive substring.
+    """
+    target = criterion.announcement_heard
+    if target is None:
+        raise ValueError("eval_announcement_heard called but criterion.announcement_heard is None")
+
+    announcements = obs.get("announcements", [])
+    heard = [a.get("text", "") for a in announcements]
+    found = any(target.lower() in t.lower() for t in heard)
+
+    return CriterionEval(
+        criterion_type="announcement_heard",
+        passed=found,
+        detail=f"announcement {target!r} {'heard' if found else 'not heard'}",
+        observed_value=heard[-5:] if heard else [],
+    )
+
+
 def eval_screen_matches(criterion: SuccessCriterion, obs: dict) -> CriterionEval:
     """Check that criterion.screen_matches stable_id appears in the current marks."""
     stable_id = criterion.screen_matches
@@ -191,6 +213,8 @@ def evaluate_all_criteria(
                 results.append(eval_no_crash(criterion, crashes))
             elif criterion.cross_device_state_matches is not None:
                 results.append(eval_cross_device_state_matches(criterion))
+            elif criterion.announcement_heard is not None:
+                results.append(eval_announcement_heard(criterion, obs))
             else:
                 # Should never happen — SuccessCriterion validates at least one field.
                 results.append(

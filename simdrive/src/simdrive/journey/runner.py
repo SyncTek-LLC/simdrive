@@ -83,6 +83,16 @@ def tool_crashes(arguments: dict) -> dict:  # pragma: no cover
     from simdrive.server import tool_crashes as _fn
     return _fn(arguments)
 
+
+def tool_perform_accessibility_action(arguments: dict) -> dict:  # pragma: no cover
+    from simdrive.server import tool_perform_accessibility_action as _fn
+    return _fn(arguments)
+
+
+def tool_get_announcements(arguments: dict) -> dict:  # pragma: no cover
+    from simdrive.server import tool_get_announcements as _fn
+    return _fn(arguments)
+
 # Approximate cost per LLM call (vision, claude-3-7 range); used for
 # in-flight cost tracking when the real client doesn't report token counts.
 _APPROX_COST_PER_CALL_USD = 0.004
@@ -98,7 +108,10 @@ _HISTORY_SIZE = 3
 class StepDecision:
     """Parsed response from one LLM vision call."""
 
-    tool: Literal["tap", "swipe", "type_text", "press_key", "clear_field", "done", "fail"]
+    tool: Literal[
+        "tap", "swipe", "type_text", "press_key", "clear_field",
+        "perform_accessibility_action", "done", "fail",
+    ]
     args: dict
     rationale: str
     confidence: float
@@ -205,6 +218,7 @@ def _dispatch_action(decision: StepDecision, session_id: str) -> None:
         "type_text": _self.tool_type_text,
         "press_key": _self.tool_press_key,
         "clear_field": _self.tool_clear_field,
+        "perform_accessibility_action": _self.tool_perform_accessibility_action,
     }
 
     tool_fn = tool_map.get(decision.tool)
@@ -351,6 +365,14 @@ async def run_journey(
             outcome = "error"
             failure_reason = f"observe failed: {exc}"
             break
+
+        # Inject VoiceOver announcements captured so far (simulator-only) so an
+        # announcement_heard criterion can be evaluated. Best-effort.
+        try:
+            ann = tool_get_announcements({"session_id": session_id})
+            obs_dict["announcements"] = ann.get("announcements", [])
+        except Exception:
+            obs_dict.setdefault("announcements", [])
 
         # Evaluate success criteria against current observation.
         perf_snapshot: Optional[dict] = None
