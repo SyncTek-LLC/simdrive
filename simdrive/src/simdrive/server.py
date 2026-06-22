@@ -72,7 +72,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import (
-    __version__, act, diagnostics, errors, observe, perf, recorder,
+    __version__, act, ax, diagnostics, errors, observe, perf, recorder,
     robustness, session, sim, som,
 )
 from .cloud.middleware.quotas import check_local_quota
@@ -1954,6 +1954,56 @@ def tool_version(arguments: dict) -> dict:
     }
 
 
+def tool_perform_accessibility_action(arguments: dict) -> dict:
+    """Fire a UIAccessibilityCustomAction by name on the simulator (host AX)."""
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    if s.target != "simulator":
+        raise errors.invalid_argument(
+            "target", s.target, "perform_accessibility_action is simulator-only (host AX)"
+        )
+    name = str(arguments.get("name", "")).strip()
+    if not name:
+        raise errors.invalid_argument("name", arguments.get("name"), "custom action name is required")
+    try:
+        # Start the observer first so an announcement this action triggers is captured.
+        ax.start_announcement_observer()
+        result = ax.perform_action(
+            s.device.name,
+            name,
+            identifier=arguments.get("identifier"),
+            label=arguments.get("label"),
+        )
+    except ax.AXError as exc:
+        raise errors.invalid_argument("name", name, str(exc)) from exc
+    s.last_action_at = _now()
+    session.append_action(s, {"action": "perform_accessibility_action", "args": dict(arguments),
+                              "result": result, "at": _now()})
+    return result
+
+
+def tool_get_announcements(arguments: dict) -> dict:
+    """Return VoiceOver announcements captured by the host AX observer (sim-only)."""
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    if s.target != "simulator":
+        raise errors.invalid_argument(
+            "target", s.target, "get_announcements is simulator-only (host AX)"
+        )
+    app_pid = None
+    if s.app_bundle_id:
+        app_pid = ax.resolve_app_pid(s.device.udid, s.app_bundle_id)
+    try:
+        return ax.get_announcements(
+            since_ts=arguments.get("since_ts"),
+            timeout_s=float(arguments.get("timeout_s", 0.0)),
+            app_pid=app_pid,
+            clear=bool(arguments.get("clear", False)),
+        )
+    except ax.AXError as exc:
+        raise errors.invalid_argument("session_id", arguments["session_id"], str(exc)) from exc
+
+
 def tool_clear_field(arguments: dict) -> dict:
     """Clear a focused text field.
 
@@ -2293,6 +2343,53 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_tap,
+    },
+    {
+        "name": "perform_accessibility_action",
+        "description": (
+            "(sim only) Fire a UIAccessibilityCustomAction by name — the actions a "
+            "VoiceOver user reaches via the rotor (e.g. 'Where am I?', 'Next page', "
+            "'Toggle toolbar'), invisible to tap/observe. Host-AX: requires macOS "
+            "Accessibility permission and the target sim's window on-screen (auto-raised). "
+            "Searches the whole target window for the carrier (the action often sits on a "
+            "deep child with no label), or scope with `identifier`/`label`. To assert a "
+            "resulting announcement, read the clock, call this, then get_announcements with "
+            "since_ts. Returns {ok, action} or {ok:false, error, available_actions?}."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "name"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "name": {"type": "string", "description": "Custom action label, e.g. 'Where am I?'."},
+                "identifier": {"type": "string", "description": "Optional accessibilityIdentifier of the carrier (or an ancestor) to scope the search."},
+                "label": {"type": "string", "description": "Optional accessibility label substring to scope the search."},
+            },
+        },
+        "handler": tool_perform_accessibility_action,
+    },
+    {
+        "name": "get_announcements",
+        "description": (
+            "(sim only) Return VoiceOver announcements (UIAccessibility.post(.announcement)) "
+            "captured by the host-AX observer — invisible to OCR/screenshots. Pass `since_ts` "
+            "(epoch seconds, read BEFORE the triggering action) to scope to new announcements, "
+            "and `timeout_s` to wait for one to arrive. Announcements are softly scoped to the "
+            "app-under-test's pid when resolvable (falls back to unscoped so async posts whose "
+            "AX-attributed pid differs aren't dropped). Each item is {text, priority, pid, ts}. "
+            "Returns {announcements, count, app_pid, pid_scoped}."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "since_ts": {"type": "number", "description": "Only return announcements newer than this epoch time."},
+                "timeout_s": {"type": "number", "description": "Block up to this long waiting for a matching announcement. Default 0.", "default": 0},
+                "clear": {"type": "boolean", "description": "Drain the buffer after reading. Default false.", "default": False},
+            },
+        },
+        "handler": tool_get_announcements,
     },
     {
         "name": "tap_and_wait_keyboard",
