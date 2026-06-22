@@ -34,6 +34,9 @@ class SuccessCriterion(BaseModel):
     no_crash: Optional[bool] = None
     # 1.0 stretch — pass-through when not configured (never fail-closed)
     cross_device_state_matches: Optional[dict[str, Any]] = None
+    # Host-AX: a VoiceOver announcement (substring, case-insensitive) the app
+    # must have posted during the journey (simulator sessions only).
+    announcement_heard: Optional[str] = None
 
     @model_validator(mode="after")
     def _at_least_one_criterion(self) -> "SuccessCriterion":
@@ -46,11 +49,13 @@ class SuccessCriterion(BaseModel):
                 self.perf_under,
                 self.no_crash,
                 self.cross_device_state_matches,
+                self.announcement_heard,
             )
         ):
             raise ValueError(
-                "SuccessCriterion must set at least one field "
-                "(text_visible, screen_matches, perf_under, no_crash, cross_device_state_matches)"
+                "SuccessCriterion must set at least one field (text_visible, "
+                "screen_matches, perf_under, no_crash, cross_device_state_matches, "
+                "announcement_heard)"
             )
         return self
 

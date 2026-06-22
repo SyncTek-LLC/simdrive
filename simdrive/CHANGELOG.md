@@ -13,6 +13,20 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b10] — 2026-06-22
+
+### Added — text entry into alert fields + accessibility journeys
+
+- **`set_text`** — set a text field's value directly via the host Accessibility
+  API, for fields that `type_text` (synthesized keystrokes) can't reach — most
+  importantly **`UIAlertController` prompts** (e.g. a "Go to Page" dialog). The
+  value propagates to the field's binding, so the app receives it. Targets the
+  field by `identifier`/`label`, or defaults to the alert's field. Simulator-only.
+- **Journeys** can now use the accessibility tools: a `perform_accessibility_action`
+  step and an **`announcement_heard`** success criterion, so an end-to-end
+  VoiceOver flow (drive → invoke a custom action → assert the spoken announcement)
+  is expressible as a journey.
+
 ## [1.0.0b9] — 2026-06-22
 
 ### Added — accessibility automation (custom actions + VoiceOver announcements)

@@ -23,7 +23,7 @@ import pytest
 # The full canonical 32-tool registry — sourced from server._TOOLS at runtime.
 # A test below pins this count so adding/removing tools without updating the
 # gate is caught immediately.
-EXPECTED_TOOL_COUNT = 35  # +2: perform_accessibility_action, get_announcements (host-AX a11y)
+EXPECTED_TOOL_COUNT = 36  # +3: perform_accessibility_action, get_announcements, set_text (host-AX a11y)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +131,7 @@ GATED_TOOLS: list[str] = [
     "load_journey",
     "perform_accessibility_action",
     "get_announcements",
+    "set_text",
 ]
 
 

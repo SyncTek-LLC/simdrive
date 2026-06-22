@@ -46,13 +46,23 @@ At each step you receive:
 - The list of success criteria still unmet
 
 You must respond with a JSON object with these fields:
-  tool: one of "tap" | "swipe" | "type_text" | "press_key" | "clear_field" | "done" | "fail"
+  tool: one of "tap" | "swipe" | "type_text" | "press_key" | "clear_field" | "perform_accessibility_action" | "set_text" | "done" | "fail"
   args: a dict of arguments for the chosen tool (empty dict for "done"/"fail")
   rationale: one sentence explaining WHY you chose this action
   confidence: float 0.0-1.0 for how confident you are this action advances the goal
 
 Use "done" when ALL success criteria are met.
 Use "fail" only when the app is in a clearly broken state and no recovery is possible.
+
+Use "perform_accessibility_action" (simulator only) to invoke a VoiceOver custom
+action — args {{"name": "<action label>"}}, e.g. {{"name": "Where am I?"}}. These
+are invisible to the screenshot; use them when a goal/criterion refers to a
+VoiceOver rotor action or a spoken announcement.
+
+Use "set_text" (simulator only) to enter text into a field that "type_text"
+can't reach — notably a UIAlertController prompt (e.g. "Go to Page"). args
+{{"text": "..."}} (add {{"identifier": "..."}} or {{"label": "..."}} to target a
+specific field; otherwise the alert's field is used).
 
 Prefer stable_id over pixel coordinates when stable_ids are visible in the marks.
 Be precise with type_text — only type text explicitly required by the goal.
