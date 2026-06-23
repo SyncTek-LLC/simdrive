@@ -511,11 +511,14 @@ def perform_action(
         # Explicit target didn't carry it — widen to the whole window.
         carrier = _find_action_carrier(window, name)
 
+    group = None
     if carrier is None:
         # iOS 26: the plain window walk can bottom out at an opaque, childless
         # ``iOSContentGroup`` AXGroup. Resolve the content group via the
         # heuristic/position-probe and DFS its subtree — this is what surfaces
         # the real custom-action carriers (e.g. the reader's "Where am I?").
+        # Resolve ONCE here and reuse below for the WKWebView hint (each resolve
+        # re-fires a position-probe + full DFS, so don't repeat it).
         group = _resolve_content_group(window)
         if group is not None and group is not window:
             carrier = _find_action_carrier(group, name)
@@ -527,7 +530,7 @@ def perform_action(
         # Keep it accurate — only when zero actions exist window-wide. iOS 26:
         # also probe the resolved content-group subtree (the window walk alone
         # can't see past an opaque ``iOSContentGroup``) before concluding zero.
-        group = _resolve_content_group(window)
+        # ``group`` was already resolved on the not-found path above; reuse it.
         has_actions = _window_has_any_custom_action(window) or (
             group is not None
             and group is not window

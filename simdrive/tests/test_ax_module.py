@@ -183,6 +183,81 @@ def _wire_fakes(monkeypatch, *, hit=None):
     monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
 
 
+# ── _frame: AXFrame → CGRect parsing (real impl, not monkeypatched) ───────────
+#
+# Every content-group test monkeypatches ``ax._frame`` away, so neither its
+# CGRect-struct path nor its documented fallbacks are exercised there. These
+# drive the REAL ``_frame`` against a stubbed ApplicationServices module.
+
+
+def _stub_app_services(monkeypatch, *, copy_ret, getvalue_ret):
+    """Install an ApplicationServices stub for the lazy import inside _frame.
+
+    ``copy_ret`` is the ``(err, val)`` AXUIElementCopyAttributeValue returns;
+    ``getvalue_ret`` is the ``(ok, rect)`` AXValueGetValue returns.
+    """
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(
+            AXUIElementCopyAttributeValue=lambda elem, attr, _none: copy_ret,
+            AXValueGetValue=lambda val, kind, _none: getvalue_ret,
+            kAXValueCGRectType=4,
+        ),
+    )
+
+
+class _CGPoint:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+class _CGSize:
+    def __init__(self, w, h):
+        self.width, self.height = w, h
+
+
+class _CGRect:
+    def __init__(self, x, y, w, h):
+        self.origin = _CGPoint(x, y)
+        self.size = _CGSize(w, h)
+
+
+def test_frame_parses_cgrect_struct(monkeypatch):
+    rect = _CGRect(10.0, 20.0, 390.0, 844.0)
+    _stub_app_services(monkeypatch, copy_ret=(0, object()), getvalue_ret=(True, rect))
+    assert ax._frame(object()) == {"x": 10.0, "y": 20.0, "width": 390.0, "height": 844.0}
+
+
+def test_frame_falls_back_to_4tuple(monkeypatch):
+    # Some pyobjc versions return AXValueGetValue's rect as an (x, y, w, h) tuple
+    # rather than a struct with .origin/.size — the documented AttributeError path.
+    _stub_app_services(
+        monkeypatch, copy_ret=(0, object()), getvalue_ret=(True, (1.0, 2.0, 3.0, 4.0))
+    )
+    assert ax._frame(object()) == {"x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0}
+
+
+def test_frame_none_when_attribute_read_fails(monkeypatch):
+    # Non-zero err from AXUIElementCopyAttributeValue → None.
+    _stub_app_services(monkeypatch, copy_ret=(-25204, None), getvalue_ret=(False, None))
+    assert ax._frame(object()) is None
+
+
+def test_frame_none_when_value_unwrap_fails(monkeypatch):
+    # AXValueGetValue reports ok=False (value isn't a CGRect) → None.
+    _stub_app_services(monkeypatch, copy_ret=(0, object()), getvalue_ret=(False, None))
+    assert ax._frame(object()) is None
+
+
+def test_frame_none_when_rect_malformed(monkeypatch):
+    # A rect that is neither a struct (no .origin) nor a 4-tuple → None fallback.
+    _stub_app_services(
+        monkeypatch, copy_ret=(0, object()), getvalue_ret=(True, (1.0, 2.0))
+    )
+    assert ax._frame(object()) is None
+
+
 # ── aspect-ratio heuristic ────────────────────────────────────────────────────
 
 
@@ -210,13 +285,20 @@ def test_find_ios_content_group_none_when_no_portrait_child(monkeypatch):
 
 
 def test_position_probe_hits_window_centre(monkeypatch):
-    # The probe hit-tests the window centre and walks up to a group container —
-    # this is the path that resolves real content when AXChildren is empty.
+    # The probe hit-tests the window centre and walks up to the NEAREST group
+    # container — this is the path that resolves real content when AXChildren is
+    # empty. The hit element's ancestor chain is
+    # real(AXStaticText) -> container(AXGroup) -> outer(AXWindow), so the up-walk
+    # MUST stop at ``container`` (the nearest AXGroup). This pins the
+    # stop-at-AXGroup semantics: if AXGroup were dropped from the stop-set, the
+    # walk would over-climb past ``container`` up to ``outer`` and this test
+    # would fail (mutation guard).
+    window = _Node(role="AXWindow", frame={"x": 100, "y": 100, "width": 400, "height": 800})
     real = _Node(role="AXStaticText", desc="hello")
     container = _Node(role="AXGroup", children=[real, _Node(role="AXTextField")])
     real.parent_container = container
+    container.parent_container = window  # nearest-group walk must NOT reach here
 
-    window = _Node(role="AXWindow", frame={"x": 100, "y": 100, "width": 400, "height": 800})
     _wire_fakes(monkeypatch)
     monkeypatch.setattr(ax, "_app_element", lambda: object())
 

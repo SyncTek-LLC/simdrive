@@ -13,6 +13,20 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b13] — 2026-06-23
+
+### Changed — internal hardening for the iOS-26 content-group path (no behavior change)
+
+- **`perform_accessibility_action` does less work on the not-found path.** When
+  a requested action isn't found, the tool now resolves the iOS content group a
+  single time and reuses it for both the carrier search and the WKWebView
+  boundary hint, instead of resolving it twice (each resolve re-runs a position-
+  probe and a full tree-walk). Same results, fewer redundant probes.
+- **Test hardening only — no user-facing change.** Added direct coverage for the
+  `AXFrame` → rectangle parser (CGRect-struct, tuple-fallback, and malformed
+  inputs) and pinned the content-group position-probe's "stop at the nearest
+  group container" walk so the behavior can't silently regress.
+
 ## [1.0.0b12] — 2026-06-23
 
 ### Fixed — host-AX `set_text` / `perform_accessibility_action` now reach app content on iOS 26
