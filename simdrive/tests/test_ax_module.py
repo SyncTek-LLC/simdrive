@@ -141,6 +141,248 @@ def test_set_text_docstring_documents_swiftui_boundary():
     assert "type_text" in doc
 
 
+# ── iOS-26 content-group probe (regression: dropped in specterqa→simdrive) ────
+#
+# On iOS 26 the Simulator collapses the app UI into one opaque AXGroup
+# (subrole "iOSContentGroup") with ZERO AXChildren, so the plain window walk
+# in set_text/perform_action sees nothing inside the app. The ported
+# heuristic + AXUIElementCopyElementAtPosition position-probe expand it.
+# These tests catch the regression: WITHOUT the resolver the field/action is
+# not found; WITH it, it is.
+
+
+class _Node:
+    """Minimal fake AX element for the content-group tests."""
+
+    def __init__(self, role="", subrole="", frame=None, children=None,
+                 actions=None, ident="", desc="", title=""):
+        self.role = role
+        self.subrole = subrole
+        self.frame = frame
+        self.children = children or []
+        self.actions = actions or []
+        self.ident = ident
+        self.desc = desc
+        self.title = title
+
+
+def _wire_fakes(monkeypatch, *, hit=None):
+    """Route ax's low-level accessors at the _Node fakes."""
+    def _attr(e, a):
+        return {
+            "AXRole": e.role,
+            "AXSubrole": e.subrole,
+            "AXIdentifier": e.ident,
+            "AXDescription": e.desc,
+            "AXTitle": e.title,
+        }.get(a)
+
+    monkeypatch.setattr(ax, "_attr", _attr)
+    monkeypatch.setattr(ax, "_children", lambda e: e.children)
+    monkeypatch.setattr(ax, "_frame", lambda e: e.frame)
+    monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
+
+
+# ── aspect-ratio heuristic ────────────────────────────────────────────────────
+
+
+def test_find_ios_content_group_picks_portrait_largest(monkeypatch):
+    # A wide chrome bar (landscape) + a portrait content group; the portrait,
+    # larger-area child wins.
+    chrome = _Node(role="AXToolbar", frame={"x": 0, "y": 0, "width": 400, "height": 40})
+    content = _Node(role="AXGroup", subrole="iOSContentGroup",
+                    frame={"x": 0, "y": 0, "width": 390, "height": 844},
+                    children=[_Node(role="AXTextField")])
+    window = _Node(role="AXWindow", children=[chrome, content])
+    _wire_fakes(monkeypatch)
+    assert ax._find_ios_content_group(window) is content
+
+
+def test_find_ios_content_group_none_when_no_portrait_child(monkeypatch):
+    window = _Node(role="AXWindow", children=[
+        _Node(role="AXButton", frame={"x": 0, "y": 0, "width": 400, "height": 40}),
+    ])
+    _wire_fakes(monkeypatch)
+    assert ax._find_ios_content_group(window) is None
+
+
+# ── position-probe fallback (AXUIElementCopyElementAtPosition) ────────────────
+
+
+def test_position_probe_hits_window_centre(monkeypatch):
+    # The probe hit-tests the window centre and walks up to a group container —
+    # this is the path that resolves real content when AXChildren is empty.
+    real = _Node(role="AXStaticText", desc="hello")
+    container = _Node(role="AXGroup", children=[real, _Node(role="AXTextField")])
+    real.parent_container = container
+
+    window = _Node(role="AXWindow", frame={"x": 100, "y": 100, "width": 400, "height": 800})
+    _wire_fakes(monkeypatch)
+    monkeypatch.setattr(ax, "_app_element", lambda: object())
+
+    captured = {}
+
+    def _copy_at(app, x, y, _none):
+        captured["xy"] = (x, y)
+        return 0, real
+
+    # _attr must also vend AXParent for the up-walk.
+    base_attr = ax._attr
+
+    def _attr_with_parent(e, a):
+        if a == "AXParent":
+            return getattr(e, "parent_container", None)
+        return base_attr(e, a)
+
+    monkeypatch.setattr(ax, "_attr", _attr_with_parent)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementCopyElementAtPosition=_copy_at),
+    )
+    grp = ax._position_probe_content_group(window)
+    assert grp is container  # walked up from the hit element to the group
+    assert captured["xy"] == (300.0, 500.0)  # exact window centre
+
+
+def test_position_probe_none_without_window_frame(monkeypatch):
+    window = _Node(role="AXWindow", frame=None)
+    _wire_fakes(monkeypatch)
+    monkeypatch.setattr(ax, "_app_element", lambda: object())
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementCopyElementAtPosition=lambda *a: (0, None)),
+    )
+    assert ax._position_probe_content_group(window) is None
+
+
+# ── resolver: childless heuristic group MUST fall through to the probe ─────────
+
+
+def test_resolve_content_group_falls_through_when_heuristic_childless(monkeypatch):
+    # The heuristic matches the opaque, CHILDLESS iOSContentGroup (the iOS-26
+    # failure shape). The resolver must NOT return it — it must fall through to
+    # the position-probe, which surfaces the real (walkable) container.
+    childless = _Node(role="AXGroup", subrole="iOSContentGroup",
+                      frame={"x": 0, "y": 0, "width": 390, "height": 844},
+                      children=[])
+    window = _Node(role="AXWindow", frame={"x": 0, "y": 0, "width": 390, "height": 844},
+                   children=[childless])
+    probed = _Node(role="AXGroup", children=[_Node(role="AXTextField")])
+    _wire_fakes(monkeypatch)
+    monkeypatch.setattr(ax, "_position_probe_content_group", lambda w: probed)
+    assert ax._resolve_content_group(window) is probed
+
+
+def test_resolve_content_group_trusts_walkable_heuristic(monkeypatch):
+    walkable = _Node(role="AXGroup", subrole="iOSContentGroup",
+                     frame={"x": 0, "y": 0, "width": 390, "height": 844},
+                     children=[_Node(role="AXTextField")])
+    window = _Node(role="AXWindow", children=[walkable])
+    _wire_fakes(monkeypatch)
+    # Probe must NOT be consulted when the heuristic group is already walkable.
+    monkeypatch.setattr(ax, "_position_probe_content_group",
+                        lambda w: pytest.fail("probe should not run"))
+    assert ax._resolve_content_group(window) is walkable
+
+
+# ── wired-in regression: set_text finds the field only via the content group ──
+
+
+def test_set_text_finds_field_via_content_group_probe(monkeypatch):
+    """iOS 26: field is invisible to the window walk, reached via the probe.
+
+    BEFORE (no probe): _find_text_field(window) is None -> 'not found'.
+    AFTER (probe): the resolved content group exposes the AXTextField -> set.
+    """
+    field = _Node(role="AXTextField")
+    window = _Node(role="AXWindow", children=[
+        _Node(role="AXGroup", subrole="iOSContentGroup", children=[]),  # opaque
+    ])
+    content_group = _Node(role="AXGroup", children=[field])
+
+    _wire_fakes(monkeypatch)
+    monkeypatch.setattr(ax, "select_window", lambda dev: window)
+    monkeypatch.setattr(ax, "_resolve_content_group", lambda w: content_group)
+
+    set_calls = {}
+
+    def _set(el, attr, val):
+        set_calls["args"] = (el, attr, val)
+        return 0
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementSetAttributeValue=_set),
+    )
+
+    # Sanity: the plain window walk alone does NOT find the field (regression).
+    assert ax._find_text_field(window) is None
+
+    res = ax.set_text("iPhone 16 Pro", "5")
+    assert res == {"ok": True, "value": "5"}
+    assert set_calls["args"] == (field, "AXValue", "5")
+
+
+def test_set_text_still_not_found_without_content_group(monkeypatch):
+    """Regression guard: with NO resolvable content group, still 'not found'."""
+    window = _Node(role="AXWindow", children=[
+        _Node(role="AXGroup", subrole="iOSContentGroup", children=[]),
+    ])
+    _wire_fakes(monkeypatch)
+    monkeypatch.setattr(ax, "select_window", lambda dev: window)
+    monkeypatch.setattr(ax, "_resolve_content_group", lambda w: None)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementSetAttributeValue=lambda *a: 0),
+    )
+    res = ax.set_text("iPhone 16 Pro", "5")
+    assert res["ok"] is False
+    assert "no editable text field" in res["error"]
+
+
+# ── wired-in regression: perform_action reaches a carrier via the probe ───────
+
+
+def test_perform_action_finds_carrier_via_content_group_probe(monkeypatch):
+    """iOS 26: the carrier lives behind the opaque content group.
+
+    BEFORE: the window walk finds no carrier -> 'not found'.
+    AFTER: the resolved content group exposes the carrier -> performed.
+    """
+    carrier = _Node(actions=["Name:Where am I?\nTarget:0x0\nSelector:(null)"])
+    window = _Node(role="AXWindow", children=[
+        _Node(role="AXGroup", subrole="iOSContentGroup", children=[]),
+    ])
+    content_group = _Node(role="AXGroup", children=[carrier])
+
+    _wire_fakes(monkeypatch)
+    monkeypatch.setattr(ax, "select_window", lambda dev: window)
+    monkeypatch.setattr(ax, "_resolve_content_group", lambda w: content_group)
+
+    performed = {}
+
+    def _perform(el, name):
+        performed["args"] = (el, name)
+        return 0
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementPerformAction=_perform),
+    )
+
+    # Sanity: the plain window walk alone finds no carrier (regression).
+    assert ax._find_action_carrier(window, "Where am I?") is None
+
+    res = ax.perform_action("iPhone 16 Pro", "Where am I?")
+    assert res == {"ok": True, "action": "Where am I?"}
+    assert performed["args"][0] is carrier
+
+
 # ── announcement buffer: soft pid scoping (never drops to a false empty) ──────
 
 
