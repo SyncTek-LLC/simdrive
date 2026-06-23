@@ -297,6 +297,30 @@ _RESTART_DELAY_SEC: float = 0.1         # give the current tool call time to shi
 _RESTART_LOOP_GUARD_MAX: int = 3        # halt auto-restart after this many consecutive restarts
 _RESTART_COUNT_ENV: str = "SIMDRIVE_RESTART_COUNT"  # carried across execv to detect loops
 
+# b11 FIX 1 — auto-restart is UNSAFE while we are serving as an MCP stdio
+# server. os.execv keeps the same PID and fds, but the MCP client on the
+# other end of the stdio pipe holds an *initialized session*; replacing the
+# process tears down that session mid-stream, so every subsequent JSON-RPC
+# request the client sends fails `MCP error -32602: Invalid request
+# parameters` until the user reconnects (/mcp). That's strictly worse than the
+# drift it was trying to cure. We therefore gate auto-restart on this flag:
+# it is flipped True only inside `_serve_async` (the one and only code path
+# that owns the stdio transport). Direct/sync callers (CLI smokes, pytest,
+# `call_tool` from a non-stdio embedder) leave it False, so the safe
+# self-restart behaviour is preserved for them.
+_MCP_SERVER_MODE: bool = False
+
+
+def _in_mcp_server_mode() -> bool:
+    """True when this process is actively serving the MCP stdio transport.
+
+    Set by ``_serve_async`` before it hands stdin/stdout to the MCP server.
+    When True, auto-restart (os.execv) MUST be suppressed: re-execing the
+    process desyncs the client's initialized stdio session and yields an
+    unrecoverable ``-32602`` on every subsequent tool call.
+    """
+    return _MCP_SERVER_MODE
+
 
 def _is_upgrade(disk: str | None, loaded: str | None) -> bool:
     """Return True only when ``disk`` parses strictly greater than ``loaded``.
@@ -324,6 +348,8 @@ def _check_version_drift() -> str | None:
     sees the issue on the very next tool call after `pip install --upgrade`.
 
     The warning text is context-aware:
+      - In MCP-SERVER MODE → never auto-restart (it desyncs the stdio
+        transport, -32602); tell the operator to reconnect /mcp.
       - On UPGRADE with auto-restart enabled → "auto-restarting" language.
       - On UPGRADE with auto-restart disabled → "restart manually" language.
       - On DOWNGRADE → never auto-restart; warning notes the version skew.
@@ -334,15 +360,31 @@ def _check_version_drift() -> str | None:
     if disk == _LOADED_VERSION:
         return None
     if _is_upgrade(disk, _LOADED_VERSION):
+        # b11 FIX 1: while serving as an MCP stdio server, auto-restart is
+        # disabled unconditionally — re-execing the process desyncs the
+        # client's stdio session and makes every later tool call fail
+        # -32602 with no recovery short of a client /mcp reconnect.
+        if _in_mcp_server_mode():
+            return (
+                f"simdrive version drift: loaded {_LOADED_VERSION}, disk {disk}. "
+                "Auto-restart is disabled in MCP-server mode because it desyncs "
+                "the stdio transport (MCP error -32602: Invalid request parameters). "
+                f"Reconnect your MCP client (/mcp) or restart the session to load {disk}. "
+                "Set SIMDRIVE_NO_AUTO_RESTART=1 to make this the default everywhere."
+            )
         if _auto_restart_disabled():
             return (
                 f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
-                f"Restart manually to pick up version {disk} (auto-restart is disabled)."
+                f"Restart manually to pick up version {disk} (auto-restart is disabled). "
+                "SIMDRIVE_NO_AUTO_RESTART suppresses the version-drift auto-restart; "
+                "set it for MCP-driver sessions."
             )
         return (
             f"Loaded simdrive {_LOADED_VERSION} but disk version is {disk}. "
             f"Auto-restarting to pick up disk version {disk}. "
-            "Set SIMDRIVE_NO_AUTO_RESTART=1 to disable and restart manually."
+            "Set SIMDRIVE_NO_AUTO_RESTART=1 to disable and restart manually "
+            "(recommended for MCP-driver sessions, where auto-restart desyncs "
+            "the stdio transport)."
         )
     # Disk version is older than (or not strictly newer than) loaded — likely a
     # downgrade or unparseable. Warn but never auto-restart.
@@ -487,7 +529,9 @@ def _maybe_handle_drift(result: dict) -> None:
     No-op when there's no drift, when the result isn't a dict, or when the
     handler already set its own ``_simdrive_warning`` field.
 
-    Auto-restart is gated by THREE conditions, all must hold:
+    Auto-restart is gated by FOUR conditions, all must hold:
+      0. We are NOT serving as an MCP stdio server (b11 FIX 1) — re-execing
+         the process desyncs the client's stdio session (-32602).
       1. Disk version is strictly newer than loaded version (upgrade only).
       2. ``SIMDRIVE_NO_AUTO_RESTART`` is not set to a truthy value.
       3. We have not already restarted ≥ ``_RESTART_LOOP_GUARD_MAX`` times
@@ -503,6 +547,12 @@ def _maybe_handle_drift(result: dict) -> None:
         return
     if "_simdrive_warning" not in result:
         result["_simdrive_warning"] = warning
+    # b11 FIX 1 — never auto-restart while owning the MCP stdio transport.
+    # The drift warning above already carries the actionable "reconnect /mcp"
+    # guidance; we surface it and stop, with NO `_simdrive_action` and NO
+    # scheduled re-exec, so the stdio session the client holds stays intact.
+    if _in_mcp_server_mode():
+        return
     if _auto_restart_disabled():
         return
     disk = _disk_version()
@@ -2404,8 +2454,12 @@ _TOOLS: list[dict] = [
             "API — for fields that HID `type_text` can't reach, notably "
             "UIAlertController prompts (e.g. a 'Go to Page' dialog). Targets the field "
             "by `identifier`/`label`, else the first editable field in the window "
-            "(which is the alert's field when a prompt is up). The value propagates to "
-            "the field's binding, so the app receives it. Returns {ok, value}."
+            "(which is the alert's field when a prompt is up). Returns {ok, value}. "
+            "WORKS for UIKit fields (incl. UIAlertController). DOES NOT reliably commit "
+            "a SwiftUI `SecureField`/`TextField` `@State` binding: set_text writes the "
+            "AX value, which the field may DISPLAY while the @State stays empty, so the "
+            "app never sees the input. For SwiftUI @State-bound fields, tap the field "
+            "and use `type_text` (HID keystrokes) instead."
         ),
         "inputSchema": {
             "type": "object",
@@ -3068,7 +3122,11 @@ async def call_tool_async(name: str, arguments: dict) -> dict:
 
 async def _serve_async() -> None:
     """Run as an MCP stdio server."""
-    global _MCP_SERVER
+    global _MCP_SERVER, _MCP_SERVER_MODE
+
+    # b11 FIX 1 — mark MCP-server mode so the version-drift handler suppresses
+    # auto-restart (os.execv would desync the client's stdio session → -32602).
+    _MCP_SERVER_MODE = True
 
     from mcp.server import Server
     from mcp.server.stdio import stdio_server

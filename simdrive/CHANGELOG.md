@@ -13,6 +13,37 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b11] — 2026-06-23
+
+### Fixed — MCP auto-restart no longer breaks the stdio session
+
+- **Auto-restart is disabled while serving as an MCP server.** When the running
+  server detected it was older than the wheel on disk, it used to re-exec itself
+  to pick up the new code. Under an MCP stdio client (Claude Code, etc.) that
+  re-exec desynced the transport — every following tool call failed with
+  `MCP error -32602: Invalid request parameters`, unrecoverable without a `/mcp`
+  reconnect. simdrive now detects MCP-server mode and **does not restart**;
+  instead it returns a clear, actionable warning telling you to reconnect your
+  MCP client (or restart the session) to load the new version. The safe
+  self-restart behaviour is preserved for non-MCP (embedded/CLI) callers.
+- **`SIMDRIVE_NO_AUTO_RESTART` is now documented** (README + the drift warning
+  text): set it for MCP-driver sessions to suppress the version-drift
+  auto-restart everywhere.
+
+### Improved — clearer diagnostics at the host-AX boundary
+
+- **`perform_accessibility_action`** now hints at the cause when *zero* custom
+  actions are found anywhere in the target window: if you're driving a
+  Readium/WKWebView reader, web-content accessibility is not bridged to host-AX
+  on the simulator — use the on-device XCTest backend for web-content a11y. The
+  hint is only added when the window genuinely has no custom actions (not when a
+  specific named action is simply absent).
+- **`set_text`** now documents its backend boundary: it commits **UIKit** fields
+  (including `UIAlertController` prompts), but does **not** reliably commit a
+  SwiftUI `SecureField`/`TextField` bound to `@State` — the field may display the
+  text while `@State` stays empty. For SwiftUI `@State`-bound fields, tap the
+  field and use `type_text` / HID keystrokes instead.
+
 ## [1.0.0b10] — 2026-06-22
 
 ### Added — text entry into alert fields + accessibility journeys

@@ -154,6 +154,13 @@ session_start(bundle_id="com.example.app", udid="<device-udid>", target="device"
 WDA bootstrap on iOS 26.x has some rough edges; the simulator
 (`target="simulator"`, default) is the fully supported path.
 
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `SIMDRIVE_ALLOW_PHYSICAL_DEVICE=1` | Allow driving a paired physical iPhone/iPad (see above). |
+| `SIMDRIVE_NO_AUTO_RESTART=1` | Suppress the version-drift auto-restart. When the running server is older than the wheel on disk (after `pip install -U simdrive`), simdrive normally re-execs itself to pick up the new code. **Set this for MCP-driver sessions** (Claude Code, etc.): an auto-restart re-execs the process and desyncs the MCP stdio transport, after which every tool call fails `MCP error -32602: Invalid request parameters` until you reconnect (`/mcp`). When simdrive detects it is serving as an MCP stdio server it now suppresses the auto-restart automatically and tells you to reconnect; this env var makes that the default everywhere (incl. embedded/CLI contexts). Truthy values: `1`, `true`, `yes`, `on`. |
+
 ## Known limitations
 
 See `docs/LIMITATIONS.md` for: `type_text` first-character drop workaround,
