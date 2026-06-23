@@ -13,6 +13,27 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b12] — 2026-06-23
+
+### Fixed — `set_text` is honest about iOS-26 modal-alert text fields
+
+- **`set_text` now searches more broadly and fails clearly when it can't reach a
+  field.** It looks for an editable field in the device window, then the app's
+  focused element, then any sibling Simulator window — so a field is found
+  wherever the Simulator vends one. When **no** field is reachable, the old terse
+  `"no editable text field found in the target window"` is replaced with an
+  actionable message.
+- **iOS 26 limitation documented and surfaced.** On iOS 26 the Simulator does
+  **not** vend a presented `UIAlertController`'s text field to the host
+  Accessibility tree at all (the whole on-device UI collapses into one opaque
+  content group), and synthesized keystrokes don't reach it either — so a
+  modal-alert prompt such as a reader's "Go to Page" dialog cannot be filled
+  host-side on iOS 26. `set_text` now returns a clear `ok: false` error that
+  names the cause and points at the on-device backend (`target='device'`,
+  XCTest/WebDriverAgent) for modal-alert text entry. The tool description and
+  docstring carry the same guidance. (Verified live on iPhone 16 Pro / iOS 26.0
+  with the Palace reader's "Go to Page" prompt.)
+
 ## [1.0.0b11] — 2026-06-23
 
 ### Fixed — MCP auto-restart no longer breaks the stdio session

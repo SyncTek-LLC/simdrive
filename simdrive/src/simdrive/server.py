@@ -2451,15 +2451,18 @@ _TOOLS: list[dict] = [
         "name": "set_text",
         "description": (
             "(sim only) Set a text field's value directly via the host Accessibility "
-            "API — for fields that HID `type_text` can't reach, notably "
-            "UIAlertController prompts (e.g. a 'Go to Page' dialog). Targets the field "
-            "by `identifier`/`label`, else the first editable field in the window "
-            "(which is the alert's field when a prompt is up). Returns {ok, value}. "
-            "WORKS for UIKit fields (incl. UIAlertController). DOES NOT reliably commit "
-            "a SwiftUI `SecureField`/`TextField` `@State` binding: set_text writes the "
-            "AX value, which the field may DISPLAY while the @State stays empty, so the "
-            "app never sees the input. For SwiftUI @State-bound fields, tap the field "
-            "and use `type_text` (HID keystrokes) instead."
+            "API — for fields that HID `type_text` can't reach. Targets the field by "
+            "`identifier`/`label`, else the first editable field reachable via host AX "
+            "(the device window, then the app's focused element, then any sibling "
+            "Simulator window). Returns {ok, value}. WORKS for UIKit fields the "
+            "Simulator vends to host AX. DOES NOT reliably commit a SwiftUI "
+            "`SecureField`/`TextField` `@State` binding (set_text writes the AX value, "
+            "which the field may DISPLAY while the @State stays empty); tap the field "
+            "and use `type_text` instead. iOS-26 LIMITATION: a presented "
+            "UIAlertController's text field (e.g. a 'Go to Page' prompt) is NOT vended "
+            "to host AX on iOS 26, so set_text returns {ok:false, error:...} pointing "
+            "at the on-device backend — use target='device' (XCTest/WebDriverAgent) for "
+            "modal-alert text entry on iOS 26."
         ),
         "inputSchema": {
             "type": "object",

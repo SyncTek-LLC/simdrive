@@ -374,6 +374,24 @@ def perform_action(
 
 _EDITABLE_ROLES = {"AXTextField", "AXSecureTextField", "AXTextArea"}
 
+# Clear, actionable message for the genuine host-AX wall (see _find_editable_field).
+# On iOS 26 the Simulator host-AX tree collapses the on-device UI into a single
+# opaque ``iOSContentGroup`` whose children aren't vended; a UIAlertController's
+# UITextField is therefore absent from EVERY host-AX access path (window walk,
+# the app's AXFocusedUIElement, and a cross-window scan). HID `type_text` also
+# can't reach it — synthesized keystrokes land on the host window, not the modal
+# field. Live-verified on iPhone 16 Pro / iOS 26.0 with Palace's "Go to Page"
+# prompt (see tests/test_set_text_alert_reachability.py).
+_NO_FIELD_HOST_AX_WALL = (
+    "no editable text field is reachable via the host Accessibility tree. On "
+    "iOS 26 the Simulator collapses the on-device UI into one opaque content "
+    "group, so a UIAlertController's text field (e.g. a 'Go to Page' prompt) is "
+    "not vended to host AX and HID type_text can't reach it either — host-side "
+    "text entry into a modal alert isn't possible on this iOS version. Use the "
+    "on-device XCTest/WebDriverAgent backend (target='device') for modal-alert "
+    "text entry, or drive the field via the app's own controls."
+)
+
 
 def _find_text_field(root, depth=0, maxdepth=60):
     if depth > maxdepth:
@@ -382,6 +400,42 @@ def _find_text_field(root, depth=0, maxdepth=60):
         return root
     for child in _children(root):
         hit = _find_text_field(child, depth + 1, maxdepth)
+        if hit is not None:
+            return hit
+    return None
+
+
+def _find_editable_field(window: Any) -> Any:
+    """Find the first editable field reachable via host AX, searching broadly.
+
+    Order (each step is best-effort and tolerant of stale elements):
+      1. The target device's window subtree — the common case for normal fields.
+      2. The app's ``AXFocusedUIElement`` — on some iOS versions a presented
+         alert's field is the focused element even when window-walking misses it.
+      3. Any other on-screen Simulator window — defensive, in case a modal is
+         vended on a sibling window rather than the device window.
+
+    Returns the field element, or ``None`` when host AX vends no editable field
+    anywhere (the iOS-26 ``UIAlertController`` wall — see ``_NO_FIELD_HOST_AX_WALL``).
+    """
+    field = _find_text_field(window)
+    if field is not None:
+        return field
+
+    # The focused element may be the alert's field directly (or contain it).
+    focused = _attr(_app_element(), "AXFocusedUIElement")
+    if focused is not None:
+        if str(_attr(focused, "AXRole") or "") in _EDITABLE_ROLES:
+            return focused
+        hit = _find_text_field(focused)
+        if hit is not None:
+            return hit
+
+    # Defensive cross-window scan (skip the one we already searched).
+    for w in _attr(_app_element(), "AXWindows") or []:
+        if w is window:
+            continue
+        hit = _find_text_field(w)
         if hit is not None:
             return hit
     return None
@@ -396,22 +450,28 @@ def set_text(
 ) -> dict[str, Any]:
     """Set a text field's value directly via host AX (`AXValue`).
 
-    The fix for fields HID `type_text` can't reach — notably `UIAlertController`
-    prompts (e.g. a "Go to Page" dialog), whose field never receives synthesized
-    keystrokes. Setting `AXValue` propagates to the field's binding (verified:
-    the app reads the value), so the app receives the input.
+    Reaches fields that HID `type_text` (synthesized keystrokes) can't drive by
+    writing `AXValue` directly, which propagates to the field's binding so the
+    app observes the input.
 
     Resolution: scope to the device's window, then the field by *identifier* /
     *label*, else the first editable field (text field / secure field / text
-    area) in the window — which is the alert's field when a prompt is up.
+    area) reachable via host AX — the window subtree, then the app's focused
+    element, then any sibling Simulator window (see ``_find_editable_field``).
 
-    Backend boundary (b11): this works for **UIKit** fields, including
-    `UIAlertController` modal-alert text fields. It does **NOT** reliably commit
-    a **SwiftUI** `SecureField`/`TextField` whose text is bound to `@State`:
-    writing `AXValue` can make the field *display* the text while the `@State`
-    binding stays empty, so the app never observes the input. For SwiftUI
-    `@State`-bound fields, tap the field and drive it with `type_text` /
-    HID keystrokes instead.
+    Backend boundary (b11): this works for **UIKit** fields whose subtree the
+    Simulator vends to host AX. It does **NOT** reliably commit a **SwiftUI**
+    `SecureField`/`TextField` bound to `@State` (writing `AXValue` can update the
+    *display* while the binding stays empty). Tap and drive those with
+    `type_text` / HID keystrokes instead.
+
+    Known limitation (iOS 26 ``UIAlertController``): on iOS 26 the Simulator
+    collapses the on-device UI into one opaque content group and does **not**
+    vend a presented alert's text field to the host-AX tree at all — so a
+    modal-alert prompt (e.g. "Go to Page") can't be filled host-side on iOS 26.
+    In that case ``set_text`` returns a clear ``ok: False`` error pointing at the
+    on-device backend (see ``_NO_FIELD_HOST_AX_WALL``). Live-verified on
+    iPhone 16 Pro / iOS 26.0.
 
     Returns ``{"ok": True, "value": text}`` or ``{"ok": False, "error": ...}``.
     """
@@ -423,10 +483,18 @@ def set_text(
     elif label:
         field = _find_by(window, "AXDescription", label) or _find_by(window, "AXTitle", label)
     else:
-        field = _find_text_field(window)
+        field = _find_editable_field(window)
 
     if field is None:
-        return {"ok": False, "error": "no editable text field found in the target window"}
+        # An explicit identifier/label simply didn't match; otherwise this is the
+        # iOS-26 host-AX wall — return the actionable, on-device-pointing message.
+        if identifier or label:
+            target = f"identifier={identifier!r}" if identifier else f"label={label!r}"
+            return {
+                "ok": False,
+                "error": f"no editable text field matching {target} in the target window",
+            }
+        return {"ok": False, "error": _NO_FIELD_HOST_AX_WALL}
 
     err = AXUIElementSetAttributeValue(field, "AXValue", text)
     if err != 0:
