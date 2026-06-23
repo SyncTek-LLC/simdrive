@@ -96,6 +96,49 @@ def _children(elem: Any) -> list[Any]:
         return [kids]
 
 
+def _frame(elem: Any) -> dict | None:
+    """Return *elem*'s AXFrame as ``{x, y, width, height}`` in macOS screen pts.
+
+    Reads the ``AXFrame`` attribute (a ``CGRect``-bearing ``AXValue``) via
+    ``AXValueGetValue`` with ``kAXValueCGRectType``. Returns ``None`` when the
+    frame can't be read. pyobjc/ApplicationServices imports stay lazy.
+    """
+    try:
+        from ApplicationServices import (  # type: ignore[import]
+            AXUIElementCopyAttributeValue,
+            AXValueGetValue,
+            kAXValueCGRectType,
+        )
+
+        err, val = AXUIElementCopyAttributeValue(elem, "AXFrame", None)
+        if err != 0 or val is None:
+            return None
+        ok, rect = AXValueGetValue(val, kAXValueCGRectType, None)
+        if not ok or rect is None:
+            return None
+        try:
+            return {
+                "x": float(rect.origin.x),
+                "y": float(rect.origin.y),
+                "width": float(rect.size.width),
+                "height": float(rect.size.height),
+            }
+        except AttributeError:
+            # Some pyobjc versions return a (x, y, w, h) tuple.
+            if hasattr(rect, "__iter__"):
+                vals = list(rect)
+                if len(vals) == 4:
+                    return {
+                        "x": float(vals[0]),
+                        "y": float(vals[1]),
+                        "width": float(vals[2]),
+                        "height": float(vals[3]),
+                    }
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_frame failed: %s", exc)
+    return None
+
+
 def _action_names(elem: Any) -> list[str]:
     from ApplicationServices import AXUIElementCopyActionNames  # type: ignore[import]
 
@@ -241,6 +284,126 @@ def select_window(device_name: str, auto_raise: bool = True) -> Any:
 
 
 # ---------------------------------------------------------------------------
+# iOS content-group resolution (iOS 26 host-AX compatibility)
+#
+# Ported faithfully from the legacy class-based AXBackend
+# (src/specterqa/ios/backends/ax_backend.py: _find_ios_content_group,
+# _position_probe_content_group, _init_content_group). On iOS 26 the
+# Simulator collapses the app UI into a single AXGroup with subrole
+# "iOSContentGroup" that exposes ZERO children via AXChildren /
+# AXChildrenInNavigationOrder / AXVisibleChildren — so a plain window
+# tree-walk sees nothing inside the app. The fix is a two-stage resolve:
+#
+#   1. aspect-ratio heuristic: the largest descendant AXGroup whose frame
+#      matches an iOS portrait screen (w/h ~0.35–0.75).
+#   2. position-probe fallback (iOS 26 compatible): hit-test the window's
+#      screen-centre with AXUIElementCopyElementAtPosition, which returns
+#      the REAL element under the point even when AXChildren is empty, then
+#      walk up to the nearest sensible container.
+#
+# Scar tissue — AX-tree shape is brittle across iOS sims; do not "improve"
+# the heuristic (CLAUDE.md). Adapted class→flat: no instance cache; the
+# resolver takes the already-selected window and returns an element whose
+# subtree a DFS can search.
+# ---------------------------------------------------------------------------
+
+
+def _find_ios_content_group(window: Any) -> Any | None:
+    """Aspect-ratio heuristic: the iOS screen group inside *window*.
+
+    Walks the window's direct children for the largest one whose frame matches
+    an iOS portrait aspect ratio (0.35 < w/h < 0.75). Mirrors the legacy
+    ``_find_ios_content_group`` but scoped to a single already-selected window
+    (the flat module resolves the window up front via :func:`select_window`).
+
+    Returns the content-group AXUIElement, or ``None`` when no child matches.
+    """
+    best_elem: Any = None
+    best_area = 0.0
+    for child in _children(window):
+        cf = _frame(child)
+        if cf is None:
+            continue
+        w = cf["width"]
+        h = cf["height"]
+        area = w * h
+        if area > best_area and h > 0 and (0.35 < w / h < 0.75):
+            best_area = area
+            best_elem = child
+    return best_elem
+
+
+def _position_probe_content_group(window: Any) -> Any | None:
+    """Fallback: probe the AX element at *window*'s screen centre.
+
+    Uses ``AXUIElementCopyElementAtPosition`` (the same position API the legacy
+    backend used for the tab bar) to hit-test the centre of the window's frame.
+    On iOS 26 the ``iOSContentGroup`` AXGroup reports zero AXChildren, but a
+    position hit-test still resolves the real element drawn under the point —
+    so the returned element's own subtree IS walkable. We then walk up the
+    parent chain to the nearest AXGroup/AXWindow container (depth-capped) so a
+    DFS from it covers the whole presented surface.
+
+    Returns the resolved container element, or ``None`` when unavailable.
+    """
+    try:
+        from ApplicationServices import (  # type: ignore[import]
+            AXUIElementCopyElementAtPosition,
+        )
+    except ImportError:
+        logger.debug("position-probe unavailable: ApplicationServices not importable")
+        return None
+
+    frame = _frame(window)
+    if frame is None or frame["width"] <= 0 or frame["height"] <= 0:
+        logger.debug("position-probe: could not read target window frame")
+        return None
+
+    centre_x = frame["x"] + frame["width"] / 2.0
+    centre_y = frame["y"] + frame["height"] / 2.0
+
+    app = _app_element()
+    err, hit = AXUIElementCopyElementAtPosition(app, centre_x, centre_y, None)
+    if err != 0 or hit is None:
+        logger.debug("position-probe: copyElementAtPosition err=%s", err)
+        return None
+
+    # Walk up to the nearest window-level / group container (cap depth to avoid
+    # loops on malformed trees), matching the legacy probe's parent-walk.
+    candidate = hit
+    for _ in range(10):
+        role = str(_attr(candidate, "AXRole") or "")
+        if role in ("AXWindow", "AXGroup"):
+            break
+        parent = _attr(candidate, "AXParent")
+        if parent is None:
+            break
+        candidate = parent
+    return candidate
+
+
+def _resolve_content_group(window: Any) -> Any | None:
+    """Resolve the iOS content group for *window* (heuristic → position-probe).
+
+    Returns an element whose subtree a DFS can search to reach the app's real
+    accessibility content on iOS 26 (where the window walk alone sees an opaque,
+    childless ``iOSContentGroup``). ``None`` when neither stage resolves a group.
+    """
+    try:
+        elem = _find_ios_content_group(window)
+        # Only trust the heuristic when the matched group is actually walkable.
+        # On iOS 26 the aspect-ratio match is frequently the opaque, CHILDLESS
+        # ``iOSContentGroup`` itself — returning it would dead-end a DFS, so we
+        # fall through to the position-probe (the iOS-26 expansion path) in that
+        # case rather than "improving" the brittle heuristic.
+        if elem is not None and _children(elem):
+            return elem
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("content-group heuristic failed: %s — trying position-probe", exc)
+    return _position_probe_content_group(window)
+
+
+# ---------------------------------------------------------------------------
 # Element + action-carrier resolution
 # ---------------------------------------------------------------------------
 
@@ -349,11 +512,28 @@ def perform_action(
         carrier = _find_action_carrier(window, name)
 
     if carrier is None:
+        # iOS 26: the plain window walk can bottom out at an opaque, childless
+        # ``iOSContentGroup`` AXGroup. Resolve the content group via the
+        # heuristic/position-probe and DFS its subtree — this is what surfaces
+        # the real custom-action carriers (e.g. the reader's "Read summary").
+        group = _resolve_content_group(window)
+        if group is not None and group is not window:
+            carrier = _find_action_carrier(group, name)
+
+    if carrier is None:
         error = f"custom action {name!r} not found in the target window"
         # b11 FIX 2: if the window has NO custom actions at all (not merely a
         # missing named one), hint at the WKWebView/Readium host-AX boundary.
-        # Keep it accurate — only when zero actions exist window-wide.
-        if not _window_has_any_custom_action(window):
+        # Keep it accurate — only when zero actions exist window-wide. iOS 26:
+        # also probe the resolved content-group subtree (the window walk alone
+        # can't see past an opaque ``iOSContentGroup``) before concluding zero.
+        group = _resolve_content_group(window)
+        has_actions = _window_has_any_custom_action(window) or (
+            group is not None
+            and group is not window
+            and _window_has_any_custom_action(group)
+        )
+        if not has_actions:
             error += _WKWEBVIEW_HINT
         return {
             "ok": False,
@@ -424,6 +604,21 @@ def set_text(
         field = _find_by(window, "AXDescription", label) or _find_by(window, "AXTitle", label)
     else:
         field = _find_text_field(window)
+
+    if field is None:
+        # iOS 26: the plain window walk can bottom out at an opaque, childless
+        # ``iOSContentGroup`` AXGroup. Resolve the content group via the
+        # heuristic/position-probe and search its subtree for the field.
+        group = _resolve_content_group(window)
+        if group is not None and group is not window:
+            if identifier:
+                field = _find_by(group, "AXIdentifier", identifier)
+            elif label:
+                field = _find_by(group, "AXDescription", label) or _find_by(
+                    group, "AXTitle", label
+                )
+            else:
+                field = _find_text_field(group)
 
     if field is None:
         return {"ok": False, "error": "no editable text field found in the target window"}
