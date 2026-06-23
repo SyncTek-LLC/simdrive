@@ -128,7 +128,7 @@ Add to `.claude/mcp.json` (Claude Code) or `claude_desktop_config.json` (Claude 
 }}
 ```
 
-Then in Claude: _"Run a smoke test on the Example Reader app and record it as example-smoke."_ Claude drives the simulator, records every action as a deterministic YAML file. Future CI runs replay that YAML without calling Claude.
+Then in Claude: _"Run a smoke test on the reader app and record it as reader-smoke."_ Claude drives the simulator, records every action as a deterministic YAML file. Future CI runs replay that YAML without calling Claude.
 
 ## Minimum Viable Session (5 calls)
 

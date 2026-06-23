@@ -51,7 +51,7 @@ def _single_button_xml(
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
             <XCUIElementTypeButton name="{name}" x="{x}" y="{y}" width="{w}" height="{h}" visible="{visible}" enabled="{enabled}" />
           </XCUIElementTypeApplication>
         </AppiumAUT>
@@ -66,7 +66,7 @@ def _two_elements_xml(
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
             <XCUIElementTypeButton name="Visible Button" x="10" y="50" width="100" height="44" visible="{el1_visible}" enabled="true" />
             <XCUIElementTypeButton name="Hidden Button" x="10" y="150" width="100" height="44" visible="{el2_visible}" enabled="true" />
           </XCUIElementTypeApplication>
@@ -79,7 +79,7 @@ def _no_text_xml() -> str:
     return textwrap.dedent("""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
             <XCUIElementTypeButton name="" x="10" y="50" width="100" height="44" visible="true" enabled="true" />
           </XCUIElementTypeApplication>
         </AppiumAUT>
@@ -91,7 +91,7 @@ def _zero_area_xml() -> str:
     return textwrap.dedent("""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
             <XCUIElementTypeButton name="Ghost" x="10" y="50" width="0" height="44" visible="true" enabled="true" />
           </XCUIElementTypeApplication>
         </AppiumAUT>
@@ -104,7 +104,7 @@ def _out_of_bounds_xml(screen_width_pts: int = 440) -> str:
     return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="{screen_width_pts}" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="{screen_width_pts}" height="956" visible="true" enabled="true">
             <XCUIElementTypeButton name="Off Screen" x="2000" y="50" width="100" height="44" visible="true" enabled="true" />
           </XCUIElementTypeApplication>
         </AppiumAUT>
@@ -116,7 +116,7 @@ def _nested_duplicate_xml() -> str:
     return textwrap.dedent("""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
             <XCUIElementTypeOther name="My Books" x="110" y="893" width="110" height="63" visible="true" enabled="true">
               <XCUIElementTypeButton name="My Books" x="110" y="893" width="110" height="63" visible="true" enabled="true" />
             </XCUIElementTypeOther>
@@ -130,7 +130,7 @@ def _disabled_button_xml() -> str:
     return textwrap.dedent("""\
         <?xml version="1.0" encoding="UTF-8"?>
         <AppiumAUT>
-          <XCUIElementTypeApplication name="Example Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
+          <XCUIElementTypeApplication name="Reader" x="0" y="0" width="440" height="956" visible="true" enabled="true">
             <XCUIElementTypeButton name="Disabled Button" x="10" y="50" width="100" height="44" visible="true" enabled="false" />
           </XCUIElementTypeApplication>
         </AppiumAUT>

@@ -3,7 +3,7 @@
 Lets simdrive drive accessibility primitives that HID + OCR can't touch:
 
   - **Custom actions** — fire a ``UIAccessibilityCustomAction`` by name (e.g.
-    the reader's "Read summary", "Next page"), normally only reachable via the
+    a reader app's "Read summary", "Next page"), normally only reachable via the
     on-device VoiceOver rotor. iOS surfaces them to the macOS host AX layer as
     encoded action names (``"Name:<label>\\nTarget:..\\nSelector:.."``) on the
     owning element; we enumerate and perform via the macOS AX API.
@@ -15,8 +15,8 @@ Host-only: requires macOS Accessibility permission for the running process and
 the target simulator's window to be on-screen (host AX vends only on-screen
 Simulator windows — a headless ``simctl boot`` device is invisible).
 
-The mechanics here were proven against a booted sim + a fixture and against the
-real Example Reader app (com.example.reader) before being ported into simdrive.
+The mechanics here were proven against a booted sim + a fixture and against a
+real iOS reader app before being ported into simdrive.
 """
 from __future__ import annotations
 
@@ -425,7 +425,7 @@ def _find_action_carrier(root: Any, action_label: str, depth: int = 0, maxdepth:
     *action_label*.
 
     Fix for real apps: the custom action often sits on a deep child with no
-    accessibilityLabel/identifier (e.g. Example Reader's ``readerContentView``), so probing
+    accessibilityLabel/identifier (e.g. the reader content view), so probing
     only the content-group root returns "no actions" — we must recurse.
     """
     if depth > maxdepth:

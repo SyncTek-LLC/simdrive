@@ -187,7 +187,7 @@ class TestStateMachine:
         assert rp.last_error is not None
 
     def test_deploy_auto_recovers_from_failed_state(self):
-        """v16.0.0a2 (Maurice/Example Reader dogfood §3.1): FAILED is no longer terminal.
+        """v16.0.0a2 (internal dogfood §3.1): FAILED is no longer terminal.
 
         deploy() on a FAILED instance now drops back to IDLE, kills any stale
         process, clears _last_error, and falls through to the normal deploy

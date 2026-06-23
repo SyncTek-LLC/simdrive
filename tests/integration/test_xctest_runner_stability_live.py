@@ -1,4 +1,4 @@
-"""60s XCTest runner stability gate — Maurice/Example Reader dogfood §5.1.
+"""60s XCTest runner stability gate — internal dogfood §5.1.
 
 Permanent release gate: deploy the XCTest runner on a booted simulator, then
 poll `/health` every 5 seconds for 60 seconds. All 12 polls MUST return 200.

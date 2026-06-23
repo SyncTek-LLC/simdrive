@@ -14,7 +14,7 @@ The thing I kept trying to build was a "Cypress for iOS." A persistent test runn
 
 **Build two** was a forked WebDriverAgent. Same general shape, more battle-tested upstream. The fork lasted until we tried to run two test files in parallel against two simulators and the WDA process management collapsed in a way that needed me to read 18 pages of CFRunLoop documentation to fix. I shipped that fix. Two weeks later the next Xcode beta dropped and the WDA build broke entirely against the new toolchain.
 
-**Build three** was an accessibility shim — a Swift package the host app would import, exposing a runtime endpoint the agent could query for the live a11y tree. Cleaner architecturally. Required the host app to opt in by linking the package. We got it running against our internal apps. Then I tried to use it against Example Reader's reading flow, hit Readium 3.x's `WKWebView`, and discovered that the WebKit accessibility tree is a parallel universe XCTest never reaches into. Every flow inside the actual reader — page-forward, table of contents, bookmarks — was invisible.
+**Build three** was an accessibility shim — a Swift package the host app would import, exposing a runtime endpoint the agent could query for the live a11y tree. Cleaner architecturally. Required the host app to opt in by linking the package. We got it running against our internal apps. Then I tried to use it against the app-under-test's reading flow, hit Readium 3.x's `WKWebView`, and discovered that the WebKit accessibility tree is a parallel universe XCTest never reaches into. Every flow inside the actual reader — page-forward, table of contents, bookmarks — was invisible.
 
 That was the moment I admitted the abstraction was wrong.
 
@@ -36,15 +36,15 @@ The shape of an agent loop: `observe()` → look at the annotated image → `tap
 
 The mechanic that I underrated when I designed it, and that has since become the most-used feature: SSIM masking on replay. Per-step pixel-similarity check against the recorded pre-screenshot, configurable threshold (default 0.85), `mask_regions` to blank dynamic chrome before the compute. The first version didn't mask the iOS status-bar clock. Same-screen replays drifted into the 0.6s, randomly. One added field on the recording schema and the same-screen drift went away. That's a representative bug for what this product is — most of the engineering is composing pixel-space primitives that have been there all along.
 
-## The Example Reader cutover
+## The reference-customer cutover
 
-I was nervous shipping this against a real customer. ExampleOrg's Example Reader iOS app — `com.example.reader`, the public-library reading client used by hundreds of US library systems — has the worst possible XCTest surface area: Readium 3.x reading flows running in `WKWebView`, OAuth/SAML auth via out-of-process Safari sheets, library search through SwiftUI components without explicit accessibility identifiers. None of it was testable under XCUITest. The Example Reader team had been carrying a manual-QA bill on every release.
+I was nervous shipping this against a real customer. The app under test — `com.example.reader`, a public-library reading client used by hundreds of US library systems — has the worst possible XCTest surface area: Readium 3.x reading flows running in `WKWebView`, OAuth/SAML auth via out-of-process Safari sheets, library search through SwiftUI components without explicit accessibility identifiers. None of it was testable under XCUITest. The team had been carrying a manual-QA bill on every release.
 
 We ran the cutover in 5 days. Day 1, install + first `observe` against the catalog screen. Day 2, the tab-bar tour replay. Day 3, the `type_text` regression repro that proved the iOS 26 `UITextField` issue was actually fixed — a search query landed, results rendered, search auto-submitted. Day 4, three rough edges identified and filed. Day 5, fixes shipped, predecessor archived in the team's `CLAUDE.md`, SpecterQA declared canonical.
 
 Three dogfood rounds since. All feedback closed. The headline from the v0.2.0a1 report:
 
-> "SpecterQA is now the canonical iOS sim driver for Example Reader iOS development, replacing the predecessor."
+> "SpecterQA is now the canonical iOS sim driver for our development, replacing the predecessor."
 
 And from the v0.3.0a2 round:
 

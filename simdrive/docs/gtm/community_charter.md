@@ -23,7 +23,7 @@ A support helpdesk. SpecterQA Pro and Team customers get email support against a
 |---|---|---|
 | `#announcements` | Read-only. Releases, breaking changes, security advisories | "v1.0.0 stable shipped — release notes at [LINK]" |
 | `#help` | User-to-user help. Public so the answer is searchable | "type_text returns ok but no characters land — what am I missing?" |
-| `#show-and-tell` | What you built. Journey YAMLs, agent loops, CI configs | "the reader page-forward journey — repo link below" |
+| `#show-and-tell` | What you built. Journey YAMLs, agent loops, CI configs | "Reader page-forward journey — repo link below" |
 | `#cloud-beta` | Cloud-tier subscribers and beta-graduates only. Hosted-infrastructure topics | "SSIM-trend dashboard rolled out — feedback?" |
 | `#off-topic` | Anything else iOS, testing, or agent-adjacent | "Anyone else watching the iOS 27 betas for HID API drift?" |
 | `#contributors` | OSS contributors. Roadmap discussions, PR coordination | "Drafting the network-monitoring tool — design doc at [LINK]" |

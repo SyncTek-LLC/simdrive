@@ -324,7 +324,7 @@ final class HTTPServer {
     // thread is already inside a sync call; the RunLoop approach is safer.
 
     func runOnMain(_ block: @escaping () -> Void) {
-        // v16.0.0 — defense-in-depth (Maurice/Example Reader dogfood).
+        // v16.0.0 — defense-in-depth (internal dogfood).
         //
         // XCTest can throw an ObjC NSException out of XCUICoordinate /
         // snapshot APIs on unexpected simulator states. Swift cannot

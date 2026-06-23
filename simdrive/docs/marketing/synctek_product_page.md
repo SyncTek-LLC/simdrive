@@ -75,5 +75,5 @@ The free engine is the product. The paid tier is the convenience layer around it
 ## Related posts
 
 - [Why we replaced XCTest with screenshots](/blog/why-we-built-specterqa) — the founder essay on the iOS 26 `UITextField` regression and the agent-first pivot
-- [Case study: Example Reader iOS migrated off the predecessor in 5 days](/blog/case-study-example) — the reader + OAuth coverage that XCTest couldn't reach
+- [Case study: a real-world iOS app migrated off the predecessor in 5 days](/blog/case-study-example-reader) — the reader content view + OAuth coverage that XCTest couldn't reach
 - [Show HN launch post](/blog/show-hn-specterqa) — the lede, the mechanic, the receipts

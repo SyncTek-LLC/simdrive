@@ -1,6 +1,6 @@
 """Regression tests for SpringBoard alert handling and polish items.
 
-Example Reader dogfood Issues 3 + polish (v13.1.0 → v13.2.0):
+internal dogfood Issues 3 + polish (v13.1.0 → v13.2.0):
 
   Issue 3 — SpringBoard permission alerts (Task #17):
     `ios_elements()` does not see alert buttons; `ios_tap()` with pixel

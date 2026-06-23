@@ -207,7 +207,7 @@ CI gates that pin a specific simdrive version need a parseable signal when the i
 
 ### Tests added
 
-- 6 new tests in `tests/test_b4_example_dogfood_fixes.py` — one per fix above + happy-path counterpart
+- 6 new tests in `tests/test_b4_dogfood_fixes.py` — one per fix above + happy-path counterpart
 - 5 new tests in `tests/test_no_fastapi_in_client_path.py` (regression guard)
 - Total non-live test count: 1514 → **1525**
 
@@ -1017,7 +1017,7 @@ First slice of real-device support. **Observe + logs + app lifecycle** work agai
 dogfood feedback round 1 (a user regression workload).
 
 ### Fixed
-- **`type_text` now correctly uppercases** — sends the Shift HID modifier for `A-Z` and shifted symbols (`!@#$%^&*_+{}|:"<>?~`). Previous behavior typed `"Test Library"` as `"Test Library"`. Credentialed flows (basic auth, SAML, OIDC) now work.
+- **`type_text` now correctly uppercases** — sends the Shift HID modifier for `A-Z` and shifted symbols (`!@#$%^&*_+{}|:"<>?~`). Previous behavior typed `"TESTLIB"` as `"testlib"`. Credentialed flows (basic auth, SAML, OIDC) now work.
 - `swipe` warns when the end y-coordinate falls in the iOS home-indicator zone (bottom ~80px). Saves an accidental "exit to home screen" gesture.
 
 ### Added

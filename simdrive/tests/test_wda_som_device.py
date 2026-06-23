@@ -41,7 +41,7 @@ _ONE_PX_PNG = bytes.fromhex(
 # ── XML fixtures ──────────────────────────────────────────────────────────────
 
 _SIMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<XCUIElementTypeApplication name="Example Reader" label="Example Reader" enabled="true" visible="true" x="0" y="0" width="440" height="956">
+<XCUIElementTypeApplication name="Reader" label="Reader" enabled="true" visible="true" x="0" y="0" width="440" height="956">
   <XCUIElementTypeWindow x="0" y="0" width="440" height="956" visible="true">
     <XCUIElementTypeButton name="Catalog" label="Catalog" x="0" y="893" width="110" height="63" enabled="true" visible="true"/>
     <XCUIElementTypeButton name="My Books" label="My Books" x="110" y="893" width="110" height="63" enabled="true" visible="true"/>
@@ -167,8 +167,8 @@ def test_basic_marks_produced(tmp_path):
 
     texts = {m["text"] for m in marks}
     # "Catalog" and "My Books" must appear; empty-text button must be excluded.
-    # Root XCUIElementTypeApplication "Example Reader" is not a leaf with unique text below it,
-    # but it has text "Example Reader" and no child has the same text, so it may appear.
+    # Root XCUIElementTypeApplication "Reader" is not a leaf with unique text below it,
+    # but it has text "Reader" and no child has the same text, so it may appear.
     assert "Catalog" in texts
     assert "My Books" in texts
     # Empty-text button (name="" label="" value="") must be excluded.

@@ -20,10 +20,9 @@ cost_limit_per_run: 5.00
 max_iterations: 50
 
 app_context: |
-  Example Reader is a free library reading app by TestVendor/The Example Reader Project.
-  Users can browse library catalogs (OPDS feeds), borrow ebooks and
-  audiobooks, read/listen to content, manage holds, and switch between
-  multiple library accounts.
+  Example Reader is a free library reading app. Users can browse library
+  catalogs (OPDS feeds), borrow ebooks and audiobooks, read/listen to
+  content, manage holds, and switch between multiple library accounts.
 
   Key screens: Catalog, My Books, Reservations, Settings, Account
   Authentication: Basic, OIDC, SAML, Clever

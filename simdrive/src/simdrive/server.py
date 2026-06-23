@@ -1260,7 +1260,7 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
     # Upgrade the just-recorded step's action so replays preserve the
     # tap-and-wait-for-keyboard semantic. Without this, the recorder
     # serializes the underlying tool_tap call as a bare 'tap' and the
-    # replay taps-then-immediately-acts (F-B3-010, Example Reader b3 dogfood).
+    # replay taps-then-immediately-acts (F-B3-010, b3 dogfood).
     s = session.get(arguments["session_id"])
     step_id = tap_response.get("step_id")
     if step_id is not None and s.recorder is not None:
@@ -1505,7 +1505,7 @@ def tool_type_text(arguments: dict) -> dict:
         "keyboard_visible": keyboard_visible,
         "focused_field": focused_field,
     }
-    # b4 — disambiguate the false-negative case Example Reader b3 dogfood surfaced
+    # b4 — disambiguate the false-negative case b3 dogfood surfaced
     # (F-B3-011). When dispatch_succeeded but the post-type observe failed to
     # find keyboard chrome, the keyboard most likely auto-collapsed on commit
     # (instant-search fields, single-line accept-on-Return inputs). Surface a
@@ -2097,7 +2097,7 @@ def tool_clear_field(arguments: dict) -> dict:
     s = session.get(arguments["session_id"])
     target = arguments.get("target")
     # Capture pre-state so the recorder can serialize a clear_field step with a
-    # "before" screenshot. Without this, b3 Example Reader dogfood reported that
+    # "before" screenshot. Without this, b3 dogfood reported that
     # clear_field calls were entirely absent from recording.yaml — F-B3-009.
     pre_path = s.last_screenshot_path
 

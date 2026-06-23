@@ -1,6 +1,6 @@
 # simdrive — Known Limitations
 
-> **Quick reference:** The four limitations most commonly encountered during the 1.0.0a2 Example Reader iOS dogfood
+> **Quick reference:** The four limitations most commonly encountered during the 1.0.0a2 internal dogfood
 > (`type_text` HID timing, SSIM advisory, `dismiss_sheet` scope, `set_appearance` respring) are documented
 > in the [README Known limitations](../README.md#known-limitations--workarounds) section for visibility.
 > The full canonical list is below.
@@ -108,7 +108,7 @@ injection lands cleanly.
 type_text({text: "simdrive", tap_first: True})
 ```
 
-Observed consistently during the 1.0.0a2 Example Reader iOS dogfood (2026-05-04).
+Observed consistently during the 1.0.0a2 internal dogfood (2026-05-04).
 
 ## SSIM threshold is advisory; `structural_checks` is the regression gate
 
@@ -120,7 +120,7 @@ regression gate.
 **Why:** OPDS content, time-of-day clocks, library-list ordering, and appearance
 changes all shift pixels without changing app behavior. SSIM was designed as a
 visual decoration signal; structural assertions are what actually catch
-regressions. In the 1.0.0a2 Example Reader dogfood, 76% of replay steps drifted — but
+regressions. In the 1.0.0a2 internal dogfood, 76% of replay steps drifted — but
 `struct-check` passed on all of them because the behavioral assertions were
 correct. Don't chase pixel drift as if it were a behavioral regression.
 
@@ -145,7 +145,7 @@ close button if one exists.
 swipe({from_x: 390, from_y: 300, to_x: 390, to_y: 800})
 ```
 
-Confirmed via the Example Reader iOS half-sheet during the 1.0.0a2 dogfood.
+Confirmed via a real-app half-sheet during the 1.0.0a2 dogfood.
 
 ## `set_appearance` may need an app respring
 

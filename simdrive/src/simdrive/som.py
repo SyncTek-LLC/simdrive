@@ -20,8 +20,8 @@ from typing import Optional
 # is the fence: a mark whose tokens mostly aren't in the wordlist (and aren't short
 # or numeric) gets clamped down even when raw_confidence is 1.0.
 #
-# Keep this list <= 200 entries: stop words + common UI vocabulary. Example Reader will
-# tell us what to add when something real-world legitimate gets clamped.
+# Keep this list <= 200 entries: stop words + common UI vocabulary. Real-world
+# usage will tell us what to add when something legitimate gets clamped.
 _ENGLISH_WORDS: frozenset[str] = frozenset(
     {
         # function words / pronouns / common verbs
@@ -50,7 +50,7 @@ _ENGLISH_WORDS: frozenset[str] = frozenset(
         # nav
         "home", "tab", "menu", "list", "grid", "page", "pages", "all", "any",
         "some", "none", "every",
-        # Example Reader / library domain
+        # reader / library domain
         "library", "book", "books", "read", "reading", "title", "author",
         "content", "chapter", "return", "borrow", "hold", "catalog", "cart",
         "ebook", "audiobook", "audio", "video", "media", "magazine",
@@ -108,7 +108,7 @@ _ENGLISH_WORDS: frozenset[str] = frozenset(
 # Canonical form: `{semantic_name: [list of OCR strings the glyph commonly
 # rasterizes as, including the semantic name itself]}`. Match is
 # case-insensitive on the mark text against the alias list. Keep this seed
-# set small — Example Reader will tell us what's missing.
+# set small — real-world usage will tell us what's missing.
 _ICON_GLYPH_ALIASES: dict[str, list[str]] = {
     # search magnifying glass renders as Q, Q/, Q., Q\, O, etc.
     "search": ["q", "q/", "q.", "q\\", "o", "search"],
@@ -221,7 +221,7 @@ class Mark:
 
         Misreads at raw 1.0 (stylized covers OCRing as plausible-looking
         gibberish) fail the English-likeness check and surface as "low" even
-        with a perfect engine-side score. That's the dogfood signal Example Reader's
+        with a perfect engine-side score. That's the dogfood signal real-app
         engineers can trust.
         """
         raw = float(self.raw_confidence or 0.0)

@@ -4,21 +4,21 @@ persona: new-patron
 
 steps:
   - id: launch_app
-    goal: "Launch the Example Reader app. Wait for the main screen to load."
+    goal: "Launch the reader app. Wait for the main screen to load."
     checkpoint: "App launched and main screen visible"
 
   - id: add_library
-    goal: "Tap the Settings or Account button. Find and tap 'Add Library' or 'Find Your Library'. Search for 'TestVendor' or 'TestAuth' in the library finder."
-    checkpoint: "Library search results showing TestVendor or TestAuth"
+    goal: "Tap the Settings or Account button. Find and tap 'Add Library' or 'Find Your Library'. Search for the test library in the library finder."
+    checkpoint: "Library search results showing the test library"
     monitor:
       - network: "*/authentication_document*|*/loans*"
 
   - id: select_library
-    goal: "Select the TestVendor/TestAuth library from the results. Tap to add it."
+    goal: "Select the test library from the results. Tap to add it."
     checkpoint: "Library added, sign-in option visible"
 
   - id: sign_in_oidc
-    goal: "Tap Sign In. An OIDC web login page should appear. Enter the email ${TESTVENDOR_EMAIL} and password ${TESTVENDOR_PASSWORD}."
+    goal: "Tap Sign In. An OIDC web login page should appear. Enter the email ${READER_EMAIL} and password ${READER_PASSWORD}."
     checkpoint: "User is signed in — My Books or catalog visible"
     monitor:
       - console: "auth|oauth|oidc|token"

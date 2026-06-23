@@ -1,6 +1,6 @@
 """Regression tests for AX backend sibling-window enumeration.
 
-Example Reader dogfood Issue 2 (v13.1.0 → v13.2.0):
+internal dogfood Issue 2 (v13.1.0 → v13.2.0):
   When a SwiftUI `.sheet` presents a `UIViewControllerRepresentable`-wrapped
   UIKit screen, the sheet content lives in a sibling `AXWindow` that the old
   tree-walk never visited.  `ios_elements()` returned only the root tab-bar
@@ -13,7 +13,7 @@ Unit tests here verify the fix via static source analysis and a mock-based
 walk that exercises the dedup logic without a live Simulator.
 
 Live integration tests (marked `requires_live`) exercise the real
-TestKitApp `Example ReaderPatternTab` which already contains the exact Example Reader sheet
+TestKitApp `RealAppPatternTab` which already contains the exact reader sheet
 pattern (`.sheet(isPresented: $showLibrarySheet) { UIKitLibrarySwitcher(…) }`).
 """
 from __future__ import annotations
@@ -316,7 +316,7 @@ except Exception:
 
 @pytest.mark.skipif(not _LIVE_AVAILABLE, reason="Requires active AX session on port 8222")
 class TestSheetEnumerationLive:
-    """Live test: Example Reader sheet pattern on TestKitApp.
+    """Live test: reader sheet pattern on TestKitApp.
 
     Requires:
     - TestKitApp installed and running (bundle id: io.synctek.specterqa.testkit)
@@ -342,15 +342,15 @@ class TestSheetEnumerationLive:
             return _json.loads(resp.read())
 
     def test_sheet_elements_visible_after_open(self):
-        """Opening the Example Reader-pattern sheet exposes >5 elements (cells + nav bar + cancel)."""
-        # Navigate to Example Reader tab
-        self._post("/tap", {"label": "Example Reader"})
+        """Opening the reader-pattern sheet exposes >5 elements (cells + nav bar + cancel)."""
+        # Navigate to Reader tab
+        self._post("/tap", {"label": "Reader"})
 
         import time
         time.sleep(0.5)
 
         # Tap "Switch Library" to open the UIKit sheet
-        self._post("/tap", {"identifier": "example_btn_switch_library"})
+        self._post("/tap", {"identifier": "reader_btn_switch_library"})
         time.sleep(1.0)  # let sheet animation complete
 
         elements = self._get_elements()

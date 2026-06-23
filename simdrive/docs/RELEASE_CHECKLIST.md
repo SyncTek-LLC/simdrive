@@ -51,7 +51,7 @@ If any pre-publish gate fails, the publish job **does not run**.
 
 Before pushing the `simdrive-v*` tag — even if all PRs are merged green — do:
 
-- [ ] **Read open issues** for the previous release tag. The Example Reader team logs dogfood-found bugs against the current beta. Surface anything filed in the last 7 days; address blockers or document deferrals in the release notes.
+- [ ] **Read open issues** for the previous release tag. The dogfood team logs dogfood-found bugs against the current beta. Surface anything filed in the last 7 days; address blockers or document deferrals in the release notes.
 - [ ] **Pull main + verify the merge commit is the one you expect.** Don't tag a commit you haven't read.
 - [ ] **`pyproject.toml` version bumped + CHANGELOG entry has matching heading.** The pre-publish gate catches this, but verifying locally first saves CI minutes.
 - [ ] **CHANGELOG entry is honest.** Specifically:
@@ -99,12 +99,12 @@ After yanking, publish a fixed version with a higher version number and write a 
 
 ---
 
-## What we learned (Example Reader b3 dogfood post-mortem, 2026-05-22)
+## What we learned (b3 dogfood post-mortem, 2026-05-22)
 
 Four bugs surfaced in b3 dogfood that should have been caught earlier:
 
 - **F-B3-007** `fastapi` ModuleNotFoundError on fresh install (b2 + b3 both shipped broken). Caused by the pre-publish smoke test using `simdrive --version || python -c "import simdrive; ..."` — the bare `import simdrive` runs `__init__.py` only and works fine, masking the failure of the real import path. **Fix:** rebuilt the smoke as three explicit checks with no fallback; added `cleanroom-install.yml` as a per-PR gate.
-- **F-B3-009** `clear_field` did not emit a recording step → silent divergence on replay. **Fix:** added `_record_act_step` calls on both branches; new test pins this in `test_b4_example_dogfood_fixes.py`.
+- **F-B3-009** `clear_field` did not emit a recording step → silent divergence on replay. **Fix:** added `_record_act_step` calls on both branches; new test pins this in `test_b4_dogfood_fixes.py`.
 - **F-B3-010** `tap_and_wait_keyboard` serialized as bare `tap` → wait semantic stripped on replay. **Fix:** added `Recorder.upgrade_step_action()` and call from the composite tool.
 - **F-B3-011** `type_text` returned `keyboard_visible: false` when dispatch succeeded → agents would retry into a successfully-typed field. **Fix:** added `keyboard_visible_reason` field with explicit guidance not to retry on `dispatch_succeeded=true`.
 

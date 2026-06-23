@@ -8,7 +8,7 @@ The mechanic: the agent calls `observe`, gets back a screenshot plus an annotate
 
 How it differs from neighbors: **Maestro** is more mature and ships Android, but it's not MCP-native — the agent has to bounce through a CLI. SpecterQA is designed for the LLM tool loop. **Detox** is great for React Native because it gray-boxes the JS bridge; outside RN, SpecterQA wins by default. **XCUITest** can't see WebViews and broke on `UITextField` focus on iOS 26. **claude-computer-use** is the obvious existential risk and it lacks native HID, sim session lifecycle, `simctl` integration, log tail, crash retrieval, perf, recording/replay, OCR-marks, and `stable_id`. That's roughly 6-9 months of focused work to rebuild.
 
-Real receipt: ExampleOrg's Example Reader iOS app — public-library reading client — migrated off the predecessor in **5 days**. Three dogfood rounds, all feedback closed. Their reading-engine `WKWebView` and OAuth/SAML flows weren't testable before. Maurice from their team:
+Real receipt: a real-world iOS app — a public-library reading client — migrated off the predecessor in **5 days**. Three dogfood rounds, all feedback closed. Their reading-engine `WKWebView` and OAuth/SAML flows weren't testable before. Maurice from their team:
 
 > "Replays are now reliable enough to gate PRs on."
 
@@ -16,4 +16,4 @@ What's open: the engine is **MIT** and ships as `pip install specterqa-ios`. All
 
 Honest limits: macOS-only because `CoreSimulator` doesn't exist anywhere else. Simulator-only in v1.0; real-device input is read-only (`observe`, `logs`, lifecycle work; `tap`/`swipe`/`type` raise `device_input_unavailable`) until v1.1 lands WDA. Not an XCTest replacement for accessibility audits — run XCTest in parallel for those. 91 unit tests, 26 live E2E against `TestKitApp`, validated on iOS 26.3 / iPhone 17 Pro sim.
 
-Install: `pip install specterqa-ios` and add to `.mcp.json`. Repo: github.com/SyncTek-LLC/specterqa-ios. Happy to answer questions about the HID path, why I gave up on XCTest, or what broke during Example Reader's cutover.
+Install: `pip install specterqa-ios` and add to `.mcp.json`. Repo: github.com/SyncTek-LLC/specterqa-ios. Happy to answer questions about the HID path, why I gave up on XCTest, or what broke during the reference customer's cutover.

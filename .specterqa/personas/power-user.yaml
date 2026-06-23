@@ -15,5 +15,5 @@ goals:
   - Return a book early
 
 credentials:
-  TestVendor_email: "${TESTVENDOR_EMAIL}"
-  TestVendor_password: "${TESTVENDOR_PASSWORD}"
+  reader_email: "${READER_EMAIL}"
+  reader_password: "${READER_PASSWORD}"

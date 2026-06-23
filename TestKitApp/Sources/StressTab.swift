@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Covers crash-prone SwiftUI patterns:
 ///   - LazyVStack with 20 items (scroll recycling)
-///   - List with 5 TextField rows (Example Reader pattern amplified)
+///   - List with 5 TextField rows (reader pattern amplified)
 ///   - Nested Form with deep Section nesting + TextField/SecureField
 ///   - Alert triggered while a TextField is focused
 struct StressTab: View {

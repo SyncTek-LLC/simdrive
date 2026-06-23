@@ -14,7 +14,7 @@ goals:
   - Check reservations/holds
 
 credentials:
-  TestVendor_email: "${TESTVENDOR_EMAIL}"
-  TestVendor_password: "${TESTVENDOR_PASSWORD}"
-  Test Library_barcode: "${Test Library_BARCODE}"
-  Test Library_pin: "${Test Library_PIN}"
+  reader_email: "${READER_EMAIL}"
+  reader_password: "${READER_PASSWORD}"
+  testlib_barcode: "${TESTLIB_BARCODE}"
+  testlib_pin: "${TESTLIB_PIN}"

@@ -1,4 +1,4 @@
-"""Regression test for Example Reader dogfood Issue 1 (v13.1.0 → v13.1.1).
+"""Regression test for internal dogfood Issue 1 (v13.1.0 → v13.1.1).
 
 Bug: AXHTTPServer.stop() called shutdown() but NOT server_close(), leaving the
 TCP socket in a half-closed state. A second ios_start_session with backend="ax"
@@ -57,7 +57,7 @@ TEST_PORT = 18222  # high non-conflicting port; self-contained
 
 
 class TestAXHTTPServerPortRelease:
-    """Example Reader dogfood Issue 1 — port must be free after stop()."""
+    """internal dogfood Issue 1 — port must be free after stop()."""
 
     def test_port_is_released_after_stop(self):
         """stop() must call server_close() so a new HTTPServer can bind the same port."""

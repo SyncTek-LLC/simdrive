@@ -2,19 +2,19 @@ import SwiftUI
 import Combine
 import UIKit
 
-/// Reproduces the exact Example Reader patterns that crash XCTest:
+/// Reproduces the real-app patterns that crash XCTest:
 /// 1. NotificationCenter cascade (5+ rapid posts)
 /// 2. UIViewControllerRepresentable in a sheet
 /// 3. Combine PassthroughSubject rapid updates (download progress)
 /// 4. State machine transitions that fire multiple notifications
-struct Example ReaderPatternTab: View {
+struct RealAppPatternTab: View {
     @State private var bookState = "unregistered"
     @State private var downloadProgress: Double = 0
     @State private var showLibrarySheet = false
     @State private var statusLog = "Ready"
     @State private var notificationCount = 0
 
-    // Simulates Example Reader's download progress publisher
+    // Simulates a reader app's download progress publisher
     @State private var progressCancellable: AnyCancellable?
     private let progressPublisher = PassthroughSubject<Double, Never>()
 
@@ -23,26 +23,26 @@ struct Example ReaderPatternTab: View {
             List {
                 Section("Book State Machine") {
                     Text("State: \(bookState)")
-                        .accessibilityIdentifier("example_book_state")
+                        .accessibilityIdentifier("reader_book_state")
 
                     Button("Borrow") {
                         simulateBorrow()
                     }
-                    .accessibilityIdentifier("example_btn_borrow")
+                    .accessibilityIdentifier("reader_btn_borrow")
 
                     Button("Download") {
                         simulateDownload()
                     }
-                    .accessibilityIdentifier("example_btn_download")
+                    .accessibilityIdentifier("reader_btn_download")
 
                     Button("Return") {
                         simulateReturn()
                     }
-                    .accessibilityIdentifier("example_btn_return")
+                    .accessibilityIdentifier("reader_btn_return")
 
                     if downloadProgress > 0 && downloadProgress < 1 {
                         ProgressView(value: downloadProgress)
-                            .accessibilityIdentifier("example_download_progress")
+                            .accessibilityIdentifier("reader_download_progress")
                     }
                 }
 
@@ -50,25 +50,25 @@ struct Example ReaderPatternTab: View {
                     Button("Switch Library") {
                         showLibrarySheet = true
                     }
-                    .accessibilityIdentifier("example_btn_switch_library")
+                    .accessibilityIdentifier("reader_btn_switch_library")
                 }
 
                 Section("Notification Flood") {
                     Text("Notifications fired: \(notificationCount)")
-                        .accessibilityIdentifier("example_notification_count")
+                        .accessibilityIdentifier("reader_notification_count")
 
                     Button("Fire 10 Notifications") {
                         fireNotificationCascade(count: 10)
                     }
-                    .accessibilityIdentifier("example_btn_fire_notifications")
+                    .accessibilityIdentifier("reader_btn_fire_notifications")
                 }
 
                 Section("Status") {
                     Text(statusLog)
-                        .accessibilityIdentifier("example_status_log")
+                        .accessibilityIdentifier("reader_status_log")
                 }
             }
-            .navigationTitle("Example Reader Patterns")
+            .navigationTitle("Reader Patterns")
             .sheet(isPresented: $showLibrarySheet) {
                 // Pattern: UIViewControllerRepresentable wrapping UIKit VC
                 UIKitLibrarySwitcher(onSelect: { library in
@@ -84,21 +84,21 @@ struct Example ReaderPatternTab: View {
         }
     }
 
-    // MARK: - Example Reader State Machine Simulation
+    // MARK: - Reader State Machine Simulation
 
     private func simulateBorrow() {
         bookState = "borrowing"
         statusLog = "Borrowing..."
         // Fire cascade: registry change + state change + UI update
-        NotificationCenter.default.post(name: .init("TPPBookRegistryDidChange"), object: nil)
-        NotificationCenter.default.post(name: .init("TPPBookRegistryStateDidChange"), object: nil)
-        NotificationCenter.default.post(name: .init("TPPBookProcessingDidChange"), object: nil)
+        NotificationCenter.default.post(name: .init("BookRegistryDidChange"), object: nil)
+        NotificationCenter.default.post(name: .init("BookRegistryStateDidChange"), object: nil)
+        NotificationCenter.default.post(name: .init("BookProcessingDidChange"), object: nil)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             bookState = "borrowed"
             statusLog = "Borrowed — ready to download"
-            NotificationCenter.default.post(name: .init("TPPBookRegistryDidChange"), object: nil)
-            NotificationCenter.default.post(name: .init("TPPBookRegistryStateDidChange"), object: nil)
+            NotificationCenter.default.post(name: .init("BookRegistryDidChange"), object: nil)
+            NotificationCenter.default.post(name: .init("BookRegistryStateDidChange"), object: nil)
             notificationCount += 5
         }
     }
@@ -120,9 +120,9 @@ struct Example ReaderPatternTab: View {
                     bookState = "ready"
                     statusLog = "Download complete"
                     // Fire multiple notifications on completion
-                    NotificationCenter.default.post(name: .init("TPPMyBooksDownloadCenterDidChange"), object: nil)
-                    NotificationCenter.default.post(name: .init("TPPBookRegistryDidChange"), object: nil)
-                    NotificationCenter.default.post(name: .init("TPPBookRegistryStateDidChange"), object: nil)
+                    NotificationCenter.default.post(name: .init("MyBooksDownloadCenterDidChange"), object: nil)
+                    NotificationCenter.default.post(name: .init("BookRegistryDidChange"), object: nil)
+                    NotificationCenter.default.post(name: .init("BookRegistryStateDidChange"), object: nil)
                     notificationCount += 3
                 } else {
                     progressPublisher.send(progress)
@@ -133,13 +133,13 @@ struct Example ReaderPatternTab: View {
     private func simulateReturn() {
         bookState = "returning"
         statusLog = "Returning..."
-        NotificationCenter.default.post(name: .init("TPPBookRegistryDidChange"), object: nil)
-        NotificationCenter.default.post(name: .init("TPPBookRegistryStateDidChange"), object: nil)
+        NotificationCenter.default.post(name: .init("BookRegistryDidChange"), object: nil)
+        NotificationCenter.default.post(name: .init("BookRegistryStateDidChange"), object: nil)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             bookState = "unregistered"
             statusLog = "Book returned"
-            NotificationCenter.default.post(name: .init("TPPBookRegistryDidChange"), object: nil)
+            NotificationCenter.default.post(name: .init("BookRegistryDidChange"), object: nil)
             notificationCount += 3
         }
     }
@@ -147,7 +147,7 @@ struct Example ReaderPatternTab: View {
     private func fireNotificationCascade(count: Int) {
         for i in 0..<count {
             NotificationCenter.default.post(
-                name: .init("TPPTestNotification_\(i)"),
+                name: .init("TestNotification_\(i)"),
                 object: nil,
                 userInfo: ["index": i, "timestamp": Date()]
             )
@@ -173,7 +173,7 @@ struct UIKitLibrarySwitcher: UIViewControllerRepresentable {
 
 class LibrarySwitchTableViewController: UITableViewController {
     var onSelect: ((String) -> Void)?
-    let libraries = ["Test Library Test Library", "New York Public Library", "Brooklyn Public Library",
+    let libraries = ["Test Library", "New York Public Library", "Brooklyn Public Library",
                      "Queens Public Library", "Chicago Public Library"]
 
     override func viewDidLoad() {
@@ -185,7 +185,7 @@ class LibrarySwitchTableViewController: UITableViewController {
             target: self,
             action: #selector(cancel)
         )
-        view.accessibilityIdentifier = "example_library_list"
+        view.accessibilityIdentifier = "reader_library_list"
     }
 
     @objc private func cancel() {
@@ -199,7 +199,7 @@ class LibrarySwitchTableViewController: UITableViewController {
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         cell.textLabel?.text = libraries[indexPath.row]
-        cell.accessibilityIdentifier = "example_library_\(indexPath.row)"
+        cell.accessibilityIdentifier = "reader_library_\(indexPath.row)"
         return cell
     }
 

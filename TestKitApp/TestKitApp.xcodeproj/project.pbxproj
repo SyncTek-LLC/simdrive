@@ -14,7 +14,7 @@
 		AA000005 /* ListTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000005 /* ListTab.swift */; };
 		AA000006 /* StressTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000006 /* StressTab.swift */; };
 		AA000007 /* UIKitBridgeTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000007 /* UIKitBridgeTab.swift */; };
-		AA000008 /* Example ReaderPatternTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000008 /* Example ReaderPatternTab.swift */; };
+		AA000008 /* RealAppPatternTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB000008 /* RealAppPatternTab.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -25,7 +25,7 @@
 		BB000005 /* ListTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListTab.swift; sourceTree = "<group>"; };
 		BB000006 /* StressTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StressTab.swift; sourceTree = "<group>"; };
 		BB000007 /* UIKitBridgeTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitBridgeTab.swift; sourceTree = "<group>"; };
-		BB000008 /* Example ReaderPatternTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Example ReaderPatternTab.swift; sourceTree = "<group>"; };
+		BB000008 /* RealAppPatternTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealAppPatternTab.swift; sourceTree = "<group>"; };
 		CC000001 /* TestKitApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TestKitApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -50,7 +50,7 @@
 				BB000005 /* ListTab.swift */,
 				BB000006 /* StressTab.swift */,
 				BB000007 /* UIKitBridgeTab.swift */,
-				BB000008 /* Example ReaderPatternTab.swift */,
+				BB000008 /* RealAppPatternTab.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -121,7 +121,7 @@
 			AA000005 /* ListTab.swift in Sources */,
 				AA000006 /* StressTab.swift in Sources */,
 				AA000007 /* UIKitBridgeTab.swift in Sources */,
-				AA000008 /* Example ReaderPatternTab.swift in Sources */,
+				AA000008 /* RealAppPatternTab.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

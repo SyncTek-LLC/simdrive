@@ -63,7 +63,7 @@ def test_tool_names_match_spec():
         "lint_recordings", "migrate_recording",
         # SimDrive 1.0.0b3 polish — atomic tap+settle+observe composite
         "tap_and_wait_keyboard",
-        # Host-AX accessibility (internal-ticket): custom actions + VoiceOver announcements
+        # Host-AX accessibility: custom actions + VoiceOver announcements
         "perform_accessibility_action", "get_announcements",
         # Host-AX text entry for fields HID can't reach (UIAlertController)
         "set_text",

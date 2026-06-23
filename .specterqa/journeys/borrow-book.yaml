@@ -4,7 +4,7 @@ persona: new-patron
 
 steps:
   - id: launch_app
-    goal: "Launch Example Reader app and wait for it to load."
+    goal: "Launch the reader app and wait for it to load."
     checkpoint: "App loaded and catalog visible"
 
   - id: browse_catalog

@@ -15,9 +15,9 @@ struct ContentView: View {
             StressTab()
                 .tabItem { Label("Stress", systemImage: "flame") }
                 .accessibilityIdentifier("tab_stress")
-            Example ReaderPatternTab()
-                .tabItem { Label("Example Reader", systemImage: "books.vertical") }
-                .accessibilityIdentifier("tab_example")
+            RealAppPatternTab()
+                .tabItem { Label("Reader", systemImage: "books.vertical") }
+                .accessibilityIdentifier("tab_reader")
         }
     }
 }

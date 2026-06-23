@@ -107,9 +107,9 @@ That's the whole loop. No selectors, no waits, no XCTest.
 
 ## Testimonial
 
-> "SpecterQA is now the canonical iOS sim driver for Example Reader iOS development, replacing the predecessor. The single biggest reason it was failing — the path that broke `UITextField` focus — is fully fixed."
+> "SpecterQA is now the canonical iOS sim driver for our development, replacing the predecessor. The single biggest reason it was failing — the path that broke `UITextField` focus — is fully fixed."
 >
-> — Maurice Carrier, ExampleOrg (Example Reader iOS, [`com.example.reader`](https://exampleorg.org))
+> — Maurice Carrier, reference customer (a real-world iOS reading app, `com.example.reader`)
 
 ## Honest tradeoffs
 

@@ -29,7 +29,7 @@ People who have shipped MCP servers, contributed to `modelcontextprotocol/server
 | 4 | `[research needed]` — top contributor to `modelcontextprotocol/servers` | OSS contributor, MCP servers monorepo | GitHub profile via `git log --format='%an %ae' modelcontextprotocol/servers \| sort -u \| head` | Has commit credibility; their thumbs-up on the SpecterQA PR speeds review | "We are submitting an iOS-Simulator MCP server. Would value your eyes on the PR before we open it formally." Template #1 with a code-review framing. |
 | 5 | `[research needed]` — Cline maintainer / dev-rel | Maintainer or DevRel, Cline (the VSCode MCP client) | GitHub: `cline/cline` org | Owns the Cline MCP marketplace listing path | Template #4. |
 | 6 | `[research needed]` — Cursor team (MCP integrations) | Engineer or product lead, Cursor | `careers@cursor.com` is the public address; better path is via Cursor team members on X | Cursor MCP ecosystem is the second-largest after Claude desktop | Template #4. Lead with the cookbook PR if it has shipped. |
-| 7 | Simon Willison | Engineer, blogger (`simonwillison.net`) — `confirmed` covers MCP | `@simonw` on X, blog comment form | Writes the most-read independent coverage of MCP and Claude tooling; a Simon Willison weeknotes mention is the single highest-leverage independent endorsement available | "Vision-first MCP server for iOS sims; here is the Example Reader dogfood. If it is interesting enough for weeknotes, the install is one line." Template #1. |
+| 7 | Simon Willison | Engineer, blogger (`simonwillison.net`) — `confirmed` covers MCP | `@simonw` on X, blog comment form | Writes the most-read independent coverage of MCP and Claude tooling; a Simon Willison weeknotes mention is the single highest-leverage independent endorsement available | "Vision-first MCP server for iOS sims; here is the real-app dogfood. If it is interesting enough for weeknotes, the install is one line." Template #1. |
 | 8 | `[research needed]` — Smithery.ai team | Founder or dev-rel, Smithery.ai | Listed on smithery.ai/about | Catalog gatekeeper; faster-moving than the Anthropic registry | Template #4 framed at the catalog submission. |
 
 ---
@@ -40,7 +40,7 @@ The iOS engineering community is small and trust-driven. A nod from this categor
 
 | # | Name | Role | Contact | Why they matter | Hook |
 |---|---|---|---|---|---|
-| 9 | Pol Piella | iOS engineer, blogger (`polpielladev.com`), `confirmed` writes on Swift testing | `@polpielladev` on X | Mid-deep iOS testing audience; writes the post that 5,000 iOS engineers will read on a Saturday morning | "iOS 26 broke XCUITest's UITextField focus. Here is the working alternative — and the Example Reader dogfood receipts." Template #1. |
+| 9 | Pol Piella | iOS engineer, blogger (`polpielladev.com`), `confirmed` writes on Swift testing | `@polpielladev` on X | Mid-deep iOS testing audience; writes the post that 5,000 iOS engineers will read on a Saturday morning | "iOS 26 broke XCUITest's UITextField focus. Here is the working alternative — and the real-app dogfood receipts." Template #1. |
 | 10 | Paul Hudson | Engineer, author of Hacking with Swift (`hackingwithswift.com`), `confirmed` | `@twostraws` on X | Largest iOS-Swift-tutorial audience; not a direct buyer but a credibility multiplier | "Vision-first iOS testing — short post for HWS readers if it fits the editorial calendar?" Template #6, podcast-pitch shape. |
 | 11 | John Sundell | Engineer, Swift by Sundell podcast (`swiftbysundell.com`), `confirmed` | `@johnsundell` on X | Podcast platform — see Category D | Template #6, the SpecterQA origin-story hook. |
 | 12 | Antoine van der Lee | Engineer, blogger (`avanderlee.com`), `confirmed` writes on iOS testing and CI | `@twannl` on X | iOS-testing-curious readership; Antoine's posts surface in CI-tooling discussions | "iOS-26 SwiftUI + WebView test gap; vision-first MCP driver as the patch." Template #1. |
@@ -73,14 +73,14 @@ Video reach is the fastest distribution channel for the "watch the agent drive a
 
 ---
 
-## Category F — iOS QA leads at target companies (5 prospects beyond Example Reader)
+## Category F — iOS QA leads at target companies (5 prospects beyond the reference customer)
 
-Same shape as Example Reader iOS: medium iOS app, WebView-heavy flows, OAuth/SAML in-app, accessibility-tree gaps Example Reader's team felt acutely. Names below are slot-shaped and `[research needed]` because the right contact at each company moves quickly. Do not fabricate.
+Same shape as the reference customer: medium iOS app, WebView-heavy flows, OAuth/SAML in-app, accessibility-tree gaps that team felt acutely. Names below are slot-shaped and `[research needed]` because the right contact at each company moves quickly. Do not fabricate.
 
 | # | Company shape | Why it fits | Outreach |
 |---|---|---|---|
-| 21 | A library / e-reader iOS app at a public-sector or non-profit publisher | Same WebView + DRM-reader profile as Example Reader | LinkedIn search "iOS lead" + company; template #2 |
-| 22 | A mid-size fintech iOS app with OAuth + biometric flows | OAuth sheet + biometric prompt = XCTest blind spot SpecterQA is built for | Template #2; reference Example Reader's SSIM-gated CI |
+| 21 | A library / e-reader iOS app at a public-sector or non-profit publisher | Same WebView + DRM-reader profile as the reference customer | LinkedIn search "iOS lead" + company; template #2 |
+| 22 | A mid-size fintech iOS app with OAuth + biometric flows | OAuth sheet + biometric prompt = XCTest blind spot SpecterQA is built for | Template #2; reference the SSIM-gated CI |
 | 23 | A music or audio iOS app with WebView lyrics / sheet | WebView-heavy; iOS 26 SwiftUI components | Template #2 |
 | 24 | A health / fitness iOS app with HealthKit + WebView dashboards | HealthKit prompts + WebView dashboards = AX-tree gap | Template #2 |
 | 25 | A crypto / wallet iOS app with WalletConnect + WebView | WebView + dApp interactions invisible to XCUITest | Template #2 |

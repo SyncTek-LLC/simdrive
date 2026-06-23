@@ -1,8 +1,8 @@
 """Unit tests for ``simdrive.ax`` — host-AX custom actions + announcements.
 
 Pure unit tests: the macOS AX layer and ``simctl`` are mocked, so these run
-without a booted simulator. End-to-end validation against a real sim + the
-Example Reader app is covered by manual/live runs (see the module docstring).
+without a booted simulator. End-to-end validation against a real sim + a
+real reader app is covered by manual/live runs (see the module docstring).
 """
 from __future__ import annotations
 

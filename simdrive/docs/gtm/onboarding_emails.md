@@ -91,7 +91,7 @@ The CI integration is a one-flag add to your existing pipeline:
 specterqa-ios replay --gate --threshold 0.85 .specterqa/journeys/login.yaml
 ```
 
-Exit code 0 on pass, non-zero on drift. Wire it into your PR check, fail the build on drift, ship the screenshot of the diff in the failure comment. Example Reader runs this pattern on every PR; a sample failure comment is at [LINK].
+Exit code 0 on pass, non-zero on drift. Wire it into your PR check, fail the build on drift, ship the screenshot of the diff in the failure comment. Our reference customer runs this pattern on every PR; a sample failure comment is at [LINK].
 
 — Maurice
 
@@ -103,7 +103,7 @@ Exit code 0 on pass, non-zero on drift. Wire it into your PR check, fail the bui
 
 You have been on the Cloud beta for two weeks. Two asks:
 
-1. **Would you let us feature [COMPANY] as a Cloud-beta user?** A logo on the pricing page, a one-line quote we draft together and you approve. No press release, no sales calls. The honesty around 5-day Example Reader cutover and "replays reliable enough to gate PRs on" is the brand — we want yours in the same shape, or not at all.
+1. **Would you let us feature [COMPANY] as a Cloud-beta user?** A logo on the pricing page, a one-line quote we draft together and you approve. No press release, no sales calls. The honesty around the 5-day cutover and "replays reliable enough to gate PRs on" is the brand — we want yours in the same shape, or not at all.
 
 2. **Would you graduate to the paid Team tier when the beta ends?** $249/month, 5 seats, real-device input via WDA when v1.1 ships. Beta-grad pricing locks for 12 months at the current number even if list moves. Reply "yes" or "tell me more" — no contract until you sign one.
 

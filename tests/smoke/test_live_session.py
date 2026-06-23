@@ -140,7 +140,7 @@ class TestMultiFieldForm:
 
 @requires_live
 class TestSecureField:
-    """Scenario 3: SecureField typing (the Example Reader password field bug)."""
+    """Scenario 3: SecureField typing (the reader-app password field bug)."""
 
     def test_secure_field_accepts_text(self):
         # Refresh element cache first (previous test may have left keyboard open)
@@ -291,7 +291,7 @@ class TestListNavigation:
     """Scenario 10: navigate to List tab without crashing the runner."""
 
     def test_navigate_to_list_tab(self):
-        """The Example Reader crash: navigating to a SwiftUI List with TextField rows
+        """The reader-app crash: navigating to a SwiftUI List with TextField rows
         caused the runner to crash via snapshot/element query.
         This test verifies the runner survives the navigation."""
         _dismiss_keyboard()
@@ -324,10 +324,10 @@ class TestListNavigation:
 
 @requires_live
 class TestListFormTyping:
-    """Scenario 11: type into TextField and SecureField inside a List (Example Reader pattern)."""
+    """Scenario 11: type into TextField and SecureField inside a List (reader pattern)."""
 
     def test_list_multi_field_typing(self):
-        """The core Example Reader regression: type into two fields inside a List."""
+        """The core reader-app regression: type into two fields inside a List."""
         _dismiss_keyboard()
         time.sleep(0.5)
         _tap_tab("List")

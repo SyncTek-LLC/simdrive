@@ -356,15 +356,15 @@ def test_alert_while_focused_dismisses_via_text_tap(session_id):
 
 
 # ---------------------------------------------------------------------- #
-# Example Reader tab — original Example Reader dogfood reproducer
+# Reader tab — original internal dogfood reproducer
 # ---------------------------------------------------------------------- #
 
 
 @pytest.mark.live
-def test_example_book_state_machine(session_id):
-    """Example Reader tab: walk Borrow → Download → Return state machine via button taps."""
-    obs = _navigate_to(session_id, "Example Reader")
-    assert _has(obs, "Example Reader") or _has(obs, "Book State")
+def test_reader_book_state_machine(session_id):
+    """Reader tab: walk Borrow → Download → Return state machine via button taps."""
+    obs = _navigate_to(session_id, "Reader")
+    assert _has(obs, "Reader") or _has(obs, "Book State")
 
     # Initial state should be 'available' or 'idle' — verify Borrow button is present
     if not _has(obs, "Borrow"):
@@ -380,9 +380,9 @@ def test_example_book_state_machine(session_id):
 
 
 @pytest.mark.live
-def test_example_notification_flood_button(session_id):
-    """Example Reader tab: 'Fire 10 Notifications' button increments visible counter."""
-    _navigate_to(session_id, "Example Reader")
+def test_reader_notification_flood_button(session_id):
+    """Reader tab: 'Fire 10 Notifications' button increments visible counter."""
+    _navigate_to(session_id, "Reader")
     obs = server.tool_observe({"session_id": session_id})
     sw, sh = obs["screenshot_size_pixels"]
 

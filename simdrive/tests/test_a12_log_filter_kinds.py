@@ -9,8 +9,8 @@ Tests:
        Mock idevicesyslog stdout with 5 lines (3 starting "ERROR").
        Assert result has the 3 ERROR lines.
   3. test_logs_predicate_kind_substring_post_filters_on_device
-     - device + predicate_kind="substring", predicate="Example Reader".
-       Mock 5 lines, 2 contain "Example Reader". Assert result has those 2.
+     - device + predicate_kind="substring", predicate="Reader".
+       Mock 5 lines, 2 contain "Reader". Assert result has those 2.
   4. test_logs_predicate_kind_nspredicate_on_device_warns_and_downgrades
      - device + predicate_kind="nspredicate".
        Assert a WARNING log mentioning downgrade was emitted; result is non-empty.
@@ -91,7 +91,7 @@ def test_logs_predicate_kind_nspredicate_on_sim_uses_log_show(tmp_path, monkeypa
     result = server_mod.tool_logs({
         "session_id": sid,
         "lines": 50,
-        "predicate": "eventMessage CONTAINS 'Example Reader'",
+        "predicate": "eventMessage CONTAINS 'Reader'",
         "predicate_kind": "nspredicate",
     })
 
@@ -160,9 +160,9 @@ def test_logs_predicate_kind_regex_post_filters_on_device(tmp_path, monkeypatch)
 
 
 def test_logs_predicate_kind_substring_post_filters_on_device(tmp_path, monkeypatch):
-    """device + predicate_kind='substring', predicate='Example Reader' → 2 Example Reader lines returned.
+    """device + predicate_kind='substring', predicate='Reader' → 2 Reader lines returned.
 
-    5 fake lines, 2 contain 'Example Reader'. Result must have exactly those 2.
+    5 fake lines, 2 contain 'Reader'. Result must have exactly those 2.
 
     Fails on HEAD: predicate_kind param not accepted; also baseline substring
     behaviour may differ if the predicate_kind routing is missing.
@@ -177,9 +177,9 @@ def test_logs_predicate_kind_substring_post_filters_on_device(tmp_path, monkeypa
     monkeypatch.setitem(session_mod._SESSIONS, sid, s)
 
     fake_lines = [
-        "Example Reader app started",
+        "Reader app started",
         "INFO: unrelated",
-        "Example Reader user tapped checkout",
+        "Reader user tapped checkout",
         "DEBUG: background task",
         "ERROR: network timeout",
     ]
@@ -196,19 +196,19 @@ def test_logs_predicate_kind_substring_post_filters_on_device(tmp_path, monkeypa
     result = server_mod.tool_logs({
         "session_id": sid,
         "lines": 200,
-        "predicate": "Example Reader",
+        "predicate": "Reader",
         "predicate_kind": "substring",
     })
 
     assert result.get("ok") is True, f"Expected ok=True, got: {result}"
     returned_lines = [ln for ln in result.get("logs", "").splitlines() if ln]
-    example_lines = [ln for ln in returned_lines if "Example Reader" in ln]
-    assert len(example_lines) == 2, (
-        f"Expected 2 lines containing 'Example Reader', got {len(example_lines)}: {returned_lines}"
+    reader_lines = [ln for ln in returned_lines if "Reader" in ln]
+    assert len(reader_lines) == 2, (
+        f"Expected 2 lines containing 'Reader', got {len(reader_lines)}: {returned_lines}"
     )
-    others = [ln for ln in returned_lines if "Example Reader" not in ln]
+    others = [ln for ln in returned_lines if "Reader" not in ln]
     assert not others, (
-        f"substring filter should exclude non-Example Reader lines, but got: {others}"
+        f"substring filter should exclude non-Reader lines, but got: {others}"
     )
 
 
@@ -237,7 +237,7 @@ def test_logs_predicate_kind_nspredicate_on_device_warns_and_downgrades(
     # Lines where at least 1 contains the predicate text as a substring so
     # the downgraded substring filter returns something.
     fake_lines = [
-        "eventMessage CONTAINS 'Example Reader'",
+        "eventMessage CONTAINS 'Reader'",
         "unrelated debug line",
         "another unrelated line",
     ]
@@ -255,7 +255,7 @@ def test_logs_predicate_kind_nspredicate_on_device_warns_and_downgrades(
         result = server_mod.tool_logs({
             "session_id": sid,
             "lines": 200,
-            "predicate": "eventMessage CONTAINS 'Example Reader'",
+            "predicate": "eventMessage CONTAINS 'Reader'",
             "predicate_kind": "nspredicate",
         })
 

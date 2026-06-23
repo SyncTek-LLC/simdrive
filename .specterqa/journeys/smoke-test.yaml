@@ -1,10 +1,10 @@
-name: Example Reader Smoke Test
+name: Reader Smoke Test
 product: example-ios
 persona: new-patron
 
 steps:
   - id: launch
-    goal: "Launch Example Reader and verify it starts without crashing."
+    goal: "Launch the reader app and verify it starts without crashing."
     checkpoint: "App launched, no crash detected"
 
   - id: navigate_tabs

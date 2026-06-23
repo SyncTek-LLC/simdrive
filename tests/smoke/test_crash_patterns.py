@@ -6,7 +6,7 @@ interacting with UIKit/SwiftUI hybrid views. All tests hit the real runner
 at http://127.0.0.1:8222.
 
 Crash patterns covered:
-  1. SwiftUI List + TextField (Example Reader pattern)
+  1. SwiftUI List + TextField (reader pattern)
   2. LazyVStack scroll recycling
   3. Nested Form deep tree
   4. UIKit ↔ SwiftUI bridge
@@ -215,14 +215,14 @@ def _assert_runner_alive(context=""):
 
 
 # ---------------------------------------------------------------------------
-# Pattern 1: SwiftUI List + TextField (Example Reader pattern)
+# Pattern 1: SwiftUI List + TextField (reader pattern)
 # ---------------------------------------------------------------------------
 
 @requires_live
 class TestSwiftUIListTextField:
     """Pattern 1 — SwiftUI List containing TextField rows.
 
-    The Example Reader crash: navigating to a List with embedded TextFields and then
+    The reader-app crash: navigating to a List with embedded TextFields and then
     calling /source or /elements caused a SIGABRT inside the accessibility
     snapshot walk. The runner must survive all three operations.
     """
@@ -441,7 +441,7 @@ class TestRapidTabSwitching:
         time.sleep(0.5)
 
         # Only use directly visible tabs (not behind More menu)
-        tab_sequence = ["Form", "List", "Nav", "Stress", "Example Reader", "Form"]
+        tab_sequence = ["Form", "List", "Nav", "Stress", "Reader", "Form"]
         for tab in tab_sequence:
             _tap_tab(tab)
             time.sleep(0.15)
@@ -712,83 +712,83 @@ class TestScreenshotParsing:
 
 
 # ---------------------------------------------------------------------------
-# Dogfood Issue 1 (Example Reader-specific): State mutation + notification cascade
+# Dogfood Issue 1 (reader-app-specific): State mutation + notification cascade
 # ---------------------------------------------------------------------------
 
 @requires_live
-class TestExample ReaderNotificationCascade:
-    """Reproduces the Example Reader crash: state-mutating operations fire rapid
+class TestReaderNotificationCascade:
+    """Reproduces the reader-app crash: state-mutating operations fire rapid
     NotificationCenter posts that crash XCTest's debug logging.
 
-    The Example ReaderPatternTab simulates borrow/download/return/library-switch
-    with the same notification patterns as Example Reader.
+    The RealAppPatternTab simulates borrow/download/return/library-switch
+    with the same notification patterns as Reader.
     """
 
     def test_borrow_flow_survives(self):
         """Tap Borrow — fires 5 rapid notifications. Runner must survive."""
-        _ensure_tab("Example Reader", "example_btn_borrow")
+        _ensure_tab("Reader", "reader_btn_borrow")
 
-        _tap(identifier="example_btn_borrow")
+        _tap(identifier="reader_btn_borrow")
         time.sleep(2.0)  # wait for async completion
 
-        _assert_runner_alive("Example Reader borrow flow")
+        _assert_runner_alive("Reader borrow flow")
 
         # Verify state changed
-        el = _find(identifier="example_book_state")
-        assert el is not None, "example_book_state not found"
+        el = _find(identifier="reader_book_state")
+        assert el is not None, "reader_book_state not found"
         val = str(el.get("label", "") or el.get("value", ""))
         assert "borrowed" in val.lower(), f"Expected 'borrowed', got: {val!r}"
 
     def test_download_flow_survives(self):
         """Tap Download — fires rapid Combine progress updates + notifications."""
-        _ensure_tab("Example Reader", "example_btn_borrow")
+        _ensure_tab("Reader", "reader_btn_borrow")
 
         # Borrow first
-        _tap(identifier="example_btn_borrow")
+        _tap(identifier="reader_btn_borrow")
         time.sleep(1.5)
 
         # Download — rapid progress updates via Combine
-        _tap(identifier="example_btn_download")
+        _tap(identifier="reader_btn_download")
         time.sleep(3.0)  # wait for simulated download (20 progress ticks × 100ms)
 
-        _assert_runner_alive("Example Reader download flow")
+        _assert_runner_alive("Reader download flow")
 
-        el = _find(identifier="example_book_state")
+        el = _find(identifier="reader_book_state")
         assert el is not None
         val = str(el.get("label", "") or el.get("value", ""))
         assert "ready" in val.lower(), f"Expected 'ready', got: {val!r}"
 
     def test_return_flow_survives(self):
         """Tap Return — fires notification cascade during state transition."""
-        _ensure_tab("Example Reader", "example_btn_return")
+        _ensure_tab("Reader", "reader_btn_return")
 
-        _tap(identifier="example_btn_return")
+        _tap(identifier="reader_btn_return")
         time.sleep(1.0)
 
-        _assert_runner_alive("Example Reader return flow")
+        _assert_runner_alive("Reader return flow")
 
     def test_notification_flood_10_rapid_survives(self):
-        """Fire 10 notifications in burst — the exact Example Reader crash trigger."""
-        _ensure_tab("Example Reader", "example_btn_fire_notifications")
+        """Fire 10 notifications in burst — the exact reader-app crash trigger."""
+        _ensure_tab("Reader", "reader_btn_fire_notifications")
 
-        _tap(identifier="example_btn_fire_notifications")
+        _tap(identifier="reader_btn_fire_notifications")
         time.sleep(1.0)
 
         _assert_runner_alive("10-notification flood")
 
-        el = _find(identifier="example_notification_count")
+        el = _find(identifier="reader_notification_count")
         assert el is not None
         val = str(el.get("label", "") or el.get("value", ""))
         assert int("".join(c for c in val if c.isdigit())) >= 10, f"Expected >= 10 notifications, got: {val!r}"
 
     def test_library_switch_modal_survives(self):
         """Open library switch sheet (UIKit VC in SwiftUI) — runner must survive."""
-        _ensure_tab("Example Reader", "example_btn_switch_library")
+        _ensure_tab("Reader", "reader_btn_switch_library")
 
-        _tap(identifier="example_btn_switch_library")
+        _tap(identifier="reader_btn_switch_library")
         time.sleep(1.5)
 
-        _assert_runner_alive("Example Reader library switch modal")
+        _assert_runner_alive("Reader library switch modal")
 
         # Verify the UIKit table view is visible
         els = _elements()
@@ -796,10 +796,10 @@ class TestExample ReaderNotificationCascade:
         assert has_library, "Library list not visible after opening sheet"
 
         # Select a library (fires notification cascade + dismisses sheet)
-        _tap(identifier="example_library_0")
+        _tap(identifier="reader_library_0")
         time.sleep(2.0)
 
-        _assert_runner_alive("Example Reader library selection + notification cascade")
+        _assert_runner_alive("Reader library selection + notification cascade")
 
         # Return to Form tab
         _dismiss_keyboard()
@@ -817,13 +817,13 @@ class TestXCTestCrashMitigation:
     """Verify the WDA-proven crash mitigations prevent SIGABRT.
     
     These tests trigger the exact crash vectors that killed the runner
-    in Example Reader dogfood: sheet presentation + notification cascade +
+    in internal dogfood: sheet presentation + notification cascade +
     rapid element queries during state transitions.
     """
 
     def test_sheet_presentation_during_typing_survives(self):
         """Type into a field, open a sheet, query elements — runner must survive.
-        This is the Example Reader search-catalog crash: typing triggers keyboard,
+        This is the reader search-catalog crash: typing triggers keyboard,
         then sheet presentation fires notifications that crash the logger."""
         _ensure_tab("Form", "field_first_name")
 
@@ -860,21 +860,21 @@ class TestXCTestCrashMitigation:
         _assert_runner_alive("rapid navigation with interleaved queries")
 
     def test_borrow_download_return_cycle_survives(self):
-        """Full Example Reader state machine cycle with element queries between steps."""
-        _ensure_tab("Example Reader", "example_btn_borrow")
+        """Full Reader state machine cycle with element queries between steps."""
+        _ensure_tab("Reader", "reader_btn_borrow")
 
         # Borrow → query → download → query → return → query
-        _tap(identifier="example_btn_borrow")
+        _tap(identifier="reader_btn_borrow")
         time.sleep(1.0)
         _elements()
         _assert_runner_alive("after borrow")
 
-        _tap(identifier="example_btn_download")
+        _tap(identifier="reader_btn_download")
         time.sleep(3.0)
         _elements()
         _assert_runner_alive("after download")
 
-        _tap(identifier="example_btn_return")
+        _tap(identifier="reader_btn_return")
         time.sleep(1.0)
         _elements()
         _assert_runner_alive("after return")

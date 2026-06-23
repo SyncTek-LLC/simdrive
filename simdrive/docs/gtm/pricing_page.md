@@ -39,7 +39,7 @@ The 29 MCP tools, vision-first observe, real UITouch HID injection, and record/r
 
 ## Engine — Free, MIT, forever
 
-The same code Example Reader iOS migrated to in 5 days. 29 MCP tools, real UITouch on iOS 26, vision-first observe with stable_id replay, the universal2 native HID helper in the wheel. One install line:
+The same code our reference customer migrated to in 5 days. 29 MCP tools, real UITouch on iOS 26, vision-first observe with stable_id replay, the universal2 native HID helper in the wheel. One install line:
 
 ```
 pip install specterqa-ios

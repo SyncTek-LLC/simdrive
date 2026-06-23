@@ -1,7 +1,7 @@
 """F#2: session_start must verify the launched app reached foreground before
 returning ``state: "active"``.
 
-Bug reproducer (Example Reader dogfood 2026-05-22): SplashMate built without proper
+Bug reproducer (internal dogfood 2026-05-22): SplashMate built without proper
 iCloud entitlement crashed within ~500 ms of launch. ``tool_session_start``
 returned ``state: "active"`` for an already-terminated process. The agent
 wasted multiple tap/type roundtrips before discovering the crash via separate

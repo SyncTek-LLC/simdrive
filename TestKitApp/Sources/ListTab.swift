@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Mirrors the Example Reader Library sign-in pattern: a List with TextField
+/// Mirrors a library reader app's sign-in pattern: a List with TextField
 /// rows (not Form). This is the layout that crashes XCTest's
 /// allElementsBoundByIndex on iOS 26.
 struct ListTab: View {
@@ -41,7 +41,7 @@ struct ListTab: View {
                 }
 
                 // Stress test: multiple cells with text to trigger the
-                // deep-tree crash that Example Reader experienced
+                // deep-tree crash that the reader app experienced
                 Section("Catalog") {
                     ForEach(0..<5) { i in
                         HStack {

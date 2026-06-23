@@ -84,7 +84,7 @@ class SpecterQARunnerTests: XCTestCase {
 
         // Step 3: Launch the app — single attempt, short timeout.
         //
-        // v16.0.0a2 (Maurice/Example Reader dogfood §3.3): on iOS 26.2, XCTest's
+        // v16.0.0a2 (internal dogfood §3.3): on iOS 26.2, XCTest's
         // XCUIApplication(bundleIdentifier:) sometimes returns
         // "Unknown application" (LaunchServices error 10100) for
         // legitimately-installed apps. Internally `launch()` then enters
@@ -166,7 +166,7 @@ class SpecterQARunnerTests: XCTestCase {
         // iOS 26's XCTRuntimeIssueDetectionManager flags long-running test
         // methods that poll on the main thread as "stuck" and SIGKILLs the
         // test process — even though the in-sim HTTP server is healthy
-        // (Maurice/Example Reader 2026-04-27 dogfood, v15.1.0 Issue #2).
+        // (internal 2026-04-27 dogfood, v15.1.0 Issue #2).
         //
         // XCTWaiter.wait(for:[expectation], timeout:) is XCTest's blessed
         // wait primitive: the test method appears legitimately blocked on

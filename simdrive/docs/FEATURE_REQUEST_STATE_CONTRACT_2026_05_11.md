@@ -1,6 +1,6 @@
 # Feature request: state contract on recordings (capture-time + replay-time)
 
-**Filer:** Example Reader iOS dogfood (Maurice Carrier)
+**Filer:** internal dogfood pass (Maurice Carrier)
 **Date:** 2026-05-11
 **simdrive version observed:** 1.0.0a7 (disk: 1.0.0a8 — drift warning)
 
@@ -10,7 +10,7 @@ Recordings carry **no contract** about what the world looks like at step 0, so a
 
 ## Concrete dogfood evidence (today)
 
-Goal: smoke-test a Example Reader iOS PR that refactored the SAML auth surface. Plan: replay the only SAML recording (`pr907-saml-signin-gorgon`, 23 steps) against the post-refactor build.
+Goal: smoke-test a real-app PR that refactored the SAML auth surface. Plan: replay the only SAML recording (`pr907-saml-signin-gorgon`, 23 steps) against the post-refactor build.
 
 What happened:
 
@@ -63,7 +63,7 @@ requires:
     foreground: true
     text_subset_required:
       - "Add Library"
-      - "Example Reader Bookshelf"
+      - "My Bookshelf"
     text_subset_forbidden:
       - "Allow Notifications"  # an alert that wasn't there at capture
       - "Don't Allow"
@@ -104,7 +104,7 @@ When `replay` is called:
      "ok": false,
      "halted_at": 0,
      "halt_reason": "state_contract_mismatch",
-     "expected": { "text_subset_required": ["Add Library", "Example Reader Bookshelf"] },
+     "expected": { "text_subset_required": ["Add Library", "My Bookshelf"] },
      "actual":   { "text_subset_present": ["Allow Notifications", "Don't Allow", "Example Reader would like to send"] },
      "remedy": "App appears to be showing a permission alert. Pre-grant via `xcrun simctl privacy <udid> grant notifications <bundle_id>` before launching, then retry.",
      "_simdrive_warning": null
@@ -138,14 +138,15 @@ I'd suggest shipping #2 + #3 in the same release as the schema. #1 as a follow-u
 
 ## What's downstream on the consuming-project side
 
-Example Reader landed a complementary primitive layer in https://github.com/ExampleOrg/ios-core/pull/937 — `.example-state/operations/reset-fresh-install.sh` + snapshot/restore. With Layer 2 (this proposal) shipped:
+The consuming project landed a complementary primitive layer — a `reset-fresh-install.sh` operation plus snapshot/restore under a `.app-state/operations/` directory. With Layer 2 (this proposal) shipped:
 
-- Example Reader's recording authors run `simctl privacy grant` + reset-fresh-install before `record_start`
+- The project's recording authors run `simctl privacy grant` + reset-fresh-install before `record_start`
 - Capture-time auto-populates `requires:` with the post-reset state's OCR signature
 - Replay-time verifies and halts cleanly if a future agent forgets the reset
-- `verify-pr.sh` lints that every Example Reader recording has a non-empty `requires:` (Example Reader's Layer 3)
+- `verify-pr.sh` lints that every recording has a non-empty `requires:` (the project's Layer 3)
 
 This eliminates the entire class of "blind 23 taps at SSIM 0.014" failures.
+
 
 ## Suggested test plan for the simdrive PR that implements this
 
@@ -166,7 +167,7 @@ This eliminates the entire class of "blind 23 taps at SSIM 0.014" failures.
 
 ## Why I'm filing this now
 
-The smoke-test failure today is the third time this class of bug has bitten Example Reader (per memory: `specterqa_corpus_replay_under_a3.md` 2026-04, `simdrive_v1_0_0a3_dogfood.md` 2026-04). Each prior occurrence got worked around with "use structural_checks instead of SSIM" — that's been the right tactical move but it doesn't address the upstream gap.
+The smoke-test failure today is the third time this class of bug has bitten the dogfood project (per memory: `specterqa_corpus_replay_under_a3.md` 2026-04, `simdrive_v1_0_0a3_dogfood.md` 2026-04). Each prior occurrence got worked around with "use structural_checks instead of SSIM" — that's been the right tactical move but it doesn't address the upstream gap.
 
 This proposal closes the gap at the schema level so individual projects don't have to keep inventing local workarounds.
 
@@ -175,4 +176,4 @@ Happy to review a draft PR or do additional dogfood once an experimental build i
 ---
 
 **Contact**: Maurice Carrier (maurice.carrier@outlook.com)
-**Example Reader context**: https://github.com/ExampleOrg/ios-core/pull/937 (Layer 1, just landed for review)
+**Consuming-project context**: the complementary Layer 1 primitive (reset-fresh-install + snapshot/restore) just landed for review in the app-under-test repo.

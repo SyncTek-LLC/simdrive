@@ -1,7 +1,7 @@
-"""Regression tests pinning the three b3 Example Reader-dogfood bug fixes.
+"""Regression tests pinning the three b3 dogfood bug fixes.
 
-Example Reader iOS 3.1.0 / iPhone 16 Pro sim / iOS 26 surfaced these in
-2026-05-22 dogfood. Each test asserts the *fixed* behavior so a future
+A real reader app (3.1.0) on an iPhone 16 Pro sim / iOS 26 surfaced these
+in a 2026-05-22 internal dogfood pass. Each test asserts the *fixed* behavior so a future
 regression fires here before reaching dogfood.
 
 F-B3-009  `clear_field` must emit a recording step
@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-_FAKE_UDID = "31471BBD-0000-B4FIX-Example Reader-DOGFOODB3"
+_FAKE_UDID = "31471BBD-0000-B4FIX-READER-DOGFOODB3"
 
 
 def _make_sim_session(tmp_path: Path, sid: str = "b4-fix"):
@@ -114,7 +114,7 @@ def test_clear_field_records_a_step(tmp_path):
         result = server.tool_clear_field({"session_id": s.session_id})
     assert result["ok"] is True
     assert result["cleared"] is True
-    # Pre-fix this list was empty (b3 Example Reader bug). Post-fix it has the step.
+    # Pre-fix this list was empty (b3 bug). Post-fix it has the step.
     assert len(rec.steps) == 1
     assert rec.steps[0]["action"] == "clear_field"
 
@@ -198,14 +198,14 @@ def test_tap_and_wait_keyboard_no_recorder_is_safe(tmp_path):
 
 def test_type_text_emits_keyboard_visible_reason_when_dispatched_but_collapsed(tmp_path):
     """When dispatch_succeeded=True but the post-type observe finds no
-    keyboard chrome (the Example Reader instant-search scenario), the response must
+    keyboard chrome (the reader app's instant-search scenario), the response must
     include a `keyboard_visible_reason` so the agent does NOT retry the type.
     """
     s = _make_sim_session(tmp_path)
     from simdrive import observe as observe_mod
     from simdrive import server, som
 
-    # Mock a post_obs with NO keyboard chrome marks — mirrors Example Reader's case
+    # Mock a post_obs with NO keyboard chrome marks — mirrors the reader app's case
     # where the search field auto-committed and dismissed the keyboard.
     no_kb_obs = _stub_observation(tmp_path)
 

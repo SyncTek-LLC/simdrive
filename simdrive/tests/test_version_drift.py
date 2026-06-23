@@ -1,7 +1,7 @@
 """Regression tests for Bug 2 — _disk_version() reads wrong package name.
 
 server.py:_disk_version() calls importlib.metadata.version("specterqa-ios")
-but the package is now named "simdrive".  In the Example Reader dogfood environment
+but the package is now named "simdrive".  In the upgrade-residue dogfood environment
 the old specterqa-ios 16.0.0a3 wheel was still installed, so _disk_version()
 returned "16.0.0a3" — a perpetual mismatch with _LOADED_VERSION "1.0.0a2",
 causing a false-positive _simdrive_warning on every single tool call.
@@ -67,7 +67,7 @@ class TestDiskVersionReadsSimdrivePackage:
         )
 
     def test_disk_version_old_wheel_causes_false_positive_warning(self) -> None:
-        """Simulate the Example Reader dogfood environment where specterqa-ios 16.0.0a3
+        """Simulate the upgrade-residue dogfood environment where specterqa-ios 16.0.0a3
         was installed alongside simdrive 1.0.0a2.
 
         When _disk_version() queries 'specterqa-ios' and gets '16.0.0a3', it
@@ -86,7 +86,7 @@ class TestDiskVersionReadsSimdrivePackage:
         from simdrive import server
         import simdrive
 
-        # Simulate the Example Reader environment: specterqa-ios 16.0.0a3 is installed
+        # Simulate the upgrade-residue environment: specterqa-ios 16.0.0a3 is installed
         def old_env_metadata_version(package_name: str) -> str:
             if package_name == "specterqa-ios":
                 return "16.0.0a3"  # old wheel still present
@@ -112,7 +112,7 @@ class TestDiskVersionReadsSimdrivePackage:
         )
 
     def test_check_version_drift_no_false_positive_in_old_wheel_env(self) -> None:
-        """In the Example Reader dogfood environment (specterqa-ios 16.0.0a3 installed),
+        """In the upgrade-residue dogfood environment (specterqa-ios 16.0.0a3 installed),
         _check_version_drift() must return None (no warning) when simdrive
         is correctly installed as 'simdrive'.
 
@@ -144,8 +144,8 @@ class TestDiskVersionReadsSimdrivePackage:
             "Fix: change the package name in _disk_version()."
         )
 
-    def test_call_tool_injects_warning_in_example_dogfood_environment(self) -> None:
-        """In the Example Reader dogfood environment (specterqa-ios 16.0.0a3 still installed),
+    def test_call_tool_injects_warning_in_upgrade_residue_environment(self) -> None:
+        """In the upgrade-residue dogfood environment (specterqa-ios 16.0.0a3 still installed),
         every call_tool() response INCORRECTLY gets _simdrive_warning injected
         because _disk_version() returns "16.0.0a3" via the stale package name.
 
@@ -161,15 +161,15 @@ class TestDiskVersionReadsSimdrivePackage:
         from simdrive import server
         import simdrive
 
-        # Simulate Example Reader dogfood: specterqa-ios 16.0.0a3 installed, simdrive 1.0.0a2 installed
-        def example_env_metadata_version(package_name: str) -> str:
+        # Simulate the upgrade-residue dogfood case: specterqa-ios 16.0.0a3 installed, simdrive 1.0.0a2 installed
+        def residue_env_metadata_version(package_name: str) -> str:
             if package_name == "specterqa-ios":
                 return "16.0.0a3"  # old wheel still present → buggy code returns this
             elif package_name == "simdrive":
                 return simdrive.__version__  # correct wheel present → fix returns this
             raise importlib.metadata.PackageNotFoundError(package_name)
 
-        with patch("importlib.metadata.version", side_effect=example_env_metadata_version):
+        with patch("importlib.metadata.version", side_effect=residue_env_metadata_version):
             server._DISK_VERSION_CACHE["checked_at"] = 0.0
             server._DISK_VERSION_CACHE["version"] = None
             result = server.call_tool("version", {})
@@ -180,7 +180,7 @@ class TestDiskVersionReadsSimdrivePackage:
         # Currently (before fix): _disk_version() returns '16.0.0a3' (from 'specterqa-ios')
         # != '1.0.0a2' → warning IS injected → test FAILS.
         assert "_simdrive_warning" not in result, (
-            f"call_tool() injected a false-positive _simdrive_warning in the Example Reader "
+            f"call_tool() injected a false-positive _simdrive_warning in the upgrade-residue "
             f"dogfood environment (specterqa-ios 16.0.0a3 + simdrive 1.0.0a2 installed). "
             f"Warning injected: {result.get('_simdrive_warning')!r}\n"
             "Root cause: _disk_version() queries 'specterqa-ios' (returned '16.0.0a3') "

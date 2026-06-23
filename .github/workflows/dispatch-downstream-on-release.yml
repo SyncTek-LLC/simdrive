@@ -150,7 +150,7 @@ jobs:
           function sanitizeForPublic(input) {
             const DROP = [
               /^\s*\[internal-tracker\]/,
-              /^\s*Reported by .+\(.*Example Reader.*\)/i,
+              /^\s*Reported by .+\(.*early adopter.*\)/i,
               /Reported by Maurice Carrier/i,
             ];
             const REDACT = [
@@ -162,12 +162,9 @@ jobs:
               [/\bAtlas CEO\b/g, "the team"],
               [/\bforgeos(?:-engine)?\b/gi, "the build system"],
               [/\bMaurice Carrier\b/g, "a user"],
-              [/\bMaurice(?:\s*\/\s*Example Reader)?\b/g, "a user"],
+              [/\bMaurice\b/g, "a user"],
               [/\bMoe'?s Max\b/g, "a real device"],
-              [/\bExample Reader iOS team\b/g, "early adopters"],
-              [/\bExample Reader dogfood/g, "dogfood"],
-              [/\bExample Reader's\b/g, "an early adopter's"],
-              [/\bExample Reader\b/g, "early adopters"],
+              [/\bearly adopter iOS team\b/g, "early adopters"],
               [/\bSpecterQA(?:'s)?\b/g, "the predecessor project"],
               [/\bsub-?agent\b/gi, "automated"],
               [/\bbackend team\b/gi, "maintainer"],

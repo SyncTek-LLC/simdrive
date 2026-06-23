@@ -264,8 +264,8 @@ device session is usable end-to-end". Suite went 678 → 711 passed.
  (1s-warmup-too-short → broken brew binary → over-aggressive predicate
  → DEVNULL'd stderr → Developer Mode regression) in
  `simdrive/docs/D6_LOGS_INVESTIGATION.md`. a9 will pick the right fix
- after TestVendor dogfood captures `idevicesyslog -u <udid> 2>&1` against
- early adopter on a real device.
+ after an internal dogfood pass captures `idevicesyslog -u <udid> 2>&1` against
+ a real device.
 
 ### Tests
 - 33 new tests across the four fix waves (1.0.0a7 baseline 678 →

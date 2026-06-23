@@ -32,9 +32,9 @@ Killer technical bit: the bundled native helper drives `SimDeviceLegacyHIDClient
 
 **5/**
 
-Receipt: ExampleOrg's Example Reader iOS app — public-library reading client, Readium WKWebView + OAuth/SAML — migrated off the predecessor in 5 days. Three dogfood rounds, all feedback closed.
+Receipt: a real-world iOS app — public-library reading client, Readium WKWebView + OAuth/SAML — migrated off the predecessor in 5 days. Three dogfood rounds, all feedback closed.
 
-> "Replays are now reliable enough to gate PRs on." — Maurice Carrier, ExampleOrg
+> "Replays are now reliable enough to gate PRs on." — Maurice Carrier, reference customer
 
 ---
 

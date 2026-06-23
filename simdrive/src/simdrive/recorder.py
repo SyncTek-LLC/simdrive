@@ -465,7 +465,7 @@ class Recorder:
         delegate to an underlying primitive (``tap``) which records itself
         as the primitive — without this, the composite's semantics are
         silently stripped on serialization and the replay tap-then-acts
-        instead of tap-then-waits (F-B3-010, Example Reader b3 dogfood 2026-05-22).
+        instead of tap-then-waits (F-B3-010, b3 dogfood 2026-05-22).
 
         Returns True when the step was found and upgraded; False otherwise
         (caller can decide whether to log — typical pattern is best-effort).

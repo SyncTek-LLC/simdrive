@@ -12,11 +12,11 @@ Send from `maurice.carrier@synctek.io`. No tracking pixels. No "just following u
 
 Hi [FIRST_NAME],
 
-I saw your [POST/VIDEO/THREAD] on [SPECIFIC_TOPIC] — [ONE_LINE_REACTION_THAT_PROVES_I_READ_IT]. I am the maintainer of SpecterQA, an MCP-native driver for the iOS Simulator. It ships 29 tools, real UITouch on iOS 26 (the kind that actually focuses UITextField, which XCUITest stopped doing a year ago), and stable_id replay. Example Reader iOS migrated off their previous driver in 5 days and is now PR-gating on SSIM-thresholded replays.
+I saw your [POST/VIDEO/THREAD] on [SPECIFIC_TOPIC] — [ONE_LINE_REACTION_THAT_PROVES_I_READ_IT]. I am the maintainer of SpecterQA, an MCP-native driver for the iOS Simulator. It ships 29 tools, real UITouch on iOS 26 (the kind that actually focuses UITextField, which XCUITest stopped doing a year ago), and stable_id replay. A real-world iOS app migrated off their previous driver in 5 days and is now PR-gating on SSIM-thresholded replays.
 
 Install is one line: `pip install specterqa-ios`. No Xcode target to build, no provisioning profile dance.
 
-If a 5-minute demo would be useful for [PUBLICATION/CHANNEL], I am happy to record one against any iOS app you pick — or against the bundled TestKitApp if you would rather see a clean baseline. The 30-second hero GIF is at [LINK]. The Example Reader dogfood report (every recommendation we did not ship is listed) is at [LINK].
+If a 5-minute demo would be useful for [PUBLICATION/CHANNEL], I am happy to record one against any iOS app you pick — or against the bundled TestKitApp if you would rather see a clean baseline. The 30-second hero GIF is at [LINK]. The real-app dogfood report (every recommendation we did not ship is listed) is at [LINK].
 
 Either way, thanks for the work you put into [SPECIFIC_TOPIC].
 
@@ -31,11 +31,11 @@ SyncTek LLC
 
 Hi [FIRST_NAME],
 
-I run an open-source iOS testing tool called SpecterQA. The thesis is that XCUITest stopped working on iOS 26 SwiftUI + WebView-heavy apps, and the right replacement is a vision-first MCP driver that an LLM can call directly. 29 MCP tools, MIT license, ships through PyPI as `specterqa-ios`. Real reference customer: Example Reader iOS (ExampleOrg) — they cut over from their previous driver in 5 days, three feedback rounds all closed, and now PR-gate on SSIM 0.85 against canonical journeys.
+I run an open-source iOS testing tool called SpecterQA. The thesis is that XCUITest stopped working on iOS 26 SwiftUI + WebView-heavy apps, and the right replacement is a vision-first MCP driver that an LLM can call directly. 29 MCP tools, MIT license, ships through PyPI as `specterqa-ios`. Real reference customer: a real-world iOS app (a public-library reading client) — they cut over from their previous driver in 5 days, three feedback rounds all closed, and now PR-gate on SSIM 0.85 against canonical journeys.
 
-I am reaching out because [COMPANY]'s [SPECIFIC_PRODUCT_OR_FLOW] looks like it sits in the same gap Example Reader was in — [SPECIFIC_REASON: WebView-heavy, OAuth/SAML flows, SwiftUI without AX identifiers, etc.]. Would a 30-minute call to walk through the architecture and the Example Reader dogfood data be useful? No pitch deck, no sales motion — I am the engineer.
+I am reaching out because [COMPANY]'s [SPECIFIC_PRODUCT_OR_FLOW] looks like it sits in the same gap that customer was in — [SPECIFIC_REASON: WebView-heavy, OAuth/SAML flows, SwiftUI without AX identifiers, etc.]. Would a 30-minute call to walk through the architecture and the dogfood data be useful? No pitch deck, no sales motion — I am the engineer.
 
-Install line if you want to look first: `pip install specterqa-ios`. Repo: [LINK]. Example Reader dogfood report: [LINK].
+Install line if you want to look first: `pip install specterqa-ios`. Repo: [LINK]. Dogfood report: [LINK].
 
 — Maurice
 SyncTek LLC
@@ -73,7 +73,7 @@ Hi [FIRST_NAME],
 
 Submitting SpecterQA for the [CLINE/CURSOR] MCP marketplace. It is an iOS Simulator driver, MCP-native, 29 tools, MIT-licensed, on PyPI as `specterqa-ios`. Use case: a [CLINE/CURSOR] user with an iOS project asks the agent to "test the login flow," and the agent drives the actual simulator — observes via a real screenshot, taps via real UITouch, replays deterministically.
 
-Reference customer: Example Reader iOS (ExampleOrg) — full migration off their previous driver in 5 days. They are PR-gating on SSIM-thresholded replays.
+Reference customer: a real-world iOS app (a public-library reading client) — full migration off their previous driver in 5 days. They are PR-gating on SSIM-thresholded replays.
 
 I have followed the [CLINE/CURSOR] marketplace submission template at [LINK_TO_OUR_SUBMISSION_BRANCH]. Three things I want to confirm before opening the PR:
 
@@ -98,7 +98,7 @@ We are recruiting design partners for the SpecterQA Cloud beta — the hosted la
 
 The deal is simple: 60 days free on what will become the Team tier ($249/month). In exchange, one 30-minute call per month to tell us what is working and what is not. No paid pilot, no contract, no obligation to convert. If at the end of 60 days the Cloud is not earning its keep for [COMPANY], you go back to the free Engine and we keep the feedback.
 
-We are looking for [COMPANY] specifically because [SPECIFIC_REASON: medium iOS app size, WebView-heavy flows, agent-driven CI ambitions, prior dogfood relationship, etc.]. The Engine you would be running underneath is the same code Example Reader iOS migrated to in 5 days — repo and dogfood report at [LINKS].
+We are looking for [COMPANY] specifically because [SPECIFIC_REASON: medium iOS app size, WebView-heavy flows, agent-driven CI ambitions, prior dogfood relationship, etc.]. The Engine you would be running underneath is the same code our reference customer migrated to in 5 days — repo and dogfood report at [LINKS].
 
 Cloud beta opens [DATE]. Five slots, allocated in reply order. Worth a call?
 
@@ -113,13 +113,13 @@ SyncTek LLC
 
 Hi [FIRST_NAME],
 
-Pitching a talk for [PODCAST/CONFERENCE]. The story is the SpecterQA pivot: we shipped a legacy XCTest-based iOS driver through 16 major versions, watched it die on iOS 26 SwiftUI + WebView surfaces, and then deleted the accessibility-tree selector layer entirely. The replacement is vision-first — same shape as Anthropic Computer Use and OpenAI Operator, applied to iOS. It worked: Example Reader iOS (ExampleOrg) cut over from their previous driver in 5 days, three feedback rounds all closed.
+Pitching a talk for [PODCAST/CONFERENCE]. The story is the SpecterQA pivot: we shipped a legacy XCTest-based iOS driver through 16 major versions, watched it die on iOS 26 SwiftUI + WebView surfaces, and then deleted the accessibility-tree selector layer entirely. The replacement is vision-first — same shape as Anthropic Computer Use and OpenAI Operator, applied to iOS. It worked: a real-world iOS app (a public-library reading client) cut over from their previous driver in 5 days, three feedback rounds all closed.
 
 Talk format: 25 minutes, technical, code-on-screen. Concrete artifacts:
 
 - The runner stack trace that ended the AX-tree era (a real `XCUIElementQuery[label]` `NSException`).
 - The five-line `observe` call that replaced it, with the actual screenshot the agent reasons about.
-- The Example Reader migration delta — what worked, what we got wrong, what we shipped to fix it.
+- The reference-customer migration delta — what worked, what we got wrong, what we shipped to fix it.
 
 The hook for [PODCAST/CONFERENCE] specifically: [SPECIFIC_HOOK — agentic testing, iOS 26 changes, MCP ecosystem, etc.].
 
@@ -130,7 +130,7 @@ SyncTek LLC
 
 ---
 
-## 7. Customer reference ask (template — Example Reader already aligned)
+## 7. Customer reference ask (template — reference customer already aligned)
 
 **Subject:** Reference call request — [PROSPECT_COMPANY]
 

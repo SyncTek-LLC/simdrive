@@ -6,8 +6,8 @@ Covers:
   - Replay-time verification (halt on mismatch, warn on missing block)
   - robustness.validate_replay tolerates `requires:` key
 
-The state contract is the headline a9.0 feature in response to Example Reader's
-2026-05-11 dogfood report: a replay against a divergent app state silently
+The state contract is the headline a9.0 feature in response to a
+2026-05-11 internal dogfood report: a replay against a divergent app state silently
 executed 23 taps at SSIM 0.014. We verify state at replay step -1 and halt
 on mismatch with a structured error.
 """
