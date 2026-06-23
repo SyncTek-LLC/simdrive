@@ -13,6 +13,29 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b12] — 2026-06-23
+
+### Fixed — host-AX `set_text` / `perform_accessibility_action` now reach app content on iOS 26
+
+- **Restored the iOS content-group position-probe.** On iOS 26 the Simulator
+  collapses the whole app UI into a single opaque accessibility group that
+  reports no children, so the host-AX tree-walk used by `set_text` and
+  `perform_accessibility_action` saw nothing inside the app — text fields (e.g.
+  a "Go to Page" alert) and custom-action carriers were reported as "not
+  found". simdrive now resolves that content group via an aspect-ratio
+  heuristic and, when the group is opaque, an `AXUIElementCopyElementAtPosition`
+  position-probe at the device window's centre — the same iOS-26-compatible
+  approach the engine shipped before. When the plain window walk finds nothing,
+  both tools now search the resolved content-group subtree before giving up.
+- Non-iOS-26 paths are unchanged: when the plain window walk already finds the
+  field or action, the content-group fallback is never consulted.
+- **Boundary note:** Readium/WKWebView reader *web-content* actions (e.g.
+  "Where am I?") remain unreachable from host-AX — web-content accessibility is
+  not bridged to the macOS AX tree on the simulator. The probe surfaces the
+  reader's native chrome actions ("Move next/previous"); for web-content a11y,
+  use the on-device XCTest backend. The host-AX bridge also requires on-device
+  accessibility to be active in the simulator.
+
 ## [1.0.0b11] — 2026-06-23
 
 ### Fixed — MCP auto-restart no longer breaks the stdio session
