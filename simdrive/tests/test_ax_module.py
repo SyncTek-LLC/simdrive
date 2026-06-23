@@ -65,6 +65,82 @@ def test_find_action_carrier_recurses_to_deep_child(monkeypatch):
     assert ax._find_action_carrier(root, "Toggle toolbar") is None
 
 
+# ── b11 FIX 2: WKWebView host-AX boundary hint when zero custom actions ───────
+
+
+def test_window_has_any_custom_action_true_when_present(monkeypatch):
+    monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
+    monkeypatch.setattr(ax, "_children", lambda e: e.children)
+    deep = _FakeEl(actions=["Name:Next page\nTarget:0x0\nSelector:(null)"])
+    root = _FakeEl(children=[_FakeEl(actions=["AXPress"]), _FakeEl(children=[deep])])
+    assert ax._window_has_any_custom_action(root) is True
+
+
+def test_window_has_any_custom_action_false_when_only_builtins(monkeypatch):
+    monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
+    monkeypatch.setattr(ax, "_children", lambda e: e.children)
+    # Only built-in AX actions (AXPress/AXShowMenu) — no custom actions at all,
+    # the WKWebView/Readium signature where web-AX isn't bridged to host-AX.
+    root = _FakeEl(
+        actions=["AXPress"],
+        children=[_FakeEl(actions=["AXShowMenu"]), _FakeEl(children=[_FakeEl()])],
+    )
+    assert ax._window_has_any_custom_action(root) is False
+
+
+def test_perform_action_adds_wkwebview_hint_when_zero_actions(monkeypatch):
+    """Zero custom actions window-wide => error carries the WKWebView hint."""
+    window = _FakeEl(actions=["AXPress"], children=[_FakeEl(actions=["AXShowMenu"])])
+    monkeypatch.setattr(ax, "select_window", lambda dev: window)
+    monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
+    monkeypatch.setattr(ax, "_children", lambda e: e.children)
+    # AXUIElementPerformAction is imported lazily; provide a stub module so the
+    # lazy `from ApplicationServices import ...` succeeds without pyobjc.
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementPerformAction=lambda *a: 0),
+    )
+
+    result = ax.perform_action("iPhone 15", "Next page")
+    assert result["ok"] is False
+    assert "not found" in result["error"]
+    assert "WKWebView" in result["error"]
+    assert "XCTest" in result["error"]
+
+
+def test_perform_action_no_hint_when_other_actions_exist(monkeypatch):
+    """A missing named action but other custom actions present => NO hint.
+
+    Accuracy guard: the WKWebView hint must only fire when the window has zero
+    custom actions, not when the requested label simply isn't among the (real)
+    custom actions that DO exist.
+    """
+    other = _FakeEl(actions=["Name:Where am I?\nTarget:0x0\nSelector:(null)"])
+    window = _FakeEl(children=[other])
+    monkeypatch.setattr(ax, "select_window", lambda dev: window)
+    monkeypatch.setattr(ax, "_action_names", lambda e: e.actions)
+    monkeypatch.setattr(ax, "_children", lambda e: e.children)
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "ApplicationServices",
+        types.SimpleNamespace(AXUIElementPerformAction=lambda *a: 0),
+    )
+
+    result = ax.perform_action("iPhone 15", "Next page")
+    assert result["ok"] is False
+    assert "not found" in result["error"]
+    assert "WKWebView" not in result["error"]
+
+
+def test_set_text_docstring_documents_swiftui_boundary():
+    """b11 FIX 3: set_text docstring warns about SwiftUI @State binding."""
+    doc = ax.set_text.__doc__ or ""
+    assert "SwiftUI" in doc
+    assert "@State" in doc
+    assert "type_text" in doc
+
+
 # ── announcement buffer: soft pid scoping (never drops to a false empty) ──────
 
 

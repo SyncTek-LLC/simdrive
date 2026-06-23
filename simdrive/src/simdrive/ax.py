@@ -277,6 +277,38 @@ def _find_action_carrier(root: Any, action_label: str, depth: int = 0, maxdepth:
     return None
 
 
+def _window_has_any_custom_action(root: Any, depth: int = 0, maxdepth: int = 60) -> bool:
+    """True if *any* element in the subtree carries at least one custom action.
+
+    Used to distinguish two failure modes when a named action isn't found:
+      - The window has custom actions, just not the one requested (the caller
+        likely mistyped the label or it's on a different screen).
+      - The window has ZERO custom actions anywhere — the strong signal that
+        the a11y tree isn't bridged to host-AX at all (e.g. a Readium /
+        WKWebView reader, whose web-content accessibility never reaches the
+        macOS AXUIElement tree on the simulator).
+    """
+    if depth > maxdepth:
+        return False
+    for name in _action_names(root):
+        if _custom_action_label(name) is not None:
+            return True
+    for child in _children(root):
+        if _window_has_any_custom_action(child, depth + 1, maxdepth):
+            return True
+    return False
+
+
+# b11 FIX 2 — appended to the "not found" error when the target window has
+# ZERO custom actions anywhere (the WKWebView/Readium host-AX boundary).
+_WKWEBVIEW_HINT = (
+    " No custom actions found anywhere in the target window — if this is a "
+    "Readium/WKWebView reader, web-content accessibility is NOT bridged to "
+    "host-AX on the simulator; use the on-device XCTest backend (runner/) for "
+    "web-content a11y."
+)
+
+
 def perform_action(
     device_name: str,
     name: str,
@@ -317,9 +349,15 @@ def perform_action(
         carrier = _find_action_carrier(window, name)
 
     if carrier is None:
+        error = f"custom action {name!r} not found in the target window"
+        # b11 FIX 2: if the window has NO custom actions at all (not merely a
+        # missing named one), hint at the WKWebView/Readium host-AX boundary.
+        # Keep it accurate — only when zero actions exist window-wide.
+        if not _window_has_any_custom_action(window):
+            error += _WKWEBVIEW_HINT
         return {
             "ok": False,
-            "error": f"custom action {name!r} not found in the target window",
+            "error": error,
         }
 
     matched = next(
@@ -366,6 +404,14 @@ def set_text(
     Resolution: scope to the device's window, then the field by *identifier* /
     *label*, else the first editable field (text field / secure field / text
     area) in the window — which is the alert's field when a prompt is up.
+
+    Backend boundary (b11): this works for **UIKit** fields, including
+    `UIAlertController` modal-alert text fields. It does **NOT** reliably commit
+    a **SwiftUI** `SecureField`/`TextField` whose text is bound to `@State`:
+    writing `AXValue` can make the field *display* the text while the `@State`
+    binding stays empty, so the app never observes the input. For SwiftUI
+    `@State`-bound fields, tap the field and drive it with `type_text` /
+    HID keystrokes instead.
 
     Returns ``{"ok": True, "value": text}`` or ``{"ok": False, "error": ...}``.
     """
