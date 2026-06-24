@@ -995,6 +995,84 @@ def launch_and_discover_port(
     return host, port
 
 
+# ─── reachable-host resolution (iOS 17+ RemoteServiceTunnel) ─────────────────
+#
+# WDA announces the first IP it finds on-device via "ServerURLHere->http://<ip>:<port>",
+# falling back to `localhost` when the device has no routable Wi-Fi IP on the
+# host's network. But `localhost` on the *Mac* does not reach the *device*, so
+# the /status smoke (and every later tool call) fails with "Connection refused".
+# On iOS 17+ a USB-attached device is reachable from the host only via the
+# CoreDevice RemoteServiceTunnel, whose address devicectl reports as
+# connectionProperties.tunnelIPAddress (an IPv6 ULA, e.g. fd35:ed24:fc2::1).
+# WDA binds 0.0.0.0:<port> on the device, so the tunnel address reaches it even
+# when the announced host is non-routable. We probe candidates and use the first
+# that actually answers.
+
+
+def _resolve_tunnel_ip(coredevice_uuid: str) -> Optional[str]:
+    """Return the device's CoreDevice tunnel IP (IPv6 ULA), or None."""
+    try:
+        result = subprocess.run(
+            ["xcrun", "devicectl", "device", "info", "details",
+             "--device", coredevice_uuid, "--json-output", "-"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout)
+        conn = (data.get("result") or {}).get("connectionProperties") or {}
+        return (conn.get("tunnelIPAddress") or "").strip() or None
+    except Exception:
+        return None
+
+
+def _fmt_host(host: str) -> str:
+    """Bracket a bare IPv6 literal so it is valid in a URL authority."""
+    if host and ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _probe_status(host: str, port: int, timeout: float = 4.0) -> bool:
+    """Lightweight GET /status reachability probe — True iff WDA answers ready."""
+    try:
+        resp = httpx.get(f"http://{host}:{port}/status", timeout=timeout)
+        return resp.is_success and bool((resp.json().get("value") or {}).get("ready"))
+    except Exception:
+        return False
+
+
+def choose_reachable_host(announced_host: str, port: int, coredevice_uuid: str) -> str:
+    """Return a host that actually reaches WDA from this Mac.
+
+    Probes, in priority order: the CoreDevice tunnel IP (reliable for USB on
+    iOS 17+), the host WDA announced (works when device + Mac share a network),
+    then localhost. Returns the first that answers /status. If none answer,
+    returns the best candidate (tunnel IP when available) so the subsequent
+    smoke_test raises a clear error naming the address actually tried.
+    """
+    candidates: list[str] = []
+    tunnel_ip = _resolve_tunnel_ip(coredevice_uuid)
+    if tunnel_ip:
+        candidates.append(_fmt_host(tunnel_ip))
+    for h in (announced_host, "localhost"):
+        fh = _fmt_host(h)
+        if fh and fh not in candidates:
+            candidates.append(fh)
+
+    for h in candidates:
+        if _probe_status(h, port):
+            if h != _fmt_host(announced_host):
+                print(
+                    f"[simdrive] WDA announced {announced_host!r} (not reachable from host); "
+                    f"using {h} via CoreDevice tunnel instead.",
+                    flush=True,
+                )
+            return h
+
+    return candidates[0] if candidates else _fmt_host(announced_host)
+
+
 # ─── smoke test ──────────────────────────────────────────────────────────────
 
 
@@ -1304,6 +1382,11 @@ def bootstrap_device(
     # 7. Launch + port discovery (Bug 5+6 fix: xcodebuild test-without-building)
     host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
 
+    # 7b. Resolve a host that actually reaches WDA from this Mac. On iOS 17+ the
+    # announced host is often `localhost` (no routable Wi-Fi IP), which the Mac
+    # cannot reach — fall back to the CoreDevice tunnel IP. (iOS 17+ tunnel fix)
+    host = choose_reachable_host(host, port, udid)
+
     # 8. Smoke test using the device's WiFi IP — pulls /status which carries
     # os.version (D8). Run before persisting so the registry write captures
     # the current OS / device-name fields in a single operation.
@@ -1380,6 +1463,8 @@ def wda_up(udid: str) -> dict:
     wda_port = int(entry.get("port") or _WDA_DEFAULT_PORT)
 
     host, port = launch_and_discover_port(udid, derived_data, hardware_udid, bundle_id, wda_port)
+    # iOS 17+ tunnel fix: prefer a host that actually reaches WDA from this Mac.
+    host = choose_reachable_host(host, port, udid)
 
     entry["host"] = host
     entry["ip"] = host
