@@ -13,6 +13,22 @@
  filter catch what slips through.
 -->
 
+## [Unreleased]
+
+### Changed — telemetry is now opt-in by default (privacy)
+
+- **Source-attribution telemetry is OFF unless you explicitly opt in.**
+  Previously `simdrive trial start` could POST a hashed email + version + OS
+  family to the attribution endpoint by default. It now sends **nothing**
+  unless you opt in — per run with `--track`, or durably with `track = true`
+  in `~/.simdrive/telemetry.toml`. Your trial always works locally either way.
+- **One kill-switch.** Setting `HEKA_TELEMETRY=off` (or `0`/`false`/`no`)
+  severs every telemetry path — it overrides even an explicit opt-in.
+- **Local-first crash sink.** Unhandled crashes are now recorded to
+  `~/.heka/crashes/*.json` capturing only the crash *shape* (exception class,
+  stack frames as basenames, version, OS) — no messages, paths, or PII — and
+  never sent anywhere. Disable with `HEKA_CRASH_SINK_DISABLED=1`.
+
 ## [1.0.0b12] — 2026-06-23
 
 ### Fixed — host-AX `set_text` / `perform_accessibility_action` now reach app content on iOS 26
@@ -330,7 +346,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 ### Added — Business model
 
 - **14-day free trial** — `simdrive trial start --email you@example.com` issues an Ed25519-signed local license valid for 14 days, full Pro feature access. Email+machine SHA-256 de-dupe prevents infinite re-trials.
-- **License authentication** — `simdrive auth <license-key>` redeems a Polar-issued production license. Writes to `~/.simdrive/license.json`, validates against the embedded public key.
+- **License authentication** — `simdrive auth <license-key>` redeems a signed production license. Writes to `~/.simdrive/license.json`, validates against the embedded public key.
 - **Paywall enforcement on every MCP tool** — all 32 MCP tools now gate on `check_entitlement`. Trial users get full access; after trial expiry, `LicenseError` is raised with a structured `license_required` envelope containing `pricing_url`, `auth_command_hint`, and `trial_command_hint` so the MCP client (Claude Code, Cursor, Continue) surfaces a copy-pasteable recovery path to the user.
 
 ### Added — Positioning
@@ -341,7 +357,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 ### Added — Release engineering
 
 - New publish workflow: triggers on `simdrive-v*` tag pattern (was `specterqa-ios-v*`), gates on version-match + CHANGELOG-head + non-live pytest + fresh-venv install smoke, publishes via PyPI Trusted Publisher (OIDC, no static token).
-- Production license-signing keypair rotated. Public key embedded in client; private key Fernet-encrypted in vault and bound to the simdrive-license-api Cloudflare Worker for license issuance on Polar webhook events.
+- Production license-signing keypair rotated. Public key embedded in client; private key Fernet-encrypted in vault and bound to the simdrive-license-api Cloudflare Worker for license issuance on checkout-provider webhook events.
 
 ### Changed
 

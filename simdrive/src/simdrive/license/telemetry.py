@@ -1,8 +1,8 @@
-"""Trial-start source attribution telemetry — opt-in, privacy-first.
+"""Trial-start source attribution telemetry — **true opt-in**, privacy-first.
 
 When a user runs ``simdrive trial start --email <addr> --source <channel>``,
-this module fires a single, fire-and-forget POST to the SimDrive Worker so
-we can attribute which marketing channel drove the trial. The payload is
+this module *can* fire a single, fire-and-forget POST to the SimDrive Worker
+so we can attribute which marketing channel drove the trial. The payload is
 deliberately small:
 
     {
@@ -15,12 +15,20 @@ deliberately small:
 
 Hard rules
 ----------
+* **Opt-in by default is OFF.** No POST is made unless the user has
+  *explicitly and durably* opted in. The only opt-in signals are:
+    - a persisted config at ``~/.simdrive/telemetry.toml`` containing
+      ``track = true`` (durable), or
+    - a per-invocation ``--track`` flag (``track=True`` here).
+  Without one of these, the network call is **never attempted**.
+* **One kill-switch.** ``HEKA_TELEMETRY`` set to an off value
+  (``off`` / ``0`` / ``false`` / ``no`` / ``none`` / ``disabled``) severs
+  *every* telemetry path — it overrides even an explicit opt-in. This is the
+  single, provable cross-Heka switch (see the ``HEKA-SIM-NOSAAS`` claim).
 * Raw email is **never** sent. Only SHA-256 of the normalized
-  (lowercased, stripped) email leaves the machine.
-* ``--no-track`` skips the network call entirely.
-* A persisted opt-out config at ``~/.simdrive/telemetry.toml`` containing
-  ``track = false`` (or just being present with no ``track`` key) skips
-  the network call permanently — no further prompts.
+  (lowercased, stripped) email leaves the machine, and only when opted in.
+* ``--no-track`` and the legacy ``SIMDRIVE_TELEMETRY_OFF=1`` also skip the
+  call (redundant now that OFF is the default, kept for compatibility).
 * Network failure is non-fatal. The trial license is generated locally
   regardless; we print a single "telemetry skipped" notice and exit 0.
 
@@ -32,7 +40,6 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
-import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -53,6 +60,27 @@ _DEFAULT_OPT_OUT_PATH = Path.home() / ".simdrive" / "telemetry.toml"
 
 # Default channel string when --source is omitted but tracking is allowed.
 _DEFAULT_SOURCE = "direct"
+
+# The single cross-Heka telemetry kill-switch. When ``HEKA_TELEMETRY`` is set
+# to any of these values, EVERY simdrive telemetry path short-circuits to a
+# no-op — this overrides even an explicit opt-in. Unset means "not killed"
+# (telemetry is still opt-in-by-default OFF elsewhere).
+_KILL_SWITCH_ENV = "HEKA_TELEMETRY"
+_KILL_SWITCH_OFF_VALUES = frozenset(
+    {"off", "0", "false", "no", "none", "disabled"}
+)
+
+
+def telemetry_killed() -> bool:
+    """Return True iff the ``HEKA_TELEMETRY`` kill-switch is set to an off value.
+
+    This is the ONE provable switch that severs every simdrive telemetry path.
+    It takes precedence over any opt-in. Unset → not killed.
+    """
+    raw = os.environ.get(_KILL_SWITCH_ENV)
+    if raw is None:
+        return False
+    return raw.strip().lower() in _KILL_SWITCH_OFF_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -118,24 +146,30 @@ def build_payload(
 
 
 def is_opted_out(opt_out_path: Path = _DEFAULT_OPT_OUT_PATH) -> bool:
-    """Return True iff a persisted opt-out config disables tracking.
+    """Return True iff telemetry must NOT fire (**true opt-in — default OUT**).
 
-    Precedence:
+    Telemetry is disabled unless the user has *explicitly and durably* opted
+    in. Precedence (first decisive signal wins):
 
-    1. ``SIMDRIVE_TELEMETRY_OFF=1`` env var → opt-out
-    2. File exists at ``opt_out_path``:
-       - File contains ``track = false`` → opt-out
-       - File contains ``track = true``  → tracking allowed
-       - File present with no ``track`` key → treat as opt-out (the user
-         created the file, default-deny their intent)
-    3. Otherwise → tracking allowed (default opt-in)
+    1. ``HEKA_TELEMETRY`` kill-switch off → opted out (hard mute; overrides
+       any opt-in).
+    2. ``SIMDRIVE_TELEMETRY_OFF=1`` (legacy) → opted out.
+    3. Persisted config at ``opt_out_path``:
+       - File contains ``track = true``  → opted **IN** (the one durable
+         opt-in signal).
+       - File contains ``track = false`` → opted out.
+       - File present with no ``track`` key → opted out.
+    4. No config file → opted **OUT** (privacy-safe default; no POST is ever
+       attempted without a recorded opt-in).
 
     A malformed config defaults to opt-out (fail-closed for privacy).
     """
+    if telemetry_killed():
+        return True
     if os.environ.get("SIMDRIVE_TELEMETRY_OFF") == "1":
         return True
     if not opt_out_path.exists():
-        return False
+        return True  # DEFAULT OFF — no explicit opt-in on record
     try:
         text = opt_out_path.read_text(encoding="utf-8")
     except OSError:
@@ -150,26 +184,40 @@ def is_opted_out(opt_out_path: Path = _DEFAULT_OPT_OUT_PATH) -> bool:
         if key.strip() == "track":
             normalized = value.strip().strip('"').strip("'").lower()
             if normalized == "true":
-                return False
-            if normalized == "false":
-                return True
-    # File present but no ``track`` key — default-deny.
+                return False  # explicit, durable opt-in
+            return True       # track = false / any other value → opted out
+    # File present but no ``track`` key — no explicit opt-in → opted out.
     return True
 
 
-def write_opt_out(opt_out_path: Path = _DEFAULT_OPT_OUT_PATH) -> Path:
-    """Persist an opt-out config. Used by --no-track to make it sticky.
+def write_opt_in(opt_out_path: Path = _DEFAULT_OPT_OUT_PATH) -> Path:
+    """Persist an explicit opt-**IN** (``track = true``).
 
-    Note: --no-track on a single invocation does NOT itself write the file —
-    the user must pass the flag each time, or call this helper / hand-edit
-    the config. This keeps the CLI flag side-effect-free (POLA).
-
-    Returns the path that was written.
+    This is the documented, durable way a user consents to source-attribution
+    telemetry. Since OFF is the default, this file is the ONLY thing (besides a
+    per-invocation ``--track``) that enables the POST. Returns the path written.
     """
     opt_out_path.parent.mkdir(parents=True, exist_ok=True)
     opt_out_path.write_text(
-        "# SimDrive telemetry opt-out. Remove this file to re-enable\n"
-        "# source-attribution telemetry on `simdrive trial start`.\n"
+        "# SimDrive telemetry opt-IN. Telemetry is OFF by default; this file\n"
+        "# is the only durable thing that turns source-attribution on for\n"
+        "# `simdrive trial start`. Delete it (or set track = false) to opt out.\n"
+        'track = true\n',
+        encoding="utf-8",
+    )
+    return opt_out_path
+
+
+def write_opt_out(opt_out_path: Path = _DEFAULT_OPT_OUT_PATH) -> Path:
+    """Persist an explicit opt-out config (``track = false``).
+
+    Mostly redundant now that OFF is the default, but kept so a user can make
+    the opt-out visible/explicit on disk. Returns the path that was written.
+    """
+    opt_out_path.parent.mkdir(parents=True, exist_ok=True)
+    opt_out_path.write_text(
+        "# SimDrive telemetry opt-out (explicit). Telemetry is OFF by default;\n"
+        "# this file records the opt-out visibly. Set track = true to opt in.\n"
         'track = false\n',
         encoding="utf-8",
     )
@@ -199,6 +247,11 @@ def send_trial_attribution(
     outcome. Callers should NEVER raise on a False return — that would
     defeat the "telemetry is non-fatal" invariant.
     """
+    # Defense in depth: the kill-switch severs the network path at the
+    # narrowest boundary, so even a *direct* call can never phone home when
+    # HEKA_TELEMETRY is off. This is what makes HEKA-SIM-NOSAAS provable.
+    if telemetry_killed():
+        return False, "telemetry disabled (HEKA_TELEMETRY kill-switch)"
     payload = build_payload(email, source)
     try:
         resp = requests.post(worker_url, json=payload, timeout=timeout)
@@ -225,16 +278,32 @@ def maybe_send_attribution(
     *,
     source: Optional[str],
     no_track: bool,
+    track: bool = False,
     opt_out_path: Path = _DEFAULT_OPT_OUT_PATH,
     worker_url: str = _DEFAULT_WORKER_URL,
 ) -> str:
-    """Resolve opt-out, send if allowed, return a one-line notice for the CLI.
+    """Resolve consent, send only if opted in, return a one-line CLI notice.
+
+    Telemetry is **opt-in-by-default OFF**. The POST is attempted only when
+    the user has opted in — either per-invocation (``track=True``, the
+    ``--track`` flag) or durably (``track = true`` in ``opt_out_path``) — and
+    the ``HEKA_TELEMETRY`` kill-switch is not off.
 
     The CLI prints whatever string this returns. Never raises.
     """
+    # Kill-switch first — a single provable off signal beats everything.
+    if telemetry_killed():
+        return "telemetry disabled (HEKA_TELEMETRY kill-switch)"
     if no_track:
         return "telemetry opted out (--no-track)"
+    if track:
+        # Explicit per-invocation opt-in (documented CLI consent).
+        _ok, msg = send_trial_attribution(email, source, worker_url=worker_url)
+        return msg
     if is_opted_out(opt_out_path):
-        return f"telemetry opted out ({opt_out_path})"
+        return (
+            "telemetry off (opt-in is OFF by default — enable durably with "
+            f"`track = true` in {opt_out_path}, or pass --track for one run)"
+        )
     _ok, msg = send_trial_attribution(email, source, worker_url=worker_url)
     return msg

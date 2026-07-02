@@ -112,9 +112,9 @@ class TestBuildPayload:
 
 class TestOptOut:
 
-    def test_default_is_opt_in(self, tmp_path: Path) -> None:
-        # No config file → tracking allowed.
-        assert telemetry.is_opted_out(tmp_path / "missing.toml") is False
+    def test_default_is_opted_out(self, tmp_path: Path) -> None:
+        # TRUE OPT-IN: no config file → opted OUT (no POST without consent).
+        assert telemetry.is_opted_out(tmp_path / "missing.toml") is True
 
     def test_env_var_opts_out(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -149,6 +149,55 @@ class TestOptOut:
         assert cfg.exists()
         assert telemetry.is_opted_out(cfg) is True
 
+    def test_write_opt_in_persists(self, tmp_path: Path) -> None:
+        """The documented durable opt-in: write_opt_in → is_opted_out False."""
+        cfg = tmp_path / "telemetry.toml"
+        telemetry.write_opt_in(cfg)
+        assert cfg.exists()
+        assert telemetry.is_opted_out(cfg) is False
+
+
+# ---------------------------------------------------------------------------
+# HEKA_TELEMETRY kill-switch — the single cross-Heka off signal
+# ---------------------------------------------------------------------------
+
+
+class TestKillSwitch:
+
+    @pytest.mark.parametrize("val", ["off", "0", "false", "no", "none", "disabled", "OFF", "False"])
+    def test_off_values_kill(self, val: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HEKA_TELEMETRY", val)
+        assert telemetry.telemetry_killed() is True
+
+    def test_unset_is_not_killed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HEKA_TELEMETRY", raising=False)
+        assert telemetry.telemetry_killed() is False
+
+    def test_on_value_is_not_killed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # "on" is not an off value; kill-switch is off-only (it never enables).
+        monkeypatch.setenv("HEKA_TELEMETRY", "on")
+        assert telemetry.telemetry_killed() is False
+
+    def test_kill_switch_overrides_opt_in_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = tmp_path / "telemetry.toml"
+        cfg.write_text("track = true\n")
+        monkeypatch.setenv("HEKA_TELEMETRY", "off")
+        # Even an explicit opt-in must be overridden by the kill-switch.
+        assert telemetry.is_opted_out(cfg) is True
+
+    def test_kill_switch_short_circuits_sender(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """send_trial_attribution must NOT touch the network when killed."""
+        monkeypatch.setenv("HEKA_TELEMETRY", "off")
+        with patch.object(telemetry.requests, "post") as mock_post:
+            ok, msg = telemetry.send_trial_attribution("u@x.io", "hn")
+        assert mock_post.call_count == 0
+        assert ok is False
+        assert "kill-switch" in msg.lower()
+
 
 # ---------------------------------------------------------------------------
 # maybe_send_attribution — orchestration: no-track / opt-out short-circuit
@@ -180,7 +229,68 @@ class TestMaybeSendAttributionShortCircuit:
                 opt_out_path=cfg,
             )
         assert mock_post.call_count == 0
-        assert "opted out" in notice.lower()
+        assert "off" in notice.lower()
+
+    def test_default_no_optin_skips_network(self, tmp_path: Path) -> None:
+        """No opt-in on record → zero network calls, even with a --source."""
+        with patch.object(telemetry.requests, "post") as mock_post:
+            notice = telemetry.maybe_send_attribution(
+                "u@x.io",
+                source="hn",
+                no_track=False,
+                opt_out_path=tmp_path / "missing.toml",
+            )
+        assert mock_post.call_count == 0
+        assert "off" in notice.lower()
+
+    def test_kill_switch_skips_network_despite_opt_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HEKA_TELEMETRY=off wins over an explicit --track opt-in."""
+        monkeypatch.setenv("HEKA_TELEMETRY", "off")
+        with patch.object(telemetry.requests, "post") as mock_post:
+            notice = telemetry.maybe_send_attribution(
+                "u@x.io",
+                source="hn",
+                no_track=False,
+                track=True,
+                opt_out_path=tmp_path / "missing.toml",
+            )
+        assert mock_post.call_count == 0
+        assert "kill-switch" in notice.lower()
+
+    def test_explicit_track_flag_enables_send(self, tmp_path: Path) -> None:
+        """--track (track=True) is a valid per-invocation opt-in → POST fires."""
+        with patch.object(telemetry.requests, "post") as mock_post:
+            resp = MagicMock()
+            resp.status_code = 204
+            mock_post.return_value = resp
+            notice = telemetry.maybe_send_attribution(
+                "u@x.io",
+                source="hn",
+                no_track=False,
+                track=True,
+                opt_out_path=tmp_path / "missing.toml",
+            )
+        assert mock_post.call_count == 1
+        assert "sent" in notice.lower()
+
+    def test_persisted_opt_in_enables_send(self, tmp_path: Path) -> None:
+        """track = true on disk is a valid durable opt-in → POST fires."""
+        cfg = tmp_path / "telemetry.toml"
+        cfg.write_text("track = true\n")
+        with patch.object(telemetry.requests, "post") as mock_post:
+            resp = MagicMock()
+            resp.status_code = 200
+            mock_post.return_value = resp
+            notice = telemetry.maybe_send_attribution(
+                "u@x.io",
+                source="hn",
+                no_track=False,
+                opt_out_path=cfg,
+            )
+        assert mock_post.call_count == 1
+        assert "sent" in notice.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +316,7 @@ class TestSendTrialAttributionIntegration:
                 "user@example.com",
                 source="hn",
                 no_track=False,
+                track=True,  # explicit opt-in required for the POST to fire
                 opt_out_path=tmp_path / "missing.toml",
                 worker_url="https://api.simdrive.dev/trial",
             )
@@ -234,6 +345,7 @@ class TestSendTrialAttributionIntegration:
                 "user@example.com",
                 source=None,
                 no_track=False,
+                track=True,  # explicit opt-in required for the POST to fire
                 opt_out_path=tmp_path / "missing.toml",
             )
         assert captured["json"]["source"] == "direct"
@@ -249,6 +361,7 @@ class TestSendTrialAttributionIntegration:
                 "u@x.io",
                 source="hn",
                 no_track=False,
+                track=True,
                 opt_out_path=tmp_path / "missing.toml",
             )
         # Did not raise → assertion is reaching this line.
@@ -262,6 +375,7 @@ class TestSendTrialAttributionIntegration:
                 "u@x.io",
                 source="hn",
                 no_track=False,
+                track=True,
                 opt_out_path=tmp_path / "missing.toml",
             )
         assert "skipped" in notice.lower()
@@ -277,6 +391,7 @@ class TestSendTrialAttributionIntegration:
                 "u@x.io",
                 source="hn",
                 no_track=False,
+                track=True,
                 opt_out_path=tmp_path / "missing.toml",
             )
         assert "skipped" in notice.lower()
