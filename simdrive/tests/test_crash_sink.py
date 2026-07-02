@@ -131,6 +131,31 @@ class TestListCrashes:
         assert len(recs) == 1
 
 
+class TestCrashSinkNoEgress:
+    """Adversarial: the crash sink is local-only — it never opens a socket."""
+
+    def test_record_crash_opens_no_socket(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import socket
+
+        def _deny(*a, **k):  # noqa: ANN002
+            raise AssertionError("crash sink attempted network egress")
+
+        monkeypatch.setattr(socket.socket, "connect", _deny, raising=True)
+        monkeypatch.setattr(socket, "create_connection", _deny, raising=True)
+        # Records locally under network-deny without tripping the guard.
+        path = crash_sink.record_crash(_raise_and_capture(), crash_dir=tmp_path)
+        assert path is not None and path.exists()
+
+    def test_module_has_no_network_imports(self) -> None:
+        """Belt-and-braces: the crash-sink source imports no HTTP/socket libs."""
+        import inspect
+        src = inspect.getsource(crash_sink)
+        for banned in ("import requests", "import socket", "import http", "urllib"):
+            assert banned not in src, f"crash_sink must not reference {banned!r}"
+
+
 class TestInstallCrashSink:
 
     def test_disabled_env_returns_false(

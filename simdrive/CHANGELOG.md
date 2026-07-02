@@ -15,6 +15,17 @@
 
 ## [Unreleased]
 
+### Added — signed update-check (advisory only, no telemetry)
+
+- **`simdrive update-check`** pulls a signed, pull-based release feed
+  (`releases.json` + detached Ed25519 signature), verifies it locally, and
+  prints an advisory if a newer version exists. It **never auto-installs** and
+  sends **no user data** — the request carries nothing identifying. An
+  unverifiable feed is refused (fail-closed); a network error is a silent skip
+  (fail-open). Obeys the single `HEKA_TELEMETRY=off` kill-switch and
+  `HEKA_OFFLINE=1`. Every real call is logged to
+  `~/.heka/calls.jsonl` so you can audit what left the machine.
+
 ### Changed — telemetry is now opt-in by default (privacy)
 
 - **Source-attribution telemetry is OFF unless you explicitly opt in.**

@@ -3958,6 +3958,53 @@ def _cmd_doctor(args: list[str]) -> None:
     sys.exit(0 if checks_ok else 1)
 
 
+def _cmd_update_check(args: list[str]) -> None:
+    """Handle `simdrive update-check [--now] [--verbose] [--json]`.
+
+    Pulls the signed release feed, verifies it locally, and prints an advisory.
+    Never auto-installs; carries no user data; obeys the HEKA_TELEMETRY
+    kill-switch and HEKA_OFFLINE. Non-fatal — always exits 0 unless --json is
+    requested with a hard error.
+
+    Exit codes: 0 = up to date / skipped / disabled; 10 = update available;
+    11 = below minimum supported (upgrade urged).
+    """
+    import argparse
+    import json as _json
+    import sys
+
+    from simdrive.update.check import check_for_update
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive update-check",
+        description=(
+            "Check for a newer simdrive release via the signed pull-based feed. "
+            "Advisory only — never installs. No user data is sent; obeys "
+            "HEKA_TELEMETRY=off and HEKA_OFFLINE=1."
+        ),
+    )
+    parser.add_argument("--now", action="store_true", default=False,
+                        help="Force a fresh check, ignoring the cached cadence.")
+    parser.add_argument("--verbose", action="store_true", default=False,
+                        help="Print the advisory even when up to date.")
+    parser.add_argument("--json", action="store_true", default=False,
+                        help="Emit the result as JSON.")
+    ns = parser.parse_args(args)
+
+    result = check_for_update(force=ns.now)
+    status = result.get("status", "unknown")
+
+    if ns.json:
+        print(_json.dumps(result, indent=2))
+    else:
+        # Stay quiet when up to date unless --verbose; always surface actionable
+        # states (update available / below min).
+        if status in ("update_available", "below_min") or ns.verbose:
+            print(result.get("message", ""))
+
+    sys.exit({"update_available": 10, "below_min": 11}.get(status, 0))
+
+
 # Subcommand dispatch registry — maps the first CLI argument to its handler.
 _SUBCOMMANDS: dict = {
     "demo": _cmd_demo,
@@ -3971,6 +4018,7 @@ _SUBCOMMANDS: dict = {
     "trial": _cmd_trial,
     "license": _cmd_license,
     "auth": _cmd_auth,
+    "update-check": _cmd_update_check,
     "lint-recordings": _cmd_lint_recordings,
     "migrate-recording": _cmd_migrate_recording,
 }
