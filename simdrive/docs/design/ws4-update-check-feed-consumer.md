@@ -104,9 +104,24 @@ this same shape:
   "payload_shape": [],          // field NAMES only; [] = zero-user-data GET
   "ok": true,                   // + optional "error" on failure
   // retained additional fields (allowed by the contract):
-  "result": "ok|skipped_unreachable|skipped_schema|signature_unverified",
+  "result": "ok|skipped_unreachable|skipped_schema|skipped_product|signature_unverified",
   "user_data": false }
 ```
+
+Coordinator adjudications from the WS-4 producer review (2026-07-02), both
+shipped in the publishing-pipeline slice:
+
+- **Missing sig is fail-CLOSED.** Feed fetched but `.sig` missing/unfetchable
+  classifies as `signature_unverified` (`ok:false`) — the frozen contract
+  reads "fail-closed on bad/**missing** signature"; it must not fold into the
+  fail-open `skipped_unreachable`. Matches the canonical reference consumer.
+- **`ok` is TRANSPORT truth** — did the call succeed. Locally-decided skips
+  after a successful fetch (`skipped_schema`, `skipped_product`) log
+  `ok:true`; the advisory outcome rides in `result`/`error` only.
+- **Product membership pin** (parity with the canonical consumer's
+  `expected_product`): a verified feed whose `product` ≠ `"simdrive"` is a
+  fail-open skip (`skipped_product`), so a validly-signed feed for another
+  Heka product can never drive a simdrive advisory.
 
 `simdrive` should expose the tail of this log (e.g. `simdrive update-check
 --history`) so a user can audit exactly what left the machine and when.
@@ -118,8 +133,10 @@ update-check
   ├─ telemetry_killed() or HEKA_OFFLINE → no-op (log "skipped: disabled")
   ├─ cached last_check within interval and not --now → use cache
   ├─ GET feed (timeout ~3s, like telemetry)
-  │    ├─ network error → silent skip, log "skipped: unreachable" (fail-open)
+  │    ├─ feed unreachable → silent skip, log "skipped: unreachable" (fail-open)
+  │    ├─ sig missing/unfetchable → refuse (fail-CLOSED, signature_unverified)
   │    ├─ signature invalid → refuse + warn, keep cached-known-good
+  │    ├─ verified but product ≠ simdrive → skip (fail-open, skipped_product)
   │    └─ ok → verify → parse → cache → advise
   └─ advise: compare __version__ vs latest/min_supported
        ├─ up to date        → (quiet unless --verbose)

@@ -7,7 +7,10 @@ Behavior (see docs/design/ws4-update-check-feed-consumer.md):
 * Pulls ``releases.json`` + detached ``releases.json.sig`` over plain GET with
   ZERO user data on the wire.
 * Verifies the Ed25519 signature over the exact raw bytes BEFORE parsing; an
-  unverifiable feed is refused (fail-closed), never acted on.
+  unverifiable feed — including a feed whose detached ``.sig`` is missing or
+  unfetchable — is refused (fail-closed), never acted on.
+* A verified feed for a DIFFERENT Heka product is skipped (fail-open product
+  membership pin, mirroring the canonical consumer's ``expected_product``).
 * Compares to the installed version (PEP 440) and returns an advisory. It never
   auto-installs.
 * Network/timeout errors are non-fatal (fail-open silent skip), mirroring
@@ -224,21 +227,30 @@ def evaluate(current: str, feed: dict) -> Advisory:
 # ---------------------------------------------------------------------------
 
 
-def _fetch(url: str, *, timeout: float) -> Optional[Tuple[bytes, str]]:
-    """GET the feed + detached sig. Returns (raw, sig_text) or None on any error.
+def _fetch(url: str, *, timeout: float) -> Optional[Tuple[bytes, Optional[str]]]:
+    """GET the feed + detached sig. The GET carries no query params / body —
+    zero user data on the wire.
 
-    The GET carries no query params / body — zero user data on the wire.
+    Returns ``None`` if the feed itself is unreachable (the fail-open network
+    class), or ``(raw, sig_text_or_None)`` — a ``None`` sig means the feed was
+    fetched but its signature was not. Per the frozen contract ("fail-closed
+    on bad/MISSING signature", coordinator adjudication 2026-07-02) the caller
+    must classify a missing sig as ``signature_unverified``, matching the
+    canonical reference — NOT as a network skip.
     """
     try:
         r = requests.get(url, timeout=timeout)
         if not (200 <= r.status_code < 300):
             return None
-        s = requests.get(url + ".sig", timeout=timeout)
-        if not (200 <= s.status_code < 300):
-            return None
-        return r.content, s.text
     except requests.exceptions.RequestException:
         return None
+    try:
+        s = requests.get(url + ".sig", timeout=timeout)
+        if not (200 <= s.status_code < 300):
+            return r.content, None
+        return r.content, s.text
+    except requests.exceptions.RequestException:
+        return r.content, None
 
 
 def _call_record(ts: float, url: str, *, ok: bool, result: str, **extra) -> dict:
@@ -337,7 +349,7 @@ def check_for_update(
                 "reason": "network"}
 
     raw, sig = fetched
-    feed = verify_feed(raw, sig, verify_keys=verify_keys)
+    feed = verify_feed(raw, sig, verify_keys=verify_keys) if sig is not None else None
     if feed is None:
         _log_call(_call_record(ts, url, ok=False, result="signature_unverified",
                                error="signature_unverified"), state_dir=sdir)
@@ -357,6 +369,20 @@ def check_for_update(
         return {"checked": True, "status": "skipped",
                 "message": "update check skipped (unknown feed schema)",
                 "reason": "schema"}
+
+    # Product membership pin (mirrors the canonical consumer's
+    # validate_feed(expected_product=...)): a correctly-signed feed for a
+    # DIFFERENT Heka product must never drive a simdrive advisory — if one
+    # operator key ever signs several products' feeds, a swapped feed would
+    # otherwise verify. Fail-open skip; applied only after the signature
+    # verified, so a forged product can't trigger it.
+    if feed.get("product") != _PRODUCT:
+        _log_call(_call_record(ts, url, ok=True, result="skipped_product",
+                               feed_product=str(feed.get("product"))),
+                  state_dir=sdir)
+        return {"checked": True, "status": "skipped",
+                "message": "update check skipped (feed is for a different product)",
+                "reason": "product"}
 
     adv = evaluate(cur, feed)
     _log_call(_call_record(ts, url, ok=True, result="ok",

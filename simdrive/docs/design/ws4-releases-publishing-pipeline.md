@@ -1,8 +1,12 @@
 # WS-4 — simdrive `releases.json` publishing pipeline (design)
 
 **Status:** APPROVED (coordinator sign-off @ d77dd60) with Q1/Q2 adjudicated
-and folded in below; Q3 pending Chairman, Q4 pending harness-lane.
-Implementation starts once harness-lane's canonical producer/validator lands.
+and folded in below; Q3 pending Chairman, Q4 answered (see §8).
+Implementation slice SHIPPED (this branch): `scripts/make_releases_feed.py`
+(§4 steps 1–4 tooling) + the §6.3 CI self-test + two consumer
+reconciliations from the producer-review adjudications (missing-sig
+fail-closed classification, product membership pin — see the companion
+consumer doc §6/§7).
 
 **Owner:** simdrive-lane (this doc: how *simdrive.dev* publishes the feed).
 **Converges with:** harness-lane's `harness update-check` producer + canonical
@@ -95,10 +99,17 @@ release tagged (vX.Y.Z on main, PR-only per governance)
                 channels values parse, notes_url is https://simdrive.dev/…)
   3. SIGN      operator signs the exact bytes offline → releases.json.sig
                (private key never enters CI; signing is the one manual step)
-  4. DOGFOOD   run the SHIPPED consumer against the staged pair:
-               `SIMDRIVE_UPDATE_FEED_URL=file://…staging simdrive update-check
-                --now --json` must verify and report the new version
-               (with the staging pubkey injected — see §6 test hook)
+  4. DOGFOOD   run the SHIPPED consumer's verify path against the staged pair:
+               `scripts/make_releases_feed.py --dogfood <staging-dir>
+                --keys <staging-keyset> --current <installed> --json`
+               must verify and report the new version. (CORRECTED from the
+               original `SIMDRIVE_UPDATE_FEED_URL=file://…` form: the shipped
+               consumer's transport is `requests`, which has NO file://
+               adapter — found by the 2026-07-02 parity cross-check. --dogfood
+               feeds the staged bytes to the exact verify/advise code real
+               clients run, with the staging keyset injected in-process via
+               the consumer's `verify_keys=` parameter — the §6.2-adjudicated
+               injection, no env trust-anchor override.)
   5. PUBLISH   upload BOTH objects, sig-first, then swap releases.json
   6. VERIFY    fetch from the real origin and re-run step 4 against it
 ```
@@ -141,6 +152,14 @@ upgrade advisory.
    produce + sign a fixture feed, run the canonical validator AND the shipped
    consumer against it, tamper one byte → must reject. This proves the
    producer/consumer pair end-to-end on every PR.
+   **Shipped** as `scripts/make_releases_feed.py --self-test` (CI step +
+   `tests/test_make_releases_feed.py`). The validator run in CI is the
+   script's mirror of the canonical validator; mirror↔canonical parity
+   (byte-identical produce, identical verdicts, cross-verified sigs) is
+   locked by `TestCanonicalParity`, which runs against the reference module
+   whenever it is reachable (`HEKA_CANONICAL_UPDATE_CHECK_DIR`, pinned to the
+   reviewed commit during gate runs; skips on GitHub CI where the harness
+   repo is absent).
 
 ## 7. Failure modes
 
@@ -163,9 +182,15 @@ upgrade advisory.
 - **Q3 — PENDING (routed to Chairman):** hosting infra for
   `releases.simdrive.dev` (static bucket + CDN vs existing simdrive.dev host)
   — determines the §2 access-log setting to document.
-- **Q4 — PENDING (relayed to harness-lane):** producer CLI shape — can
-  `harness update-check --produce`(?) emit the feed from a git tag so step 1
-  needs no simdrive-local script long-term?
+- **Q4 — ANSWERED YES (harness main @ 7b4ba2d):** `harness update-check
+  --produce` emits the feed deterministically from a git tag. **One residual
+  raised back to harness-lane:** its `_pick_tag` only considers bare `v*`
+  tags, but simdrive releases are tagged `simdrive-v*` (this repo's `v*` tags
+  are legacy specterqa releases — auto-pick would emit `latest: 9.0.0`).
+  Until the canonical producer grows a tag-prefix option, simdrive cuts
+  either pass `--tag` explicitly or use the interim
+  `scripts/make_releases_feed.py` (default prefix `simdrive-v`, byte-parity
+  locked by tests).
 
 ## 9. DoD for the implementation slice
 

@@ -15,6 +15,23 @@
 
 ## [Unreleased]
 
+### Added — release-feed publishing pipeline (operator tooling)
+
+- **`scripts/make_releases_feed.py`** — the tooling that publishes simdrive's
+  signed `releases.json`: generate the feed from a release tag, validate it
+  against the shared cross-product schema, sign it offline (the signing key
+  never enters CI), and dogfood the staged feed through the exact verify code
+  shipped clients run. A CI self-test proves the whole produce → sign →
+  verify → tamper-reject loop on every PR using a throwaway key.
+
+### Changed — update-check hardening
+
+- A feed whose detached signature is **missing** is now refused outright
+  (fail-closed), exactly like a bad signature — previously it was treated as
+  a network hiccup and skipped.
+- A correctly-signed feed for a **different product** is now ignored: only a
+  feed with `"product": "simdrive"` can produce a simdrive upgrade advisory.
+
 ### Added — signed update-check (advisory only, no telemetry)
 
 - **`simdrive update-check`** pulls a signed, pull-based release feed
