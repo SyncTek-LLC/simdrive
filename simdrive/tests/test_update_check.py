@@ -30,10 +30,11 @@ def _sign(raw: bytes, sk: SigningKey) -> str:
     return base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
 
 
-def _feed_bytes(latest="1.0.0", min_supported="1.0.0b8", schema=1) -> bytes:
+def _feed_bytes(latest="1.0.0", min_supported="1.0.0b8", schema=1,
+                product="simdrive") -> bytes:
     return json.dumps({
         "schema_version": schema,
-        "product": "simdrive",
+        "product": product,
         "latest": latest,
         "min_supported": min_supported,
         "released_at": "2026-07-01T00:00:00Z",
@@ -179,7 +180,8 @@ class TestEvaluate:
 # ---------------------------------------------------------------------------
 
 
-def _patch_fetch(monkeypatch, raw: bytes | None, sig: str | None):
+def _patch_fetch(monkeypatch, raw: bytes | None, sig: str | None,
+                 sig_missing: bool = False):
     def fake_get(url, timeout):  # noqa: ANN001
         from unittest.mock import MagicMock
         m = MagicMock()
@@ -188,6 +190,8 @@ def _patch_fetch(monkeypatch, raw: bytes | None, sig: str | None):
             raise requests.exceptions.ConnectionError("deny")
         m.status_code = 200
         if url.endswith(".sig"):
+            if sig_missing:
+                m.status_code = 404
             m.text = sig
         else:
             m.content = raw
@@ -273,6 +277,42 @@ class TestCheckForUpdate:
         _assert_canonical(rec)
         assert rec["ok"] is False
         assert rec["error"] == "signature_unverified"
+
+
+class TestCoordinatorReconciliations:
+    """WS-4 producer-review adjudications (coordinator, 2026-07-02):
+    (1) feed present + sig missing/unfetchable is fail-CLOSED
+    ``signature_unverified`` — the frozen contract reads "fail-closed on
+    bad/MISSING signature", so it must NOT fold into the fail-open network
+    skip, and the audit record must match the reference classification.
+    (2) a correctly-signed feed for a DIFFERENT product is a fail-open skip
+    (product membership pin, mirroring the canonical
+    ``validate_feed(expected_product=...)`` behavior)."""
+
+    def test_missing_sig_fails_closed_as_unverified(
+            self, monkeypatch, keypair, tmp_path) -> None:
+        _sk, keys = keypair
+        _patch_fetch(monkeypatch, _feed_bytes(), None, sig_missing=True)
+        res = uc.check_for_update(current="1.0.0b12", verify_keys=keys, force=True)
+        assert res["status"] == "unverified"
+        assert res["reason"] == "signature"
+        rec = _last_call_record(tmp_path)
+        _assert_canonical(rec)
+        assert rec["ok"] is False
+        assert rec["error"] == "signature_unverified"
+
+    def test_wrong_product_feed_is_fail_open_skip(
+            self, monkeypatch, keypair, tmp_path) -> None:
+        sk, keys = keypair
+        raw = _feed_bytes(product="harness")  # validly signed, wrong product
+        _patch_fetch(monkeypatch, raw, _sign(raw, sk))
+        res = uc.check_for_update(current="1.0.0b12", verify_keys=keys, force=True)
+        assert res["status"] == "skipped"
+        assert res["reason"] == "product"
+        rec = _last_call_record(tmp_path)
+        _assert_canonical(rec)
+        assert rec["ok"] is True  # transport succeeded; skipping is local
+        assert rec["result"] == "skipped_product"
 
 
 class TestNoEgressWhenDisabled:

@@ -46,6 +46,19 @@ MUTANTS = [
         'ok=False, result="signature_unverified"',
         'ok=True, result="signature_unverified"',
     ),
+    (
+        "missing sig reclassified as fail-open network skip "
+        "(frozen contract: missing sig is fail-CLOSED)",
+        "        if not (200 <= s.status_code < 300):\n"
+        "            return r.content, None",
+        "        if not (200 <= s.status_code < 300):\n"
+        "            return None  # MUTANT",
+    ),
+    (
+        "product membership pin removed (cross-product feed advises)",
+        '    if feed.get("product") != _PRODUCT:',
+        "    if False:  # MUTANT",
+    ),
 ]
 
 
