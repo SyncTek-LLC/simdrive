@@ -15,6 +15,14 @@ operator secrets store (same handling as the license-signing key).
 Rotation mirrors ``simdrive.license.public_key``: prepend the new
 ``(key_id, hex_pubkey)`` tuple, keep the prior one until no in-the-wild feed
 references it, then remove it.
+
+Trust model — MEMBERSHIP pinning, not key_id selection: a feed is trusted iff
+its detached signature verifies under one of the public keys listed here. The
+``key_id`` (both here and in the feed body) is an ops/rotation hint for humans
+only; it is never used to pick the verification key, because the feed's
+``key_id`` lives inside the signed JSON and verify-before-parse forbids reading
+it pre-verification. An attacker advertising any ``key_id`` gains nothing
+(test: ``TestKeyIdSemantics``).
 """
 from __future__ import annotations
 

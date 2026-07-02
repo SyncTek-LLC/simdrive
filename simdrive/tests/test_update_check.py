@@ -47,6 +47,27 @@ def keypair():
     return sk, [sk.verify_key]
 
 
+# Canonical product-plane call-log record shape — frozen by the WS-3
+# entitlement contract §8 (forgeos-lane, WS3-ENTITLEMENT-CONTRACT-v1.md
+# @ 1796699). Extra fields are allowed; these keys are mandatory.
+CANONICAL_CALL_KEYS = {"ts", "product", "kind", "method", "url", "payload_shape", "ok"}
+
+
+def _last_call_record(tmp_path: Path) -> dict:
+    log = Path(tmp_path / "heka" / "calls.jsonl")
+    assert log.exists()
+    return json.loads(log.read_text().strip().splitlines()[-1])
+
+
+def _assert_canonical(rec: dict) -> None:
+    assert CANONICAL_CALL_KEYS <= set(rec), f"missing {CANONICAL_CALL_KEYS - set(rec)}"
+    assert rec["product"] == "simdrive"
+    assert rec["kind"] == "update_check"
+    assert rec["method"] == "GET"
+    assert rec["payload_shape"] == []  # zero-user-data GET → empty field list
+    assert isinstance(rec["ok"], bool)
+
+
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.delenv("HEKA_TELEMETRY", raising=False)
@@ -103,6 +124,29 @@ class TestVerifyFeed:
         sk, keys = keypair
         raw = b"not json at all"
         assert uc.verify_feed(raw, _sign(raw, sk), verify_keys=keys) is None
+
+
+class TestKeyIdSemantics:
+    """Trust is MEMBERSHIP-pinned: the sig must verify under an embedded
+    trusted pubkey. The feed's ``key_id`` field is an ops/rotation hint only —
+    it sits inside the signed JSON, so it cannot select a key before
+    verification (verify-before-parse) and must never influence trust."""
+
+    def test_unknown_key_id_gains_no_trust(self, keypair) -> None:
+        _sk, keys = keypair
+        rogue = SigningKey.generate()
+        feed = json.loads(_feed_bytes())
+        feed["key_id"] = "feed-2099-01"  # advertises a key we don't hold
+        raw = json.dumps(feed).encode("utf-8")
+        # Signed by a NON-trusted key: the advertised key_id must gain nothing.
+        assert uc.verify_feed(raw, _sign(raw, rogue), verify_keys=keys) is None
+
+    def test_trusted_sig_accepted_regardless_of_key_id(self, keypair) -> None:
+        sk, keys = keypair
+        feed = json.loads(_feed_bytes())
+        feed["key_id"] = "feed-1999-01"  # stale/wrong hint; sig is trusted
+        raw = json.dumps(feed).encode("utf-8")
+        assert uc.verify_feed(raw, _sign(raw, sk), verify_keys=keys) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +255,24 @@ class TestCheckForUpdate:
         raw = _feed_bytes(latest="1.0.0")
         _patch_fetch(monkeypatch, raw, _sign(raw, sk))
         uc.check_for_update(current="1.0.0b12", verify_keys=keys, force=True)
-        log = Path(tmp_path / "heka" / "calls.jsonl")
-        assert log.exists()
-        rec = json.loads(log.read_text().strip().splitlines()[-1])
-        assert rec["user_data"] is False
-        assert rec["payload_shape"] == "none"
-        assert "1.0.0b12" not in log.read_text()  # installed version not logged
+        rec = _last_call_record(tmp_path)
+        _assert_canonical(rec)  # full frozen WS-3 §8 key-set
+        assert rec["ok"] is True
+        assert rec["user_data"] is False  # retained extra field
+        log_text = Path(tmp_path / "heka" / "calls.jsonl").read_text()
+        assert "1.0.0b12" not in log_text  # installed version not logged
+
+    def test_call_log_canonical_on_refusal(self, monkeypatch, keypair, tmp_path) -> None:
+        """Failure-path records carry the same canonical shape, with ok=False."""
+        _sk, keys = keypair
+        raw = _feed_bytes()
+        rogue = SigningKey.generate()
+        _patch_fetch(monkeypatch, raw, _sign(raw, rogue))
+        uc.check_for_update(current="1.0.0b12", verify_keys=keys, force=True)
+        rec = _last_call_record(tmp_path)
+        _assert_canonical(rec)
+        assert rec["ok"] is False
+        assert rec["error"] == "signature_unverified"
 
 
 class TestNoEgressWhenDisabled:
@@ -231,3 +287,13 @@ class TestNoEgressWhenDisabled:
         )
         res = uc.check_for_update(current="1.0.0b12", verify_keys=keypair[1], force=True)
         assert res["status"] == "disabled"  # no connect attempted → no AssertionError
+
+    def test_offline_makes_zero_egress(self, monkeypatch, keypair) -> None:
+        import socket
+        monkeypatch.setenv("HEKA_OFFLINE", "1")
+        monkeypatch.setattr(
+            socket.socket, "connect",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("egress")),
+        )
+        res = uc.check_for_update(current="1.0.0b12", verify_keys=keypair[1], force=True)
+        assert res["status"] == "disabled"  # HEKA_OFFLINE mutes before any socket

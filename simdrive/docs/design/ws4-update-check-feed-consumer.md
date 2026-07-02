@@ -93,14 +93,19 @@ key id / rotation story, and the canonical hosting origin.
 
 Per the coordinator's contract-freeze addition, the GET must be **announced**:
 every update-check call appends one structured record to the shared local
-product-plane call log at **`~/.heka/calls.jsonl`** (coordinator-frozen interim
-path; the canonical record shape is owned by forgeos-lane's WS-3 entitlement
-contract, and this consumer converges onto it once it lands):
+product-plane call log at **`~/.heka/calls.jsonl`**, in the **canonical
+cross-lane shape frozen by the WS-3 entitlement contract §8**
+(forgeos-lane, `WS3-ENTITLEMENT-CONTRACT-v1.md`) — all 3 Heka products write
+this same shape:
 
 ```jsonc
-{ "ts": "...", "kind": "update_check", "url": "<feed origin>",
-  "payload_shape": "none", "user_data": false,
-  "result": "ok|skipped_unreachable|skipped_schema|signature_unverified" }
+{ "ts": ..., "product": "simdrive", "kind": "update_check",
+  "method": "GET", "url": "<feed origin, no query values>",
+  "payload_shape": [],          // field NAMES only; [] = zero-user-data GET
+  "ok": true,                   // + optional "error" on failure
+  // retained additional fields (allowed by the contract):
+  "result": "ok|skipped_unreachable|skipped_schema|signature_unverified",
+  "user_data": false }
 ```
 
 `simdrive` should expose the tail of this log (e.g. `simdrive update-check

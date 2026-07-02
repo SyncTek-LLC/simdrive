@@ -14,9 +14,14 @@ Behavior (see docs/design/ws4-update-check-feed-consumer.md):
   ``license.telemetry.send_trial_attribution``.
 * Every real outbound call is appended to the local product-plane call log
   (``~/.heka/calls.jsonl``) so the user can audit exactly what left the machine.
-  This is the coordinator-agreed interim path/shape; the canonical WS-3 call-log
-  contract is owned by forgeos-lane and this consumer converges onto it when it
-  lands.
+  Records use the CANONICAL cross-lane shape frozen by the WS-3 entitlement
+  contract §8 (WS3-ENTITLEMENT-CONTRACT-v1.md): ``{ts, product, kind, method,
+  url, payload_shape, ok}`` (+ optional ``error``); extra fields are allowed
+  and we keep ``result``/``user_data`` for continuity.
+* Trust is MEMBERSHIP-pinned: the detached signature must verify under one of
+  the embedded trusted public keys. The feed's ``key_id`` field is an
+  ops/rotation hint only — it lives *inside* the signed JSON, so under
+  verify-before-parse it cannot select a key and must never influence trust.
 """
 from __future__ import annotations
 
@@ -42,11 +47,10 @@ _OFFLINE_ENV = "HEKA_OFFLINE"
 # At most one real check per this interval (cached), unless forced.
 _DEFAULT_INTERVAL_SECONDS = 24 * 3600
 
-# Product-plane call log filename under the state dir. Coordinator-frozen
-# interim path (~/.heka/calls.jsonl) shared by all 3 Heka lanes; the canonical
-# record shape is owned by forgeos-lane's WS-3 contract, which this consumer
-# adopts once it lands.
+# Product-plane call log: path AND record shape are canonical per the frozen
+# WS-3 entitlement contract §8 (all 3 Heka lanes write the same shape).
 _CALL_LOG_NAME = "calls.jsonl"
+_PRODUCT = "simdrive"
 
 # Highest releases.json schema major this consumer understands. An unknown
 # major means the producer changed the shape in a way we can't safely read, so
@@ -112,6 +116,11 @@ def verify_feed(
     Returns the parsed feed dict on success, or ``None`` if there is no trust
     anchor, the signature does not verify under any trusted key, or the body is
     not valid JSON. Fail-closed: an unverifiable feed yields ``None``.
+
+    Trust is MEMBERSHIP-pinned: the signature is tried against every embedded
+    trusted key. The feed's ``key_id`` is deliberately NOT used for selection —
+    it is inside the payload we refuse to parse before verification, so using
+    it would invert verify-before-parse; it remains an ops/rotation hint only.
     """
     keys = verify_keys if verify_keys is not None else _trusted_verify_keys()
     if not keys:
@@ -232,6 +241,28 @@ def _fetch(url: str, *, timeout: float) -> Optional[Tuple[bytes, str]]:
         return None
 
 
+def _call_record(ts: float, url: str, *, ok: bool, result: str, **extra) -> dict:
+    """Build one canonical product-plane call record (WS-3 contract §8).
+
+    Canonical keys: ts, product, kind, method, url (no query values),
+    payload_shape (field NAMES only — [] for this zero-user-data GET), ok.
+    ``result``/``user_data`` are retained additional fields.
+    """
+    rec = {
+        "ts": ts,
+        "product": _PRODUCT,
+        "kind": "update_check",
+        "method": "GET",
+        "url": url,
+        "payload_shape": [],
+        "ok": ok,
+        "result": result,
+        "user_data": False,
+    }
+    rec.update(extra)
+    return rec
+
+
 def _log_call(record: dict, *, state_dir: Optional[Path] = None) -> None:
     """Append one product-plane call record to ~/.heka/calls.jsonl."""
     try:
@@ -299,9 +330,8 @@ def check_for_update(
     url = feed_url if feed_url is not None else _feed_url()
     fetched = _fetch(url, timeout=timeout)
     if fetched is None:
-        _log_call({"ts": ts, "kind": "update_check", "url": url,
-                   "payload_shape": "none", "user_data": False,
-                   "result": "skipped_unreachable"}, state_dir=sdir)
+        _log_call(_call_record(ts, url, ok=False, result="skipped_unreachable",
+                               error="unreachable"), state_dir=sdir)
         return {"checked": True, "status": "skipped",
                 "message": "update check skipped (feed unreachable)",
                 "reason": "network"}
@@ -309,9 +339,8 @@ def check_for_update(
     raw, sig = fetched
     feed = verify_feed(raw, sig, verify_keys=verify_keys)
     if feed is None:
-        _log_call({"ts": ts, "kind": "update_check", "url": url,
-                   "payload_shape": "none", "user_data": False,
-                   "result": "signature_unverified"}, state_dir=sdir)
+        _log_call(_call_record(ts, url, ok=False, result="signature_unverified",
+                               error="signature_unverified"), state_dir=sdir)
         return {"checked": True, "status": "unverified",
                 "message": "update feed refused (signature not verified)",
                 "reason": "signature"}
@@ -321,18 +350,17 @@ def check_for_update(
     # after the signature verified, so a forged version can't trigger it.
     schema_major = _feed_schema_major(feed)
     if schema_major is None or schema_major > _SUPPORTED_SCHEMA_MAJOR:
-        _log_call({"ts": ts, "kind": "update_check", "url": url,
-                   "payload_shape": "none", "user_data": False,
-                   "result": "skipped_schema", "schema_major": schema_major},
-                  state_dir=sdir)
+        # The fetch itself succeeded and verified; skipping is a local
+        # decision, so ok=True with the reason in the retained extras.
+        _log_call(_call_record(ts, url, ok=True, result="skipped_schema",
+                               schema_major=schema_major), state_dir=sdir)
         return {"checked": True, "status": "skipped",
                 "message": "update check skipped (unknown feed schema)",
                 "reason": "schema"}
 
     adv = evaluate(cur, feed)
-    _log_call({"ts": ts, "kind": "update_check", "url": url,
-               "payload_shape": "none", "user_data": False,
-               "result": "ok", "advisory_status": adv.status}, state_dir=sdir)
+    _log_call(_call_record(ts, url, ok=True, result="ok",
+                           advisory_status=adv.status), state_dir=sdir)
     _write_cache(sdir, {"last_check_ts": ts,
                         "advisory": {"status": adv.status, "message": adv.message}})
     return {"checked": True, "status": adv.status, "message": adv.message}
