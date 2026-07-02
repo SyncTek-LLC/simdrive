@@ -3605,20 +3605,31 @@ def _cmd_trial(args: list[str]) -> None:
         default=None,
         help="Override the license.json path (default: ~/.simdrive/license.json).",
     )
-    # ----- Source attribution (INIT-2026-556 W1) ---------------------------
-    # --source <channel> tags the trial start with the channel that drove
-    # the install (e.g. hn, reddit:iOSProgramming, cursor.directory). Send
-    # is fire-and-forget; only SHA-256(email) is transmitted.
-    # --no-track skips the network call for THIS invocation. A persisted
-    # opt-out at ~/.simdrive/telemetry.toml disables tracking permanently.
+    # ----- Source attribution (INIT-2026-556 W1; opt-in flip WS-0) ---------
+    # Telemetry is OPT-IN BY DEFAULT OFF: no POST is made unless the user
+    # explicitly opts in via --track (per-run) or `track = true` in
+    # ~/.simdrive/telemetry.toml (durable). HEKA_TELEMETRY=off severs it
+    # entirely (the single kill-switch). --source only tags an opted-in run.
     start_p.add_argument(
         "--source",
         default=None,
         help=(
             "Marketing source/channel that drove the install (e.g. hn, reddit, "
-            "cursor.directory). Sends one POST to api.simdrive.dev/trial with "
-            "SHA256(email) + source + timestamp + version + OS family. Raw email "
-            "never leaves the machine. Omit to record as 'direct'."
+            "cursor.directory). Only used if you have opted in to telemetry "
+            "(--track or `track = true` in ~/.simdrive/telemetry.toml). On its "
+            "own it sends nothing. Omit to record as 'direct'."
+        ),
+    )
+    start_p.add_argument(
+        "--track",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt IN to source-attribution telemetry for this run. Sends one "
+            "POST to api.simdrive.dev/trial with SHA256(email) + source + "
+            "timestamp + version + OS family — raw email never leaves the "
+            "machine. Telemetry is OFF unless you pass this or persist "
+            "`track = true`. HEKA_TELEMETRY=off overrides it."
         ),
     )
     start_p.add_argument(
@@ -3626,7 +3637,8 @@ def _cmd_trial(args: list[str]) -> None:
         action="store_true",
         default=False,
         help=(
-            "Skip the source-attribution POST for this invocation. The trial "
+            "Explicitly skip the source-attribution POST for this invocation "
+            "(redundant now that telemetry is off by default). The trial "
             "license is still generated locally."
         ),
     )
@@ -3657,6 +3669,7 @@ def _cmd_trial(args: list[str]) -> None:
             ns.email,
             source=ns.source,
             no_track=ns.no_track,
+            track=ns.track,
         )
         if notice:
             print(notice)
@@ -3976,6 +3989,14 @@ def serve() -> None:
       "license"          → _cmd_license
     """
     import sys
+    # Local-first, scrubbed crash sink (WS-4): records unhandled exceptions to
+    # ~/.heka/crashes/*.json (stack shape + class + version, no PII) before the
+    # traceback prints. Purely local — never opens a socket. Best-effort.
+    try:
+        from simdrive.observability.crash_sink import install_crash_sink
+        install_crash_sink()
+    except Exception:
+        pass
     args = sys.argv[1:]
     if args:
         flag = args[0]

@@ -10,7 +10,7 @@ body:
         > `support@simdrive.dev` directly rather than posting them publicly
         > in this issue.** Use this template for surfacing the failure mode
         > so we can fix the product; we will follow up over email for any
-        > private details (Polar order ID, payment method, refund processing).
+        > private details (order/receipt ID, payment method, refund processing).
   - type: dropdown
     id: issue-type
     attributes:
@@ -27,16 +27,16 @@ body:
     id: purchase-email
     attributes:
       label: Email used for purchase
-      description: The email address tied to the trial or Polar order.
+      description: The email address tied to the trial or order.
       placeholder: "you@example.com"
     validations:
       required: true
   - type: input
-    id: polar-order-id
+    id: order-id
     attributes:
-      label: Polar order ID (if known)
-      description: From your Polar receipt or account dashboard.
-      placeholder: "polar_xxx..."
+      label: Order / receipt ID (if known)
+      description: From your purchase receipt or account dashboard.
+      placeholder: "order_xxx..."
   - type: textarea
     id: error-message
     attributes:
