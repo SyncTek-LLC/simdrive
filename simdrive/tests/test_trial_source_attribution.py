@@ -143,6 +143,22 @@ class TestOptOut:
         cfg.write_text('track = "false"\n')
         assert telemetry.is_opted_out(cfg) is True
 
+    def test_malformed_track_value_fails_closed(self, tmp_path: Path) -> None:
+        """A non-true/false track value → opted out (fail-closed for privacy)."""
+        cfg = tmp_path / "telemetry.toml"
+        cfg.write_text("track = maybe\n")
+        assert telemetry.is_opted_out(cfg) is True
+
+    def test_unreadable_config_fails_closed(self, tmp_path: Path) -> None:
+        """An OSError while reading the config → opted out (fail-closed).
+
+        A directory at the config path makes read_text raise IsADirectoryError
+        (an OSError subclass), exercising the except-OSError branch.
+        """
+        cfg = tmp_path / "telemetry.toml"
+        cfg.mkdir()  # path exists but reading it raises OSError
+        assert telemetry.is_opted_out(cfg) is True
+
     def test_write_opt_out_persists(self, tmp_path: Path) -> None:
         cfg = tmp_path / "telemetry.toml"
         telemetry.write_opt_out(cfg)
