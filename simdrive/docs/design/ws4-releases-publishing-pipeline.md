@@ -1,10 +1,8 @@
 # WS-4 — simdrive `releases.json` publishing pipeline (design)
 
-**Status:** DESIGN FOR REVIEW — the consumer slice (cs_75802181) is APPROVED
-and merged to main; this doc is the follow-on WS-4 slice scoping how
-simdrive.dev publishes the feed. No implementation lands until this design is
-reviewed and harness-lane's canonical producer/validator exists to build
-against.
+**Status:** APPROVED (coordinator sign-off @ d77dd60) with Q1/Q2 adjudicated
+and folded in below; Q3 pending Chairman, Q4 pending harness-lane.
+Implementation starts once harness-lane's canonical producer/validator lands.
 
 **Owner:** simdrive-lane (this doc: how *simdrive.dev* publishes the feed).
 **Converges with:** harness-lane's `harness update-check` producer + canonical
@@ -68,11 +66,12 @@ Serving requirements (CDN / static host config):
   license-signing key (same handling, separate entry, separate rotation
   schedule). It is never present in CI by default — see §4 signing step.
 - **`key_id` convention:** `feed-YYYY-MM` (e.g. `feed-2026-07`), matching the
-  placeholder in `feed_key.py`. **Seam to close (→ §8 Q1):** WS-3 uses
-  `kid = sha256(pubkey)` for entitlement tokens. Either convention satisfies
-  the frozen contract (the consumer tries all trusted keys; `key_id` is a
-  selection hint, not a security boundary), but the three lanes should pick
-  ONE convention before GA so `harness calls` / docs read uniformly.
+  placeholder in `feed_key.py`. **Resolved (coordinator adjudication, Q1):**
+  do NOT unify with WS-3's `kid = sha256(pubkey)` mid-build — WS-3 F7 froze
+  "new conventions, do not unify". WS-4 feeds keep `feed-YYYY-MM` as an ops
+  hint; **membership-pinning is the security boundary** (the consumer tries
+  all trusted keys; `key_id` never selects). Revisit post-GA only if ops
+  friction appears.
 - **Rotation runbook** (mirrors `feed_key.py`'s documented procedure):
   1. Generate the next keypair; prepend `(key_id, hex_pubkey)` to
      `UPDATE_FEED_PUBLIC_KEYS` in a client release (clients now trust
@@ -134,10 +133,10 @@ upgrade advisory.
 1. Embed the production feed pubkey in `feed_key.py` (currently EMPTY →
    consumer fails closed everywhere; this is the tracked GA prereq).
 2. The dogfood step needs a **test-key injection hook** so staging can verify
-   without the prod key: monkeypatch in tests today; decide whether a
-   `SIMDRIVE_UPDATE_FEED_PUBKEY` env override is acceptable (leaning NO —
-   an env-injectable trust anchor weakens the fail-closed story; prefer a
-   staging build or test-only patch). **→ §8 Q2.**
+   without the prod key. **Resolved (coordinator adjudication, Q2): NO
+   env-based trust-anchor override** — an env-injectable pubkey would break
+   fail-closed. Test-only injection (monkeypatch / `verify_keys=` param) plus
+   a staging build for the pre-publish dogfood step.
 3. Pipeline self-test in CI (no secrets needed): generate a throwaway keypair,
    produce + sign a fixture feed, run the canonical validator AND the shipped
    consumer against it, tamper one byte → must reject. This proves the
@@ -155,16 +154,18 @@ upgrade advisory.
 
 ## 8. Open questions (routed via coordinator)
 
-- **Q1 (forgeos-lane + harness-lane):** one `key_id` convention across WS-3
-  tokens and WS-4 feeds — `feed-YYYY-MM` vs `sha256(pubkey)`?
-- **Q2 (coordinator):** is an env-based staging pubkey override acceptable, or
-  test-only injection? (simdrive-lane recommends test-only; see §6.2.)
-- **Q3 (ops/Chairman):** hosting infra for `releases.simdrive.dev` (static
-  bucket + CDN vs existing simdrive.dev host) — determines the §2 access-log
-  setting to document.
-- **Q4 (harness-lane):** producer CLI shape — can `harness update-check
-  --produce`(?) emit the feed from a git tag so step 1 needs no simdrive-local
-  script long-term?
+- **Q1 — RESOLVED (coordinator):** do NOT unify `key_id` conventions
+  mid-build (WS-3 F7). WS-3 tokens keep `kid=sha256(pubkey)`; WS-4 feeds keep
+  `feed-YYYY-MM` as an ops hint; membership-pinning is the security boundary.
+  Revisit post-GA only on ops friction. (§3)
+- **Q2 — RESOLVED (coordinator):** no env-based trust-anchor override;
+  test-only injection + staging build. (§6.2)
+- **Q3 — PENDING (routed to Chairman):** hosting infra for
+  `releases.simdrive.dev` (static bucket + CDN vs existing simdrive.dev host)
+  — determines the §2 access-log setting to document.
+- **Q4 — PENDING (relayed to harness-lane):** producer CLI shape — can
+  `harness update-check --produce`(?) emit the feed from a git tag so step 1
+  needs no simdrive-local script long-term?
 
 ## 9. DoD for the implementation slice
 
