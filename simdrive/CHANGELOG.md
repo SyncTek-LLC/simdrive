@@ -57,6 +57,27 @@
   stack frames as basenames, version, OS) — no messages, paths, or PII — and
   never sent anywhere. Disable with `HEKA_CRASH_SINK_DISABLED=1`.
 
+### Fixed — `observe` confidence bands no longer flag legible on-screen text as `low`
+
+- **The english-likeness fence now uses the host dictionary, not a ~370-word
+  seed.** `observe` clamps a mark's `confidence`/`confidence_band` down when its
+  text fails a dictionary check — the fence that catches stylized-cover
+  gibberish OCR'd as plausible fake words. But the built-in wordlist was tiny
+  and hand-maintained, so everyday UI copy that simply wasn't in it —
+  "Discard", "Download", "Sending your ticket", "Support will reply within 1
+  business day." — was mislabeled `low` at a perfect OCR score. A band that
+  flags correct reads as low-quality is one agents learn to ignore. simdrive now
+  unions the system word list (`/usr/share/dict/words`, ~235k words on macOS and
+  most Linux) with the curated seed, so real words pass and only genuine
+  gibberish stays `low`. Hosts without a system list fall back to the seed
+  unchanged — no hard dependency.
+- **Typographic punctuation no longer trips the charset gate.** Sentences using
+  an em-dash, ellipsis, or curly apostrophe — "I haven't seen exactly that
+  before —", "OK — let's start fresh.", "Looking into this…" — were rejected
+  before the dictionary check ever ran and clamped to `low`. Those characters
+  are real text; the fence now accepts them while still rejecting OCR-noise
+  symbols. Gibberish separated by an em-dash still lands `low`.
+
 ## [1.0.0b12] — 2026-06-23
 
 ### Fixed — host-AX `set_text` / `perform_accessibility_action` now reach app content on iOS 26

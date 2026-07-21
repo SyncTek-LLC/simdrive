@@ -99,6 +99,50 @@ _ENGLISH_WORDS: frozenset[str] = frozenset(
 )
 
 
+def _load_dictionary() -> frozenset[str]:
+    """The effective wordlist the english-likeness fence checks against.
+
+    The curated `_ENGLISH_WORDS` seed above is a *portable fallback*, not the
+    real dictionary: a hand-maintained ~370-word list loses to real UI copy
+    faster than words can be added (F#18 was the third such whack-a-mole —
+    'Wi-Fi', 'Bluetooth', 'General' all clamped legible system text to 'low').
+    On any host that ships a system word list (macOS `/usr/share/dict/words`
+    → web2 with ~235k entries; most Linux with the `words` package), union it
+    in so plainly-English strings — "Discard", "Sending your ticket…",
+    "Reference", "Support will reply within 1 business day." — stop failing the
+    dictionary gate and getting mislabeled 'low'.
+
+    Adding real words can never let gibberish pass the fence (gibberish stays
+    absent from the dict), so this only removes false negatives. Best-effort and
+    portable: if no system list exists (minimal CI containers), the seed alone
+    is used and behavior degrades to the pre-existing gate rather than erroring.
+    """
+    words = set(_ENGLISH_WORDS)
+    for path in ("/usr/share/dict/words", "/usr/share/dict/web2"):
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    tok = line.strip().lower()
+                    if len(tok) >= 2 and tok.isalpha():
+                        words.add(tok)
+            break
+        except OSError:
+            continue
+    # Modern app/UI compounds the 1934 web2 corpus predates but that appear
+    # constantly in real screens. (web2 has 'audiobook' via the seed but not
+    # 'download'.) Real words only — safe to add.
+    words.update({
+        "download", "downloads", "upload", "uploads", "login", "logout",
+        "signin", "signout", "username", "wifi", "online", "offline",
+        "email", "app", "apps", "reset", "resets", "resync", "rescan",
+    })
+    return frozenset(words)
+
+
+# Loaded once at import. The seed stays the fallback; this is what the fence uses.
+_DICTIONARY: frozenset[str] = _load_dictionary()
+
+
 # v0.3.0a3 — semantic-name → likely-OCR-misread lookup for icon glyphs.
 # OCR rasterizes the search magnifying glass as "Q/" / "Q." / "O" depending
 # on resolution. Stable IDs catch it for replay against the same screen, but
@@ -127,7 +171,12 @@ _ICON_GLYPH_ALIASES: dict[str, list[str]] = {
 }
 
 
-_ALLOWED_PUNCT = set("-'.,!?:")
+# Straight ASCII punctuation PLUS the typographic characters real UI copy uses
+# constantly: em/en dashes, the ellipsis, and curly quotes. Without these the
+# charset fence rejected plainly-English sentences before they ever reached the
+# dictionary check — "I haven't seen exactly that before —" and "OK — let's
+# start fresh." both clamped to 'low' purely on the em-dash / U+2019 apostrophe.
+_ALLOWED_PUNCT = set("-'.,!?:") | set("—–…’‘“”")
 _VOWELS = set("aeiouAEIOU")
 _TOKEN_RE = re.compile(r"\s+")
 
@@ -143,7 +192,7 @@ def _is_english_like_token(token: str) -> bool:
         return True  # punctuation-only fragment
     if len(cleaned) <= 3:
         return True
-    return cleaned in _ENGLISH_WORDS
+    return cleaned in _DICTIONARY
 
 
 def _english_likeness(text: str) -> bool:
