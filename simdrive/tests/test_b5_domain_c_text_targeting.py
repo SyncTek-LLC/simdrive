@@ -527,3 +527,66 @@ class TestF18ConfidenceBandLabeling:
         assert m.confidence_band == "low", (
             "Non-English OCR reads at any confidence should remain 'low' (regression guard)"
         )
+
+
+class TestSystemDictionaryFence:
+    """The english-likeness fence is backed by the host word list (unioned with
+    the curated seed), not the ~370-word seed alone.
+
+    Regression from a Palace triage-bot sim-drive: legible UI copy —
+    'Discard', 'Sending your ticket…', 'Support will reply within 1 business
+    day.' — was clamped to 'low' at raw 1.0 because the words were absent from
+    the tiny seed, and em-dash / ellipsis / curly-quote strings were rejected by
+    the charset gate before the dictionary ever ran. A confidence band that
+    flags perfectly-correct reads as 'low' is worse than none — agents can't
+    trust it. This guards both fixes at once.
+    """
+
+    def test_dictionary_is_superset_of_curated_seed(self):
+        """Whatever the host, the effective dictionary must never be smaller
+        than the curated fallback (portability floor)."""
+        from simdrive.som import _DICTIONARY, _ENGLISH_WORDS
+        assert _ENGLISH_WORDS <= _DICTIONARY
+        # On a dev/CI host with /usr/share/dict/words this is vastly larger;
+        # even without it the seed keeps the gate working.
+        assert len(_DICTIONARY) >= len(_ENGLISH_WORDS)
+
+    def test_common_ui_words_not_low(self):
+        """Everyday English UI vocabulary absent from the old seed must land
+        'high' at raw 1.0, not 'low'."""
+        from simdrive.som import Mark
+        for text in ("Discard", "Download", "Sending your ticket",
+                     "Support will reply within 1 business day.",
+                     "Describe what's happening"):
+            m = Mark(id=1, x=0, y=0, w=200, h=40, text=text,
+                     confidence=1.0, raw_confidence=1.0)
+            assert m.confidence_band != "low", (
+                f"legible UI copy {text!r} clamped to 'low' — dictionary fence "
+                f"false-negative (got band={m.confidence_band!r})"
+            )
+
+    def test_typographic_punctuation_survives_charset_gate(self):
+        """Em-dash, ellipsis, and curly apostrophes are real text, not OCR
+        noise — sentences using them must reach the dictionary check, not get
+        rejected by the charset fence and clamped to 'low'."""
+        from simdrive.som import Mark
+        for text in ("I haven’t seen exactly that before —",
+                     "OK — let’s start fresh.",
+                     "Looking into this…"):
+            m = Mark(id=1, x=0, y=0, w=300, h=40, text=text,
+                     confidence=1.0, raw_confidence=1.0)
+            assert m.confidence_band != "low", (
+                f"typographic-punctuation string {text!r} rejected by the "
+                f"charset gate (got band={m.confidence_band!r})"
+            )
+
+    def test_gibberish_with_typographic_punct_still_low(self):
+        """Widening the charset must not let stylized-cover gibberish through:
+        an em-dash between fake words stays 'low'."""
+        from simdrive.som import Mark
+        m = Mark(id=1, x=0, y=0, w=300, h=40,
+                 text="Sary — liotex canxz zqxw",
+                 confidence=1.0, raw_confidence=1.0)
+        assert m.confidence_band == "low", (
+            "gibberish must stay 'low' even with allowed typographic punctuation"
+        )
