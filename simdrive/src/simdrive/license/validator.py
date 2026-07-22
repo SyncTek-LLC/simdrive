@@ -238,6 +238,19 @@ def validate_license(
     signed_by_prod = _try_verify(selected_verify_key, payload_b64, sig_bytes)
     signed_by_dev = False
 
+    # Structural guard (SoD hardening): never let the DEV verify key satisfy the
+    # prod path. If it is ever mistakenly added to TRUSTED_PUBLIC_KEYS,
+    # `_select_verify_key` could return it and a dev-signed license would count
+    # as `signed_by_prod`, skipping the dev-trial clamp entirely. Demote it to
+    # the dev branch below so the clamp always runs for dev-key signatures.
+    if signed_by_prod:
+        try:
+            from simdrive.license.public_key import get_dev_verify_key
+            if bytes(selected_verify_key) == bytes(get_dev_verify_key()):
+                signed_by_prod = False
+        except Exception:
+            pass
+
     if not signed_by_prod:
         # Try the embedded dev key as a fallback
         try:
@@ -351,18 +364,20 @@ def _enforce_dev_trial_limits(
             f"got {tier!r}. Dev key cannot grant a paid tier."
         )
 
-    # seats: coerce defensively; a non-int or over-cap value is a forgery.
+    # seats: must be a genuine positive int within the trial cap. Reject
+    # non-int (incl. bool, an int subclass) and float outright — `int(4.9)`
+    # would silently truncate a forged float to 4 — and reject non-positive
+    # values (SoD hardening: a float/negative/bool never reaches entitlement).
     seats_raw = payload.get("seats", 1)
-    try:
-        seats = int(seats_raw)
-    except (TypeError, ValueError):
+    if not isinstance(seats_raw, int) or isinstance(seats_raw, bool):
         raise license_invalid(
             f"dev-key-signed license has non-integer seats {seats_raw!r}."
         )
-    if seats > _DEV_TRIAL_MAX_SEATS:
+    seats = seats_raw
+    if seats < 1 or seats > _DEV_TRIAL_MAX_SEATS:
         raise license_invalid(
-            f"dev-key-signed license seats={seats} exceeds the trial cap "
-            f"of {_DEV_TRIAL_MAX_SEATS}. Dev key cannot grant extra seats."
+            f"dev-key-signed license seats={seats} is outside the trial "
+            f"range 1..{_DEV_TRIAL_MAX_SEATS}. Dev key cannot grant extra seats."
         )
 
     # expires_at: bound the validity window relative to "now" so a forged

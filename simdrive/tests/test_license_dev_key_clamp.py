@@ -192,3 +192,146 @@ class TestProdKeyLicensesUnaffected:
         result = validate_license(key, verify_key=vk, last_known_server_time=None)
         assert result["tier"] == tier
         assert result["seats"] == 999
+
+
+# ---------------------------------------------------------------------------
+# 6. Seats must be a GENUINE positive int (SoD hardening follow-up #1/#2)
+# ---------------------------------------------------------------------------
+class TestDevKeySeatsTypeAndRangeHardening:
+    """The old clamp did ``int(seats_raw)``, which silently accepted a forged
+    ``4.9`` (-> 4), ``"4"`` (-> 4), ``True`` (-> 1) and negative counts. The
+    hardened clamp requires a genuine ``int`` (bool excluded) in ``1..cap``."""
+
+    @pytest.mark.parametrize(
+        "bad_seats",
+        [
+            4.9,          # float would truncate to 4 under the old int() coercion
+            2.0,          # even a whole-valued float is not a genuine int
+            "4",          # string would coerce to 4 under int()
+            "1",          # string within range still refused (must be real int)
+            True,         # bool is an int subclass -> int(True) == 1; must reject
+            False,        # int(False) == 0; reject on type before range
+            None,         # non-int
+        ],
+    )
+    def test_dev_key_non_int_seats_rejected(self, bad_seats) -> None:
+        payload = _legit_trial_payload()
+        payload["seats"] = bad_seats
+        key = _dev_sign(payload)
+        with pytest.raises(LicenseError) as exc:
+            validate_license(key, last_known_server_time=None)
+        assert exc.value.code == "license_invalid"
+
+    @pytest.mark.parametrize("bad_seats", [-1, 0])
+    def test_dev_key_non_positive_seats_rejected(self, bad_seats: int) -> None:
+        """seats below the trial range (<1) is a forgery -> reject."""
+        payload = _legit_trial_payload(seats=bad_seats)
+        key = _dev_sign(payload)
+        with pytest.raises(LicenseError) as exc:
+            validate_license(key, last_known_server_time=None)
+        assert exc.value.code == "license_invalid"
+
+    def test_dev_key_int_seats_at_boundary_accepted(self) -> None:
+        """A genuine int at the seat cap (4) is still a valid trial."""
+        payload = _legit_trial_payload(seats=_DEV_TRIAL_MAX_SEATS)  # == 4
+        key = _dev_sign(payload)
+        result = validate_license(key, last_known_server_time=None)
+        assert result["seats"] == _DEV_TRIAL_MAX_SEATS
+        assert isinstance(result["seats"], int)
+
+    def test_dev_key_int_seats_one_accepted(self) -> None:
+        """The canonical single-seat trial is a genuine int and still valid."""
+        payload = _legit_trial_payload(seats=1)
+        key = _dev_sign(payload)
+        result = validate_license(key, last_known_server_time=None)
+        assert result["seats"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 7. Structural guard (SoD hardening follow-up #3): the DEV verify key must
+#    NEVER satisfy the prod path, even if it is mistakenly placed in the
+#    trusted-key set. Otherwise `_select_verify_key` would return it, the
+#    dev signature would count as `signed_by_prod`, and the clamp would be
+#    skipped -> full enterprise forgery. This is the important one.
+# ---------------------------------------------------------------------------
+class TestStructuralGuardDevKeyInTrustedSet:
+    def _forged_enterprise(self, *, key_id: str | None = None) -> str:
+        """Forge subject=dev-trial but tier=enterprise/seats=999/far-future,
+        signed with the shipped DEV key. If the clamp runs it is rejected
+        (tier != trial); if the guard fails to demote signed_by_prod it would
+        be accepted as a genuine enterprise license."""
+        payload = _legit_trial_payload()
+        payload["tier"] = "enterprise"
+        payload["seats"] = 999
+        payload["expires_at"] = int(time.time()) + 3650 * 86400  # ~10 years
+        if key_id is not None:
+            payload["key_id"] = key_id
+        return _dev_sign(payload)
+
+    def test_dev_key_present_in_trusted_keys_still_clamped(self) -> None:
+        """Pass the DEV verify key in `trusted_keys` (mistakenly "trusting"
+        it) and a key_id in the payload that selects it. The dev signature
+        verifies against it -> would be `signed_by_prod=True`; the structural
+        guard must demote it so the clamp runs and enterprise is REJECTED."""
+        from simdrive.license.public_key import get_dev_verify_key
+
+        dev_key_id = "dev-oops-trusted"
+        key = self._forged_enterprise(key_id=dev_key_id)
+        trusted = [(dev_key_id, get_dev_verify_key())]
+
+        # Sanity: the signature genuinely verifies against the dev key placed
+        # in the trusted set, so acceptance would hinge solely on the guard.
+        from simdrive.license.validator import (
+            _b64url_decode,
+            _select_verify_key,
+            _try_verify,
+        )
+        payload_b64, sig_b64 = key.split(".")
+        sel = _select_verify_key(payload_b64, verify_key=None, trusted_keys=trusted)
+        assert bytes(sel) == bytes(get_dev_verify_key())
+        assert _try_verify(sel, payload_b64, _b64url_decode(sig_b64))
+
+        with pytest.raises(LicenseError) as exc:
+            validate_license(key, trusted_keys=trusted, last_known_server_time=None)
+        assert exc.value.code == "license_invalid"
+
+    def test_dev_key_prepended_to_TRUSTED_PUBLIC_KEYS_still_clamped(
+        self, monkeypatch
+    ) -> None:
+        """Same attack via the real default path: monkeypatch the module-level
+        TRUSTED_PUBLIC_KEYS so the dev key is the first (legacy-selected) entry,
+        then validate a forged enterprise license with no key_id. The guard
+        must still force the clamp."""
+        from simdrive.license import public_key
+
+        monkeypatch.setattr(
+            public_key,
+            "TRUSTED_PUBLIC_KEYS",
+            [
+                ("dev-oops", public_key.DEV_VERIFY_KEY_HEX),
+                (public_key.PROD_KEY_ID, public_key.SIMDRIVE_PUBLIC_KEY_HEX),
+            ],
+        )
+
+        key = self._forged_enterprise()  # no key_id -> pins to first (dev) key
+        with pytest.raises(LicenseError) as exc:
+            # trusted_keys omitted -> falls back to the (patched) module list.
+            validate_license(key, last_known_server_time=None)
+        assert exc.value.code == "license_invalid"
+
+    def test_dev_key_in_trusted_set_legit_trial_still_validates(self) -> None:
+        """Even with the dev key mistakenly trusted, a genuine dev trial still
+        validates (demotion routes it through the dev branch, clamp passes)."""
+        from simdrive.license.public_key import get_dev_verify_key
+
+        dev_key_id = "dev-oops-trusted"
+        payload = _legit_trial_payload()
+        payload["key_id"] = dev_key_id
+        key = _dev_sign(payload)
+        trusted = [(dev_key_id, get_dev_verify_key())]
+        result = validate_license(
+            key, trusted_keys=trusted, last_known_server_time=None
+        )
+        assert result["tier"] == "trial"
+        assert result["seats"] == 1
+        assert result["subject"] == "dev-trial"
