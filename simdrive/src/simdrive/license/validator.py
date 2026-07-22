@@ -7,8 +7,13 @@ Design decisions:
   "now" to defend against local clock backdating attacks.
 - Offline grace: if last_known_server_time is None (fully offline), allow
   7-day window past expiry before hard-rejecting. This matches the spec.
-- Dev key: licenses signed with DEV_SIGNING_KEY are accepted but MUST have
-  subject="dev-trial"; the dev key cannot forge enterprise/pro licenses.
+- Dev key: the dev SIGNING key ships in the package (clients self-issue
+  offline trials at runtime), so a dev-key signature is forgeable and is
+  NOT a trust boundary. Licenses signed with the dev key are hard-clamped
+  to genuine-trial limits by _enforce_dev_trial_limits() — subject must be
+  "dev-trial", tier must be "trial", seats <= trial cap, and expiry within
+  a bounded window. This clamp (not the signature) is the load-bearing
+  control that stops a forged dev-key payload from escalating past a trial.
 - Multi-key rotation: payloads may include a ``key_id``
   field naming which entry in TRUSTED_PUBLIC_KEYS signed them. Payloads
   without ``key_id`` fall back to the first trusted key (backwards compat
@@ -47,6 +52,35 @@ SERVER_CHECK_FRESHNESS_SECONDS: int = 30 * 86400   # 30 days
 
 # Subject value required for dev-key-signed licenses.
 _DEV_TRIAL_SUBJECT: str = "dev-trial"
+
+# --- Dev-key license hard limits (LOAD-BEARING SECURITY CONTROL) ---
+# The dev SIGNING key ships inside the distributed package (see
+# public_key.DEV_SIGNING_KEY_HEX) because the client self-issues offline
+# trials at runtime (license/cli.py::_issue_dev_license). That means the
+# dev-key *signature* is NOT a trust boundary: anyone who unpacks the wheel
+# can forge a valid dev-key signature over ANY payload. Therefore the
+# validator — not the signature — is the only thing standing between a
+# forged payload and the entitlement it claims.
+#
+# Invariant enforced below: a dev-key-signed license can NEVER grant more
+# than a genuine offline trial, regardless of what the (fully
+# attacker-controlled) payload says. We HARD-REJECT (fail closed) any
+# dev-key license whose tier/seats/expiry exceed trial limits rather than
+# silently clamping, so a forged enterprise/multi-seat/far-future claim
+# errors loudly instead of quietly downgrading.
+_DEV_TRIAL_TIER: str = "trial"
+# Trial seat cap. A legitimately self-issued offline trial always carries
+# seats=1 (license/cli.py) and the trial tier's max_simulators is 4
+# (license/entitlement.py). We cap at 4 — the trial tier's own ceiling —
+# so a forged seats=999 is refused while the legit seats=1 trial passes.
+_DEV_TRIAL_MAX_SEATS: int = 4
+# Maximum validity window for a dev-key license, measured from "now".
+# The legit offline trial is 14 days (license/cli.py). We allow up to 30
+# days of headroom so a legit trial never trips this, while a forged
+# far-future expiry (months/years out) is firmly rejected. Anchoring to
+# the effective current time (not the payload's issued_at, which the
+# attacker also controls) is what makes this bound meaningful.
+_DEV_TRIAL_MAX_LIFETIME_SECONDS: int = 30 * 86400
 
 
 def _b64url_decode(s: str) -> bytes:
@@ -223,15 +257,17 @@ def validate_license(
     except Exception as exc:
         raise license_invalid(f"payload decode failed: {exc}") from exc
 
-    # ---- 4. Dev-key subject enforcement ----
+    # ---- 4. Dev-key entitlement clamp (LOAD-BEARING) ----
+    # The dev signing key ships in the package, so a valid dev-key signature
+    # proves nothing about the payload's authenticity. Enforce, fail-closed,
+    # that a dev-key license is a genuine trial and can never escalate beyond
+    # trial limits — no matter what tier/seats/expiry the payload claims.
     if signed_by_dev and not signed_by_prod:
-        subject = payload.get("subject", "")
-        if subject != _DEV_TRIAL_SUBJECT:
-            raise license_invalid(
-                f"dev-key-signed license must have subject={_DEV_TRIAL_SUBJECT!r}; "
-                f"got {subject!r}. Dev key cannot forge non-trial licenses."
-            )
-        log.debug("license validated via dev key (offline trial)", extra={"subject": subject})
+        _enforce_dev_trial_limits(payload, last_known_server_time)
+        log.debug(
+            "license validated via dev key (offline trial)",
+            extra={"subject": payload.get("subject", "")},
+        )
 
     # ---- 5. Expiry check with clock-skew defense ----
     expires_at: int = payload.get("expires_at", 0)
@@ -271,6 +307,80 @@ def validate_license(
         )
 
     return payload
+
+
+def _enforce_dev_trial_limits(
+    payload: dict[str, Any],
+    last_known_server_time: Optional[int],
+) -> None:
+    """Fail-closed guard for dev-key-signed licenses.
+
+    A dev-key signature is forgeable by anyone who unpacks the wheel (the
+    private DEV_SIGNING_KEY ships in the package), so this function — not
+    the signature — is the trust boundary. It guarantees the invariant:
+
+        No dev-key license can grant more than a genuine offline trial,
+        regardless of the (attacker-controlled) payload.
+
+    Enforced, each a HARD REJECT (``license_invalid``):
+      1. ``subject`` must equal ``dev-trial``.
+      2. ``tier`` must equal ``trial`` — a forged "enterprise"/"pro"/etc.
+         claim is refused loudly (never silently downgraded).
+      3. ``seats`` must be <= the trial seat cap (4).
+      4. ``expires_at`` must be no more than ``_DEV_TRIAL_MAX_LIFETIME_SECONDS``
+         (30 days) past the effective current time — a far-future expiry
+         is refused. Anchored to "now", not the payload's issued_at, since
+         the attacker controls issued_at too.
+
+    Raises
+    ------
+    LicenseError(code="license_invalid")
+        Any of the above constraints is violated.
+    """
+    subject = payload.get("subject", "")
+    if subject != _DEV_TRIAL_SUBJECT:
+        raise license_invalid(
+            f"dev-key-signed license must have subject={_DEV_TRIAL_SUBJECT!r}; "
+            f"got {subject!r}. Dev key cannot forge non-trial licenses."
+        )
+
+    tier = payload.get("tier")
+    if tier != _DEV_TRIAL_TIER:
+        raise license_invalid(
+            f"dev-key-signed license must have tier={_DEV_TRIAL_TIER!r}; "
+            f"got {tier!r}. Dev key cannot grant a paid tier."
+        )
+
+    # seats: coerce defensively; a non-int or over-cap value is a forgery.
+    seats_raw = payload.get("seats", 1)
+    try:
+        seats = int(seats_raw)
+    except (TypeError, ValueError):
+        raise license_invalid(
+            f"dev-key-signed license has non-integer seats {seats_raw!r}."
+        )
+    if seats > _DEV_TRIAL_MAX_SEATS:
+        raise license_invalid(
+            f"dev-key-signed license seats={seats} exceeds the trial cap "
+            f"of {_DEV_TRIAL_MAX_SEATS}. Dev key cannot grant extra seats."
+        )
+
+    # expires_at: bound the validity window relative to "now" so a forged
+    # far-future expiry is rejected.
+    expires_raw = payload.get("expires_at", 0)
+    try:
+        expires_at = int(expires_raw)
+    except (TypeError, ValueError):
+        raise license_invalid(
+            f"dev-key-signed license has non-integer expires_at {expires_raw!r}."
+        )
+    max_expiry = _effective_now(last_known_server_time) + _DEV_TRIAL_MAX_LIFETIME_SECONDS
+    if expires_at > max_expiry:
+        raise license_invalid(
+            f"dev-key-signed license expires_at={expires_at} is more than "
+            f"{_DEV_TRIAL_MAX_LIFETIME_SECONDS}s in the future. Dev key cannot "
+            "grant a long-lived license."
+        )
 
 
 def _effective_now(last_known_server_time: Optional[int]) -> float:
