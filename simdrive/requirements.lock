@@ -67,9 +67,9 @@ jsonschema==4.26.0
     # via mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
-mcp==1.27.1
+mcp==1.28.1
     # via simdrive (pyproject.toml)
-pillow==12.2.0
+pillow==12.3.0
     # via simdrive (pyproject.toml)
 prometheus-client==0.25.0
     # via simdrive (pyproject.toml)
