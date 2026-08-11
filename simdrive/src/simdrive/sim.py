@@ -93,6 +93,27 @@ def _parse_listapps(body: str) -> dict:
     return {}
 
 
+def get_app_container(udid: str, bundle_id: str, kind: str = "data") -> Path:
+    """Resolve an installed app's on-disk container.
+
+    kind: "app" (the bundle), "data" (the sandbox — where Library/Preferences
+    lives), "groups", or a specific app-group identifier.
+
+    Raises SimError when the app is not installed on that device, which is the
+    only way simctl distinguishes "no such bundle" from "no such container".
+    """
+    res = _simctl("get_app_container", udid, bundle_id, kind, timeout=15.0)
+    if res.returncode != 0:
+        raise SimError(
+            f"no {kind} container for {bundle_id!r} on {udid}: "
+            f"{(res.stderr or res.stdout).strip()[:300]}"
+        )
+    path = res.stdout.strip()
+    if not path:
+        raise SimError(f"simctl returned an empty {kind} container path for {bundle_id!r}")
+    return Path(path)
+
+
 def find_device(name: str | None = None, os_version: str | None = None, udid: str | None = None) -> Device | None:
     """Look up a device by udid (exact), or name (+ optional os_version)."""
     devices = list_devices()
@@ -181,16 +202,94 @@ def set_pasteboard(udid: str, text: str) -> None:
         raise SimError(f"simctl pbcopy failed: {res.stderr.strip()}")
 
 
-def get_log_tail(udid: str, lines: int = 50, predicate: str | None = None) -> str:
+# ── log capture ─────────────────────────────────────────────────────────────
+#
+# `log show` reports only default-level records unless told otherwise: `.info`
+# and `.debug` are dropped on the floor. Most apps narrate at `.info`, so the
+# pre-1.0.0b13 capture (no flags) made an app's own logging structurally
+# invisible to the tool built to read it. LOG_LEVELS maps our three-valued
+# `level` onto the flags that actually widen the stream.
+#
+# "debug" deliberately carries --info too: --debug alone is documented as
+# enabling debug-level records, not as implying info-level, and the union is
+# what a caller asking for "everything" means.
+LOG_LEVELS: dict[str, tuple[str, ...]] = {
+    "default": (),
+    "info": ("--info",),
+    "debug": ("--info", "--debug"),
+}
+
+# `log show --last` accepts a bare integer (seconds) or an integer plus a unit
+# suffix. We validate rather than pass through: the value lands in an argv we
+# construct, and a permissive parse is how a duration string turns into an
+# argument-injection surface.
+_LOG_WINDOW_UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+
+_LOG_TIMEOUT_MIN_SEC = 10.0
+_LOG_TIMEOUT_MAX_SEC = 120.0
+
+
+def _parse_log_window(last: str) -> int:
+    """Validate a `log show --last` duration and return it in seconds.
+
+    Accepts ``"30s"``, ``"5m"``, ``"2h"``, ``"1d"`` and a bare integer
+    (interpreted as seconds, matching `log show`). Raises SimError on anything
+    else so a malformed value fails loudly at the call site instead of
+    reaching the shell.
+    """
+    raw = (last or "").strip()
+    if not raw:
+        raise SimError("log window `last` must be non-empty, e.g. '30s' or '5m'")
+    unit = ""
+    digits = raw
+    if raw[-1].isalpha():
+        unit = raw[-1].lower()
+        digits = raw[:-1]
+    if not digits.isdigit() or unit not in _LOG_WINDOW_UNIT_SECONDS:
+        raise SimError(
+            f"invalid log window {last!r}: expected an integer plus an optional "
+            "s/m/h/d suffix, e.g. '30s', '5m', '2h'"
+        )
+    return int(digits) * _LOG_WINDOW_UNIT_SECONDS[unit]
+
+
+def _log_timeout(window_seconds: int) -> float:
+    """Scale the subprocess budget with the requested window.
+
+    A 5-minute `--info` window emits far more than a 30-second default-level
+    one; the old fixed 10s budget would time the capture out and hand back an
+    empty result that reads like "the app logged nothing".
+    """
+    return max(_LOG_TIMEOUT_MIN_SEC, min(_LOG_TIMEOUT_MAX_SEC, window_seconds * 0.5))
+
+
+def get_log_tail(
+    udid: str,
+    lines: int = 50,
+    predicate: str | None = None,
+    level: str = "info",
+    last: str = "30s",
+) -> str:
     """Capture a one-shot tail of recent simulator logs.
 
     Uses `log show --last <duration>` which doesn't stream — bounded latency.
+
+    level: "default" (default-level records only, the quietest stream),
+           "info" (adds `--info` — what an app's own narration usually uses),
+           "debug" (adds `--info --debug`; very high volume).
+    last:  capture window, e.g. "30s", "5m", "2h". `lines` slices *after*
+           capture, so this is what actually bounds how far back a tail reaches.
     """
-    # log show requires a duration; pick a small window and slice in Python.
-    args = ["spawn", udid, "log", "show", "--last", "30s", "--style", "compact"]
+    if level not in LOG_LEVELS:
+        raise SimError(
+            f"invalid log level {level!r}: expected one of {sorted(LOG_LEVELS)}"
+        )
+    window_seconds = _parse_log_window(last)
+    args = ["spawn", udid, "log", "show", "--last", last, "--style", "compact"]
+    args += list(LOG_LEVELS[level])
     if predicate:
         args += ["--predicate", predicate]
-    res = _simctl(*args, timeout=10.0)
+    res = _simctl(*args, timeout=_log_timeout(window_seconds))
     if res.returncode != 0:
         # Don't raise — logs are best-effort; just return stderr noise.
         return res.stderr.strip()[:2000]

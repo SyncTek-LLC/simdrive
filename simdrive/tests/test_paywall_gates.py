@@ -23,7 +23,7 @@ import pytest
 # The full canonical 32-tool registry — sourced from server._TOOLS at runtime.
 # A test below pins this count so adding/removing tools without updating the
 # gate is caught immediately.
-EXPECTED_TOOL_COUNT = 36  # +3: perform_accessibility_action, get_announcements, set_text (host-AX a11y)
+EXPECTED_TOOL_COUNT = 38  # +2: app_defaults, set_app_defaults (QA evidence primitives)
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +75,7 @@ def force_license_error(monkeypatch: pytest.MonkeyPatch):
 
 class TestToolRegistryShape:
 
-    def test_tool_count_pinned_at_32(self) -> None:
+    def test_tool_count_pinned(self) -> None:
         names = _all_tool_names()
         assert len(names) == EXPECTED_TOOL_COUNT, (
             f"Tool surface drifted: expected {EXPECTED_TOOL_COUNT}, got {len(names)}.\n"
@@ -132,6 +132,9 @@ GATED_TOOLS: list[str] = [
     "perform_accessibility_action",
     "get_announcements",
     "set_text",
+    # QA evidence primitives — app preferences read/write
+    "app_defaults",
+    "set_app_defaults",
 ]
 
 

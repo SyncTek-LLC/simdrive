@@ -28,8 +28,8 @@ def test_version_present():
     )
 
 
-def test_tool_count_is_thirty_two():
-    """Canonical MCP tool surface = 32 tools.
+def test_tool_count():
+    """Canonical MCP tool surface.
 
     Sourced from server._TOOLS. The categorized human-readable inventory lives
     in docs/MCP_TOOL_SURFACE.md; llms.txt mirrors the same list. Any change
@@ -38,9 +38,11 @@ def test_tool_count_is_thirty_two():
     History:
         29 pre-existing + load_journey (1.0.0a7)
                        + lint_recordings + migrate_recording (a9.1) = 32
+                       + tap_and_wait_keyboard + 3 host-AX a11y tools    = 36
+                       + app_defaults + set_app_defaults (QA evidence)   = 38
     """
     tools = server.list_tools()
-    assert len(tools) == 36, f"expected 36 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 38, f"expected 38 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -67,6 +69,8 @@ def test_tool_names_match_spec():
         "perform_accessibility_action", "get_announcements",
         # Host-AX text entry for fields HID can't reach (UIAlertController)
         "set_text",
+        # QA evidence primitives — app preferences, read from disk not cfprefsd
+        "app_defaults", "set_app_defaults",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"

@@ -72,7 +72,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import (
-    __version__, act, ax, diagnostics, errors, observe, perf, recorder,
+    __version__, act, ax, diagnostics, errors, observe, perf, prefs, recorder,
     robustness, session, sim, som,
 )
 from .cloud.middleware.quotas import check_local_quota
@@ -1674,6 +1674,20 @@ def tool_logs(arguments: dict) -> dict:
             "predicate_kind", predicate_kind,
             "must be 'nspredicate', 'regex', or 'substring'",
         )
+    # Default to 'info': `log show` drops .info records without --info, which is
+    # the level most apps narrate at. 'default' is kept for noise-sensitive
+    # callers; 'debug' is the firehose.
+    level = str(arguments.get("level", "info"))
+    if level not in sim.LOG_LEVELS:
+        raise errors.invalid_argument(
+            "level", level,
+            f"must be one of {sorted(sim.LOG_LEVELS)}",
+        )
+    last = str(arguments.get("last", "30s"))
+    try:
+        sim._parse_log_window(last)
+    except sim.SimError as exc:
+        raise errors.invalid_argument("last", last, str(exc))
     if s.target == "device":
         from . import device
         try:
@@ -1712,7 +1726,10 @@ def tool_logs(arguments: dict) -> dict:
             # Pass no predicate to log show; filter in Python after capture.
             raw_predicate = None
             post_filter_kind = predicate_kind
-        text = sim.get_log_tail(s.device.udid, lines=lines, predicate=raw_predicate)
+        text = sim.get_log_tail(
+            s.device.udid, lines=lines, predicate=raw_predicate,
+            level=level, last=last,
+        )
         if post_filter_kind and predicate:
             raw_lines = [ln for ln in text.splitlines() if ln]
             if post_filter_kind == "regex":
@@ -1730,7 +1747,75 @@ def tool_logs(arguments: dict) -> dict:
             else:
                 raw_lines = [ln for ln in raw_lines if predicate in ln]
             text = "\n".join(raw_lines[-lines:])
-    return {"ok": True, "lines": len(text.splitlines()), "logs": text}
+    # Echo level/last so the agent can tell what noise floor and window produced
+    # this payload — "the app logged nothing" and "we only looked at the last
+    # 30 seconds of default-level records" are very different facts.
+    return {
+        "ok": True,
+        "lines": len(text.splitlines()),
+        "logs": text,
+        "level": level,
+        "last": last,
+    }
+
+
+# --------------------- App preferences (NSUserDefaults) ----------------- #
+
+
+def _resolve_prefs_bundle_id(s, arguments: dict) -> str:
+    """Bundle id for a preferences call: explicit argument, else the session's app."""
+    bid = arguments.get("bundle_id") or arguments.get("app_bundle_id") or s.app_bundle_id
+    if not bid:
+        raise errors.invalid_argument(
+            "bundle_id", None,
+            "no bundle_id on the session (session_start was called without "
+            "app_bundle_id) and none provided in arguments",
+        )
+    return str(bid)
+
+
+def _require_simulator(s, tool_name: str) -> None:
+    if s.target == "device":
+        raise errors.SimdriveError(
+            code="not_supported_on_device",
+            message=(
+                f"{tool_name} is simulator-only — it reads the app container via "
+                "`simctl get_app_container`, which has no real-device equivalent."
+            ),
+            details={"tool": tool_name, "target": s.target},
+        )
+
+
+def tool_app_defaults(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "app_defaults")
+    bundle_id = _resolve_prefs_bundle_id(s, arguments)
+    raw_keys = arguments.get("keys")
+    if raw_keys is not None and not isinstance(raw_keys, list):
+        raise errors.invalid_argument("keys", raw_keys, "must be an array of key names")
+    keys = [str(k) for k in raw_keys] if raw_keys else None
+    result = prefs.read_defaults(s.device.udid, bundle_id, keys=keys)
+    s.last_action_at = _now()
+    return {"ok": True, "bundle_id": bundle_id, **result}
+
+
+def tool_set_app_defaults(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "set_app_defaults")
+    bundle_id = _resolve_prefs_bundle_id(s, arguments)
+    values = arguments.get("values")
+    if not isinstance(values, dict) or not values:
+        raise errors.invalid_argument(
+            "values", values, "must be a non-empty object of {key: value} pairs",
+        )
+    try:
+        result = prefs.write_defaults(s.device.udid, bundle_id, values)
+    except sim.SimError as exc:
+        raise errors.invalid_argument("values", values, str(exc))
+    s.last_action_at = _now()
+    return {"ok": True, "bundle_id": bundle_id, **result}
 
 
 # --------------------- Performance / diagnostics / robustness ----------- #
@@ -2701,8 +2786,14 @@ _TOOLS: list[dict] = [
     {
         "name": "logs",
         "description": (
-            "(sim + device) Tail iOS logs. On simulator: uses `log show --last 30s` "
-            "(NSPredicate supported natively). On device: uses idevicesyslog — "
+            "(sim + device) Tail iOS logs. On simulator: uses `log show` "
+            "(NSPredicate supported natively). "
+            "IMPORTANT: `log show` hides .info and .debug records unless asked for them, "
+            "and most apps narrate at .info — so `level` defaults to 'info' here. "
+            "Set level='debug' only when you need it: it is a firehose. "
+            "`last` sets the capture window ('30s', '5m', '2h'); `lines` slices AFTER "
+            "capture, so raise `last` — not `lines` — to reach further back than 30s. "
+            "On device: uses idevicesyslog — level/last do not apply; "
             "NSPredicate is NOT supported; pass predicate_kind='substring' or 'regex' "
             "for reliable filtering, or omit predicate_kind (defaults to 'nspredicate' "
             "which auto-downgrades to substring on device with a logged WARNING). "
@@ -2716,6 +2807,28 @@ _TOOLS: list[dict] = [
             "properties": {
                 "session_id": {"type": "string"},
                 "lines": {"type": "integer", "default": 200},
+                "level": {
+                    "type": "string",
+                    "enum": ["default", "info", "debug"],
+                    "default": "info",
+                    "description": (
+                        "(sim only) Log-level floor. 'default': default-level records only "
+                        "— quietest, matches bare `log show`. 'info' (default): adds --info, "
+                        "which is where most apps' own narration lives. 'debug': adds "
+                        "--info --debug — very noisy, and on a busy app can bury the lines "
+                        "you came for; choose it deliberately."
+                    ),
+                },
+                "last": {
+                    "type": "string",
+                    "default": "30s",
+                    "description": (
+                        "(sim only) Capture window passed to `log show --last`: an integer "
+                        "plus an optional s/m/h/d suffix ('30s', '5m', '2h'). `lines` slices "
+                        "after capture, so this is what bounds how far back the tail reaches "
+                        "— widen it for a defect you noticed a minute ago."
+                    ),
+                },
                 "predicate": {"type": "string", "description": "Filter string. Interpretation depends on predicate_kind."},
                 "predicate_kind": {
                     "type": "string",
@@ -2731,6 +2844,82 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_logs,
+    },
+    # ── App preferences (NSUserDefaults) ────────────────────────────────
+    {
+        "name": "app_defaults",
+        "description": (
+            "(sim only) Read the app's NSUserDefaults from its own container plist on disk. "
+            "USE THIS instead of `xcrun simctl spawn <udid> defaults read <bundle> <key>`. "
+            "That command is not just stale — it reads a DIFFERENT FILE. A simulator keeps "
+            "two plists per domain: the app's sandboxed "
+            "Containers/Data/Application/<uuid>/Library/Preferences/<bundle>.plist (what "
+            "NSUserDefaults uses) and a device-wide data/Library/Preferences/<bundle>.plist "
+            "(what a simctl-spawned `defaults` uses). They never sync, so keys the app wrote "
+            "are invisible to `defaults read`, and keys `defaults write` set are invisible to "
+            "the app. That is what produced a confidently-wrong 'this setting never persists' "
+            "finding against a setting that persisted fine. "
+            "Pass `keys` to filter; omit for the whole domain. A missing plist returns "
+            "values={} plus a note, not an error. Keys found ONLY in the device-wide domain "
+            "are reported in `device_domain_only` — that means someone set them with "
+            "`simctl spawn defaults write` and the app has never seen them. "
+            "Data values come back as {__type__:'data', base64:...} and dates as ISO-8601. "
+            "Caveat: a live app may not have flushed a just-set value yet; background or "
+            "relaunch the app and re-read if a fresh write seems missing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Defaults to the session's launched app bundle id.",
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Only return these keys. Keys not present in the plist come back "
+                        "in `missing_keys` — absent is a distinct answer from false/0."
+                    ),
+                },
+            },
+        },
+        "handler": tool_app_defaults,
+    },
+    {
+        "name": "set_app_defaults",
+        "description": (
+            "(sim only) Write app NSUserDefaults into the domain the app actually reads, "
+            "and VERIFY the result against disk. "
+            "Do NOT hand-roll `simctl spawn <udid> defaults write <bundle> ...`: on a "
+            "simulator that writes the DEVICE-WIDE plist, not the app's sandboxed one, so "
+            "the app never sees it while `defaults read` cheerfully echoes it back at you. "
+            "This tool runs `defaults` inside the simulator against the app's container "
+            "plist as a path domain (so the simulator's cfprefsd, which a live app reads "
+            "through, mediates the write), then re-reads that plist from disk to confirm. "
+            "Anything not confirmed is reported in `unverified` rather than claimed as "
+            "written — `defaults write` exiting 0 is not proof. "
+            "Supported value types: bool, int, float, string, array, object. "
+            "Relaunch the app after writing if it reads the value only at startup."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "values"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "values": {
+                    "type": "object",
+                    "description": "{key: value} pairs to write. Types are preserved (a bool stays a bool, not the string \"1\").",
+                },
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Defaults to the session's launched app bundle id.",
+                },
+            },
+        },
+        "handler": tool_set_app_defaults,
     },
     # ── Performance monitoring ──────────────────────────────────────────
     {
