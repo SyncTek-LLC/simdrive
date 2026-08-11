@@ -23,7 +23,7 @@ import pytest
 # The full canonical 32-tool registry — sourced from server._TOOLS at runtime.
 # A test below pins this count so adding/removing tools without updating the
 # gate is caught immediately.
-EXPECTED_TOOL_COUNT = 38  # +2: app_defaults, set_app_defaults (QA evidence primitives)
+EXPECTED_TOOL_COUNT = 41  # +5: app_defaults, set_app_defaults, capture_motion, detect_flicker, liveness_probe
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +135,10 @@ GATED_TOOLS: list[str] = [
     # QA evidence primitives — app preferences read/write
     "app_defaults",
     "set_app_defaults",
+    # QA evidence primitives — motion / animation measurement
+    "capture_motion",
+    "detect_flicker",
+    "liveness_probe",
 ]
 
 

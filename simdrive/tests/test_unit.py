@@ -40,9 +40,10 @@ def test_tool_count():
                        + lint_recordings + migrate_recording (a9.1) = 32
                        + tap_and_wait_keyboard + 3 host-AX a11y tools    = 36
                        + app_defaults + set_app_defaults (QA evidence)   = 38
+                       + capture_motion + detect_flicker + liveness_probe = 41
     """
     tools = server.list_tools()
-    assert len(tools) == 38, f"expected 38 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 41, f"expected 41 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -71,6 +72,8 @@ def test_tool_names_match_spec():
         "set_text",
         # QA evidence primitives — app preferences, read from disk not cfprefsd
         "app_defaults", "set_app_defaults",
+        # QA evidence primitives — quantified motion, a separate channel from replay
+        "capture_motion", "detect_flicker", "liveness_probe",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"

@@ -46,7 +46,6 @@ from typing import Any, Optional
 from . import sim
 from .sim import SimError
 
-
 # A path-domain write is committed by the time `defaults` exits, but poll a
 # couple of times anyway: verification that occasionally races is worse than
 # useless, because an "unverified" verdict is exactly the false signal this

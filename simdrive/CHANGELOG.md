@@ -15,6 +15,62 @@
 
 ## [Unreleased]
 
+### Added — motion capture: measure animation instead of guessing at it
+
+Three new tools answer questions a pair of screenshots never could — does this
+flicker, does the skeleton ever resolve, is the morph smooth, is the app alive.
+They return **numbers, not frames**: a hundred screenshots is an unreadable
+payload, so you get a per-frame delta series, a count of perceptually distinct
+states, transitions, when motion settled, and one saved image per state.
+
+- **`capture_motion(duration_ms, fps, roi)`** records the screen with
+  `simctl io recordVideo`, decodes it, and returns the quantified series. Pass
+  an `roi` — a whole-screen delta mostly measures the status-bar clock —
+  or `mask_regions` to blank noisy rectangles, the same concept `replay` uses.
+- **`detect_flicker(roi, duration_ms)`** decides whether a region is
+  *oscillating* rather than merely changing. Few states visited many times is a
+  flicker; a wizard stepping through screens is not, however many transitions
+  it makes. Returns the verdict, the transition count, and the cycle period.
+- **`liveness_probe(seconds)`** injects a touch and reports whether the UI
+  changed at all, with the app's CPU% alongside so a spin (frozen at high CPU)
+  reads differently from a deadlock (frozen at idle).
+
+Frame decoding uses ffmpeg when present (`brew install ffmpeg`). Without it,
+capture falls back to polling screenshots at roughly 1 fps and says so in
+`effective_fps` and `warnings`; `detect_flicker` refuses a verdict it cannot
+support rather than guessing from too few samples. This is a separate channel
+from `replay` — recording and drift semantics are unchanged.
+
+### Added — `app_defaults` / `set_app_defaults`: read app settings that are actually true
+
+`xcrun simctl spawn <udid> defaults read <bundle> <key>` does not read your
+app's settings. A simulator keeps two plists per domain: the app's sandboxed
+one, which `NSUserDefaults` uses, and a device-wide one, which a
+simctl-spawned `defaults` uses. They never sync — so a value your app wrote is
+invisible to that command, and a value that command wrote is invisible to your
+app. Read a toggle back after setting it that way and you see your own write
+echoed out of a file the app has never opened, which is a very convincing way
+to conclude that a working setting is broken.
+
+- **`app_defaults(bundle_id?, keys?)`** parses the app's own container plist
+  from disk. Missing plist returns an empty result with an explanation rather
+  than an error. Dates come back as ISO-8601 and Data as tagged base64, so real
+  preference files survive intact. Keys found *only* in the device-wide domain
+  are reported separately — that is the trap, named.
+- **`set_app_defaults(values, bundle_id?)`** writes into the domain the app
+  really reads, then confirms each value by re-reading the plist. Anything it
+  cannot confirm is reported as unverified rather than claimed as written.
+
+### Added — `logs` can finally see `.info` and `.debug`
+
+`log show` hides `.info` and `.debug` records unless asked for them, and most
+apps narrate at `.info` — so an app's own logging was invisible to the tool
+built to read it. `logs` now takes `level` (`default` | `info` | `debug`,
+defaulting to `info`) and `last`, the capture window. `lines` slices *after*
+capture, so widening `last` — not `lines` — is how you reach back past the
+previous fixed 30-second horizon to a defect you noticed a minute ago.
+`debug` is a firehose; choose it deliberately.
+
 ### Fixed — `observe` confidence bands no longer flag legible on-screen text as `low`
 
 - **The english-likeness fence now uses the host dictionary, not a ~370-word

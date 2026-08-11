@@ -72,8 +72,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import (
-    __version__, act, ax, diagnostics, errors, observe, perf, prefs, recorder,
-    robustness, session, sim, som,
+    __version__, act, ax, diagnostics, errors, motion, observe, perf, prefs,
+    recorder, robustness, session, sim, som,
 )
 from .cloud.middleware.quotas import check_local_quota
 from .license.gate import gate as _entitlement_gate
@@ -1818,6 +1818,196 @@ def tool_set_app_defaults(arguments: dict) -> dict:
     return {"ok": True, "bundle_id": bundle_id, **result}
 
 
+# --------------------- Motion capture (animation evidence) -------------- #
+
+# Below this measured frame rate a flicker verdict is not supportable: the
+# screenshot-sampling fallback runs at ~1 fps, and you cannot resolve a
+# several-Hz oscillation from a handful of samples. Refusing beats guessing.
+_FLICKER_MIN_FPS = 4.0
+_MOTION_DEFAULT_DURATION_MS = 2000
+_LIVENESS_MAX_SECONDS = 60
+
+
+def _parse_rect(raw, name: str):
+    """Coerce an [x, y, w, h] / {x, y, w, h} rectangle, or None."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        try:
+            return (int(raw["x"]), int(raw["y"]), int(raw["w"]), int(raw["h"]))
+        except (KeyError, TypeError, ValueError):
+            raise errors.invalid_argument(name, raw, "must have integer x, y, w, h")
+    if isinstance(raw, (list, tuple)) and len(raw) == 4:
+        try:
+            return tuple(int(v) for v in raw)  # type: ignore[return-value]
+        except (TypeError, ValueError):
+            raise errors.invalid_argument(name, raw, "must be four integers [x, y, w, h]")
+    raise errors.invalid_argument(
+        name, raw, "must be [x, y, w, h] or {x, y, w, h} in screenshot pixel coordinates",
+    )
+
+
+def _run_motion_capture(s, arguments: dict, duration_ms: int, roi=None) -> dict:
+    """Shared capture path for capture_motion / detect_flicker / liveness_probe."""
+    sw, sh = _ensure_screenshot_dims(s)
+    fps = int(arguments.get("fps", 30))
+    if fps < 1 or fps > 60:
+        raise errors.invalid_argument("fps", fps, "must be between 1 and 60")
+    masks = arguments.get("mask_regions")
+    mask_rects = [_parse_rect(m, "mask_regions") for m in masks] if masks else None
+    try:
+        return motion.capture_motion(
+            s.device.udid,
+            s.workdir / "motion",
+            duration_ms=duration_ms,
+            fps=fps,
+            roi=roi,
+            mask_regions=mask_rects,
+            source=str(arguments.get("source", "auto")),
+            reference_size=(sw, sh),
+        )
+    except motion.MotionError as exc:
+        raise errors.SimdriveError(
+            code="motion_capture_failed", message=str(exc),
+            details={"udid": s.device.udid, "duration_ms": duration_ms},
+        )
+
+
+def tool_capture_motion(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "capture_motion")
+    duration_ms = int(arguments.get("duration_ms", _MOTION_DEFAULT_DURATION_MS))
+    if duration_ms < 1 or duration_ms > motion._MAX_DURATION_MS:
+        raise errors.invalid_argument(
+            "duration_ms", duration_ms,
+            f"must be between 1 and {motion._MAX_DURATION_MS}",
+        )
+    roi = _parse_rect(arguments.get("roi"), "roi")
+    result = _run_motion_capture(s, arguments, duration_ms, roi=roi)
+    s.last_action_at = _now()
+    return {"ok": True, **result}
+
+
+def tool_detect_flicker(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "detect_flicker")
+    roi = _parse_rect(arguments.get("roi"), "roi")
+    if roi is None:
+        raise errors.invalid_argument(
+            "roi", None,
+            "detect_flicker requires an roi — a whole-screen delta is dominated by "
+            "the status-bar clock and cannot isolate one oscillating control",
+        )
+    duration_ms = int(arguments.get("duration_ms", _MOTION_DEFAULT_DURATION_MS))
+    if duration_ms < 1 or duration_ms > motion._MAX_DURATION_MS:
+        raise errors.invalid_argument(
+            "duration_ms", duration_ms,
+            f"must be between 1 and {motion._MAX_DURATION_MS}",
+        )
+    analysis = _run_motion_capture(s, arguments, duration_ms, roi=roi)
+    measured_fps = float(analysis.get("effective_fps") or 0.0)
+    if measured_fps < _FLICKER_MIN_FPS:
+        return {
+            "ok": False,
+            "error": {
+                "code": "insufficient_frame_rate",
+                "message": (
+                    f"captured at {measured_fps} fps via '{analysis.get('source')}', below the "
+                    f"{_FLICKER_MIN_FPS} fps needed to resolve a flicker. A verdict from this "
+                    "sampling would not be trustworthy. Recovery: install ffmpeg "
+                    "(`brew install ffmpeg`) so capture uses simctl recordVideo."
+                ),
+                "details": {
+                    "effective_fps": measured_fps,
+                    "source": analysis.get("source"),
+                    "frames": analysis.get("frames"),
+                },
+            },
+        }
+    verdict = motion.flicker_verdict(analysis, duration_ms=duration_ms)
+    s.last_action_at = _now()
+    return {
+        "ok": True,
+        **verdict,
+        "roi": list(roi),
+        "frames": analysis["frames"],
+        "effective_fps": measured_fps,
+        "delta_series": analysis["delta_series"],
+        "state_sequence": analysis["state_sequence"],
+        "representative_frames": analysis["representative_frames"],
+        "warnings": analysis["warnings"],
+    }
+
+
+def tool_liveness_probe(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "liveness_probe")
+    seconds = int(arguments.get("seconds", 5))
+    if seconds < 1 or seconds > _LIVENESS_MAX_SECONDS:
+        raise errors.invalid_argument(
+            "seconds", seconds, f"must be between 1 and {_LIVENESS_MAX_SECONDS}",
+        )
+    sw, sh = _ensure_screenshot_dims(s)
+    # Default to the middle of the screen: a tap there lands on content on
+    # essentially any screen and is unlikely to trigger navigation.
+    x = int(arguments.get("x", sw // 2))
+    y = int(arguments.get("y", sh // 2))
+
+    tap_error = None
+    try:
+        act.tap(x, y, sw, sh, udid=s.device.udid)
+    except Exception as exc:  # noqa: BLE001 — a failed tap is part of the verdict
+        tap_error = str(exc)
+
+    analysis = _run_motion_capture(s, arguments, seconds * 1000)
+    responsive = motion.liveness_verdict(analysis)
+
+    # Corroborate with CPU: a frozen UI at 100% CPU is a spin, at ~0% a deadlock.
+    # The campaign established its freeze exactly this way, by hand.
+    cpu_pct = None
+    if s.app_bundle_id:
+        try:
+            cpu_pct = perf.snapshot(s.device.udid, s.app_bundle_id).get("cpu_pct")
+        except Exception:  # noqa: BLE001 — corroboration is optional
+            cpu_pct = None
+
+    if responsive:
+        verdict = "the UI changed in response to the touch"
+    elif cpu_pct is not None and cpu_pct > 50.0:
+        verdict = (
+            f"no UI change after the touch while the app burns {cpu_pct}% CPU — "
+            "consistent with a spin/busy-loop rather than an idle deadlock"
+        )
+    else:
+        verdict = (
+            "no UI change after the touch"
+            + (f" and the app is near-idle at {cpu_pct}% CPU" if cpu_pct is not None else "")
+            + " — consistent with a hang. Corroborate with `logs` silence over the same window."
+        )
+
+    s.last_action_at = _now()
+    return {
+        "ok": True,
+        "responsive": responsive,
+        "tapped": [x, y],
+        "tap_error": tap_error,
+        "seconds": seconds,
+        "max_delta": analysis["max_delta"],
+        "mean_delta": analysis["mean_delta"],
+        "frames": analysis["frames"],
+        "distinct_states": analysis["distinct_states"],
+        "transitions": analysis["transitions"],
+        "effective_fps": analysis["effective_fps"],
+        "source": analysis["source"],
+        "cpu_pct": cpu_pct,
+        "verdict": verdict,
+        "warnings": analysis["warnings"],
+    }
+
+
 # --------------------- Performance / diagnostics / robustness ----------- #
 
 
@@ -2920,6 +3110,129 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_set_app_defaults,
+    },
+    # ── Motion capture (animation evidence) ─────────────────────────────
+    {
+        "name": "capture_motion",
+        "description": (
+            "(sim only) Measure on-screen MOTION over a time window and return NUMBERS, "
+            "not frames. Use when the question is about animation rather than state: "
+            "does this flicker, does the skeleton ever resolve, is the morph smooth, is "
+            "the UI alive. A pair of screenshots can never answer any of those. "
+            "Records with `simctl io recordVideo` and decodes with ffmpeg (install it: "
+            "`brew install ffmpeg`); without ffmpeg it falls back to polling screenshots "
+            "at roughly 1 fps and says so in `warnings` and `effective_fps`. "
+            "PASS AN ROI. Whole-screen deltas are dominated by the status-bar clock; "
+            "roi=[x,y,w,h] in screenshot pixel coordinates (same space as observe marks) "
+            "crops before analysis. mask_regions blanks noisy rectangles instead. "
+            "Returns: delta_series (per-frame difference vs the previous frame, 0-1), "
+            "distinct_states (frames clustered perceptually), transitions, "
+            "settled_at_ms (when motion stopped, or null if it never did), "
+            "max_gap_ms, and representative_frames — ONE saved image per distinct state, "
+            "never one per frame. "
+            "Note: recordVideo is change-driven, so a static screen yields very few frames; "
+            "that shows up as a `warnings` entry and is itself evidence of stillness. "
+            "This is a separate channel from replay and does not affect drift semantics."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "duration_ms": {
+                    "type": "integer", "default": 2000,
+                    "description": "Capture window in milliseconds (max 120000).",
+                },
+                "fps": {
+                    "type": "integer", "default": 30,
+                    "description": "Frames per second to decode (1-60). The video path honours "
+                                   "this; the screenshot fallback cannot — read `effective_fps`.",
+                },
+                "roi": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 4, "maxItems": 4,
+                    "description": "[x, y, w, h] in screenshot pixels. Strongly recommended: "
+                                   "an unfocused capture measures the clock, not your control.",
+                },
+                "mask_regions": {
+                    "type": "array",
+                    "description": "Rectangles to blank before analysis, [x,y,w,h] each. "
+                                   "Same concept as replay's mask_regions.",
+                    "items": {"type": "array", "items": {"type": "integer"},
+                              "minItems": 4, "maxItems": 4},
+                },
+                "source": {
+                    "type": "string", "enum": ["auto", "video", "screenshots"], "default": "auto",
+                    "description": "'auto' uses recordVideo+ffmpeg when available and degrades "
+                                   "to screenshot polling; 'video' fails loudly without ffmpeg.",
+                },
+            },
+        },
+        "handler": tool_capture_motion,
+    },
+    {
+        "name": "detect_flicker",
+        "description": (
+            "(sim only) Decide whether a region is OSCILLATING rather than merely changing. "
+            "The motivating case: a button alternating between two labels several times a "
+            "second, which screenshot sampling can neither prove nor disprove. "
+            "A flicker is FEW distinct states visited MANY times — a one-way change, or a "
+            "wizard stepping through screens, is not flicker no matter how many transitions. "
+            "roi is REQUIRED: whole-screen motion cannot isolate one control. "
+            "Returns {flickering, transitions, period_ms (a full cycle, not a half), states, "
+            "revisits, transitions_per_second} plus the delta series and state sequence. "
+            "If the capture rate is too low to support a verdict (no ffmpeg), returns "
+            "ok=false with code 'insufficient_frame_rate' rather than guessing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "roi"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "roi": {
+                    "type": "array", "items": {"type": "integer"},
+                    "minItems": 4, "maxItems": 4,
+                    "description": "[x, y, w, h] in screenshot pixels — the control under suspicion.",
+                },
+                "duration_ms": {"type": "integer", "default": 2000,
+                                "description": "How long to watch. 2000-3000 ms catches a "
+                                               "several-Hz flicker comfortably."},
+                "fps": {"type": "integer", "default": 30},
+                "source": {"type": "string", "enum": ["auto", "video", "screenshots"],
+                           "default": "auto"},
+            },
+        },
+        "handler": tool_detect_flicker,
+    },
+    {
+        "name": "liveness_probe",
+        "description": (
+            "(sim only) Is the UI alive? Injects a touch, samples the screen for `seconds`, "
+            "and reports whether anything changed — with the app's CPU% alongside, so a spin "
+            "(frozen at high CPU) reads differently from a deadlock (frozen at idle). "
+            "Replaces the hand-rolled `ps` + log-silence routine that took an agent five "
+            "minutes to establish a freeze. "
+            "Taps the centre of the screen by default; pass x/y to probe a specific control. "
+            "Works without ffmpeg (a coarse sampling rate is sufficient to answer "
+            "'did anything change at all'). "
+            "Corroborate a not-responsive verdict with `logs` over the same window."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "seconds": {"type": "integer", "default": 5,
+                            "description": "How long to watch after the touch (1-60)."},
+                "x": {"type": "integer", "description": "Tap x in screenshot pixels (default: centre)."},
+                "y": {"type": "integer", "description": "Tap y in screenshot pixels (default: centre)."},
+                "fps": {"type": "integer", "default": 10},
+                "source": {"type": "string", "enum": ["auto", "video", "screenshots"],
+                           "default": "auto"},
+            },
+        },
+        "handler": tool_liveness_probe,
     },
     # ── Performance monitoring ──────────────────────────────────────────
     {

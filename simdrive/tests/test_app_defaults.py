@@ -431,3 +431,71 @@ def test_defaults_tools_are_registered_and_warn_about_the_improvised_command():
         assert "simctl spawn" in desc and "defaults " in desc, (
             f"{name} must tell the agent why the improvised simctl command is not the answer"
         )
+
+
+# ── simctl container resolution ─────────────────────────────────────────────
+
+
+def test_get_app_container_returns_the_parsed_path():
+    from simdrive import sim as sim_mod
+    out = "/Users/x/Devices/UD/data/Containers/Data/Application/ABC\n"
+    with patch("simdrive.sim._simctl", return_value=_ok(out)):
+        assert str(sim_mod.get_app_container("UD", "com.example.app")) == out.strip()
+
+
+def test_get_app_container_rejects_an_empty_path():
+    """simctl exiting 0 with no path would otherwise produce a Path('') that
+    silently resolves to the working directory."""
+    from simdrive import sim as sim_mod
+    with patch("simdrive.sim._simctl", return_value=_ok("   \n")):
+        with pytest.raises(SimError) as exc:
+            sim_mod.get_app_container("UD", "com.example.app")
+    assert "empty" in str(exc.value)
+
+
+# ── tool-surface edge cases ─────────────────────────────────────────────────
+
+
+def test_prefs_tools_refuse_a_device_session(tmp_path, monkeypatch):
+    """There is no `get_app_container` for real hardware; say so rather than
+    failing deep inside a simctl call."""
+    import simdrive.server as server_mod
+    import simdrive.session as session_mod
+    from simdrive.sim import Device
+
+    d = Device(udid="DEV", name="iPhone", os_version="26.0", state="available")
+    s = SimpleNamespace(session_id="sid-dev-prefs", device=d, target="device",
+                        app_bundle_id="com.example.app", workdir=tmp_path, last_action_at=0.0)
+    monkeypatch.setitem(session_mod._SESSIONS, s.session_id, s)
+    for tool in (server_mod.tool_app_defaults, server_mod.tool_set_app_defaults):
+        with pytest.raises(Exception) as exc:
+            tool({"session_id": s.session_id, "values": {"a": 1}})
+        assert "simulator-only" in str(exc.value)
+
+
+def test_tool_app_defaults_rejects_non_list_keys(tmp_path, monkeypatch):
+    import simdrive.server as server_mod
+    import simdrive.session as session_mod
+
+    s = _make_sim_session(tmp_path)
+    monkeypatch.setitem(session_mod._SESSIONS, s.session_id, s)
+    with pytest.raises(Exception) as exc:
+        server_mod.tool_app_defaults({"session_id": s.session_id, "keys": "hiddenLibraries"})
+    assert "keys" in str(exc.value)
+
+
+def test_tool_set_app_defaults_turns_an_unsupported_type_into_a_structured_error(
+        tmp_path, monkeypatch):
+    import simdrive.server as server_mod
+    import simdrive.session as session_mod
+
+    s = _make_sim_session(tmp_path)
+    monkeypatch.setitem(session_mod._SESSIONS, s.session_id, s)
+
+    def _boom(udid, bundle_id, values):
+        raise SimError("cannot write preference 'blob': unsupported value type object")
+
+    monkeypatch.setattr("simdrive.prefs.write_defaults", _boom)
+    with pytest.raises(Exception) as exc:
+        server_mod.tool_set_app_defaults({"session_id": s.session_id, "values": {"blob": 1}})
+    assert "unsupported value type" in str(exc.value)
