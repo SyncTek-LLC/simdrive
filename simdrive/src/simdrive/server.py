@@ -664,6 +664,21 @@ def tool_session_end(arguments: dict) -> dict:
     _entitlement_gate()
     sid = arguments["session_id"]
     session.end(sid, terminate_app=bool(arguments.get("terminate_app", True)))
+    # Tear down the host-AX announcement observer once the last session ends.
+    # The observer attaches an AXObserver run-loop source to the Simulator
+    # process, which engages the simulator's accessibility globally — apps then
+    # report UIAccessibility.isVoiceOverRunning == true and silently take their
+    # VoiceOver code path (e.g. an accessibility toolbar instead of the normal
+    # UI). Because stop_announcement_observer() was never called, that state
+    # leaked across every later session for the MCP server's lifetime. The
+    # observer restarts lazily on the next get_announcements /
+    # perform_accessibility_action call, so AX features are unaffected.
+    try:
+        remaining = session.all_sessions()
+    except Exception:  # noqa: BLE001 — teardown must never break session_end
+        remaining = []
+    if not remaining:
+        ax.stop_announcement_observer()
     return {"ended": sid}
 
 
