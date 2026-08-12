@@ -397,6 +397,77 @@ def test_replay_honours_the_recorded_settle(tmp_path, monkeypatch):
     assert slept.count(0.25) >= 2, f"each step's settle must be honoured: {slept}"
 
 
+def test_a_malformed_settle_is_ignored_rather_than_crashing_the_replay(tmp_path, monkeypatch):
+    """A hand-edited recording must not be able to take the engine down."""
+    from simdrive import recorder
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    rec_dir = recorder.recordings_root() / "bad-settle"
+    _write_recording(rec_dir, steps=1)
+    payload = yaml.safe_load((rec_dir / "recording.yaml").read_text())
+    payload["steps"][0]["args"]["settle_ms"] = "soon"
+    (rec_dir / "recording.yaml").write_text(yaml.safe_dump(payload, sort_keys=False))
+    _patch_replay_frames(monkeypatch, [GREY])
+    _patch_tap(monkeypatch)
+    slept: list = []
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: slept.append(s))
+
+    result = recorder.replay("bad-settle", _make_sim_session(tmp_path),
+                             on_drift="warn", halt_on_state_mismatch=False)
+
+    assert result["steps"][0]["executed"] is True
+    assert slept == []
+
+
+def test_retry_is_skipped_when_the_recorded_frames_are_gone(tmp_path, monkeypatch):
+    """Without the capture's frames there is no way to know an effect is missing,
+    so the retry must decline rather than guess."""
+    from simdrive import recorder
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    rec_dir = recorder.recordings_root() / "frames-gone"
+    _write_recording(rec_dir, steps=1, final_post_colour=DARK)
+    (rec_dir / "snapshots" / "001_post.png").unlink()
+    _patch_replay_frames(monkeypatch, [GREY])
+    taps = _patch_tap(monkeypatch)
+
+    recorder.replay("frames-gone", _make_sim_session(tmp_path),
+                    on_drift="warn", halt_on_state_mismatch=False,
+                    retry_noop_taps=True)
+
+    assert len(taps) == 1, "no recorded oracle means no retry"
+
+
+def test_retries_are_reported_even_when_a_later_step_blows_up(tmp_path, monkeypatch):
+    """Whoever triages the crash needs to know a tap had already been repeated."""
+    from simdrive import act, recorder
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    rec_dir = recorder.recordings_root() / "retry-then-error"
+    _write_recording(rec_dir, steps=2, final_post_colour=DARK)
+    # Give step 1 a recorded effect so the retry has something to chase.
+    Image.new("RGB", (1206, 2622), DARK).save(rec_dir / "snapshots" / "001_post.png")
+    _patch_replay_frames(monkeypatch, [GREY])
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: None)
+
+    calls: list = []
+
+    def _tap(*a, **kw):
+        calls.append((a, kw))
+        if len(calls) > 2:            # step 1 taps twice (tap + retry), step 2 dies
+            raise RuntimeError("HID went away")
+
+    monkeypatch.setattr(act, "tap", _tap)
+
+    result = recorder.replay("retry-then-error", _make_sim_session(tmp_path),
+                             on_drift="warn", halt_on_state_mismatch=False,
+                             retry_noop_taps=True)
+
+    assert result["halt_reason"] == "execute_error"
+    assert result["noop_retries"], "a retry that already happened must still be reported"
+    assert result["noop_retries"][0]["step_id"] == 1
+
+
 def test_recordings_without_a_settle_do_not_sleep(tmp_path, monkeypatch):
     """Recordings captured before settle_ms was persisted keep their old cadence."""
     from simdrive import recorder
