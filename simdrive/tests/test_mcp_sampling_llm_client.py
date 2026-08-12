@@ -151,13 +151,20 @@ class TestMCPSamplingClientHappyPath:
             "so the MCP client picks a capable model for journey decisions. "
             "Got model_preferences=None."
         )
-        # ModelPreferences from mcp 1.27.0 has intelligencePriority field.
+        # ModelPreferences spells this field differently across mcp releases —
+        # 1.27.0 exposes the camelCase alias `intelligencePriority`, later
+        # versions expose only the snake_case field. The behaviour under test is
+        # "we asked for a capable model", which is identical either way, so read
+        # whichever the installed SDK provides rather than pinning a spelling.
         intelligence = getattr(model_prefs, "intelligencePriority", None)
+        if intelligence is None:
+            intelligence = getattr(model_prefs, "intelligence_priority", None)
         assert intelligence is not None, (
-            f"model_preferences must have intelligencePriority set; got {model_prefs!r}"
+            "model_preferences must set an intelligence priority under either "
+            f"spelling; got {model_prefs!r}"
         )
         assert intelligence > 0.5, (
-            f"intelligencePriority should be > 0.5 for journey decisions; got {intelligence}"
+            f"intelligence priority should be > 0.5 for journey decisions; got {intelligence}"
         )
 
 
