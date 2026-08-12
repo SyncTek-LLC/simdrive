@@ -548,6 +548,31 @@ class Recorder:
         return partial_path
 
 
+def _mark_text_of(m: Any) -> str:
+    """Text of a Mark dataclass (sim path) or dict mark (device path)."""
+    if hasattr(m, "text"):
+        return (m.text or "").strip()
+    return (m.get("text") or "").strip()
+
+
+def _stable_texts(samples: list[list]) -> Optional[set[str]]:
+    """Intersect mark text across observations; None when there is nothing to
+    cross-check (a single sample), which means "don't filter".
+
+    See ``_STATE_CONTRACT_SAMPLES`` for why this exists: OCR of rendered cover
+    art varies between consecutive reads at full confidence, and a contract that
+    pins it rejects correct state.
+    """
+    usable = [s for s in samples if s]
+    if len(usable) < 2:
+        return None
+    common: Optional[set[str]] = None
+    for sample in usable:
+        texts = {_mark_text_of(m) for m in sample if _mark_text_of(m)}
+        common = texts if common is None else (common & texts)
+    return common or set()
+
+
 def _build_requires_block(
     marks: list,
     *,
@@ -561,6 +586,7 @@ def _build_requires_block(
     device_udid: Optional[str] = None,
     device_name: Optional[str] = None,
     device_os_version: Optional[str] = None,
+    stable_texts: Optional[set[str]] = None,
 ) -> RequiresBlock:
     """Pure transform from (marks + screen metadata) → RequiresBlock.
 
@@ -572,6 +598,11 @@ def _build_requires_block(
     from the session/WDA registry.  For sim recordings, the inverse applies.
     This keeps the requires block format-compatible across targets — a new developer
     can inspect either recording type and immediately see which fields are relevant.
+
+    ``stable_texts``: when provided, only text present in *every* observation
+    sampled at capture time is eligible for ``text_subset_required`` and
+    ``primary_button_label``. Pass None (the default, and what ``migrate_recording``
+    does with a single stored screenshot) to keep the old unfiltered behaviour.
     """
     foreground = len(marks) > 0
     # text_subset_required: top-10 (top-to-bottom from detect_marks), confidence
@@ -592,6 +623,8 @@ def _build_requires_block(
         if cb not in ("high", "medium"):
             continue
         if len(text) < 2:
+            continue
+        if stable_texts is not None and text not in stable_texts:
             continue
         if text in _seen:
             continue
@@ -619,8 +652,15 @@ def _build_requires_block(
 
         upper = [m for m in marks if _mark_y(m) < (h / 2 if h else float("inf"))]
         pool = upper if upper else marks
-        biggest = max(pool, key=_mark_area)
-        primary_label = _mark_text(biggest) or None
+        if stable_texts is not None:
+            # The biggest text in the upper half is often cover art or a hero
+            # image, which is exactly the OCR that drifts. Prefer a stable one;
+            # if nothing up there is stable, pin no label at all rather than a
+            # string that will fail the contract on a good screen.
+            pool = [m for m in pool if _mark_text(m) in stable_texts] or []
+        if pool:
+            biggest = max(pool, key=_mark_area)
+            primary_label = _mark_text(biggest) or None
 
     # Build device-specific block when target is "device".
     device_req: Optional[DeviceRequires] = None
@@ -676,6 +716,19 @@ def _capture_state_contract(session: Session, workdir: Path) -> tuple[Optional[R
     except Exception as exc:  # pragma: no cover — exercised via degrades_gracefully test
         return None, f"Could not capture state contract at record_start: {exc}"
 
+    # Re-read the same screen and keep only text both reads agree on, so unstable
+    # OCR of rendered artwork never lands in the contract (_STATE_CONTRACT_SAMPLES).
+    # A failed second read is not fatal: fall back to the single-sample contract.
+    samples = [list(live.marks or [])]
+    for _ in range(_STATE_CONTRACT_SAMPLES - 1):
+        try:
+            again = observe.observe(session.device.udid, workdir, target=session.target)
+            samples.append(list(again.marks or []))
+        except Exception as exc:
+            log.debug("recorder.state_contract_resample_failed",
+                      extra={"error": str(exc)})
+            break
+
     block = _build_requires_block(
         list(live.marks or []),
         screen_h=live.screenshot_h,
@@ -684,6 +737,7 @@ def _capture_state_contract(session: Session, workdir: Path) -> tuple[Optional[R
         sim_device=session.device.name,
         sim_ios_version=session.device.os_version,
         target="simulator",
+        stable_texts=_stable_texts(samples),
     )
     return block, None
 
@@ -1463,11 +1517,67 @@ a pixel-level SSIM dip. — set to 2; raising this would lengthen recovery time 
 genuinely drifted screens without meaningfully improving false-positive rate.
 """
 
+_NOOP_TAP_GRACE_SEC = 0.75
+"""Extra settle granted before concluding a tap did nothing.
+
+A tap whose effect is a network round-trip (borrow, sign-in, delete) can leave
+the screen unchanged for a moment while working perfectly well. Re-checking
+after this grace period is the difference between "the UI ignored the tap" and
+"the UI is still thinking", and re-dispatching the latter would double-submit.
+"""
+
+_NOOP_TAP_SSIM = 0.995
+"""Similarity above which a tap is treated as having done *nothing*.
+
+Synthetic HID taps on a freshly-presented overlay are sometimes swallowed: the
+tap dispatches, the tool reports success, and the UI never sees it. SwiftUI
+`Menu` rows are the reproducible case — the first tap after the popover appears
+lands roughly half the time, and an identical second tap always works.
+
+Capture usually hides this because an agent observes between actions, which buys
+a second or two of real time; replay dispatches back-to-back and hits it far more
+often.
+
+Re-dispatching is OPT-IN (``retry_noop_taps``), and deliberately so: a tap whose
+effect is a network round-trip — Borrow, Return, Sign in, Delete — can leave the
+screen unchanged while working perfectly, and re-sending it would submit twice.
+Double-borrowing a book to paper over a UI race is a far worse outcome than a
+failed replay. Left off, the swallowed tap still cannot pass silently: the
+outcome assertion at the end of the replay catches the end state it produced.
+
+When enabled, all of the following must hold before a tap is repeated:
+  * the *capture* saw this step change the screen (recorded pre ≠ recorded post),
+    so there is a documented effect that is now missing;
+  * the live screen is unchanged versus the pre-tap frame, above this threshold;
+  * it is *still* unchanged after ``_NOOP_TAP_GRACE_SEC``, ruling out a slow
+    action that simply had not landed yet.
+Every retry is reported in ``noop_retries`` so it stays visible rather than
+becoming a silent crutch hiding a genuinely unresponsive UI.
+"""
+
+_STATE_CONTRACT_SAMPLES = 2
+"""Number of observations intersected when capturing a state contract.
+
+OCR of *rendered image* text (book cover art, logos, photographed words) is not
+stable run to run: the same cover read as "JAMES PATTERSON" and "JAMES PATERSON",
+"MICHAEL WHITE" and "MICHALL WHITE", "PRIVATE" as "PRVATE"/"PRUALE"/"PRIATE" —
+all at high OCR confidence, so confidence banding cannot filter them. Pinning
+those strings into ``text_subset_required`` produced contracts that rejected
+genuinely correct state at replay-start.
+
+Text drawn by the UI toolkit (labels, buttons, timestamps) re-OCRs identically.
+So the contract is built from the intersection of N consecutive observations:
+whatever survives is text the screen renders stably, which is exactly the
+property a state contract needs. Two samples removes the noise cheaply; more
+would cost a screenshot each for diminishing returns.
+"""
+
 
 def replay(name: str, session: Session, on_drift: str = "halt",
            drift_threshold: Optional[float] = None,
            mask_regions: Optional[list] = None,
-           halt_on_state_mismatch: bool = True) -> dict:
+           halt_on_state_mismatch: bool = True,
+           retry_noop_taps: Optional[bool] = None) -> dict:
     """Replay a recording against the current session.
 
     on_drift ∈ {"halt", "warn", "force"} controls what happens when the live
@@ -1486,6 +1596,37 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     simulator sessions when not explicitly provided. Pass a numeric value to
     override. Marks-count drift is also checked per step — if the live marks
     count drops below 50% of the recorded count, it's reported as drift.
+
+    What gets verified, and when:
+
+      * before step 1 — the ``requires:`` state contract;
+      * before each step — the live screen against that step's recorded
+        PRE-state (SSIM + marks count);
+      * after the final step — the live screen against the last step's recorded
+        POST-state, reported as ``final_state`` and halting with
+        ``halt_reason="outcome_drift"``.
+
+    That last one exists because the per-step checks alone verify nothing about
+    a recording's *outcome*: the final action fires and replay returns ok
+    without ever looking at what it did. A recording whose payload is its last
+    step was therefore a guaranteed pass. ``final_state`` is omitted only when
+    there is nothing to compare against (no steps, or a missing post-screenshot).
+
+    Each step's recorded ``settle_ms`` is honoured so replay paces the way the
+    capture did. Recordings made before that was persisted keep their old cadence.
+
+    retry_noop_taps: re-dispatch a tap the UI provably ignored (see
+    ``_NOOP_TAP_SSIM``). Off unless the recording opts in via
+    ``replay_policy.retry_noop_taps: true``, or the caller passes True — it costs
+    an extra screenshot per tap and can double-submit a slow non-idempotent
+    action. Turn it on for menu- and popover-driven journeys, where the
+    swallowed-tap race is common and the taps are idempotent.
+
+    A note for recordings captured before simdrive persisted ``settle_ms``: their
+    post-frames were taken immediately after the action rather than after the
+    settle, so an outcome comparison against one can see a mid-animation frame.
+    If a legacy recording reports ``outcome_drift`` on a run you can see is
+    correct, re-record it rather than loosening the threshold.
     """
     if on_drift not in {"halt", "warn", "force"}:
         raise ValueError("on_drift must be halt|warn|force")
@@ -1508,6 +1649,11 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     masks = _normalize_masks(mask_regions)
     if masks is None:
         masks = _normalize_masks(payload.get("ssim_masks"))
+
+    # Caller wins; otherwise the recording decides; otherwise off.
+    if retry_noop_taps is None:
+        policy = payload.get("replay_policy") or {}
+        retry_noop_taps = bool(policy.get("retry_noop_taps", False))
 
     # State-contract verification (a9.0 / a13) — happens BEFORE any step executes.
     requires_block = RequiresBlock.from_dict(payload.get("requires"))
@@ -1549,6 +1695,7 @@ def replay(name: str, session: Session, on_drift: str = "halt",
 
     results: list[dict] = []
     drift_events: list[dict] = []
+    noop_retries: list[dict] = []
 
     for step in steps:
         # marks_count: stored at step level (recorder a13 path) or in step.args
@@ -1681,6 +1828,14 @@ def replay(name: str, session: Session, on_drift: str = "halt",
         try:
             _execute_step_for_session(step, session, live_obs=live_obs)
             step_result["executed"] = True
+            _settle_for_step(step)
+            retry = _retry_if_tap_was_swallowed(
+                step, session, live_obs["screenshot_path"], masks,
+                rec_dir=rec_dir, enabled=retry_noop_taps,
+            )
+            if retry is not None:
+                step_result["noop_retry"] = retry
+                noop_retries.append({"step_id": step["id"], **retry})
         except Exception as exc:
             step_result["error"] = str(exc)
             results.append(step_result)
@@ -1693,11 +1848,25 @@ def replay(name: str, session: Session, on_drift: str = "halt",
                 "steps": results,
                 "drift_events": drift_events,
             }
+            if noop_retries:
+                out["noop_retries"] = noop_retries
             if state_warning:
                 out["_simdrive_warning"] = state_warning
             return out
 
         results.append(step_result)
+
+    # Outcome assertion. Every check above compares a step's PRE-state, so a
+    # recording whose payload is its final action was never verified at all:
+    # the last action dispatched, nothing looked at the result, and replay
+    # returned ok. (Observed live — a two-step sleep-timer recording reported
+    # ok=true at SSIM 0.995 while the menu tap had been swallowed and no timer
+    # was ever armed.) Comparing the final live frame against the last step's
+    # recorded post-state closes that hole for every recording, including ones
+    # captured before this existed — post-screenshots were always stored.
+    final_state = _assert_final_outcome(
+        steps, rec_dir, session, masks, effective_threshold
+    )
 
     out = {
         "ok": True,
@@ -1708,9 +1877,147 @@ def replay(name: str, session: Session, on_drift: str = "halt",
         "steps": results,
         "drift_events": drift_events,
     }
+    if noop_retries:
+        out["noop_retries"] = noop_retries
+    if final_state is not None:
+        out["final_state"] = final_state
+        if final_state.get("drifted"):
+            drift_events.append({
+                "step_id": final_state["step_id"],
+                "kind": "outcome_drift",
+                "ssim": final_state["similarity"],
+                "threshold": effective_threshold,
+            })
+            if on_drift == "halt":
+                out["ok"] = False
+                out["halted_at"] = final_state["step_id"]
+                out["halt_reason"] = "outcome_drift"
+                out["step_id"] = final_state["step_id"]
+                out["ssim"] = final_state["similarity"]
+                out["expected_screenshot_path"] = final_state["expected_screenshot_path"]
+                out["actual_screenshot_path"] = final_state["actual_screenshot_path"]
+                out["remedy"] = (
+                    "Every recorded step executed, but the screen afterwards does "
+                    "not match the state the capture ended in — the last action "
+                    "did not take effect. Compare the two screenshots above."
+                )
     if state_warning:
         out["_simdrive_warning"] = state_warning
     return out
+
+
+def _settle_for_step(step: dict) -> None:
+    """Sleep the step's recorded ``settle_ms`` so replay paces like the capture.
+
+    Recordings made before ``settle_ms`` was persisted simply have nothing to
+    honour and fall through — replay keeps its old back-to-back cadence for them.
+    """
+    try:
+        settle_ms = int((step.get("args") or {}).get("settle_ms") or 0)
+    except (TypeError, ValueError):
+        return
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+
+
+def _retry_if_tap_was_swallowed(step: dict, session: Session,
+                                pre_tap_screenshot: Path,
+                                masks: Optional[list], *,
+                                rec_dir: Path,
+                                enabled: bool) -> Optional[dict]:
+    """Re-dispatch a tap the UI provably ignored. See ``_NOOP_TAP_SSIM``.
+
+    Returns a report dict when a retry happened, else None. Only taps qualify —
+    re-sending a swipe or a keystroke is not obviously idempotent — and only when
+    the recording documents an effect that is now missing, so a step that changed
+    nothing at capture time never triggers one.
+    """
+    if not enabled or step.get("action") != "tap":
+        return None
+
+    # Did the capture see this step do anything? If pre and post look the same
+    # in the recording, "nothing changed" is the expected outcome and there is
+    # no missing effect to chase.
+    rec_pre = rec_dir / (step.get("pre_screenshot") or "")
+    rec_post = rec_dir / (step.get("post_screenshot") or "")
+    if not (rec_pre.exists() and rec_post.exists()):
+        return None
+    if _ssim_or_fallback(rec_pre, rec_post, masks=masks) >= _NOOP_TAP_SSIM:
+        return None
+
+    after = _observe_for_replay(session)
+    unchanged = _ssim_or_fallback(after["screenshot_path"], pre_tap_screenshot,
+                                  masks=masks)
+    if unchanged < _NOOP_TAP_SSIM:
+        return None
+
+    # Give a slow action the chance to land before concluding it was swallowed;
+    # re-dispatching a pending Borrow would submit it twice.
+    time.sleep(_NOOP_TAP_GRACE_SEC)
+    after = _observe_for_replay(session)
+    unchanged = _ssim_or_fallback(after["screenshot_path"], pre_tap_screenshot,
+                                  masks=masks)
+    if unchanged < _NOOP_TAP_SSIM:
+        return None
+
+    log.debug(
+        "replay.noop_tap_retry",
+        extra={"step_id": step.get("id"), "ssim_vs_pre_tap": round(unchanged, 4),
+               "threshold": _NOOP_TAP_SSIM},
+    )
+    _execute_step_for_session(step, session, live_obs=after)
+    _settle_for_step(step)
+    return {
+        "action": "tap",
+        "reason": "screen_unchanged_after_tap",
+        "ssim_vs_pre_tap": round(unchanged, 4),
+        "threshold": _NOOP_TAP_SSIM,
+        "grace_sec": _NOOP_TAP_GRACE_SEC,
+        "retried": 1,
+    }
+
+
+def _assert_final_outcome(steps: list, rec_dir: Path, session: Session,
+                          masks: Optional[list],
+                          threshold: float) -> Optional[dict]:
+    """Compare the live screen against the last step's recorded post-state.
+
+    Returns None when there is nothing to compare against (no steps, or the
+    recording predates post-screenshot storage / the file went missing), so an
+    incomplete recording degrades to the old behaviour instead of hard-failing.
+    """
+    if not steps:
+        return None
+    last = steps[-1]
+    rel = last.get("post_screenshot")
+    if not rel:
+        return None
+    expected = rec_dir / rel
+    if not expected.exists():
+        return None
+
+    live = _observe_for_replay(session)
+    score = _ssim_or_fallback(live["screenshot_path"], expected, masks=masks)
+    # Same hysteresis as the per-step check: one noisy frame shouldn't fail a run.
+    if score < threshold:
+        live = _observe_for_replay(session)
+        recheck = _ssim_or_fallback(live["screenshot_path"], expected, masks=masks)
+        drifted = recheck < threshold
+        score = min(score, recheck)
+    else:
+        drifted = False
+    log.debug(
+        "replay.final_outcome",
+        extra={"step_id": last.get("id"), "ssim": round(score, 4),
+               "threshold": threshold, "drifted": drifted},
+    )
+    return {
+        "step_id": last.get("id"),
+        "similarity": round(score, 4),
+        "drifted": drifted,
+        "expected_screenshot_path": str(expected),
+        "actual_screenshot_path": str(live["screenshot_path"]),
+    }
 
 
 def _observe_for_replay(session: Session) -> dict:

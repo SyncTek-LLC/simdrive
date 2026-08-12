@@ -1169,13 +1169,17 @@ def tool_tap(arguments: dict) -> dict:
                 "stable_id_loose": _mark_attr(matched_mark, "stable_id_loose"),
                 "text": _mark_attr(matched_mark, "text"),
             }
+        # Settle BEFORE recording: the post-screenshot should show the state the
+        # caller actually waited for, and settle_ms is persisted so replay can
+        # pace itself the same way instead of racing back-to-back.
+        settle_ms = int(arguments.get("settle_ms", 0))
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
+            device_tap_args["settle_ms"] = settle_ms
         if pre_path:
             step_id = _record_act_step(s, "tap", device_tap_args, pre_path)
             if step_id is not None:
                 resp["step_id"] = step_id
-        settle_ms = int(arguments.get("settle_ms", 0))
-        if settle_ms > 0:
-            time.sleep(settle_ms / 1000.0)
         return resp
 
     # F#8: capture the pre-tap screenshot path for verify_change before the tap occurs.
@@ -1192,6 +1196,14 @@ def tool_tap(arguments: dict) -> dict:
         args["stable_id"] = _mark_attr(matched_mark, "stable_id")
         args["stable_id_loose"] = _mark_attr(matched_mark, "stable_id_loose")
         args["text"] = _mark_attr(matched_mark, "text")
+    # Settle BEFORE recording: the post-screenshot should show the state the
+    # caller actually waited for (a pre-settle capture is mid-animation), and
+    # settle_ms is persisted so replay paces itself the same way rather than
+    # dispatching the next action into an unsettled screen.
+    settle_ms = int(arguments.get("settle_ms", 0))
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+        args["settle_ms"] = settle_ms
     step_id = None
     if pre_path:
         step_id = _record_act_step(s, "tap", args, pre_path)
@@ -1218,12 +1230,26 @@ def tool_tap(arguments: dict) -> dict:
         }
     if step_id is not None:
         response["step_id"] = step_id
-    settle_ms = int(arguments.get("settle_ms", 0))
-    if settle_ms > 0:
-        time.sleep(settle_ms / 1000.0)
-    # F#8: verify_change — compare pre/post screenshots via SSIM.
+    # F#8: verify_change — compare pre/post screenshots via SSIM. The settle
+    # already happened above, so this reads the settled screen.
     if verify_change:
         post_path = s.last_screenshot_path
+        if post_path == verify_pre_path or post_path is None:
+            # No recorder attached, so nothing has captured a post-tap frame and
+            # last_screenshot_path is still the PRE frame — comparing it with
+            # itself scores 1.0 and reports "nothing changed" for every tap,
+            # including taps that did change the screen. Capture one.
+            # A failed capture must not fail the tap: verify_change is a
+            # diagnostic, so fall back to the (uninformative) old comparison.
+            try:
+                post_obs = observe.observe(s.device.udid, s.workdir / "observations",
+                                           target=s.target)
+                post_path = post_obs.screenshot_path
+                s.last_screenshot_path = post_path
+                s.last_screenshot_w = post_obs.screenshot_w
+                s.last_screenshot_h = post_obs.screenshot_h
+            except Exception as exc:
+                _log.debug("tap.verify_change_capture_failed", extra={"error": str(exc)})
         ssim_val = _compute_ssim(verify_pre_path, post_path)
         ssim_delta = round(1.0 - ssim_val, 4)
         response["screen_changed"] = ssim_delta > 0.05
@@ -1322,6 +1348,13 @@ def tool_swipe(arguments: dict) -> dict:
         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
         "screenshot_w": sw, "screenshot_h": sh, "duration_ms": duration_ms,
     }
+    # Settle before recording, for the same reason as tap: a scroll captured
+    # mid-deceleration is not the state the caller waited for, and replay needs
+    # the pacing to land on the same frame.
+    settle_ms = int(arguments.get("settle_ms", 0))
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+        args["settle_ms"] = settle_ms
     step_id = None
     if pre_path:
         step_id = _record_act_step(s, "swipe", args, pre_path)
@@ -1337,9 +1370,6 @@ def tool_swipe(arguments: dict) -> dict:
         response["warnings"] = warnings
     if step_id is not None:
         response["step_id"] = step_id
-    settle_ms = int(arguments.get("settle_ms", 0))
-    if settle_ms > 0:
-        time.sleep(settle_ms / 1000.0)
     return response
 
 
@@ -1580,9 +1610,13 @@ def tool_replay(arguments: dict) -> dict:
     threshold = float(arguments.get("drift_threshold", 0.85))
     mask_regions = arguments.get("mask_regions")
     halt_on_state_mismatch = bool(arguments.get("halt_on_state_mismatch", True))
+    retry_noop_taps = arguments.get("retry_noop_taps")
+    if retry_noop_taps is not None:
+        retry_noop_taps = bool(retry_noop_taps)
     return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold,
                            mask_regions=mask_regions,
-                           halt_on_state_mismatch=halt_on_state_mismatch)
+                           halt_on_state_mismatch=halt_on_state_mismatch,
+                           retry_noop_taps=retry_noop_taps)
 
 
 def tool_list_devices(arguments: dict) -> dict:
@@ -2628,7 +2662,15 @@ _TOOLS: list[dict] = [
             "halt_on_state_mismatch (a9.0, default true) verifies the recorded "
             "requires: block before step 1 and halts with halt_reason="
             "'state_contract_mismatch' on failure. Set false to proceed with a warning. "
-            "a13: also checks marks-count drift per step (50% drop halts when on_drift=halt)."
+            "a13: also checks marks-count drift per step (50% drop halts when on_drift=halt). "
+            "After the final step the live screen is compared against that step's recorded "
+            "POST-state and reported as `final_state`, halting with halt_reason='outcome_drift' "
+            "— without it a recording whose payload IS its last action passes no matter what "
+            "the action did. retry_noop_taps (default off, or per-recording via "
+            "replay_policy.retry_noop_taps) re-sends a tap the UI provably ignored, which is "
+            "common on freshly-presented SwiftUI menus; leave it off for flows with "
+            "non-idempotent taps (Borrow, Return, Sign in) where a slow request is "
+            "indistinguishable from a swallowed tap."
         ),
         "inputSchema": {
             "type": "object",
@@ -2639,6 +2681,7 @@ _TOOLS: list[dict] = [
                 "on_drift": {"type": "string", "enum": ["halt", "warn", "force"], "default": "halt"},
                 "drift_threshold": {"type": "number", "default": 0.85},
                 "halt_on_state_mismatch": {"type": "boolean", "default": True},
+                "retry_noop_taps": {"type": "boolean", "description": "Re-dispatch a tap the UI ignored (screen unchanged after the tap and after a grace re-check, where the capture recorded a change). Off by default: a slow non-idempotent tap looks the same and would be double-submitted. Recordings can opt in via replay_policy.retry_noop_taps."},
                 "mask_regions": {
                     "type": "array",
                     "description": "Rectangles to blank in both screenshots before similarity. Each entry is [x, y, w, h] OR {x, y, w, h}.",

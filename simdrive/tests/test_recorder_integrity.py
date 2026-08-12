@@ -438,7 +438,10 @@ def test_drift_hysteresis_single_subthreshold_then_normal_does_not_halt(
     monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
 
     rec_dir = tmp_path / "recordings" / "hysteresis-recover"
-    _write_single_step_recording(rec_dir, pre_fill=(200, 200, 200))
+    # post_fill matches the 'clean' frame below: the replay's outcome check
+    # compares the final live frame against the recorded post-state.
+    _write_single_step_recording(rec_dir, pre_fill=(200, 200, 200),
+                                 post_fill=(200, 200, 200))
 
     # Live frames: first one is wildly different (forces sub-threshold SSIM),
     # second matches the recorded pre — recheck passes → no halt.
