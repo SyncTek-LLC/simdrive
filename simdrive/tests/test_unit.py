@@ -881,7 +881,9 @@ def test_replay_uses_yaml_ssim_masks_when_caller_doesnt_pass(tmp_path, monkeypat
     pre = snaps / "001_pre.png"
     post = snaps / "001_post.png"
     _make_grayscale_png(pre, (320, 600), fill=200, top_band_height=60, top_band_fill=10)
-    _make_grayscale_png(post, (320, 600), fill=180)
+    # Same fill as `pre`/live: the outcome check compares the final live frame
+    # against this post-state, and the live screen here never changes.
+    _make_grayscale_png(post, (320, 600), fill=200, top_band_height=60, top_band_fill=10)
 
     payload = {
         "name": rec_name,
