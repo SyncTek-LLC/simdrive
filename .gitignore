@@ -21,3 +21,4 @@ coverage.xml
 # LapsApp — Xcode user-specific state (project.pbxproj IS committed)
 LapsApp/LapsApp.xcodeproj/xcuserdata/
 LapsApp/LapsApp.xcodeproj/project.xcworkspace/
+.claude/settings.local.json

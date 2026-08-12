@@ -72,9 +72,12 @@ def _write_fixture_recording(rec_dir: Path, steps_count: int = 3,
     for i in range(1, steps_count + 1):
         pre = snaps / f"{i:03d}_pre.png"
         post = snaps / f"{i:03d}_post.png"
-        # Identical grey images for "identical" baseline.
+        # Identical grey images for "identical" baseline. The post frame has to
+        # be that same grey: replay now compares the final live frame against
+        # the last step's post-state, so an arbitrary shade here would read as
+        # "the recording ended somewhere the replay never reached".
         Image.new("RGB", (1170, 2532), (210, 210, 210)).save(pre)
-        Image.new("RGB", (1170, 2532), (200, 200, 200)).save(post)
+        Image.new("RGB", (1170, 2532), (210, 210, 210)).save(post)
         steps.append({
             "id": i,
             "action": "tap",

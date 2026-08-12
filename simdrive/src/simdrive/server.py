@@ -1184,13 +1184,17 @@ def tool_tap(arguments: dict) -> dict:
                 "stable_id_loose": _mark_attr(matched_mark, "stable_id_loose"),
                 "text": _mark_attr(matched_mark, "text"),
             }
+        # Settle BEFORE recording: the post-screenshot should show the state the
+        # caller actually waited for, and settle_ms is persisted so replay can
+        # pace itself the same way instead of racing back-to-back.
+        settle_ms = int(arguments.get("settle_ms", 0))
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
+            device_tap_args["settle_ms"] = settle_ms
         if pre_path:
             step_id = _record_act_step(s, "tap", device_tap_args, pre_path)
             if step_id is not None:
                 resp["step_id"] = step_id
-        settle_ms = int(arguments.get("settle_ms", 0))
-        if settle_ms > 0:
-            time.sleep(settle_ms / 1000.0)
         return resp
 
     # F#8: capture the pre-tap screenshot path for verify_change before the tap occurs.
@@ -1207,6 +1211,14 @@ def tool_tap(arguments: dict) -> dict:
         args["stable_id"] = _mark_attr(matched_mark, "stable_id")
         args["stable_id_loose"] = _mark_attr(matched_mark, "stable_id_loose")
         args["text"] = _mark_attr(matched_mark, "text")
+    # Settle BEFORE recording: the post-screenshot should show the state the
+    # caller actually waited for (a pre-settle capture is mid-animation), and
+    # settle_ms is persisted so replay paces itself the same way rather than
+    # dispatching the next action into an unsettled screen.
+    settle_ms = int(arguments.get("settle_ms", 0))
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+        args["settle_ms"] = settle_ms
     step_id = None
     if pre_path:
         step_id = _record_act_step(s, "tap", args, pre_path)
@@ -1233,12 +1245,26 @@ def tool_tap(arguments: dict) -> dict:
         }
     if step_id is not None:
         response["step_id"] = step_id
-    settle_ms = int(arguments.get("settle_ms", 0))
-    if settle_ms > 0:
-        time.sleep(settle_ms / 1000.0)
-    # F#8: verify_change — compare pre/post screenshots via SSIM.
+    # F#8: verify_change — compare pre/post screenshots via SSIM. The settle
+    # already happened above, so this reads the settled screen.
     if verify_change:
         post_path = s.last_screenshot_path
+        if post_path == verify_pre_path or post_path is None:
+            # No recorder attached, so nothing has captured a post-tap frame and
+            # last_screenshot_path is still the PRE frame — comparing it with
+            # itself scores 1.0 and reports "nothing changed" for every tap,
+            # including taps that did change the screen. Capture one.
+            # A failed capture must not fail the tap: verify_change is a
+            # diagnostic, so fall back to the (uninformative) old comparison.
+            try:
+                post_obs = observe.observe(s.device.udid, s.workdir / "observations",
+                                           target=s.target)
+                post_path = post_obs.screenshot_path
+                s.last_screenshot_path = post_path
+                s.last_screenshot_w = post_obs.screenshot_w
+                s.last_screenshot_h = post_obs.screenshot_h
+            except Exception as exc:
+                _log.debug("tap.verify_change_capture_failed", extra={"error": str(exc)})
         ssim_val = _compute_ssim(verify_pre_path, post_path)
         ssim_delta = round(1.0 - ssim_val, 4)
         response["screen_changed"] = ssim_delta > 0.05
@@ -1337,6 +1363,13 @@ def tool_swipe(arguments: dict) -> dict:
         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
         "screenshot_w": sw, "screenshot_h": sh, "duration_ms": duration_ms,
     }
+    # Settle before recording, for the same reason as tap: a scroll captured
+    # mid-deceleration is not the state the caller waited for, and replay needs
+    # the pacing to land on the same frame.
+    settle_ms = int(arguments.get("settle_ms", 0))
+    if settle_ms > 0:
+        time.sleep(settle_ms / 1000.0)
+        args["settle_ms"] = settle_ms
     step_id = None
     if pre_path:
         step_id = _record_act_step(s, "swipe", args, pre_path)
@@ -1352,9 +1385,6 @@ def tool_swipe(arguments: dict) -> dict:
         response["warnings"] = warnings
     if step_id is not None:
         response["step_id"] = step_id
-    settle_ms = int(arguments.get("settle_ms", 0))
-    if settle_ms > 0:
-        time.sleep(settle_ms / 1000.0)
     return response
 
 
@@ -1595,9 +1625,13 @@ def tool_replay(arguments: dict) -> dict:
     threshold = float(arguments.get("drift_threshold", 0.85))
     mask_regions = arguments.get("mask_regions")
     halt_on_state_mismatch = bool(arguments.get("halt_on_state_mismatch", True))
+    retry_noop_taps = arguments.get("retry_noop_taps")
+    if retry_noop_taps is not None:
+        retry_noop_taps = bool(retry_noop_taps)
     return recorder.replay(name, s, on_drift=on_drift, drift_threshold=threshold,
                            mask_regions=mask_regions,
-                           halt_on_state_mismatch=halt_on_state_mismatch)
+                           halt_on_state_mismatch=halt_on_state_mismatch,
+                           retry_noop_taps=retry_noop_taps)
 
 
 def tool_list_devices(arguments: dict) -> dict:
@@ -2918,7 +2952,15 @@ _TOOLS: list[dict] = [
             "halt_on_state_mismatch (a9.0, default true) verifies the recorded "
             "requires: block before step 1 and halts with halt_reason="
             "'state_contract_mismatch' on failure. Set false to proceed with a warning. "
-            "a13: also checks marks-count drift per step (50% drop halts when on_drift=halt)."
+            "a13: also checks marks-count drift per step (50% drop halts when on_drift=halt). "
+            "After the final step the live screen is compared against that step's recorded "
+            "POST-state and reported as `final_state`, halting with halt_reason='outcome_drift' "
+            "— without it a recording whose payload IS its last action passes no matter what "
+            "the action did. retry_noop_taps (default off, or per-recording via "
+            "replay_policy.retry_noop_taps) re-sends a tap the UI provably ignored, which is "
+            "common on freshly-presented SwiftUI menus; leave it off for flows with "
+            "non-idempotent taps (Borrow, Return, Sign in) where a slow request is "
+            "indistinguishable from a swallowed tap."
         ),
         "inputSchema": {
             "type": "object",
@@ -2929,6 +2971,7 @@ _TOOLS: list[dict] = [
                 "on_drift": {"type": "string", "enum": ["halt", "warn", "force"], "default": "halt"},
                 "drift_threshold": {"type": "number", "default": 0.85},
                 "halt_on_state_mismatch": {"type": "boolean", "default": True},
+                "retry_noop_taps": {"type": "boolean", "description": "Re-dispatch a tap the UI ignored (screen unchanged after the tap and after a grace re-check, where the capture recorded a change). Off by default: a slow non-idempotent tap looks the same and would be double-submitted. Recordings can opt in via replay_policy.retry_noop_taps."},
                 "mask_regions": {
                     "type": "array",
                     "description": "Rectangles to blank in both screenshots before similarity. Each entry is [x, y, w, h] OR {x, y, w, h}.",
@@ -4122,20 +4165,31 @@ def _cmd_trial(args: list[str]) -> None:
         default=None,
         help="Override the license.json path (default: ~/.simdrive/license.json).",
     )
-    # ----- Source attribution (INIT-2026-556 W1) ---------------------------
-    # --source <channel> tags the trial start with the channel that drove
-    # the install (e.g. hn, reddit:iOSProgramming, cursor.directory). Send
-    # is fire-and-forget; only SHA-256(email) is transmitted.
-    # --no-track skips the network call for THIS invocation. A persisted
-    # opt-out at ~/.simdrive/telemetry.toml disables tracking permanently.
+    # ----- Source attribution (INIT-2026-556 W1; opt-in flip WS-0) ---------
+    # Telemetry is OPT-IN BY DEFAULT OFF: no POST is made unless the user
+    # explicitly opts in via --track (per-run) or `track = true` in
+    # ~/.simdrive/telemetry.toml (durable). HEKA_TELEMETRY=off severs it
+    # entirely (the single kill-switch). --source only tags an opted-in run.
     start_p.add_argument(
         "--source",
         default=None,
         help=(
             "Marketing source/channel that drove the install (e.g. hn, reddit, "
-            "cursor.directory). Sends one POST to api.simdrive.dev/trial with "
-            "SHA256(email) + source + timestamp + version + OS family. Raw email "
-            "never leaves the machine. Omit to record as 'direct'."
+            "cursor.directory). Only used if you have opted in to telemetry "
+            "(--track or `track = true` in ~/.simdrive/telemetry.toml). On its "
+            "own it sends nothing. Omit to record as 'direct'."
+        ),
+    )
+    start_p.add_argument(
+        "--track",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt IN to source-attribution telemetry for this run. Sends one "
+            "POST to api.simdrive.dev/trial with SHA256(email) + source + "
+            "timestamp + version + OS family — raw email never leaves the "
+            "machine. Telemetry is OFF unless you pass this or persist "
+            "`track = true`. HEKA_TELEMETRY=off overrides it."
         ),
     )
     start_p.add_argument(
@@ -4143,7 +4197,8 @@ def _cmd_trial(args: list[str]) -> None:
         action="store_true",
         default=False,
         help=(
-            "Skip the source-attribution POST for this invocation. The trial "
+            "Explicitly skip the source-attribution POST for this invocation "
+            "(redundant now that telemetry is off by default). The trial "
             "license is still generated locally."
         ),
     )
@@ -4174,6 +4229,7 @@ def _cmd_trial(args: list[str]) -> None:
             ns.email,
             source=ns.source,
             no_track=ns.no_track,
+            track=ns.track,
         )
         if notice:
             print(notice)
@@ -4462,6 +4518,53 @@ def _cmd_doctor(args: list[str]) -> None:
     sys.exit(0 if checks_ok else 1)
 
 
+def _cmd_update_check(args: list[str]) -> None:
+    """Handle `simdrive update-check [--now] [--verbose] [--json]`.
+
+    Pulls the signed release feed, verifies it locally, and prints an advisory.
+    Never auto-installs; carries no user data; obeys the HEKA_TELEMETRY
+    kill-switch and HEKA_OFFLINE. Non-fatal — always exits 0 unless --json is
+    requested with a hard error.
+
+    Exit codes: 0 = up to date / skipped / disabled; 10 = update available;
+    11 = below minimum supported (upgrade urged).
+    """
+    import argparse
+    import json as _json
+    import sys
+
+    from simdrive.update.check import check_for_update
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive update-check",
+        description=(
+            "Check for a newer simdrive release via the signed pull-based feed. "
+            "Advisory only — never installs. No user data is sent; obeys "
+            "HEKA_TELEMETRY=off and HEKA_OFFLINE=1."
+        ),
+    )
+    parser.add_argument("--now", action="store_true", default=False,
+                        help="Force a fresh check, ignoring the cached cadence.")
+    parser.add_argument("--verbose", action="store_true", default=False,
+                        help="Print the advisory even when up to date.")
+    parser.add_argument("--json", action="store_true", default=False,
+                        help="Emit the result as JSON.")
+    ns = parser.parse_args(args)
+
+    result = check_for_update(force=ns.now)
+    status = result.get("status", "unknown")
+
+    if ns.json:
+        print(_json.dumps(result, indent=2))
+    else:
+        # Stay quiet when up to date unless --verbose; always surface actionable
+        # states (update available / below min).
+        if status in ("update_available", "below_min") or ns.verbose:
+            print(result.get("message", ""))
+
+    sys.exit({"update_available": 10, "below_min": 11}.get(status, 0))
+
+
 # Subcommand dispatch registry — maps the first CLI argument to its handler.
 _SUBCOMMANDS: dict = {
     "demo": _cmd_demo,
@@ -4475,6 +4578,7 @@ _SUBCOMMANDS: dict = {
     "trial": _cmd_trial,
     "license": _cmd_license,
     "auth": _cmd_auth,
+    "update-check": _cmd_update_check,
     "lint-recordings": _cmd_lint_recordings,
     "migrate-recording": _cmd_migrate_recording,
 }
@@ -4493,6 +4597,14 @@ def serve() -> None:
       "license"          → _cmd_license
     """
     import sys
+    # Local-first, scrubbed crash sink (WS-4): records unhandled exceptions to
+    # ~/.heka/crashes/*.json (stack shape + class + version, no PII) before the
+    # traceback prints. Purely local — never opens a socket. Best-effort.
+    try:
+        from simdrive.observability.crash_sink import install_crash_sink
+        install_crash_sink()
+    except Exception:
+        pass
     args = sys.argv[1:]
     if args:
         flag = args[0]

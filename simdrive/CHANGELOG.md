@@ -15,6 +15,47 @@
 
 ## [Unreleased]
 
+### Added — release-feed publishing pipeline (operator tooling)
+
+- **`scripts/make_releases_feed.py`** — the tooling that publishes simdrive's
+  signed `releases.json`: generate the feed from a release tag, validate it
+  against the shared cross-product schema, sign it offline (the signing key
+  never enters CI), and dogfood the staged feed through the exact verify code
+  shipped clients run. A CI self-test proves the whole produce → sign →
+  verify → tamper-reject loop on every PR using a throwaway key.
+
+### Changed — update-check hardening
+
+- A feed whose detached signature is **missing** is now refused outright
+  (fail-closed), exactly like a bad signature — previously it was treated as
+  a network hiccup and skipped.
+- A correctly-signed feed for a **different product** is now ignored: only a
+  feed with `"product": "simdrive"` can produce a simdrive upgrade advisory.
+
+### Added — signed update-check (advisory only, no telemetry)
+
+- **`simdrive update-check`** pulls a signed, pull-based release feed
+  (`releases.json` + detached Ed25519 signature), verifies it locally, and
+  prints an advisory if a newer version exists. It **never auto-installs** and
+  sends **no user data** — the request carries nothing identifying. An
+  unverifiable feed is refused (fail-closed); a network error is a silent skip
+  (fail-open). Obeys the single `HEKA_TELEMETRY=off` kill-switch and
+  `HEKA_OFFLINE=1`. Every real call is logged to
+  `~/.heka/calls.jsonl` so you can audit what left the machine.
+
+### Changed — telemetry is now opt-in by default (privacy)
+
+- **Source-attribution telemetry is OFF unless you explicitly opt in.**
+  Previously `simdrive trial start` could POST a hashed email + version + OS
+  family to the attribution endpoint by default. It now sends **nothing**
+  unless you opt in — per run with `--track`, or durably with `track = true`
+  in `~/.simdrive/telemetry.toml`. Your trial always works locally either way.
+- **One kill-switch.** Setting `HEKA_TELEMETRY=off` (or `0`/`false`/`no`)
+  severs every telemetry path — it overrides even an explicit opt-in.
+- **Local-first crash sink.** Unhandled crashes are now recorded to
+  `~/.heka/crashes/*.json` capturing only the crash *shape* (exception class,
+  stack frames as basenames, version, OS) — no messages, paths, or PII — and
+  never sent anywhere. Disable with `HEKA_CRASH_SINK_DISABLED=1`.
 ### Added — motion capture: measure animation instead of guessing at it
 
 Three new tools answer questions a pair of screenshots never could — does this
@@ -409,7 +450,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 ### Added — Business model
 
 - **14-day free trial** — `simdrive trial start --email you@example.com` issues an Ed25519-signed local license valid for 14 days, full Pro feature access. Email+machine SHA-256 de-dupe prevents infinite re-trials.
-- **License authentication** — `simdrive auth <license-key>` redeems a Polar-issued production license. Writes to `~/.simdrive/license.json`, validates against the embedded public key.
+- **License authentication** — `simdrive auth <license-key>` redeems a signed production license. Writes to `~/.simdrive/license.json`, validates against the embedded public key.
 - **Paywall enforcement on every MCP tool** — all 32 MCP tools now gate on `check_entitlement`. Trial users get full access; after trial expiry, `LicenseError` is raised with a structured `license_required` envelope containing `pricing_url`, `auth_command_hint`, and `trial_command_hint` so the MCP client (Claude Code, Cursor, Continue) surfaces a copy-pasteable recovery path to the user.
 
 ### Added — Positioning
@@ -420,7 +461,7 @@ On a typical 50-mark dense screen, `compact=True, confidence_floor="high"` reduc
 ### Added — Release engineering
 
 - New publish workflow: triggers on `simdrive-v*` tag pattern (was `specterqa-ios-v*`), gates on version-match + CHANGELOG-head + non-live pytest + fresh-venv install smoke, publishes via PyPI Trusted Publisher (OIDC, no static token).
-- Production license-signing keypair rotated. Public key embedded in client; private key Fernet-encrypted in vault and bound to the simdrive-license-api Cloudflare Worker for license issuance on Polar webhook events.
+- Production license-signing keypair rotated. Public key embedded in client; private key Fernet-encrypted in vault and bound to the simdrive-license-api Cloudflare Worker for license issuance on checkout-provider webhook events.
 
 ### Changed
 

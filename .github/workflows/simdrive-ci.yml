@@ -70,6 +70,11 @@ jobs:
             --cov-report=term-missing \
             --cov-fail-under=90  # Ratchet floor — [internal-tracker] push to 85% reached 92% on hot-path modules (server.py 70%->94%); floor set 2pp below measured per flake-safety policy.
 
+      - name: WS-4 publishing-pipeline self-test (throwaway keypair, no secrets)
+        # Design §6.3: produce + sign a fixture feed, validate, verify via the
+        # SHIPPED consumer, tamper one byte -> must reject.
+        run: python ../scripts/make_releases_feed.py --self-test
+
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v4

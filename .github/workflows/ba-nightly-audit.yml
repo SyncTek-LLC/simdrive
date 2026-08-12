@@ -122,15 +122,45 @@ jobs:
               f.write(f"has_violations={'true' if has_violations else 'false'}\n")
           PYEOF
 
-      - name: Create GitHub issue if violations found
+      # Dedupe: keep exactly ONE rolling drift issue instead of minting a new one every
+      # night. The old step put ${{ github.run_id }} (unique per run) in the title, so
+      # create-issue-from-file opened a fresh issue nightly — that produced the 30+
+      # duplicate pileup. We now find the open rolling issue by its STABLE title and
+      # update it in place; if none is open we create it; and we auto-close it when the
+      # drift clears (below), so the tracker reflects live state, not history.
+      - name: File or update the rolling drift issue
         if: steps.build_report.outputs.has_violations == 'true'
-        uses: peter-evans/create-issue-from-file@v5
-        with:
-          title: "SpecterQA Nightly Governance Drift — ${{ github.run_id }}"
-          content-filepath: /tmp/nightly_report.md
-          labels: governance,audit,automated
-          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: "SpecterQA Nightly Governance Drift"
+        run: |
+          existing=$(gh issue list --state open --label automated \
+            --json number,title \
+            --jq '[.[] | select(.title == "SpecterQA Nightly Governance Drift")] | .[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file /tmp/nightly_report.md
+            gh issue comment "$existing" \
+              --body "🔄 Drift still present as of run \`${{ github.run_id }}\`. Body updated above."
+            echo "Updated rolling drift issue #$existing"
+          else
+            gh issue create --title "$TITLE" --body-file /tmp/nightly_report.md \
+              --label governance,audit,automated
+            echo "Opened rolling drift issue"
+          fi
 
-      - name: Summarize (no violations)
+      - name: Close the rolling drift issue when drift clears
         if: steps.build_report.outputs.has_violations == 'false'
-        run: echo "Nightly governance audit complete — no drift detected."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: "SpecterQA Nightly Governance Drift"
+        run: |
+          existing=$(gh issue list --state open --label automated \
+            --json number,title \
+            --jq '[.[] | select(.title == "SpecterQA Nightly Governance Drift")] | .[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" \
+              --comment "✅ Governance drift cleared as of run \`${{ github.run_id }}\` — no open PRs missing an INIT reference. Auto-closing the rolling drift issue."
+            echo "Closed rolling drift issue #$existing"
+          else
+            echo "Nightly governance audit complete — no drift detected, no rolling issue open."
+          fi
