@@ -1,10 +1,7 @@
 {
   "mcpServers": {
-    "specterqa-ios": {
-      "command": "specterqa-ios-mcp",
-      "env": {
-        "SPECTERQA_IOS_LICENSE": "founder"
-      }
+    "simdrive": {
+      "command": "simdrive"
     }
   }
 }

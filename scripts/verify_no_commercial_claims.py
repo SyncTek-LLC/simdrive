@@ -85,6 +85,32 @@ BANNED_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("after_14_days", re.compile(r"after\s+14\s+days", re.I)),
     ("license_error_in_marketing_copy", re.compile(r"LicenseError")),
     ("trial_start_cta", re.compile(r"\btrial\s+start\b", re.I)),
+    # Pricing-tier patterns — added after INIT-2026-607 found a live
+    # Trial/Indie/Pro/Team/Enterprise pricing block in .well-known/agent.json
+    # (a surface the original INIT-2026-605 scan never covered).
+    ("price_49", re.compile(r"\$49\b")),
+    ("price_249", re.compile(r"\$249\b")),
+    ("price_5k", re.compile(r"\$5K\b", re.I)),
+    ("price_15k", re.compile(r"\$15K\b", re.I)),
+    ("pricing_tier_price_field", re.compile(r'"price(_monthly)?"\s*:\s*(\d+|"custom")')),
+    ("pricing_tiers_array_field", re.compile(r'"tiers"\s*:\s*\[')),
+    ("byok_required_field", re.compile(r'"byok_required"')),
+    # specterqa patterns — the pre-rebrand product/package/repo name showing
+    # up as a *live* claim (an install command, a wired-up MCP command
+    # string, an unqualified "rename pending" note, or a link to the dead
+    # repo) rather than accurate past-tense history.
+    ("pip_install_specterqa", re.compile(r"pip install specterqa-ios", re.I)),
+    ("specterqa_mcp_command_string", re.compile(r'"specterqa-ios(-mcp)?"', re.I)),
+    ("stale_specterqa_repo_url", re.compile(r"github\.com/SyncTek-LLC/specterqa-ios", re.I)),
+    ("rename_in_process_or_pending", re.compile(
+        r"renam\w*\s+(is\s+)?(in\s+process|in\s+the\s+process|pending)|rename\s+to\s+`?simdrive`?\s+is\s+pending",
+        re.I,
+    )),
+    # Leaked internal bypass credential (functionally inert against the
+    # shipped `simdrive` package — the implementation it once unlocked lives
+    # only in the retired src/specterqa tree — but it should never be a
+    # magic string sitting in a public repo).
+    ("license_bypass_magic_string", re.compile(r"SPECTERQA_IOS_LICENSE", re.I)),
 ]
 
 # Any "<N> tools" / "<N> MCP tools" / "<N> vision-first tools" claim where
@@ -107,9 +133,23 @@ STALE_TOOL_COUNT_RE = re.compile(
 CHANGELOG_NAME_RE = re.compile(r"(^|[/\\])CHANGELOG\.md$", re.I)
 CHANGELOG_DIR_RE = re.compile(r"(^|[/\\])changelog([/\\]|$)", re.I)
 
+# Same "historical record, not a live claim" exemption as CHANGELOG.md, for
+# a before/after migration guide: MIGRATION.md's entire "Before
+# (specterqa-ios 16.x)" column is, by design, an accurate record of the old
+# package/command names existing users actually typed -- rewording those
+# cells to dodge a pattern would make the guide *less* honest, the same
+# lesson CHANGELOG_DIR_RE already encodes. A genuinely live/current claim in
+# this file (e.g. a support link) is still a real bug and should be fixed
+# directly rather than relying on this exemption.
+MIGRATION_NAME_RE = re.compile(r"(^|[/\\])MIGRATION\.md$", re.I)
+
 
 def _is_changelog_surface(path_str: str) -> bool:
-    return bool(CHANGELOG_NAME_RE.search(path_str) or CHANGELOG_DIR_RE.search(path_str))
+    return bool(
+        CHANGELOG_NAME_RE.search(path_str)
+        or CHANGELOG_DIR_RE.search(path_str)
+        or MIGRATION_NAME_RE.search(path_str)
+    )
 
 
 @dataclass
@@ -190,6 +230,13 @@ def repo_root_marketing_files() -> list[Path]:
     and llms.txt / docs consumed by AI agents / humans landing on the repo.
     Distinct from simdrive/README.md (the PyPI long_description) — the repo
     has two READMEs and both are public.
+
+    Also covers agent-discovery/config manifests and copy-pastable examples
+    -- INIT-2026-607 found a live pricing block in `.well-known/agent.json`
+    (name/version/tool-count/pricing all stale) and a leaked license-bypass
+    string in `.claude/mcp.json` and an `examples/` CI workflow, none of
+    which this scan set had ever covered. A guard that only looks where a
+    prior takedown already looked isn't a guard.
     """
     candidates = [
         _REPO / "README.md",
@@ -197,8 +244,13 @@ def repo_root_marketing_files() -> list[Path]:
         _REPO / "docs" / "landing-page.md",
         _REPO / "docs" / "MCP_TOOL_SURFACE.md",
         _REPO / "docs" / "troubleshooting.md",
+        _REPO / "server.json",              # MCP registry manifest at repo root
+        _REPO / ".well-known" / "agent.json",  # agent-discovery manifest — was carrying a live pricing block
+        _REPO / ".claude" / "mcp.json",     # example MCP client config — was carrying a leaked license-bypass env var
     ]
-    return [p for p in candidates if p.is_file()]
+    files = [p for p in candidates if p.is_file()]
+    files += _iter_files(_REPO / "examples", ["**/*.yaml", "**/*.yml", "**/*.md"])
+    return files
 
 
 def package_marketing_files() -> list[Path]:
@@ -214,6 +266,7 @@ def package_marketing_files() -> list[Path]:
     ]
     files = [p for p in candidates if p.is_file()]
     files += _iter_files(_PKG / "docs" / "gtm", ["*.md"])
+    files += _iter_files(_PKG / "docs" / "marketing", ["*.md"])
     return files
 
 

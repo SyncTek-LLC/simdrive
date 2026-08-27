@@ -15,8 +15,8 @@ how to drive. Paste a Linear ticket into Cursor or Claude Code; SimDrive opens
 the simulator, walks the steps, captures the failure, and saves the recording —
 ready to replay deterministically the same way each time.
 
-> **Repository note:** this repo is in the process of renaming from
-> `specterqa-ios` to `simdrive`. The PyPI package is published as **`simdrive`**.
+> **Repository note:** this repo was renamed from `specterqa-ios` to
+> `simdrive`. The PyPI package is published as **`simdrive`**.
 
 ## The 60-second bug-repro loop
 

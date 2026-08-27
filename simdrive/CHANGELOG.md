@@ -99,6 +99,56 @@ importantly the two security fixes below.
   `record_start`/`record_stop` — it does not parse Maestro-style YAML
   files. The section is removed, not softened, from both READMEs.
 
+### Fixed — stale/false pre-rebrand claims across agent-discovery, registry, and example surfaces
+
+- **`.well-known/agent.json`** (a live sales/discovery surface) still
+  identified the server as "SpecterQA iOS" v11.3.0 with a 19-tool count and
+  a full Trial/Indie/Pro/Team/Enterprise pricing block, plus capabilities
+  (parallel CI execution, network inspection) the shipped package has never
+  had. Corrected identity, version, and tool count; removed the pricing
+  block entirely; capabilities now list only what's verified present in
+  `simdrive/src/simdrive/` (simulator testing, deterministic replay,
+  SSIM-based visual regression, crash detection).
+- **`server.json`** (the MCP registry manifest): tool count and version
+  were both stale; corrected to match the shipped surface and this release.
+- **`examples/github-actions/specterqa-ci.yml`** described a CI workflow —
+  install command, CLI flags, a parallel replay runner — none of which
+  exist in the shipped package, and carried a leaked internal license
+  string in its env block. Deleted outright; there is no CI entry point to
+  document, and a fabricated example is worse than none.
+- **`examples/0{1,2,3,4}-*.yaml`** all claimed a Maestro-shorthand replay
+  format and a CLI command that doesn't exist. Confirmed the shipped
+  `replay` engine reads only `action`-keyed recordings produced by
+  `record_start`/`record_stop`, and no CLI subcommand named `replay` exists
+  at all — these files were not loadable by the shipped package under any
+  command name. Deleted, rather than reworded, since there is nothing valid
+  to correct their headers to.
+- **`.claude/mcp.json`** carried a leaked internal license-bypass
+  environment variable, functionally inert against the shipped package
+  (its retired implementation lived only in `src/specterqa/`) but never
+  something that belongs tracked in a public repo. Removed; the example
+  config now just wires up the real `simdrive` command.
+- **Stale rename-in-progress notes**, in `README.md` and `llms.txt`, said
+  the GitHub repository rename to `simdrive` was "in process" / "pending."
+  It's complete — corrected to present tense, and a dead link to the old
+  repo was fixed to point at the current one.
+- **Dead pre-rebrand marketing/GTM drafts** (`simdrive/docs/marketing/*.md`,
+  `simdrive/docs/gtm/onboarding_emails.md`, `docs/troubleshooting.md`) still
+  carried the old product/package name, stale tool counts, an MIT-license
+  claim (shipped license is Elastic-2.0), links to the pre-rename repo, and
+  in one case a description of a paid Cloud beta that was never shipped.
+  None of these were ever the canonical copy. Stubbed as SUPERSEDED,
+  consistent with how the equivalent GTM drafts were already handled under
+  INIT-2026-605 — kept as historical scaffolding, not cited or served.
+- **`scripts/verify_no_commercial_claims.py`** (the takedown's own audit)
+  never scanned any of the surfaces above — its file-set only covered
+  READMEs, llms.txt, and a couple of docs directories. Extended it to also
+  scan `.well-known/`, repo-root `server.json`, `.claude/mcp.json`,
+  everything under `examples/`, and `simdrive/docs/marketing/`; added
+  pricing-tier-field and stale-`specterqa`-reference patterns so a live
+  pricing block or dead install instruction can't hide in an unscanned
+  path again.
+
 ### Added — release-feed publishing pipeline (operator tooling)
 
 - **`scripts/make_releases_feed.py`** — the tooling that publishes simdrive's
