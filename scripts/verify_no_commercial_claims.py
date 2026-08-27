@@ -30,14 +30,18 @@ Scope
    exactly 36 tools after the takedown. A takedown that breaks internal
    usage is a failed takedown.
 
-Design choice — CHANGELOG.md is EXCLUDED from the hard-fail scan.
-It is a historical record ("we shipped $29/mo pricing on this date"), not a
-live claim; scrubbing it would be a no-theater violation (rewriting
-history), not a "removal." CHANGELOG hits are reported as informational
-only under --show-changelog. Test/source code (e.g. the `LicenseError`
-exception class, its docstrings, or its test files) is likewise never
-scanned — banned patterns are checked only against surfaces a
-customer/visitor actually reads.
+Design choice — dated release-note pages are EXCLUDED from the hard-fail
+scan. That means CHANGELOG.md, but also every equivalent per-repo page
+under a `changelog/` path: `changelog/index.mdx`,
+`content/changelog/<version>.md`, etc. They are a historical record ("we
+shipped $29/mo pricing on this date"), not a live claim; scrubbing them
+would be a no-theater violation (rewriting history), not a "removal" — a
+lesson learned the hard way when an early takedown PR reworded published
+release notes to pass this exact check instead of leaving them alone.
+Changelog hits are reported as informational only under --show-changelog.
+Test/source code (e.g. the `LicenseError` exception class, its docstrings,
+or its test files) is likewise never scanned — banned patterns are checked
+only against surfaces a customer/visitor actually reads.
 
 Exit code: 0 if every hard-fail check passes, 1 otherwise.
 """
@@ -90,7 +94,22 @@ STALE_TOOL_COUNT_RE = re.compile(
     r"\b(\d{1,3})\s+(vision-first\s+)?(MCP\s+)?tools\b", re.I
 )
 
-CHANGELOG_NAME_RE = re.compile(r"CHANGELOG\.md$", re.I)
+# Historical-record exemption. Originally this matched only a literal
+# `CHANGELOG.md` filename -- but every repo in this fleet also carries
+# equivalent dated release-note pages (a per-repo `changelog/` section
+# rendered on the docs/marketing site: `changelog/index.mdx`,
+# `content/changelog/<version>.md`, etc.) that are exactly the same kind of
+# historical record, just not named CHANGELOG.md. QualityAtlas caught a PR
+# that "fixed" the audit by rewording published release notes instead of
+# leaving history alone -- that's the failure mode this whole module exists
+# to prevent, applied to itself. Any path with a `changelog` (case-
+# insensitive) path segment, or literally named CHANGELOG.md, is exempt.
+CHANGELOG_NAME_RE = re.compile(r"(^|[/\\])CHANGELOG\.md$", re.I)
+CHANGELOG_DIR_RE = re.compile(r"(^|[/\\])changelog([/\\]|$)", re.I)
+
+
+def _is_changelog_surface(path_str: str) -> bool:
+    return bool(CHANGELOG_NAME_RE.search(path_str) or CHANGELOG_DIR_RE.search(path_str))
 
 
 @dataclass
@@ -135,7 +154,7 @@ def _scan_text(surface: str, text: str, *, advisory: bool, report: Report) -> No
 
 
 def _scan_file(path: Path, report: Report) -> None:
-    advisory = bool(CHANGELOG_NAME_RE.search(path.name))
+    advisory = _is_changelog_surface(str(path))
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError as exc:
@@ -479,7 +498,7 @@ def print_report(report: Report, *, show_changelog: bool) -> None:
             print(f"  [{f.pattern}] {loc}\n      {f.excerpt}")
 
     if advisory and show_changelog:
-        print("\n--- ADVISORY (CHANGELOG.md — historical record, not scanned for pass/fail) ---")
+        print("\n--- ADVISORY (dated changelog/release-note pages — historical record, not scanned for pass/fail) ---")
         for f in advisory:
             loc = f"{f.surface}:{f.line_no}" if f.line_no else f.surface
             print(f"  [{f.pattern}] {loc}\n      {f.excerpt}")
