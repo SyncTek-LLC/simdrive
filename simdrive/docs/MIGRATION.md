@@ -8,8 +8,9 @@ in your MCP config — welcome. Here's what changed and how to get up and runnin
 ```bash
 pip uninstall specterqa-ios
 pip install --pre simdrive
-simdrive trial start --email you@example.com --offline-dev
 ```
+
+No license or account required.
 
 Update your MCP config:
 
@@ -28,7 +29,7 @@ Update your MCP config:
 | `pip install specterqa-ios` | `pip install --pre simdrive` |
 | `command: specterqa-ios` in MCP config | `command: simdrive` |
 | `ios_observe`, `ios_tap`, `ios_start_session`, … (all `ios_` prefixed) | `observe`, `tap`, `session_start`, … (unprefixed) |
-| 29 MCP tools | 31 MCP tools (adds `run_journey`, `clear_field`) |
+| 29-tool MCP surface | 31-tool MCP surface (adds `run_journey`, `clear_field`) |
 | Python import: `from specterqa_ios.X import Y` | `from simdrive.X import Y` |
 | ANTHROPIC_API_KEY required for `run_journey` | Not required via MCP — MCP sampling delegates to your client |
 
@@ -51,7 +52,6 @@ All 29 original tools are present in simdrive 1.0 with the `ios_` prefix removed
 
 - `run_journey` — agent-driven journey execution via MCP sampling (no API key needed)
 - `clear_field` — Cmd-A + delete to clear a text field
-- `--offline-dev` trial mode — no cloud server required for development licenses
 
 ## PyPI history
 

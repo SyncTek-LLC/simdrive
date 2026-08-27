@@ -121,23 +121,27 @@ One-stop reference for every error code and its recovery step. When SimDrive rai
 
 ## License errors (`simdrive.license.errors`)
 
+> SimDrive is not sold commercially (INIT-2026-605). There is nothing to
+> purchase or renew; the codes below are preserved for anyone still running
+> older licensing code paths.
+
 ### `license_invalid`
-**Recovery:** Run `simdrive license status` to check your key, or `simdrive trial start` to begin a new trial.
+**Recovery:** Run `simdrive license status` to check your key.
 
 ### `license_expired`
-**Recovery:** Run `simdrive license activate <key>` to install a renewed key, or visit https://simdrive.dev/pricing to renew.
+**Recovery:** Run `simdrive license activate <key>` to install a renewed key.
 
 ### `license_offline_grace_exhausted`
-**Recovery:** Connect to the internet and run `simdrive license status` to refresh, or visit https://simdrive.dev/pricing to renew.
+**Recovery:** Connect to the internet and run `simdrive license status` to refresh.
 
 ### `license_tier_insufficient`
-**Recovery:** Visit https://simdrive.dev/pricing to upgrade your plan.
+**Recovery:** No longer applicable — SimDrive has no paid tiers.
 
 ### `trial_already_used`
-**Recovery:** Visit https://simdrive.dev/pricing to purchase a license.
+**Recovery:** No longer applicable — SimDrive requires no trial or license.
 
 ### `license_not_found`
-**Recovery:** Run `simdrive trial start --email <you@example.com>` to begin a 14-day free trial.
+**Recovery:** No longer applicable — SimDrive requires no license.
 
 ### `trial_rate_limited`
 **Recovery:** Try again tomorrow or contact support@simdrive.dev.
