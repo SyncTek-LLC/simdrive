@@ -13,7 +13,76 @@
  filter catch what slips through.
 -->
 
-## [Unreleased]
+## [1.0.0b13] — 2026-08-27
+
+This release ships two security fixes — a license privilege-escalation fix and
+HIGH-severity dependency CVE bumps — plus a replay correctness fix and the
+product's commercial retirement. **PyPI has been stuck at 1.0.0b8 since
+2026-05-27** (tags for b9–b12 were built but never pushed); this is the first
+tag pushed since then, so it carries everything from b9–b13 forward, most
+importantly the two security fixes below.
+
+### Security — dev-trial license forgery could grant unlimited enterprise access
+
+- **Privilege-escalation fix.** The dev signing key ships inside the
+  distributed package (it has to — `simdrive trial start --offline-dev`
+  self-issues offline trials at runtime), which makes a dev-key *signature*
+  forgeable and not a trust boundary on its own. The validator previously
+  checked only `subject == "dev-trial"` and then trusted `tier` / `seats` /
+  `expires_at` straight from the (attacker-controlled) payload: anyone who
+  unpacked the wheel could sign a payload claiming
+  `tier="enterprise", seats=999, expires_at=<far future>` and get unlimited
+  access. Confirmed pre-fix by probe. The validator now hard-rejects any
+  dev-key license that isn't a genuine trial — tier must be `"trial"`, seats
+  capped at the trial max, expiry within 30 days of now — independent of what
+  the forged signature claims. Prod-key licensing was never affected.
+- **Follow-up hardening:** seats must now be a genuine positive int (a forged
+  float, string, bool, `None`, or non-positive value is rejected instead of
+  silently coerced), and a structural guard demotes `signed_by_prod` to
+  `False` whenever the selected verify key is the dev key, so the trial clamp
+  always runs even if the dev key were ever mistakenly added to the trusted
+  set. 18 new tests; 110 license tests green.
+- **Residual, by-design risk:** the offline-dev path still lets a user mint
+  unlimited 14-day *trials* — but each is capped to trial entitlements, never
+  a paid tier.
+
+### Security — HIGH-severity `mcp` / `pillow` CVEs cleared
+
+- Bumped `mcp` 1.27.1 → 1.28.1 (fixes CVE-2026-52870, CVE-2026-52869,
+  CVE-2026-59950) and `pillow` 12.2.0 → 12.3.0 (fixes PYSEC-2026-2253/2254/
+  2255/2257/3451 and others) — 24 HIGH `pip-audit` findings, cleared with only
+  the two pins moved (no transitive changes). The MCP low-level server API
+  used here is unchanged across 1.27→1.28, so no code changes were required.
+  `pip-audit --strict` now reports no known vulnerabilities.
+
+### Fixed — `replay` now verifies what a recording actually did, not just what it walked past
+
+- Previously `replay` compared each step's PRE-state and reported `ok` once
+  the final action dispatched, without ever checking the result — a
+  recording whose payload was its last step passed unconditionally even when
+  that action was silently swallowed. (Caught on a real capture: a two-step
+  sleep-timer recording reported `ok=true` at SSIM 0.995 while the menu tap
+  had done nothing and no timer was armed.) `replay` now asserts the final
+  live screen against the step's recorded POST-state (`final_state`, halting
+  with `halt_reason="outcome_drift"` on a mismatch), waits out the recorded
+  settle time before capturing that post-state, and — opt-in via
+  `replay_policy.retry_noop_taps: true` — can retry a tap whose recorded
+  effect is missing on an unchanged screen. State contracts are now built
+  from the intersection of two observations to filter OCR jitter on
+  unchanged screens. Known boundary: outcome checking inherits SSIM's blind
+  spot for small on-screen indicators (a full-screen change is caught; a
+  countdown-chip-sized change may not be).
+
+### Changed — SimDrive retired as a commercial product
+
+- Per Chairman decision (2026-08-26), SimDrive is no longer sold. It stays
+  installed and usable with no license or account required. Removed the
+  trial/license/paywall install flow and the pricing table from both
+  READMEs, and removed false CI-replay cost claims ("zero AI cost on
+  replay") — there is no standalone replay CLI entry point, so replay
+  cannot run in CI without an agent session and its token cost. Also
+  corrected a stale tool-count claim (32 → 36) across the READMEs,
+  `pyproject.toml`, `llms.txt`, and the MCP tool-surface doc.
 
 ### Added — release-feed publishing pipeline (operator tooling)
 
