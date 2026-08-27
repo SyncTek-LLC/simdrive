@@ -34,10 +34,9 @@ def _readme_full() -> str:
 def test_quickstart_pip_install_in_first_100_lines() -> None:
     """`pip install simdrive` must appear in the first 100 lines of the README.
 
-    [internal-tracker].5: the package is now a paywalled trial+paid product
-    rather than a pre-release alpha, so the install command no longer carries
-    the ``--pre`` flag. The presence of the install command itself is the
-    invariant under test.
+    The install command must be the front door regardless of how the
+    licensing/commercial model of the day is framed. The presence of the
+    install command itself is the invariant under test.
     """
     head = _readme_first_n_lines(100)
     assert "pip install simdrive" in head, (
@@ -47,18 +46,19 @@ def test_quickstart_pip_install_in_first_100_lines() -> None:
     )
 
 
-def test_quickstart_trial_start_in_first_100_lines() -> None:
-    """`simdrive trial start --email` must appear in the first 100 lines.
+def test_quickstart_no_license_required_in_first_100_lines() -> None:
+    """`No license or account required` must appear in the first 100 lines.
 
-    [internal-tracker].5: trial issuance is now the canonical first step after
-    install — every gated tool returns ``license_required`` until a trial or
-    paid key is on disk.
+    INIT-2026-605: SimDrive is not sold commercially. This is the positive
+    claim that replaced the (now-removed) trial-bootstrap quickstart step —
+    pinning it here catches a regression to trial/paywall framing the same
+    way the old test caught a regression away from it.
     """
     head = _readme_first_n_lines(100)
-    assert "simdrive trial start --email" in head, (
-        "README quickstart regression: 'simdrive trial start --email' not "
-        "found in the first 100 lines. The trial-bootstrap command must be "
-        "documented up front so new users can clear the paywall in 30 seconds."
+    assert "No license or account required" in head, (
+        "README quickstart regression: 'No license or account required' not "
+        "found in the first 100 lines. SimDrive has no trial/paywall step — "
+        "the README must say so up front, not imply one is needed."
     )
 
 

@@ -28,8 +28,8 @@ def test_version_present():
     )
 
 
-def test_tool_count_is_thirty_two():
-    """Canonical MCP tool surface = 32 tools.
+def test_tool_count_is_thirty_six():
+    """Canonical MCP tool surface = 36 tools.
 
     Sourced from server._TOOLS. The categorized human-readable inventory lives
     in docs/MCP_TOOL_SURFACE.md; llms.txt mirrors the same list. Any change
@@ -38,6 +38,9 @@ def test_tool_count_is_thirty_two():
     History:
         29 pre-existing + load_journey (1.0.0a7)
                        + lint_recordings + migrate_recording (a9.1) = 32
+                       + tap_and_wait_keyboard (1.0.0b3) = 33
+                       + perform_accessibility_action + get_announcements
+                         + set_text (Host-AX) = 36
     """
     tools = server.list_tools()
     assert len(tools) == 36, f"expected 36 tools, got {len(tools)}: {[t['name'] for t in tools]}"

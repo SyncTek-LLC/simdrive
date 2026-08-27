@@ -2,7 +2,7 @@
 
 > **Source of truth:** `simdrive/src/simdrive/server.py::_TOOLS`.
 > If you change the tool surface there, you MUST update this doc and `llms.txt` in the
-> same commit, and the assertion in `simdrive/tests/test_unit.py::test_tool_count_is_thirty_two`
+> same commit, and the assertion in `simdrive/tests/test_unit.py::test_tool_count_is_thirty_six`
 > will fail until the count matches.
 
 **Canonical count: 36 tools.**
