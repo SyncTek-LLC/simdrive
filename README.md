@@ -13,7 +13,7 @@
 SimDrive is the MCP-native iOS automation toolkit your AI agent already knows
 how to drive. Paste a Linear ticket into Cursor or Claude Code; SimDrive opens
 the simulator, walks the steps, captures the failure, and saves the recording —
-ready to replay deterministically in CI.
+ready to replay deterministically the same way each time.
 
 > **Repository note:** this repo is in the process of renaming from
 > `specterqa-ios` to `simdrive`. The PyPI package is published as **`simdrive`**.
@@ -37,15 +37,15 @@ Claude:
   → record_stop({name: "ENG-1247-repro"})
 
 You: ship the fix, then "validate the recording still fails before deploy"
-CI: runs the recording → Free. No AI tokens on replay.
+by re-running it with the `replay` tool.
 ```
 
-## Why teams pay for SimDrive
+## What SimDrive does
 
 - **Bug reproduction in 60 seconds** — paste the ticket, watch the agent walk
   it, attach the recording to the PR. The hero loop above is the entire pitch.
-- **Record once, replay free in CI** — recordings are deterministic YAML+PNG
-  bundles. After the AI captures the flow, every CI run is zero-AI-cost.
+- **Deterministic recordings** — every recording is a YAML+PNG bundle that
+  replays the same way each time via the `replay` tool.
 - **Autonomous test suites via the journey runner** — write a YAML journey
   with goals + success criteria; SimDrive drives the agent loop and reports
   pass/fail with evidence.
@@ -60,13 +60,9 @@ CI: runs the recording → Free. No AI tokens on replay.
 
 ```bash
 pip install simdrive
-simdrive trial start --email you@example.com
-# 14 days full access, then:
-simdrive auth <your-license-key>
 ```
 
-The trial is locally issued (Ed25519-signed, machine-locked) and works
-offline. After 14 days, paid licenses unlock the full tool surface.
+No license or account required.
 
 Requires macOS, Xcode 15+, Python 3.10+.
 
@@ -83,22 +79,15 @@ Desktop), or your Cursor MCP config:
 }
 ```
 
-Restart the client. Your agent now has 32 SimDrive tools available.
+Restart the client. Your agent now has 36 SimDrive tools available.
 
-## Pricing
-
-| Plan | Price | What you get |
-|------|-------|--------------|
-| **Trial** | Free, 14 days | All Pro features, machine-locked |
-| **Pro** | $29 / mo | One seat, all tools, unlimited replays in CI |
-| **Team** | $99 / seat / mo | Multi-seat, shared recording cloud (W2) |
-| **Enterprise** | Contact us | Self-hosted licensing, SLA, custom integrations |
-
-Full pricing + ROI calculator: <https://simdrive.dev/pricing>
+> **Note:** SimDrive is no longer offered as a commercial product. It remains
+> available as a free, open MCP tool for internal/personal use — see
+> [LICENSE](LICENSE).
 
 ## MCP tool surface
 
-SimDrive exposes **32 MCP tools** (canonical count — see
+SimDrive exposes **36 MCP tools** (canonical count — see
 [`docs/MCP_TOOL_SURFACE.md`](simdrive/docs/MCP_TOOL_SURFACE.md)) across these
 categories: session lifecycle, observe, act (tap/swipe/type/press),
 record/replay, devices/logs, performance/memory, diagnostics, app state,
@@ -148,7 +137,7 @@ supported-versions policy.
 
 - **Docs:** <https://docs.simdrive.dev>
 - **Bugs / feature requests:** [open an issue](https://github.com/SyncTek-LLC/simdrive/issues/new/choose)
-- **Email (private — license, billing, account):** <support@simdrive.dev>
+- **Email (private support):** <support@simdrive.dev>
 - **Security disclosures:** <security@simdrive.dev>
 
 ## License
