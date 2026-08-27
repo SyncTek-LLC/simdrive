@@ -84,6 +84,27 @@ importantly the two security fixes below.
   corrected a stale tool-count claim (32 → 36) across the READMEs,
   `pyproject.toml`, `llms.txt`, and the MCP tool-surface doc.
 
+### Fixed — every MCP tool call was still blocked by a live paywall gate
+
+- The "no license or account required" claim above was not yet true when
+  this section was first written. `check_entitlement()` raised
+  `LicenseError [license_not_found]` on any install with no
+  `~/.simdrive/license.json` on disk — i.e. **every genuine fresh
+  install** — blocking all MCP tool calls, `session_start` included. The
+  error text advertised `simdrive trial start` and a `pricing_url`
+  pointing at a page that now says the product isn't for sale.
+- Fixed under INIT-2026-610 (#182): the no-license path now returns a
+  free, unlimited entitlement instead of raising, and the remaining
+  license-error paths (a present-but-malformed or expired license) no
+  longer advertise a trial signup or the pricing page either.
+- **Why it survived this long:** the test suite auto-issues a session
+  dev-trial license at module load, so no existing test ever exercised the
+  no-license path a real installer hits — every gated-tool test ran with a
+  license already on disk, the one condition a fresh install never has. A
+  regression test using the existing `no_license` opt-out (calls a real
+  MCP tool with no `license.json` present) now covers it; confirmed red
+  before the fix, green after.
+
 ### Fixed — false "Maestro-compatible YAML" claim removed from both READMEs
 
 - Both `README.md` and `simdrive/README.md` claimed SimDrive "parses the
