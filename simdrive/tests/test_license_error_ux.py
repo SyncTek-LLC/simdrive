@@ -1,18 +1,21 @@
 """LicenseError UX-envelope tests — [internal-tracker].5 workstream 4.
 
+INIT-2026-610 (Chairman decision, 2026-08-26): SimDrive was retired as a
+commercial product. The envelope previously enriched with pricing_url /
+trial_command_hint / auth_command_hint fields advertised a purchase path for
+a product that is no longer for sale, so those fields — and any message copy
+pointing at a trial signup or the pricing page — were removed.
+
 When ANY gated tool raises LicenseError, the structured envelope returned to
-the MCP client MUST include:
+the MCP client MUST still include:
 
   * error:               umbrella "license_required" code
   * code:                granular code (license_not_found, license_expired, …)
-  * message:             clear human prose
-  * pricing_url:         https://simdrive.dev/pricing
-  * auth_command_hint:   exact CLI string to install a key
-  * trial_command_hint:  exact CLI string to start a trial
+  * message:             clear human prose, with a Recovery: clause
 
-These fields are copy-pasteable — agent hosts (Claude Code, Cursor) surface
-them verbatim so the user never has to leave the loop to figure out how to
-escape the paywall.
+...and MUST NOT include pricing_url, trial_command_hint, or
+auth_command_hint, and the message text must not advertise a trial signup or
+the pricing page.
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ import pytest
 
 class TestEnvelopeShape:
 
-    def test_license_not_found_envelope_has_all_ux_fields(self) -> None:
+    def test_license_not_found_envelope_has_no_advertising_fields(self) -> None:
         from simdrive.license.errors import license_not_found
 
         env = license_not_found("/tmp/nope.json").to_dict()
@@ -37,29 +40,33 @@ class TestEnvelopeShape:
         assert err["error"] == "license_required"
         assert err["code"] == "license_not_found"
         assert "message" in err and err["message"]
-        assert err["pricing_url"] == "https://simdrive.dev/pricing"
-        assert "simdrive trial start" in err["trial_command_hint"]
-        assert "simdrive auth" in err["auth_command_hint"]
+        assert "pricing_url" not in err
+        assert "trial_command_hint" not in err
+        assert "auth_command_hint" not in err
+        assert "simdrive.dev/pricing" not in err["message"]
+        assert "trial start" not in err["message"]
 
-    def test_license_expired_envelope_has_all_ux_fields(self) -> None:
+    def test_license_expired_envelope_has_no_advertising_fields(self) -> None:
         from simdrive.license.errors import license_expired
 
         env = license_expired(1_700_000_000).to_dict()
         err = env["error"]
         assert err["error"] == "license_required"
         assert err["code"] == "license_expired"
-        # The human message must mention the upsell — "Pro" or "trial expired"
-        assert "trial" in err["message"].lower() or "pro" in err["message"].lower()
-        assert err["pricing_url"].startswith("https://simdrive.dev")
+        assert "pricing_url" not in err
+        assert "simdrive.dev/pricing" not in err["message"]
+        assert "trial start" not in err["message"]
 
-    def test_license_invalid_envelope_has_all_ux_fields(self) -> None:
+    def test_license_invalid_envelope_has_no_advertising_fields(self) -> None:
         from simdrive.license.errors import license_invalid
 
         env = license_invalid("bad signature").to_dict()
         err = env["error"]
         assert err["error"] == "license_required"
         assert err["code"] == "license_invalid"
-        assert err["pricing_url"] == "https://simdrive.dev/pricing"
+        assert "pricing_url" not in err
+        assert "simdrive.dev/pricing" not in err["message"]
+        assert "trial start" not in err["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +85,7 @@ class TestEnvelopeRoundTrip:
             ("license_offline_grace_exhausted", {"expires_at": 1_700_000_000}),
         ],
     )
-    def test_envelope_is_json_serializable(self, factory_kwargs) -> None:
+    def test_envelope_is_json_serializable_with_no_pricing_url(self, factory_kwargs) -> None:
         from simdrive.license import errors as lic_errors
 
         factory_name, kwargs = factory_kwargs
@@ -89,7 +96,7 @@ class TestEnvelopeRoundTrip:
         decoded = json.loads(encoded)
         assert decoded["ok"] is False
         assert decoded["error"]["error"] == "license_required"
-        assert decoded["error"]["pricing_url"]
+        assert "pricing_url" not in decoded["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,12 +107,12 @@ class TestEnvelopeRoundTrip:
 
 class TestMCPCallToolWraps:
 
-    def test_call_tool_returns_license_required_envelope(
+    def test_call_tool_returns_license_required_envelope_without_advertising(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The sync ``call_tool`` dispatcher must surface the enriched
-        ``license_required`` envelope — *not* the bare ``code: license_not_found``
-        shape — so agent hosts can render the upsell UI."""
+        ``license_required`` envelope, but that envelope must no longer
+        carry pricing/trial advertising."""
         import simdrive.license.entitlement as ent
         from simdrive.license import errors as lic_errors
         from simdrive import server
@@ -123,8 +130,9 @@ class TestMCPCallToolWraps:
             server.call_tool("observe", {"session_id": "x"})
         env = exc_info.value.to_dict()
         assert env["error"]["error"] == "license_required"
-        assert env["error"]["pricing_url"] == "https://simdrive.dev/pricing"
-        assert "trial" in env["error"]["trial_command_hint"]
+        assert "pricing_url" not in env["error"]
+        assert "trial_command_hint" not in env["error"]
+        assert "auth_command_hint" not in env["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +143,7 @@ class TestMCPCallToolWraps:
 class TestGranularCodePreserved:
 
     def test_granular_code_field_remains(self) -> None:
-        """We added a sibling `error` umbrella field but must NOT remove `code`
+        """We kept the sibling `error` umbrella field but must NOT remove `code`
         — existing agents and tests switch on `error.code`."""
         from simdrive.license.errors import license_not_found, license_expired
 
