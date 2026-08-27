@@ -15,8 +15,8 @@ how to drive. Paste a Linear ticket into Cursor or Claude Code; SimDrive opens
 the simulator, walks the steps, captures the failure, and saves the recording —
 ready to replay deterministically the same way each time.
 
-> **Repository note:** this repo is in the process of renaming from
-> `specterqa-ios` to `simdrive`. The PyPI package is published as **`simdrive`**.
+> **Repository note:** this repo was renamed from `specterqa-ios` to
+> `simdrive`. The PyPI package is published as **`simdrive`**.
 
 ## The 60-second bug-repro loop
 
@@ -93,23 +93,6 @@ categories: session lifecycle, observe, act (tap/swipe/type/press),
 record/replay, devices/logs, performance/memory, diagnostics, app state,
 alerts/permissions, appearance, replay management, recordings maintenance, and
 journeys.
-
-## Maestro-compatible YAML
-
-Migrating from Maestro? SimDrive understands the shorthand natively:
-
-```yaml
-replay:
-  bundle_id: com.example.app
-  steps:
-    - tapOn: "Sign In"
-    - inputText: "user@example.com"
-    - assertVisible: "Dashboard"
-    - assertNotVisible: "Loading"
-    - waitFor: "Feed"
-```
-
-Native SimDrive syntax and Maestro shortcuts coexist in the same file.
 
 ## Physical device support
 

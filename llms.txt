@@ -15,9 +15,8 @@ the PR.
 > as an open MCP tool — install and run it directly; no license or account is
 > required.
 
-> Repo note: the GitHub repository is currently `SyncTek-LLC/specterqa-ios`;
-> rename to `SyncTek-LLC/simdrive` is pending. The PyPI package name is
-> **`simdrive`**.
+> Repo note: the GitHub repository is `SyncTek-LLC/simdrive` (renamed from
+> `specterqa-ios`). The PyPI package name is **`simdrive`**.
 
 ## Install
 
@@ -125,7 +124,6 @@ simdrive                     # start the MCP server (stdio)
 ## Links
 
 - Homepage: <https://simdrive.dev>
-- GitHub (docs + issues): <https://github.com/SyncTek-LLC/specterqa-ios>
-  (rename to `simdrive` pending)
+- GitHub (docs + issues): <https://github.com/SyncTek-LLC/simdrive>
 - Support: <support@synctek.io>
 - Security: <security@simdrive.dev>

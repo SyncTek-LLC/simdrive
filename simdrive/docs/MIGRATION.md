@@ -62,4 +62,4 @@ installed alongside `simdrive`, uninstall `specterqa-ios` first — both provide
 
 ## Questions
 
-Open an issue at [github.com/SyncTek-LLC/specterqa-ios/issues](https://github.com/SyncTek-LLC/specterqa-ios/issues).
+Open an issue at [github.com/SyncTek-LLC/simdrive/issues](https://github.com/SyncTek-LLC/simdrive/issues).

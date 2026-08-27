@@ -13,7 +13,162 @@
  filter catch what slips through.
 -->
 
-## [Unreleased]
+## [1.0.0b13] — 2026-08-27
+
+This release ships two security fixes — a license privilege-escalation fix and
+HIGH-severity dependency CVE bumps — plus a replay correctness fix and the
+product's commercial retirement. **PyPI has been stuck at 1.0.0b8 since
+2026-05-27** (tags for b9–b12 were built but never pushed); this is the first
+tag pushed since then, so it carries everything from b9–b13 forward, most
+importantly the two security fixes below.
+
+### Security — dev-trial license forgery could grant unlimited enterprise access
+
+- **Privilege-escalation fix.** The dev signing key ships inside the
+  distributed package (it has to — `simdrive trial start --offline-dev`
+  self-issues offline trials at runtime), which makes a dev-key *signature*
+  forgeable and not a trust boundary on its own. The validator previously
+  checked only `subject == "dev-trial"` and then trusted `tier` / `seats` /
+  `expires_at` straight from the (attacker-controlled) payload: anyone who
+  unpacked the wheel could sign a payload claiming
+  `tier="enterprise", seats=999, expires_at=<far future>` and get unlimited
+  access. Confirmed pre-fix by probe. The validator now hard-rejects any
+  dev-key license that isn't a genuine trial — tier must be `"trial"`, seats
+  capped at the trial max, expiry within 30 days of now — independent of what
+  the forged signature claims. Prod-key licensing was never affected.
+- **Follow-up hardening:** seats must now be a genuine positive int (a forged
+  float, string, bool, `None`, or non-positive value is rejected instead of
+  silently coerced), and a structural guard demotes `signed_by_prod` to
+  `False` whenever the selected verify key is the dev key, so the trial clamp
+  always runs even if the dev key were ever mistakenly added to the trusted
+  set. 18 new tests; 110 license tests green.
+- **Residual, by-design risk:** the offline-dev path still lets a user mint
+  unlimited 14-day *trials* — but each is capped to trial entitlements, never
+  a paid tier.
+
+### Security — HIGH-severity `mcp` / `pillow` CVEs cleared
+
+- Bumped `mcp` 1.27.1 → 1.28.1 (fixes CVE-2026-52870, CVE-2026-52869,
+  CVE-2026-59950) and `pillow` 12.2.0 → 12.3.0 (fixes PYSEC-2026-2253/2254/
+  2255/2257/3451 and others) — 24 HIGH `pip-audit` findings, cleared with only
+  the two pins moved (no transitive changes). The MCP low-level server API
+  used here is unchanged across 1.27→1.28, so no code changes were required.
+  `pip-audit --strict` now reports no known vulnerabilities.
+
+### Fixed — `replay` now verifies what a recording actually did, not just what it walked past
+
+- Previously `replay` compared each step's PRE-state and reported `ok` once
+  the final action dispatched, without ever checking the result — a
+  recording whose payload was its last step passed unconditionally even when
+  that action was silently swallowed. (Caught on a real capture: a two-step
+  sleep-timer recording reported `ok=true` at SSIM 0.995 while the menu tap
+  had done nothing and no timer was armed.) `replay` now asserts the final
+  live screen against the step's recorded POST-state (`final_state`, halting
+  with `halt_reason="outcome_drift"` on a mismatch), waits out the recorded
+  settle time before capturing that post-state, and — opt-in via
+  `replay_policy.retry_noop_taps: true` — can retry a tap whose recorded
+  effect is missing on an unchanged screen. State contracts are now built
+  from the intersection of two observations to filter OCR jitter on
+  unchanged screens. Known boundary: outcome checking inherits SSIM's blind
+  spot for small on-screen indicators (a full-screen change is caught; a
+  countdown-chip-sized change may not be).
+
+### Changed — SimDrive retired as a commercial product
+
+- Per Chairman decision (2026-08-26), SimDrive is no longer sold. It stays
+  installed and usable with no license or account required. Removed the
+  trial/license/paywall install flow and the pricing table from both
+  READMEs, and removed false CI-replay cost claims ("zero AI cost on
+  replay") — there is no standalone replay CLI entry point, so replay
+  cannot run in CI without an agent session and its token cost. Also
+  corrected a stale tool-count claim (32 → 36) across the READMEs,
+  `pyproject.toml`, `llms.txt`, and the MCP tool-surface doc.
+
+### Fixed — every MCP tool call was still blocked by a live paywall gate
+
+- The "no license or account required" claim above was not yet true when
+  this section was first written. `check_entitlement()` raised
+  `LicenseError [license_not_found]` on any install with no
+  `~/.simdrive/license.json` on disk — i.e. **every genuine fresh
+  install** — blocking all MCP tool calls, `session_start` included. The
+  error text advertised `simdrive trial start` and a `pricing_url`
+  pointing at a page that now says the product isn't for sale.
+- Fixed under INIT-2026-610 (#182): the no-license path now returns a
+  free, unlimited entitlement instead of raising, and the remaining
+  license-error paths (a present-but-malformed or expired license) no
+  longer advertise a trial signup or the pricing page either.
+- **Why it survived this long:** the test suite auto-issues a session
+  dev-trial license at module load, so no existing test ever exercised the
+  no-license path a real installer hits — every gated-tool test ran with a
+  license already on disk, the one condition a fresh install never has. A
+  regression test using the existing `no_license` opt-out (calls a real
+  MCP tool with no `license.json` present) now covers it; confirmed red
+  before the fix, green after.
+
+### Fixed — false "Maestro-compatible YAML" claim removed from both READMEs
+
+- Both `README.md` and `simdrive/README.md` claimed SimDrive "parses the
+  shorthand natively" (`tapOn`, `inputText`, `assertVisible`,
+  `assertNotVisible`, `waitFor`) and that "native SimDrive syntax and
+  Maestro shortcuts coexist in the same file." **This was false for the
+  shipping package.** That shorthand parser exists only in the retired
+  `src/specterqa/` tree, which `[tool.setuptools.packages.find] where =
+  ["src"]` in `simdrive/pyproject.toml` excludes from the published wheel
+  (it resolves to `simdrive/src`). The shipped `replay` tool
+  (`simdrive/src/simdrive/server.py::tool_replay`) takes a session ID and a
+  recording name and replays `action`-keyed YAML+PNG bundles captured by
+  `record_start`/`record_stop` — it does not parse Maestro-style YAML
+  files. The section is removed, not softened, from both READMEs.
+
+### Fixed — stale/false pre-rebrand claims across agent-discovery, registry, and example surfaces
+
+- **`.well-known/agent.json`** (a live sales/discovery surface) still
+  identified the server as "SpecterQA iOS" v11.3.0 with a 19-tool count and
+  a full Trial/Indie/Pro/Team/Enterprise pricing block, plus capabilities
+  (parallel CI execution, network inspection) the shipped package has never
+  had. Corrected identity, version, and tool count; removed the pricing
+  block entirely; capabilities now list only what's verified present in
+  `simdrive/src/simdrive/` (simulator testing, deterministic replay,
+  SSIM-based visual regression, crash detection).
+- **`server.json`** (the MCP registry manifest): tool count and version
+  were both stale; corrected to match the shipped surface and this release.
+- **`examples/github-actions/specterqa-ci.yml`** described a CI workflow —
+  install command, CLI flags, a parallel replay runner — none of which
+  exist in the shipped package, and carried a leaked internal license
+  string in its env block. Deleted outright; there is no CI entry point to
+  document, and a fabricated example is worse than none.
+- **`examples/0{1,2,3,4}-*.yaml`** all claimed a Maestro-shorthand replay
+  format and a CLI command that doesn't exist. Confirmed the shipped
+  `replay` engine reads only `action`-keyed recordings produced by
+  `record_start`/`record_stop`, and no CLI subcommand named `replay` exists
+  at all — these files were not loadable by the shipped package under any
+  command name. Deleted, rather than reworded, since there is nothing valid
+  to correct their headers to.
+- **`.claude/mcp.json`** carried a leaked internal license-bypass
+  environment variable, functionally inert against the shipped package
+  (its retired implementation lived only in `src/specterqa/`) but never
+  something that belongs tracked in a public repo. Removed; the example
+  config now just wires up the real `simdrive` command.
+- **Stale rename-in-progress notes**, in `README.md` and `llms.txt`, said
+  the GitHub repository rename to `simdrive` was "in process" / "pending."
+  It's complete — corrected to present tense, and a dead link to the old
+  repo was fixed to point at the current one.
+- **Dead pre-rebrand marketing/GTM drafts** (`simdrive/docs/marketing/*.md`,
+  `simdrive/docs/gtm/onboarding_emails.md`, `docs/troubleshooting.md`) still
+  carried the old product/package name, stale tool counts, an MIT-license
+  claim (shipped license is Elastic-2.0), links to the pre-rename repo, and
+  in one case a description of a paid Cloud beta that was never shipped.
+  None of these were ever the canonical copy. Stubbed as SUPERSEDED,
+  consistent with how the equivalent GTM drafts were already handled under
+  INIT-2026-605 — kept as historical scaffolding, not cited or served.
+- **`scripts/verify_no_commercial_claims.py`** (the takedown's own audit)
+  never scanned any of the surfaces above — its file-set only covered
+  READMEs, llms.txt, and a couple of docs directories. Extended it to also
+  scan `.well-known/`, repo-root `server.json`, `.claude/mcp.json`,
+  everything under `examples/`, and `simdrive/docs/marketing/`; added
+  pricing-tier-field and stale-`specterqa`-reference patterns so a live
+  pricing block or dead install instruction can't hide in an unscanned
+  path again.
 
 ### Added — release-feed publishing pipeline (operator tooling)
 
