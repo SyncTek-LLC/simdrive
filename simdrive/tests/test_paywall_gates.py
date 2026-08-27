@@ -232,6 +232,85 @@ class TestRunJourneyGated:
         assert exc_info.value.code == "license_not_found"
 
 
+class TestNoLicenseInstallWorks:
+    """INIT-2026-610 (Chairman decision, 2026-08-26) — SimDrive was retired as
+    a commercial product. Every public surface says it is free and unsold,
+    but before this fix the paywall was never removed from the code: a fresh
+    `pip install simdrive`, wired into an MCP client, called any tool and hit
+    `LicenseError [license_not_found]` advertising a 14-day trial and a
+    pricing page for a product no longer for sale.
+
+    1,870 passing tests never caught this because conftest.py auto-issues a
+    session dev-trial license at module load. This test uses the REAL
+    ``@pytest.mark.no_license`` opt-out (conftest.py) which deletes that
+    session license from disk for the duration of the test — it does NOT
+    monkeypatch ``check_entitlement`` (see ``force_license_error`` above) and
+    does NOT route through the session-license fixture. That is the point:
+    this exercises the exact chokepoint a genuine clean install hits.
+
+    Red-first: before the INIT-2026-610 fix to
+    ``entitlement.check_entitlement()``, both tests below fail — the gate
+    raises ``LicenseError[license_not_found]`` and the second test's
+    assertion on ``ent.tier`` never gets there. After the fix, both pass.
+    """
+
+    @pytest.mark.no_license
+    def test_tool_call_succeeds_with_no_license_on_disk(self) -> None:
+        """A gated tool call must reach real tool logic — not be stopped by
+        the paywall gate — when no license.json exists at all.
+
+        ``session_status`` with a bogus session_id is used as the probe: if
+        the entitlement gate passes (as it must), execution reaches
+        ``session.get()`` and fails with the downstream ``no_session`` error
+        instead. Asserting the code is ``no_session`` (and NOT
+        ``license_not_found``) is the precise, deterministic proof that the
+        gate let the call through.
+        """
+        from simdrive import errors as core_errors
+        from simdrive.license.errors import LicenseError
+
+        with pytest.raises(core_errors.SimdriveError) as exc_info:
+            _invoke("session_status", {"session_id": "no-such-session"})
+
+        assert not isinstance(exc_info.value, LicenseError), (
+            "session_status raised a LicenseError with no license.json present — "
+            "the paywall gate fired on a genuine clean install. This is the "
+            "INIT-2026-610 defect: check_entitlement() must return a free "
+            "entitlement when no license file exists, not raise."
+        )
+        assert exc_info.value.code == "no_session", (
+            f"expected the downstream no_session error (proving the gate passed), "
+            f"got code={exc_info.value.code!r}"
+        )
+
+    @pytest.mark.no_license
+    def test_check_entitlement_returns_free_unlimited_entitlement(self) -> None:
+        """Exercise the real default license path end to end (Path.home() /
+        '.simdrive' / 'license.json', as resolved by conftest's fixture HOME)
+        — not a monkeypatch, not a passed-in path."""
+        from simdrive.license.entitlement import check_entitlement
+
+        ent = check_entitlement()
+        assert ent.tier != "trial"
+        assert ent.journey_quota_per_month is None, "no-license install must be unlimited"
+        assert ent.max_simulators is None, "no-license install must be unlimited"
+
+    @pytest.mark.no_license
+    def test_no_advertising_if_a_license_error_still_fires(self) -> None:
+        """Even where a LicenseError CAN still legitimately fire (e.g. a
+        present-but-malformed license.json), the envelope must carry no
+        pricing_url and no trial-signup copy — SimDrive is not for sale."""
+        from simdrive.license.errors import license_invalid, license_not_found
+
+        for err in (license_invalid("corrupt"), license_not_found("/tmp/x.json")):
+            env = err.to_dict()
+            assert "pricing_url" not in env["error"]
+            assert "trial_command_hint" not in env["error"]
+            assert "auth_command_hint" not in env["error"]
+            assert "simdrive.dev/pricing" not in env["error"]["message"]
+            assert "trial start" not in env["error"]["message"]
+
+
 class TestBootstrapCommandsExempt:
     """trial / license / auth are CLI subcommands, NOT MCP tools.
 
