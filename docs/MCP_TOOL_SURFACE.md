@@ -5,13 +5,13 @@
 > same commit, and the assertion in `simdrive/tests/test_unit.py::test_tool_count_is_thirty_two`
 > will fail until the count matches.
 
-**Canonical count: 32 tools.**
+**Canonical count: 36 tools.**
 
 Verified by:
 
 ```python
 from simdrive import server
-assert len(server.list_tools()) == 32
+assert len(server.list_tools()) == 36
 ```
 
 ## Categories
@@ -24,11 +24,12 @@ assert len(server.list_tools()) == 32
 ### 2. Observation (1)
 - `observe` — Capture an annotated screenshot + element list. Vision-first primitive — agents call this before every act.
 
-### 3. Action (4)
+### 3. Action (5)
 - `tap` — Tap by mark id, label, identifier, or raw coordinates.
 - `swipe` — Swipe in a direction or between two points.
 - `type_text` — Type into a focused text field.
 - `press_key` — Press a named keyboard key (return, escape, etc.).
+- `tap_and_wait_keyboard` — Atomic tap + settle + observe composite.
 
 ### 4. Record / Replay (3)
 - `record_start` — Begin a new recording (clears the step buffer).
@@ -70,9 +71,14 @@ assert len(server.list_tools()) == 32
 - `lint_recordings` — Lint saved recordings for state-contract drift.
 - `migrate_recording` — Migrate a recording from an older schema to the current one.
 
+### 12. Host-AX accessibility (3)
+- `perform_accessibility_action` — Invoke a custom accessibility action / VoiceOver announcement.
+- `get_announcements` — Read recent VoiceOver announcements.
+- `set_text` — Set text on fields HID input can't reach (e.g. `UIAlertController`).
+
 ## Total
 
-3 + 1 + 4 + 3 + 2 + 4 + 4 + 4 + 2 + 2 + 3 = **32**
+3 + 1 + 5 + 3 + 2 + 4 + 4 + 4 + 2 + 2 + 3 + 3 = **36**
 
 ## Drift history
 
@@ -82,3 +88,4 @@ assert len(server.list_tools()) == 32
 | 2026-04 (1.0.0a7) | + `load_journey`                                                  | 30        |
 | 2026-04 (1.0.0a9.1) | + `lint_recordings`, `migrate_recording`                       | 32        |
 | 2026-05-17 | Documented canonical count in MCP_TOOL_SURFACE.md       | 32        |
+| 1.0.0b3+ | + `tap_and_wait_keyboard`, `perform_accessibility_action`, `get_announcements`, `set_text` | 36 |

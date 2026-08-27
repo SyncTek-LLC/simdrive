@@ -2,34 +2,27 @@
 
 SimDrive is an MCP-native iOS automation toolkit for reproducing and
 validating iOS bugs in 60 seconds with Claude (or any MCP-compatible agent).
-Your agent drives the iOS Simulator or a paired real device via 32 vision-first
-tools, captures the failure as a deterministic recording, and replays that
-recording in CI with zero AI cost on subsequent runs.
+Your agent drives the iOS Simulator or a paired real device via 36 vision-first
+tools, captures the failure as a deterministic recording, and can replay that
+recording later against a booted target.
 
 Distribution: PyPI package `simdrive` (also the MCP server command). The hero
 use case is **bug reproduction and validation** — paste a Linear/Jira ticket
 into your agent, watch it walk the steps, attach the captured recording to
-the PR. Record-time AI cost is borne by your MCP client (BYOK); replay is free
-forever after.
+the PR.
 
-Licensing: 14-day full-feature trial issued locally by `simdrive trial start
---email <addr>` (Ed25519-signed, machine-locked). After 14 days the MCP tool
-surface is paywalled — purchase a Pro / Team / Enterprise license at
-<https://simdrive.dev/pricing> and install it with `simdrive auth
-<license-key>`. Trial CLI commands (`trial`, `license`, `auth`) themselves
-never require a license; everything else does.
+> SimDrive is no longer offered as a commercial product. It remains available
+> as an open MCP tool — install and run it directly; no license or account is
+> required.
 
 > Repo note: the GitHub repository is currently `SyncTek-LLC/specterqa-ios`;
 > rename to `SyncTek-LLC/simdrive` is pending. The PyPI package name is
 > **`simdrive`**.
 
-## Install + activate
+## Install
 
 ```bash
 pip install simdrive
-simdrive trial start --email you@example.com
-# 14 days full access, then:
-simdrive auth <license-key>
 ```
 
 Requires: macOS, Xcode 15+, Python 3.10+.
@@ -55,8 +48,8 @@ Then in your agent:
 > iOS 26.3. Try test@example.com and capture the error."
 
 Your agent drives the simulator, captures every action, and saves a
-deterministic recording. Future CI runs replay that recording without
-calling the agent.
+deterministic recording that can be replayed later against a booted target
+via the `replay` tool.
 
 ## Minimum-viable session (5 calls)
 
@@ -69,11 +62,11 @@ record_stop(session_id="...", name="signin-smoke")  # save replay
 session_end(session_id="...")              # clean up
 ```
 
-## MCP Tool Registry (32 tools — canonical)
+## MCP Tool Registry (36 tools — canonical)
 
 The exhaustive machine-readable list lives in
 `simdrive/src/simdrive/server.py::_TOOLS`. The categorized human-readable
-surface lives in `docs/MCP_TOOL_SURFACE.md`. The 32 tools exposed by the MCP
+surface lives in `docs/MCP_TOOL_SURFACE.md`. The 36 tools exposed by the MCP
 server are:
 
 - `session_start` — Start a SimDrive session on a booted iOS Simulator (or
@@ -115,35 +108,23 @@ server are:
 - `lint_recordings` — Lint saved recordings for state-contract drift.
 - `migrate_recording` — Migrate a recording from an older schema to the
   current one.
-
-Every tool requires a valid license. Without one, every call returns a
-structured ``license_required`` envelope including the pricing URL and
-copy-pasteable command hints to start a trial or install a paid key.
+- `tap_and_wait_keyboard` — Atomic tap + settle + observe composite.
+- `perform_accessibility_action` — Invoke a custom accessibility action /
+  VoiceOver announcement.
+- `get_announcements` — Read recent VoiceOver announcements.
+- `set_text` — Set text on fields HID input can't reach (e.g.
+  `UIAlertController`).
 
 ## Use via CLI
 
 ```bash
 simdrive --version           # verify install
 simdrive                     # start the MCP server (stdio)
-simdrive trial start --email you@example.com
-simdrive auth <license-key>  # install a paid key
-simdrive license show        # show current license state
 ```
-
-## Pricing
-
-| Plan | Price | Notes |
-|------|-------|-------|
-| Trial | Free, 14 days | All Pro features, machine-locked |
-| Pro | $29 / mo | One seat |
-| Team | $99 / seat / mo | Multi-seat |
-| Enterprise | Contact | Self-hosted licensing, SLA |
-
-Pricing + ROI calculator: <https://simdrive.dev/pricing>
 
 ## Links
 
-- Homepage / pricing: <https://simdrive.dev>
+- Homepage: <https://simdrive.dev>
 - GitHub (docs + issues): <https://github.com/SyncTek-LLC/specterqa-ios>
   (rename to `simdrive` pending)
 - Support: <support@synctek.io>
