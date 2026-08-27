@@ -198,9 +198,30 @@ def package_marketing_files() -> list[Path]:
     return files
 
 
-def sibling_repo_files(name: str, patterns: list[str]) -> list[Path]:
-    root = _REPO.parent / name
+_SIBLING_ENV_VAR = {
+    "simdrive-site": "SIMDRIVE_SITE_REPO",
+    "simdrive-docs": "SIMDRIVE_DOCS_REPO",
+    "simdrive-docs-starlight": "SIMDRIVE_DOCS_STARLIGHT_REPO",
+}
+
+
+def sibling_repo_files(name: str, patterns: list[str], report: Report) -> list[Path]:
+    """Locate a sibling repo by (1) an explicit env var override, since this
+    script may run from a worktree that isn't checked out next to its
+    siblings, or (2) `_REPO.parent / name`, the conventional layout when
+    all SimDrive repos are cloned side by side. Missing sibling repos are
+    reported as a warning and skipped — not a hard failure — so this script
+    stays useful in a CI runner that only clones `simdrive`.
+    """
+    import os
+
+    override = os.environ.get(_SIBLING_ENV_VAR[name])
+    root = Path(override) if override else (_REPO.parent / name)
     if not root.is_dir():
+        report.warnings.append(
+            f"sibling repo '{name}' not found at {root} "
+            f"(set {_SIBLING_ENV_VAR[name]} to override) — skipped, not scanned"
+        )
         return []
     return _iter_files(root, patterns)
 
@@ -404,10 +425,13 @@ def run(args: argparse.Namespace) -> Report:
     files += sibling_repo_files(
         "simdrive-site",
         ["src/**/*.astro", "src/**/*.md", "src/**/*.mdx", "src/**/*.ts"],
+        report,
     )
-    files += sibling_repo_files("simdrive-docs", ["**/*.mdx", "**/*.md"])
+    files += sibling_repo_files("simdrive-docs", ["**/*.mdx", "**/*.md"], report)
     files += sibling_repo_files(
-        "simdrive-docs-starlight", ["src/content/**/*.mdx", "src/content/**/*.md", "README.md"]
+        "simdrive-docs-starlight",
+        ["src/content/**/*.mdx", "src/content/**/*.md", "README.md"],
+        report,
     )
 
     if not files:
