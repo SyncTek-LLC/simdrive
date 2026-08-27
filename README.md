@@ -94,23 +94,6 @@ record/replay, devices/logs, performance/memory, diagnostics, app state,
 alerts/permissions, appearance, replay management, recordings maintenance, and
 journeys.
 
-## Maestro-compatible YAML
-
-Migrating from Maestro? SimDrive understands the shorthand natively:
-
-```yaml
-replay:
-  bundle_id: com.example.app
-  steps:
-    - tapOn: "Sign In"
-    - inputText: "user@example.com"
-    - assertVisible: "Dashboard"
-    - assertNotVisible: "Loading"
-    - waitFor: "Feed"
-```
-
-Native SimDrive syntax and Maestro shortcuts coexist in the same file.
-
 ## Physical device support
 
 Drive a paired iPhone/iPad in addition to the simulator. Opt in:

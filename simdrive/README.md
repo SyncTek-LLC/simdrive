@@ -93,21 +93,6 @@ record_stop(session_id="...", name="signin-smoke")   # save replay
 session_end(session_id="...")              # clean up
 ```
 
-## Maestro-compatible YAML
-
-Migrating from Maestro? SimDrive parses the shorthand natively:
-
-```yaml
-replay:
-  bundle_id: com.example.app
-  steps:
-    - tapOn: "Sign In"
-    - inputText: "user@example.com"
-    - assertVisible: "Dashboard"
-    - assertNotVisible: "Loading"
-    - waitFor: "Feed"
-```
-
 ## Tool surface (36 MCP tools)
 
 | Group | Tools |

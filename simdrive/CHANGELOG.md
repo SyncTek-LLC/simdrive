@@ -84,6 +84,21 @@ importantly the two security fixes below.
   corrected a stale tool-count claim (32 → 36) across the READMEs,
   `pyproject.toml`, `llms.txt`, and the MCP tool-surface doc.
 
+### Fixed — false "Maestro-compatible YAML" claim removed from both READMEs
+
+- Both `README.md` and `simdrive/README.md` claimed SimDrive "parses the
+  shorthand natively" (`tapOn`, `inputText`, `assertVisible`,
+  `assertNotVisible`, `waitFor`) and that "native SimDrive syntax and
+  Maestro shortcuts coexist in the same file." **This was false for the
+  shipping package.** That shorthand parser exists only in the retired
+  `src/specterqa/` tree, which `[tool.setuptools.packages.find] where =
+  ["src"]` in `simdrive/pyproject.toml` excludes from the published wheel
+  (it resolves to `simdrive/src`). The shipped `replay` tool
+  (`simdrive/src/simdrive/server.py::tool_replay`) takes a session ID and a
+  recording name and replays `action`-keyed YAML+PNG bundles captured by
+  `record_start`/`record_stop` — it does not parse Maestro-style YAML
+  files. The section is removed, not softened, from both READMEs.
+
 ### Added — release-feed publishing pipeline (operator tooling)
 
 - **`scripts/make_releases_feed.py`** — the tooling that publishes simdrive's
