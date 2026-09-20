@@ -63,10 +63,11 @@ def _stub_observe(tmp_path: Path, marks: list[Mark], **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def test_to_compact_dict_returns_exactly_six_keys():
+def test_to_compact_dict_returns_exactly_seven_keys():
+    """INIT-2026-641 item 4.1 adds `english_like`, so this grew from 6 to 7 keys."""
     m = _high_mark(7)
     d = m.to_compact_dict()
-    assert set(d.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+    assert set(d.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like"}
 
 
 def test_to_compact_dict_drops_diagnostic_fields():
@@ -102,7 +103,7 @@ def test_observe_compact_emits_compact_marks(tmp_path):
     d = obs.to_dict()
     assert d["marks"], "compact=True should still emit marks"
     for md in d["marks"]:
-        assert set(md.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+        assert set(md.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like"}
 
 
 def test_observe_compact_false_keeps_legacy_payload(tmp_path):
@@ -263,7 +264,7 @@ def test_capture_observability_with_compact(tmp_path):
     )
     d = obs.to_dict()
     # Marks are compact (6 keys) but _observability still present.
-    assert all(set(m.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+    assert all(set(m.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like"}
                for m in d["marks"])
     assert len(d["_observability"]) == 2
 
@@ -364,7 +365,7 @@ def test_tool_observe_device_compact_drops_diagnostic_keys(tmp_path):
                return_value=(fake_marks, None)):
         result = server.tool_observe({"session_id": "devfilt", "compact": True})
     for m in result["marks"]:
-        assert set(m.keys()) <= {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+        assert set(m.keys()) <= {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like"}
         assert "raw_confidence" not in m
         assert "dictionary_check" not in m
 
@@ -400,3 +401,37 @@ def test_tool_observe_device_capture_observability_emits_per_mark(tmp_path):
     for entry in result["_observability"]:
         assert entry["dictionary_check"] in {"passed", "failed"}
         assert isinstance(entry["raw_confidence"], float)
+
+
+# ---------------------------------------------------------------------------
+# Item 4.1 (INIT-2026-641, D4) — english_like surfaced as its own field.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_to_dict_reports_english_like_independently_of_confidence():
+    """A non-dictionary proper noun at raw_confidence=1.0 must report
+    english_like=False WITHOUT changing confidence/confidence_band, which stay
+    governed by the existing dictionary-gated band logic. Before this item,
+    to_dict() carried no `english_like` key at all.
+    """
+    m = Mark(id=1, x=0, y=0, w=50, h=20, text="RefSource.", confidence=1.0)
+    d = m.to_dict()
+    assert "english_like" in d
+    assert d["english_like"] is False
+    # Band/confidence are unchanged by this item — RefSource. still fails the
+    # dictionary fence today, so it still clamps to "low" / 0.3.
+    assert d["confidence_band"] == "low"
+    assert d["confidence"] == pytest.approx(0.3)
+
+
+def test_mark_to_compact_dict_also_reports_english_like():
+    m = Mark(id=1, x=0, y=0, w=50, h=20, text="RefSource.", confidence=1.0)
+    d = m.to_compact_dict()
+    assert d["english_like"] is False
+
+
+def test_mark_english_like_true_for_dictionary_text():
+    m = Mark(id=1, x=0, y=0, w=50, h=20, text="Sign In", confidence=1.0)
+    d = m.to_dict()
+    assert d["english_like"] is True
+    assert d["confidence_band"] == "high"

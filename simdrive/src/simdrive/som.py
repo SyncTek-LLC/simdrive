@@ -260,6 +260,10 @@ class Mark:
         # band and clamp `confidence` accordingly.
         if self.raw_confidence is None:
             self.raw_confidence = float(self.confidence)
+        # INIT-2026-641 item 4.1 — compute and stash english-likeness once,
+        # so it can be surfaced as its own field (see `english_like` property
+        # below) instead of only ever being folded into `confidence_band`.
+        self._english_like_val = _english_likeness(self.text)
         # Compute band once.
         self._band = self._compute_band()
         # Clamp legacy confidence per the band.
@@ -274,7 +278,7 @@ class Mark:
         engineers can trust.
         """
         raw = float(self.raw_confidence or 0.0)
-        english_like = _english_likeness(self.text)
+        english_like = self._english_like_val
         if not english_like:
             # Dictionary fence failed — the OCR doesn't read as English. Don't
             # promote on raw confidence alone; this is the case the v0.3.0a3
@@ -295,6 +299,22 @@ class Mark:
     @property
     def confidence_band(self) -> str:
         return self._band or self._compute_band()
+
+    @property
+    def english_like(self) -> bool:
+        """Whether ``text`` reads as real English per the dictionary fence.
+
+        INIT-2026-641 item 4.1 — this was always computed internally to build
+        `confidence_band`, then discarded. Surfacing it as its own field lets
+        a correct, ground-truth read (e.g. an accessibility-backed mark) keep
+        a high `confidence`/`confidence_band` while still reporting that its
+        text happens not to be dictionary-English, instead of the two being
+        conflated into one value the way `confidence_band` did alone.
+        """
+        val = getattr(self, "_english_like_val", None)
+        if val is None:
+            val = _english_likeness(self.text)
+        return val
 
     @property
     def center(self) -> tuple[int, int]:
@@ -339,6 +359,10 @@ class Mark:
             "raw_confidence": round(float(self.raw_confidence or 0.0), 3),
             # `confidence_band` is the human-readable quality bucket.
             "confidence_band": self.confidence_band,
+            # INIT-2026-641 item 4.1 — dictionary-fence outcome, independent of
+            # confidence/confidence_band. Ground-truth (e.g. AX-backed) marks can
+            # be `english_like=False` and still `confidence_band="high"`.
+            "english_like": self.english_like,
             # F#4 — alternate OCR readings seen across consecutive observations.
             "alternates": list(self.alternates),
         }
@@ -347,12 +371,15 @@ class Mark:
         """Slim mark dict for token-efficient `observe(compact=True)` responses.
 
         Drops OCR diagnostic fields (`raw_confidence`, `confidence`,
-        `stable_id_loose`) that most agents never read. Retains the six keys
+        `stable_id_loose`) that most agents never read. Retains the fields
         agents typically need to act on a mark: identifier, stable identifier,
-        text, geometry, and quality bucket.
+        text, geometry, quality bucket, and english-likeness.
 
-        Token cost per mark drops from ~20 keys (to_dict) to 6 — roughly
-        5-6x reduction in JSON payload size on dense screens.
+        INIT-2026-641 D4 correction: this dict has fewer *keys* than to_dict()
+        (7 vs. 11), but `bbox`, `center`, and `text` are identical in both and
+        make up most of the bytes, so the real payload saving measured on the
+        wire is roughly 1.7x, not the 5-6x an earlier version of this
+        docstring claimed by counting dropped keys instead of dropped bytes.
         """
         return {
             "id": self.id,
@@ -361,6 +388,7 @@ class Mark:
             "center": list(self.center),
             "bbox": [self.x, self.y, self.w, self.h],
             "confidence_band": self.confidence_band,
+            "english_like": self.english_like,
         }
 
 
