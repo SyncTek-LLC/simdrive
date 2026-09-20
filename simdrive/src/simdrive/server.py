@@ -1562,8 +1562,21 @@ def tool_type_text(arguments: dict) -> dict:
         f"[F-009] simctl type_text path reached on target={s.target!r} "
         f"(session {s.session_id!r}). Route device type_text through wda.type_text()."
     )
-    pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
-    pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
+    # INIT-2026-641 item 4.4 (D2): pre-type screenshot capture is now
+    # unconditional (previously gated behind `if s.recorder`), so type_text
+    # can offer the same verify_change guarantee tap has (item 4.3) even with
+    # no recorder attached — the harder case, since nothing else in this path
+    # captures a pre-action frame otherwise. New construction, not a default
+    # flip: this observe did not run at all before in the no-recorder case.
+    # A failed capture must not fail the actual typing: verify_change is a
+    # diagnostic. annotate=False (item C): this frame is only ever compared
+    # via SSIM, never shown to the agent as an annotated image.
+    try:
+        pre_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=False)
+        pre_path = pre_obs.screenshot_path
+    except Exception as exc:
+        _log.debug("type_text.pre_observe_failed", extra={"error": str(exc)})
+        pre_path = s.last_screenshot_path
     act.type_text(text, udid=s.device.udid)
     dispatch_succeeded = True  # type_text only reaches here if act.type_text didn't raise
     backend_used = act._backend()  # capture which backend actually dispatched
@@ -1590,7 +1603,10 @@ def tool_type_text(arguments: dict) -> dict:
     # having to chain an extra observe() call. Heuristic: keyboard chrome shows
     # well-known key labels OR a row of 1-2 char marks in the bottom 45% of the screen.
     # a12 — normalise to list[dict] so last_marks remains dict-shaped after this observe.
-    post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=True)
+    # annotate=False (INIT-2026-641 item C): this call already ran unconditionally
+    # purely to derive keyboard_visible; nothing here ever surfaced an
+    # annotated_path, so drawing one wasted ~1.8s on every type_text call.
+    post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=False)
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
@@ -1645,6 +1661,20 @@ def tool_type_text(arguments: dict) -> dict:
         )
     if step_id is not None:
         response["step_id"] = step_id
+    # INIT-2026-641 item 4.4 (D2): verify_change, same contract as tap's
+    # (item 4.3) — default true, schema-declared, nested post_state. Reuses
+    # the post-type observe above (already unconditional and already
+    # refreshing s.last_marks) rather than running a second OCR pass.
+    verify_change = bool(arguments.get("verify_change", True))
+    if verify_change:
+        ssim_val = _compute_ssim(pre_path, post_obs.screenshot_path)
+        ssim_delta = round(1.0 - ssim_val, 4)
+        response["post_state"] = {
+            "marks": _compact_capped_marks(post_obs.marks),
+            "screen_changed": ssim_delta > 0.05,
+            "ssim_delta": float(ssim_delta),
+            "screenshot_path": str(post_obs.screenshot_path),
+        }
     return response
 
 
@@ -2747,7 +2777,12 @@ _TOOLS: list[dict] = [
             "keystrokes landed; reliable signal under HID where the soft keyboard isn't "
             "drawn), keyboard_visible (heuristic from a post-type observe; useful on the "
             "cliclick path), and focused_field (the stable_id of the tap_first target "
-            "when one was supplied and resolved via mark/stable_id/text, else null)."
+            "when one was supplied and resolved via mark/stable_id/text, else null). "
+            "On the simulator path, verify_change defaults to true: the response also "
+            "carries a `post_state` key with a fresh compact marks array (capped at 20), "
+            "screen_changed, ssim_delta, and screenshot_path, reusing the same post-type "
+            "observation keyboard_visible is derived from. Pass verify_change=false to "
+            "skip it."
         ),
         "inputSchema": {
             "type": "object",
@@ -2761,6 +2796,7 @@ _TOOLS: list[dict] = [
                     "default": False,
                     "description": "Send Cmd-A + delete after focusing (and before typing) to clear the field.",
                 },
+                "verify_change": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Returns `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path} built from the same post-type observation keyboard_visible already uses. Pass false to skip."},
             },
         },
         "handler": tool_type_text,
