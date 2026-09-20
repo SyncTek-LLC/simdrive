@@ -10,7 +10,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 
 # v0.3.0a3 — small inline dictionary used to dictionary-gate raw OCR confidence.
@@ -254,12 +254,33 @@ class Mark:
     # callers may set this after construction.
     alternates: list = field(default_factory=list)
 
+    # INIT-2026-641 item 5.1 (D1/D4) — provenance. "ocr" is the safe default for
+    # every existing caller (Vision OCR is what built every Mark before this
+    # field existed). The AX-primary perception path (Wave 2) constructs marks
+    # with source="ax"; wda/som_device.py's XCUITest-tree marks are also
+    # accessibility ground truth and are threaded as source="ax" too. D4's
+    # fence-skip (Wave 2 item 5.4) reads this field to decide whether the
+    # dictionary-gate fence in _compute_band()/_clamped_confidence() applies —
+    # it must not apply to ground-truth marks, only to OCR's probabilistic reads.
+    source: Literal["ocr", "ax"] = "ocr"
+    # Populated by the AX walk (role e.g. "AXButton"/"AXStaticText"/"AXTextField")
+    # and by device-path XCUITest marks. None for OCR marks, which carry no
+    # semantic role. Wave 2 surface; unused by Wave 1.
+    role: Optional[str] = None
+    # Live enabled/disabled state, when known (AX-backed marks only). None
+    # means "unknown" (OCR has no concept of control state). Wave 2 surface.
+    enabled: Optional[bool] = None
+
     def __post_init__(self) -> None:
         # If callers constructed a Mark with only `confidence`, that value is
         # the raw OCR score — preserve it as `raw_confidence`, then compute the
         # band and clamp `confidence` accordingly.
         if self.raw_confidence is None:
             self.raw_confidence = float(self.confidence)
+        # INIT-2026-641 item 4.1 — compute and stash english-likeness once,
+        # so it can be surfaced as its own field (see `english_like` property
+        # below) instead of only ever being folded into `confidence_band`.
+        self._english_like_val = _english_likeness(self.text)
         # Compute band once.
         self._band = self._compute_band()
         # Clamp legacy confidence per the band.
@@ -274,7 +295,7 @@ class Mark:
         engineers can trust.
         """
         raw = float(self.raw_confidence or 0.0)
-        english_like = _english_likeness(self.text)
+        english_like = self._english_like_val
         if not english_like:
             # Dictionary fence failed — the OCR doesn't read as English. Don't
             # promote on raw confidence alone; this is the case the v0.3.0a3
@@ -295,6 +316,22 @@ class Mark:
     @property
     def confidence_band(self) -> str:
         return self._band or self._compute_band()
+
+    @property
+    def english_like(self) -> bool:
+        """Whether ``text`` reads as real English per the dictionary fence.
+
+        INIT-2026-641 item 4.1 — this was always computed internally to build
+        `confidence_band`, then discarded. Surfacing it as its own field lets
+        a correct, ground-truth read (e.g. an accessibility-backed mark) keep
+        a high `confidence`/`confidence_band` while still reporting that its
+        text happens not to be dictionary-English, instead of the two being
+        conflated into one value the way `confidence_band` did alone.
+        """
+        val = getattr(self, "_english_like_val", None)
+        if val is None:
+            val = _english_likeness(self.text)
+        return val
 
     @property
     def center(self) -> tuple[int, int]:
@@ -339,20 +376,33 @@ class Mark:
             "raw_confidence": round(float(self.raw_confidence or 0.0), 3),
             # `confidence_band` is the human-readable quality bucket.
             "confidence_band": self.confidence_band,
+            # INIT-2026-641 item 4.1 — dictionary-fence outcome, independent of
+            # confidence/confidence_band. Ground-truth (e.g. AX-backed) marks can
+            # be `english_like=False` and still `confidence_band="high"`.
+            "english_like": self.english_like,
             # F#4 — alternate OCR readings seen across consecutive observations.
             "alternates": list(self.alternates),
+            # INIT-2026-641 item 5.1 — provenance + semantic fields. "ocr" /
+            # None / None for every mark built before this field existed;
+            # populated by Wave 2's AX-primary walk and by device-path marks.
+            "source": self.source,
+            "role": self.role,
+            "enabled": self.enabled,
         }
 
     def to_compact_dict(self) -> dict:
         """Slim mark dict for token-efficient `observe(compact=True)` responses.
 
         Drops OCR diagnostic fields (`raw_confidence`, `confidence`,
-        `stable_id_loose`) that most agents never read. Retains the six keys
+        `stable_id_loose`) that most agents never read. Retains the fields
         agents typically need to act on a mark: identifier, stable identifier,
-        text, geometry, and quality bucket.
+        text, geometry, quality bucket, and english-likeness.
 
-        Token cost per mark drops from ~20 keys (to_dict) to 6 — roughly
-        5-6x reduction in JSON payload size on dense screens.
+        INIT-2026-641 D4 correction: this dict has fewer *keys* than to_dict()
+        (8 vs. 14), but `bbox`, `center`, and `text` are identical in both and
+        make up most of the bytes, so the real payload saving measured on the
+        wire is roughly 1.7x, not the 5-6x an earlier version of this
+        docstring claimed by counting dropped keys instead of dropped bytes.
         """
         return {
             "id": self.id,
@@ -361,6 +411,11 @@ class Mark:
             "center": list(self.center),
             "bbox": [self.x, self.y, self.w, self.h],
             "confidence_band": self.confidence_band,
+            "english_like": self.english_like,
+            # INIT-2026-641 item 5.1 — provenance stays in the compact shape
+            # too: a caller filtering compact marks still needs to tell an
+            # AX-backed (ground truth) mark from an OCR (probabilistic) one.
+            "source": self.source,
         }
 
 
