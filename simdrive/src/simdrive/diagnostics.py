@@ -405,7 +405,16 @@ def list_crashes(
     for mtime, p in candidates:
         header = _ips_header(p)
         crash_bundle = header.get("bundleID") or header.get("bundle_id") or header.get("app_name") or ""
-        if bundle_id and bundle_id not in crash_bundle:
+        # INIT-2026-641 item 4.7: exact match, not substring containment.
+        # The old `bundle_id not in crash_bundle` check let a lookup for
+        # "com.acme.reader" match a crash whose bundle is
+        # "com.acme.reader.share" (a distinct share-extension app). This is
+        # a deliberate correction, not an oversight — do not "fix" this back
+        # toward substring matching without adding an explicit, separate
+        # parameter (e.g. include_extensions) for that case if it's ever
+        # actually needed; nothing today depends on the loose match (checked
+        # via grep across tests/docs/CHANGELOG before this change landed).
+        if bundle_id and crash_bundle != bundle_id:
             continue
         out.append({
             "path": str(p),
