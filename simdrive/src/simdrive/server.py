@@ -981,6 +981,51 @@ def _mark_center(m: "som.Mark | dict") -> tuple[int, int]:
     return m.center
 
 
+# INIT-2026-641 item 4.3/4.4 (D2) — verified composite actions. `post_state`
+# on tap/type_text is a cheap sanity check, not a full observe replacement,
+# so its marks are always compact and capped at a small fixed count. Reuses
+# the same (confidence_band rank desc, area desc) sort observe._apply_filters
+# uses for mark_limit, generalized to accept a12 dict marks (Session.last_marks)
+# as well as Mark dataclasses, since the two composite-action code paths below
+# have marks in both shapes depending on whether a recorder is attached.
+_POST_STATE_MARK_LIMIT = 20
+_POST_STATE_BAND_RANK = {"low": 0, "medium": 1, "high": 2}
+_COMPACT_MARK_KEYS = ("id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like", "source")
+
+
+def _mark_area(m: "som.Mark | dict") -> int:
+    if isinstance(m, dict):
+        bbox = m.get("bbox") or [0, 0, 0, 0]
+        return int(bbox[2]) * int(bbox[3])
+    return int(m.w) * int(m.h)
+
+
+def _compact_capped_marks(marks: list, limit: int = _POST_STATE_MARK_LIMIT) -> list[dict]:
+    """Project `marks` (Mark dataclasses or a12 dict marks) to the compact
+    dict shape, capped to `limit` by (confidence_band rank desc, area desc),
+    with reading order (ascending id) restored within the capped slice —
+    the exact semantics of observe._apply_filters's mark_limit handling.
+    """
+    if not marks:
+        return []
+    ranked = sorted(
+        marks,
+        key=lambda m: (
+            _POST_STATE_BAND_RANK.get(_mark_attr(m, "confidence_band") or "low", 0),
+            _mark_area(m),
+        ),
+        reverse=True,
+    )[:limit]
+    ranked.sort(key=lambda m: _mark_attr(m, "id") or 0)
+    out: list[dict] = []
+    for m in ranked:
+        if isinstance(m, dict):
+            out.append({k: m.get(k) for k in _COMPACT_MARK_KEYS if k in m})
+        else:
+            out.append(m.to_compact_dict())
+    return out
+
+
 def _position_hint(cx: int, cy: int, screen_w: int, screen_h: int) -> str:
     """F#6 — coarse 9-cell grid label for a bbox center.
 
@@ -1101,17 +1146,38 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
     # Capture post-screenshot for the recording.
     # Pass s.target so device sessions use the WDA/devicectl screenshot path,
     # not simctl (which rejects real device UDIDs with "Invalid device").
-    post_obs = observe.observe(s.device.udid, s.workdir / "observations", target=s.target)
+    # INIT-2026-641 item 4.3/C: annotate=False — nothing downstream of this
+    # call ever reads an annotated PNG (add_step only stores the raw
+    # screenshot path), so drawing one wasted ~1.8s server-side on every
+    # single recorded action for an image nobody opens.
+    post_obs = observe.observe(
+        s.device.udid, s.workdir / "observations", target=s.target, annotate=False,
+    )
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
     # marks_count: embed in args AND pass to add_step for replay drift detection (a13).
     # Stored in both locations so test engineering fixtures (args.marks_count) and the
     # recorder's step-level field (step.marks_count) are both populated.
+    # Deliberately read BEFORE the s.last_marks refresh below: this is the
+    # pre-action mark count (per the docstring above), the recorded baseline
+    # replay compares a live post-action count against for drift detection.
     marks_count = len(s.last_marks) if s.last_marks else None
     if marks_count is not None:
         args = {**args, "marks_count": marks_count}
-    return s.recorder.add_step(action, args, pre_path, post_obs.screenshot_path, marks_count=marks_count)
+    step_id = s.recorder.add_step(
+        action, args, pre_path, post_obs.screenshot_path, marks_count=marks_count,
+    )
+    # INIT-2026-641 item 4.3 (D2 correctness gap) — refresh s.last_marks from
+    # THIS post-action observation, which today runs unconditionally whenever
+    # a recorder is attached and was discarding its marks entirely. Ordered
+    # after marks_count above so that field keeps its pre-action-baseline
+    # meaning; a follow-up tap(mark:/stable_id:) with no intervening
+    # tool_observe now resolves against the post-action screen instead of a
+    # stale pre-action mark cache.
+    if post_obs.marks:
+        s.last_marks = [m.to_dict() for m in post_obs.marks]
+    return step_id
 
 
 def tool_tap(arguments: dict) -> dict:
@@ -1183,8 +1249,12 @@ def tool_tap(arguments: dict) -> dict:
                 resp["step_id"] = step_id
         return resp
 
-    # F#8: capture the pre-tap screenshot path for verify_change before the tap occurs.
-    verify_change = bool(arguments.get("verify_change", False))
+    # F#8 / INIT-2026-641 item 4.3 (D2): capture the pre-tap screenshot path
+    # for verify_change before the tap occurs. Defaults to True — a tap that
+    # returns ok:true with no verification of what actually happened is worse
+    # than useless, an agent trusts it. Schema-declared (see tap's
+    # inputSchema) so the default is a real, discoverable opt-out.
+    verify_change = bool(arguments.get("verify_change", True))
     verify_pre_path = s.last_screenshot_path if verify_change else None
 
     sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
@@ -1231,10 +1301,15 @@ def tool_tap(arguments: dict) -> dict:
         }
     if step_id is not None:
         response["step_id"] = step_id
-    # F#8: verify_change — compare pre/post screenshots via SSIM. The settle
-    # already happened above, so this reads the settled screen.
+    # F#8 / INIT-2026-641 item 4.3 (D2): verify_change — compare pre/post
+    # screenshots via SSIM and return a fresh, compact marks array under a
+    # nested `post_state`, following tool_tap_and_wait_keyboard's existing
+    # precedent exactly (do not flatten: `tap`'s own ok/screenshot_size_pixels
+    # keys would collide with observe's own ok/screenshot_path/marks keys).
+    # The settle already happened above, so this reads the settled screen.
     if verify_change:
         post_path = s.last_screenshot_path
+        post_marks_source: list = []
         if post_path == verify_pre_path or post_path is None:
             # No recorder attached, so nothing has captured a post-tap frame and
             # last_screenshot_path is still the PRE frame — comparing it with
@@ -1242,19 +1317,37 @@ def tool_tap(arguments: dict) -> dict:
             # including taps that did change the screen. Capture one.
             # A failed capture must not fail the tap: verify_change is a
             # diagnostic, so fall back to the (uninformative) old comparison.
+            # annotate=False (item C/lazy annotation): post_state never
+            # surfaces an annotated_path, so drawing one here is pure waste.
             try:
                 post_obs = observe.observe(s.device.udid, s.workdir / "observations",
-                                           target=s.target)
+                                           target=s.target, annotate=False)
                 post_path = post_obs.screenshot_path
                 s.last_screenshot_path = post_path
                 s.last_screenshot_w = post_obs.screenshot_w
                 s.last_screenshot_h = post_obs.screenshot_h
+                # D2 correctness gap: this OCR pass was previously discarded
+                # entirely. Refresh s.last_marks from it so a follow-up
+                # tap(mark:/stable_id:) resolves against the post-tap screen
+                # instead of the stale pre-tap cache.
+                if post_obs.marks:
+                    s.last_marks = [m.to_dict() for m in post_obs.marks]
+                post_marks_source = post_obs.marks
             except Exception as exc:
                 _log.debug("tap.verify_change_capture_failed", extra={"error": str(exc)})
+        else:
+            # A recorder is attached: _record_act_step already ran a fresh
+            # post-tap observation above and refreshed s.last_marks from it —
+            # reuse that OCR pass rather than observing a second time.
+            post_marks_source = s.last_marks or []
         ssim_val = _compute_ssim(verify_pre_path, post_path)
         ssim_delta = round(1.0 - ssim_val, 4)
-        response["screen_changed"] = ssim_delta > 0.05
-        response["ssim_delta"] = float(ssim_delta)
+        response["post_state"] = {
+            "marks": _compact_capped_marks(post_marks_source),
+            "screen_changed": ssim_delta > 0.05,
+            "ssim_delta": float(ssim_delta),
+            "screenshot_path": str(post_path) if post_path else None,
+        }
     return response
 
 
@@ -2498,7 +2591,11 @@ _TOOLS: list[dict] = [
             "`ambiguous_text_target` with `details.candidates` (up to 5; each "
             "carries stable_id, mark, bbox, confidence, text, position_hint) — "
             "re-call with stable_id, mark, or x/y to disambiguate. Single exact "
-            "match still resolves even when other prefix/substring matches exist."
+            "match still resolves even when other prefix/substring matches exist. "
+            "verify_change defaults to true: the response carries a `post_state` "
+            "key with a fresh compact marks array (capped at 20), screen_changed, "
+            "ssim_delta, and screenshot_path, captured after settle_ms. Pass "
+            "verify_change=false to skip this and get the bare tap response."
         ),
         "inputSchema": {
             "type": "object",
@@ -2512,6 +2609,7 @@ _TOOLS: list[dict] = [
                 "stable_id_loose": {"type": "string", "description": "Coarser stable hash (text + 60px bucketed position) — tolerates >3px layout drift that breaks the tight stable_id."},
                 "text": {"type": "string", "description": "Match a mark by visible text (exact > prefix > substring)."},
                 "settle_ms": {"type": "integer", "description": "Sleep this many ms after the tap before returning. Useful for animations. Default 0.", "default": 0},
+                "verify_change": {"type": "boolean", "default": True, "description": "Default true. Capture a post-tap screenshot, compare it against the pre-tap frame via SSIM, and return `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path}. Reuses whichever post-action OCR pass already ran rather than paying for a second one. Pass false to skip."},
             },
         },
         "handler": tool_tap,

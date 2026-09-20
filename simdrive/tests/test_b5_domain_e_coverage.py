@@ -175,12 +175,24 @@ class TestComputeSsim:
 
 
 class TestToolTapVerifyChange:
-    """Integration tests for verify_change=True path in tool_tap."""
+    """Integration tests for verify_change in tool_tap.
 
-    def test_verify_change_true_adds_screen_changed_and_ssim_delta(
+    INIT-2026-641 item 4.3 (D2): verify_change now defaults to True and its
+    result moved from flat top-level keys (screen_changed, ssim_delta) into
+    a nested `post_state` dict (post_state.screen_changed, post_state.ssim_delta,
+    post_state.marks, post_state.screenshot_path), matching
+    tool_tap_and_wait_keyboard's existing precedent. Updated here in the same
+    commit as the behavior change per this repo's own TDD convention — see
+    tests/test_tap_verify_change.py for the new item's own directed tests
+    (schema declaration, default-true, opt-out, last_marks refresh, lazy
+    annotation).
+    """
+
+    def test_verify_change_true_adds_post_state_with_screen_changed_and_ssim_delta(
         self, tmp_path, monkeypatch
     ):
-        """verify_change=True must add screen_changed + ssim_delta to response."""
+        """verify_change=True must add a `post_state` dict with screen_changed
+        + ssim_delta, not flat top-level keys."""
         from simdrive import server, session, act
 
         png = _write_png(tmp_path / "pre.png", w=4, h=4)
@@ -202,22 +214,19 @@ class TestToolTapVerifyChange:
         })
 
         assert resp.get("ok") is True
-        assert "screen_changed" in resp, (
-            f"verify_change=True must add 'screen_changed'; keys={list(resp.keys())}"
-        )
-        assert "ssim_delta" in resp, (
-            f"verify_change=True must add 'ssim_delta'; keys={list(resp.keys())}"
-        )
-        assert isinstance(resp["screen_changed"], bool)
-        assert isinstance(resp["ssim_delta"], float)
+        assert "screen_changed" not in resp, "must be nested under post_state, not flattened"
+        assert "ssim_delta" not in resp, "must be nested under post_state, not flattened"
+        post_state = resp["post_state"]
+        assert isinstance(post_state["screen_changed"], bool)
+        assert isinstance(post_state["ssim_delta"], float)
         # ssim=0.8 → delta=0.2, which is > 0.05 → screen_changed=True
-        assert resp["screen_changed"] is True
-        assert abs(resp["ssim_delta"] - 0.2) < 0.001
+        assert post_state["screen_changed"] is True
+        assert abs(post_state["ssim_delta"] - 0.2) < 0.001
 
-    def test_verify_change_false_omits_screen_changed(
+    def test_verify_change_false_omits_post_state(
         self, tmp_path, monkeypatch
     ):
-        """Default (no verify_change) must NOT add screen_changed to response."""
+        """verify_change=False must NOT add post_state to the response."""
         from simdrive import server, session, act
 
         png = _write_png(tmp_path / "pre2.png", w=4, h=4)
@@ -233,16 +242,18 @@ class TestToolTapVerifyChange:
             "session_id": "vc-false-1",
             "x": 100,
             "y": 200,
+            "verify_change": False,
         })
 
         assert resp.get("ok") is True
+        assert "post_state" not in resp
         assert "screen_changed" not in resp
         assert "ssim_delta" not in resp
 
     def test_verify_change_true_no_change_gives_screen_changed_false(
         self, tmp_path, monkeypatch
     ):
-        """When ssim=1.0 (no change), screen_changed must be False."""
+        """When ssim=1.0 (no change), post_state.screen_changed must be False."""
         from simdrive import server, session, act
 
         png = _write_png(tmp_path / "pre3.png", w=4, h=4)
@@ -262,8 +273,8 @@ class TestToolTapVerifyChange:
             "verify_change": True,
         })
 
-        assert resp["screen_changed"] is False
-        assert resp["ssim_delta"] < 0.05
+        assert resp["post_state"]["screen_changed"] is False
+        assert resp["post_state"]["ssim_delta"] < 0.05
 
 
 # ===========================================================================
