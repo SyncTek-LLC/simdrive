@@ -3973,6 +3973,78 @@ def _cmd_lint_recordings(args: list[str]) -> None:
     sys.exit(1 if fail_count else 0)
 
 
+def _cmd_replay(args: list[str]) -> None:
+    """Handle `simdrive replay <name> [--json] [...]` CLI subcommand.
+
+    INIT-2026-641 item 4.8 (D3) — runs a recorded journey headlessly, with
+    no MCP session and no agent in the loop, so a replay result can be
+    attached to a PR as evidence instead of the same agent that made the
+    fix generating and paraphrasing its own "fix validated" claim. Boots or
+    attaches to a real simulator/device directly via session.start()
+    (bypassing the MCP dispatch layer entirely, since there is no client to
+    dispatch through), defaulting device/os_version/app_bundle_id/target
+    from the recording's own metadata when not passed explicitly.
+
+    Exit code reflects the replay result's "ok" key (0 pass, 1 fail), so
+    this can gate a CI job or a pre-merge check without parsing output.
+    Exit code 2 means the recording itself could not be found/run at all
+    (a setup failure, distinct from a replay that ran and failed).
+    """
+    import argparse
+    import sys as _sys
+    import yaml as _yaml
+
+    from . import recorder as recorder_mod
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive replay",
+        description="Replay a recorded journey headlessly, no agent session required.",
+    )
+    parser.add_argument("name", help="Recording name (a directory under the recordings root).")
+    parser.add_argument("--json", action="store_true",
+                        help="Print the full replay result as JSON to stdout.")
+    parser.add_argument("--udid", help="Simulator UDID / device UUID. Defaults to booting or "
+                                       "finding one matching the recording's own device metadata.")
+    parser.add_argument("--target", choices=["simulator", "device"], default=None,
+                        help="Defaults to the recording's own recorded target.")
+    parser.add_argument("--on-drift", choices=["halt", "warn", "force"], default="halt")
+    parsed = parser.parse_args(args)
+
+    rec_dir = recorder_mod.recordings_root() / parsed.name
+    yaml_path = rec_dir / "recording.yaml"
+    if not yaml_path.exists():
+        print(f"ERROR: recording {parsed.name!r} not found at {yaml_path}", file=_sys.stderr)
+        _sys.exit(2)
+    payload = _yaml.safe_load(yaml_path.read_text()) or {}
+
+    target = parsed.target or payload.get("target", "simulator")
+    device_name = payload.get("device")
+    os_version = payload.get("os_version")
+    app_bundle_id = payload.get("app_bundle_id")
+
+    s = session.start(
+        device_name=device_name, os_version=os_version, udid=parsed.udid,
+        app_bundle_id=app_bundle_id, target=target, verify_launch=True,
+    )
+    try:
+        result = recorder_mod.replay(parsed.name, s, on_drift=parsed.on_drift)
+    finally:
+        # Headless CLI cleanup: end the session we started, but the sim/
+        # device stays booted (matching session_end's own default), so a
+        # follow-up manual inspection or another replay run isn't disrupted.
+        try:
+            session.end(s.session_id, terminate_app=False)
+        except Exception:
+            pass
+
+    if parsed.json:
+        print(json.dumps(result, default=str))
+    else:
+        status = "PASS" if result.get("ok") else "FAIL"
+        print(f"replay {parsed.name}: {status} (halt_reason={result.get('halt_reason')})")
+    _sys.exit(0 if result.get("ok") else 1)
+
+
 def _cmd_migrate_recording(args: list[str]) -> None:
     """Handle `simdrive migrate-recording <name> [--force] [--dry-run]` CLI subcommand.
 
@@ -4534,6 +4606,7 @@ _SUBCOMMANDS: dict = {
     "update-check": _cmd_update_check,
     "lint-recordings": _cmd_lint_recordings,
     "migrate-recording": _cmd_migrate_recording,
+    "replay": _cmd_replay,
 }
 
 
@@ -4548,6 +4621,7 @@ def serve() -> None:
       "wda-down"         → _cmd_wda_down
       "trial"            → _cmd_trial
       "license"          → _cmd_license
+      "replay"           → _cmd_replay
     """
     import sys
     # Local-first, scrubbed crash sink (WS-4): records unhandled exceptions to
