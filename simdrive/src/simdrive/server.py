@@ -68,6 +68,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -274,6 +275,171 @@ def _disk_version() -> str | None:
     _DISK_VERSION_CACHE["version"] = v
     _DISK_VERSION_CACHE["checked_at"] = now
     return v
+
+
+# INIT-2026-641, Wave 0 item 3.3 — editable-install git drift detection.
+#
+# _disk_version() above compares two reads of importlib.metadata.version()
+# against each other. For a NORMAL install that's the right check: the
+# version string on disk really does change on every `pip install
+# --upgrade`. For an EDITABLE install (`pip install -e .`, which is how
+# every agent on this machine runs simdrive), both reads hit the SAME
+# static .dist-info version string baked in at `pip install -e .` time. It
+# does not change just because commits land on the working tree. Measured
+# live: a checkout 8 commits behind origin/main, with no version bump,
+# reported `drift: false` the entire time while it drove every iOS repo.
+#
+# The fix reads git ground truth instead. PEP 610's direct_url.json (which
+# pip writes for every editable install) names the source tree; from there
+# `git rev-parse HEAD`, `git status --porcelain`, and commits-behind
+# `origin/main` tell the real story.
+#
+# Three states, never two:
+#   - behind by N          -> git_commits_behind: <int >= 0>, git_state_error: None
+#   - current, verified    -> git_commits_behind: 0,          git_state_error: None
+#   - could not determine  -> git_commits_behind: None,       git_state_error: <reason>
+# The third state must never be reported as the second (0) or surface as
+# git_sha_drift: False. A detector that reports confidence it has not
+# earned is the exact defect this exists to eliminate.
+
+
+def _run_git_best_effort(args: list[str], cwd: str, timeout: float = 3.0) -> tuple[bool, str]:
+    """Run a git command, never raising. Returns (ok, stdout-or-error-text)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:  # pragma: no cover - defensive, e.g. git binary missing
+        return False, f"git {' '.join(args)} raised {exc!r}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        return False, detail or f"git {' '.join(args)} exited {proc.returncode}"
+    return True, proc.stdout.strip()
+
+
+def _editable_install_git_state() -> dict | None:
+    """Best-effort git-based drift state for an editable simdrive install.
+
+    Returns ``None`` when this doesn't apply at all: no distribution found,
+    no direct_url.json (not a PEP 610 install), or a normal non-editable
+    install (whose version string IS a reliable drift signal already, via
+    ``_disk_version()``). ``None`` here means "not applicable," never
+    "could not determine" -- that distinction matters, see module docs above.
+
+    When it IS an editable install, always returns a dict (never None) with:
+      - "editable": True
+      - "source_dir": the source tree direct_url.json points at
+      - "git_sha_disk": current HEAD sha, or None if undeterminable
+      - "working_tree_dirty": bool, or None if undeterminable
+      - "git_commits_behind": commits behind local knowledge of
+        origin/main (0 means current, verified), or None if undeterminable
+      - "git_state_error": None when every field above was determined;
+        otherwise a human-readable reason (no origin remote, no
+        origin/main ref, not a git checkout, rev-list failed, timeout).
+
+    Never raises into the caller (tool_version).
+    """
+    try:
+        import importlib.metadata as _md
+        dist = _md.distribution("simdrive")
+    except Exception:
+        return None
+
+    try:
+        raw = dist.read_text("direct_url.json")
+    except Exception:
+        raw = None
+    if not raw:
+        return None
+
+    try:
+        info = json.loads(raw)
+    except Exception as exc:
+        return {
+            "editable": False,
+            "source_dir": None,
+            "git_sha_disk": None,
+            "working_tree_dirty": None,
+            "git_commits_behind": None,
+            "git_state_error": f"direct_url.json unparsable: {exc!r}",
+        }
+
+    if not info.get("dir_info", {}).get("editable"):
+        return None
+
+    url = str(info.get("url") or "")
+    if not url.startswith("file://"):
+        return {
+            "editable": True,
+            "source_dir": None,
+            "git_sha_disk": None,
+            "working_tree_dirty": None,
+            "git_commits_behind": None,
+            "git_state_error": f"editable install url is not a local file path: {url!r}",
+        }
+
+    source_dir = urllib.parse.unquote(urllib.parse.urlparse(url).path)
+
+    state: dict = {
+        "editable": True,
+        "source_dir": source_dir,
+        "git_sha_disk": None,
+        "working_tree_dirty": None,
+        "git_commits_behind": None,
+        "git_state_error": None,
+    }
+
+    if not os.path.isdir(source_dir):
+        state["git_state_error"] = f"editable source directory does not exist: {source_dir!r}"
+        return state
+
+    ok, out = _run_git_best_effort(["rev-parse", "HEAD"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"not a git checkout (git rev-parse HEAD failed: {out})"
+        return state
+    state["git_sha_disk"] = out
+
+    ok, out = _run_git_best_effort(["status", "--porcelain"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"git status failed: {out}"
+        return state
+    state["working_tree_dirty"] = bool(out)
+
+    ok, out = _run_git_best_effort(["remote", "get-url", "origin"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"no origin remote configured: {out}"
+        return state
+
+    ok, out = _run_git_best_effort(["rev-parse", "--verify", "origin/main"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"no origin/main ref known locally (fetch needed?): {out}"
+        return state
+
+    ok, out = _run_git_best_effort(
+        ["rev-list", "--count", f"{state['git_sha_disk']}..origin/main"], cwd=source_dir,
+    )
+    if not ok:
+        state["git_state_error"] = f"git rev-list failed: {out}"
+        return state
+    try:
+        state["git_commits_behind"] = int(out)
+    except ValueError:
+        state["git_state_error"] = f"git rev-list returned non-integer output: {out!r}"
+
+    return state
+
+
+# Captured once at import time, mirroring _LOADED_VERSION/_LOADED_AT: the git
+# sha this process actually loaded its code from, for an editable install.
+# None for a non-editable install or when undeterminable at import time.
+_LOADED_GIT_STATE: dict | None = _editable_install_git_state()
+_LOADED_GIT_SHA: str | None = (
+    _LOADED_GIT_STATE.get("git_sha_disk") if _LOADED_GIT_STATE else None
+)
 
 
 # F#1 — MCP server self-restart on version drift.
@@ -2027,14 +2193,64 @@ def tool_version(arguments: dict) -> dict:
     `drift=True` means the running MCP server is stale relative to what's on
     disk (after `pip install --upgrade simdrive` without restarting). The
     fix is to restart the agent host / MCP server so the new code is loaded.
+
+    INIT-2026-641 Wave 0 additions (additive only; `drift` above keeps its
+    original version-string meaning, unchanged): for an editable install,
+    the version string alone cannot see a working tree that has drifted
+    from origin/main with no version bump. These fields carry that signal:
+
+      - `editable`: True when this is an editable install (`pip install -e .`)
+      - `git_sha_loaded`: the git sha this process loaded its code from
+      - `git_sha_disk`: the git sha currently checked out on disk
+      - `git_sha_drift`: sha_loaded != sha_disk, or None if undeterminable
+      - `git_commits_behind`: commits behind local knowledge of
+        origin/main (0 means current, verified), or None if undeterminable
+      - `working_tree_dirty`: uncommitted changes present, or None if
+        undeterminable
+      - `git_state_error`: None when every field above was determined;
+        otherwise why not (no origin remote, no origin/main ref, not a git
+        checkout, etc). An undeterminable state is NEVER reported as
+        `git_commits_behind: 0` or `git_sha_drift: False` -- both stay
+        None, with the reason named here.
+
+    All of the above are None (with `editable: False`, `git_state_error:
+    None`) for a normal, non-editable install: nothing new applies there,
+    which is a legitimate "not applicable," not "could not determine."
     """
     _entitlement_gate()
     disk = _disk_version()
+    git_state = _editable_install_git_state()
+
+    if git_state is None:
+        editable = False
+        git_sha_disk = None
+        working_tree_dirty = None
+        git_commits_behind = None
+        git_state_error = None
+    else:
+        editable = True
+        git_sha_disk = git_state.get("git_sha_disk")
+        working_tree_dirty = git_state.get("working_tree_dirty")
+        git_commits_behind = git_state.get("git_commits_behind")
+        git_state_error = git_state.get("git_state_error")
+
+    if git_state_error is not None or git_sha_disk is None or _LOADED_GIT_SHA is None:
+        git_sha_drift: bool | None = None
+    else:
+        git_sha_drift = git_sha_disk != _LOADED_GIT_SHA
+
     return {
         "version": _LOADED_VERSION,
         "loaded_at": _LOADED_AT,
         "disk_version": disk,
         "drift": (disk is not None and disk != _LOADED_VERSION),
+        "editable": editable,
+        "git_sha_loaded": _LOADED_GIT_SHA,
+        "git_sha_disk": git_sha_disk,
+        "git_sha_drift": git_sha_drift,
+        "git_commits_behind": git_commits_behind,
+        "working_tree_dirty": working_tree_dirty,
+        "git_state_error": git_state_error,
     }
 
 
