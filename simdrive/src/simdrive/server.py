@@ -869,6 +869,32 @@ def tool_session_status(arguments: dict) -> dict:
     }
 
 
+def _ax_routing_allowed(s) -> bool:
+    """INIT-2026-641 Wave 2 — explicit single-sim/GUI guard for host AX.
+
+    Host AX vends whatever Simulator window is currently on-screen; it has no
+    notion of "this call is scoped to session X" beyond the device-name title
+    match `ax.select_window` does. With more than one simulator session
+    active concurrently, a host-AX call from one session's `observe` risks
+    resolving another session's on-screen window (or fighting over which
+    window is frontmost) — a correctness hazard a single-sim deployment never
+    hits. This is computed from the actual live session count, not a global
+    config flag a caller could get wrong or forget to set: the routing
+    decision IS the state of `session.all_sessions()` at call time.
+
+    Returns False (AX must not be attempted) when more than one
+    "simulator"-target session is currently active. True otherwise — this
+    function does not (and cannot) detect a headless `simctl boot` device;
+    that case is caught downstream by `ax.is_available()` returning False
+    (no on-screen Simulator.app process to vend a window from), which
+    `observe.observe()` treats as a normal, visible OCR fallback.
+    """
+    concurrent_sim_sessions = sum(
+        1 for other in session.all_sessions() if other.target == "simulator"
+    )
+    return concurrent_sim_sessions <= 1
+
+
 def tool_observe(arguments: dict) -> dict:
     _entitlement_gate()
     sid = arguments["session_id"]
@@ -1003,6 +1029,8 @@ def tool_observe(arguments: dict) -> dict:
         confidence_floor=arguments.get("confidence_floor"),
         mark_limit=arguments.get("mark_limit"),
         capture_observability=bool(arguments.get("capture_observability", False)),
+        device_name=s.device.name,
+        allow_ax=_ax_routing_allowed(s),
     )
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
@@ -2822,7 +2850,15 @@ _TOOLS: list[dict] = [
             "raw screenshot and tap by pixel coords. Set annotate=false to skip the SoM "
             "pass and get a faster, raw-only observation. Token-efficiency knobs "
             "compact/confidence_floor/mark_limit trim the marks payload for dense "
-            "screens; capture_observability adds a debug breadcrumb per returned mark."
+            "screens; capture_observability adds a debug breadcrumb per returned mark. "
+            "On a single-simulator session, marks are AX-primary: each mark's `source` "
+            "field is \"ax\" (ground truth from the app's own accessibility tree — real "
+            "role, real enabled state, real control rect) or \"ocr\" (Vision text "
+            "detection — no role/enabled, glyph-only bbox). The top-level "
+            "`resolution_method` (\"ax\"/\"ax_reactivated\"/\"ocr\") and `degraded` "
+            "fields report which path actually produced this observation — check them "
+            "rather than assuming AX ran; a multi-simulator session or a headless sim "
+            "always reports resolution_method=\"ocr\"."
         ),
         "inputSchema": {
             "type": "object",

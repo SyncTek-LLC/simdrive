@@ -294,6 +294,16 @@ class Mark:
         with a perfect engine-side score. That's the dogfood signal real-app
         engineers can trust.
         """
+        # INIT-2026-641 item 5.4 (D4 fence-skip) — the dictionary fence exists
+        # to catch OCR misreads (stylized cover art OCRing as plausible-looking
+        # gibberish). It has no business clamping a ground-truth AX-backed
+        # mark: the text came from the app's own accessibility tree, not a
+        # probabilistic read, so "doesn't look like English" is not evidence
+        # of anything wrong. `english_like` (item 4.1) still independently
+        # reports the dictionary-check outcome for AX marks — this only
+        # skips the fence's effect on confidence_band/confidence.
+        if self.source == "ax":
+            return "high"
         raw = float(self.raw_confidence or 0.0)
         english_like = self._english_like_val
         if not english_like:
@@ -417,6 +427,123 @@ class Mark:
             # AX-backed (ground truth) mark from an OCR (probabilistic) one.
             "source": self.source,
         }
+
+
+def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    """Intersection-over-union of two (x, y, w, h) pixel boxes."""
+    ax0, ay0, aw, ah = a
+    bx0, by0, bw, bh = b
+    ax1, ay1 = ax0 + aw, ay0 + ah
+    bx1, by1 = bx0 + bw, by0 + bh
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _bbox_contains_center(outer: tuple[int, int, int, int], point: tuple[float, float]) -> bool:
+    ox, oy, ow, oh = outer
+    px, py = point
+    return ox <= px <= ox + ow and oy <= py <= oy + oh
+
+
+# INIT-2026-641 Wave 2 (D1) — AX elements carrying neither a role we
+# recognize nor any label add no signal (bare AXGroup/AXGenericElement
+# containers that only exist to lay out other elements). Including them as
+# marks would flood the returned list with noise a caller can't act on.
+_MERGE_MATCH_IOU_THRESHOLD = 0.10
+
+
+def merge_ax_and_ocr(
+    ocr_marks: "list[Mark]",
+    ax_elements: "list[dict]",
+    iou_threshold: float = _MERGE_MATCH_IOU_THRESHOLD,
+) -> "list[Mark]":
+    """Overlay host-AX elements onto OCR marks — the core of D1's AX-primary
+    perception path (INIT-2026-641).
+
+    ``ax_elements`` is the pixel-space output of
+    ``ax.observe_pixel_elements()``: each item is
+    ``{"role": <normalized role or "unknown">, "label": str, "enabled":
+    bool|None, "bbox": [x, y, w, h]}`` already transformed into screenshot
+    pixel coordinates via the content-group-relative scale.
+
+    Resolution, per AX element:
+      * Skip elements with role == "unknown" and no label — pure layout
+        containers, not actionable controls or readable text.
+      * Otherwise, find the best-overlapping *unused* OCR mark by IoU. If one
+        clears ``iou_threshold``, that OCR mark (and any other OCR mark that
+        falls entirely inside this AX element's bbox — the "label + hint
+        fragment" collapse) is consumed and replaced by a single AX-sourced
+        mark using the AX element's own bbox (the real control rect, not the
+        OCR glyph box) and label (ground truth beats a probabilistic read).
+      * With no matching OCR mark, the AX element still becomes its own new
+        mark (e.g. an icon-only button OCR never rendered as text).
+
+    Every OCR mark left unconsumed passes through unchanged, still
+    ``source="ocr"`` — AX has nothing to say about it (background texture,
+    off-screen decoration, whatever). The full merged list is re-sorted into
+    reading order and given fresh sequential ids, mirroring
+    ``detect_marks()``'s own convention, so ids never collide across
+    OCR-origin and AX-origin marks.
+    """
+    consumed: set[int] = set()
+    merged: list[Mark] = []
+
+    for el in ax_elements:
+        role = el.get("role") or "unknown"
+        label = (el.get("label") or "").strip()
+        if role == "unknown" and not label:
+            continue
+        bbox = tuple(int(v) for v in el["bbox"])
+        x, y, w, h = bbox
+        cx, cy = x + w / 2.0, y + h / 2.0
+
+        # Consume every unused OCR mark this AX element's bbox meaningfully
+        # overlaps: either a strong IoU match, or an OCR mark whose own
+        # center sits inside the AX bbox (catches a small hint-text fragment
+        # sitting inside a much larger control rect, where IoU alone would
+        # be too small to clear the threshold).
+        best_text: str | None = None
+        best_iou = 0.0
+        for i, m in enumerate(ocr_marks):
+            if i in consumed:
+                continue
+            m_bbox = (m.x, m.y, m.w, m.h)
+            iou = _bbox_iou(bbox, m_bbox)
+            inside = _bbox_contains_center(bbox, m.center)
+            if iou >= iou_threshold or inside:
+                consumed.add(i)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_text = m.text
+
+        text = label or best_text or ""
+        merged.append(
+            Mark(
+                id=0,  # renumbered below
+                x=x, y=y, w=w, h=h,
+                text=text,
+                confidence=1.0,
+                raw_confidence=1.0,
+                source="ax",
+                role=role,
+                enabled=el.get("enabled"),
+            )
+        )
+
+    for i, m in enumerate(ocr_marks):
+        if i not in consumed:
+            merged.append(m)
+
+    merged.sort(key=lambda m: (m.y // 40, m.x))
+    for new_id, m in enumerate(merged, start=1):
+        m.id = new_id
+    return merged
 
 
 def vision_available() -> bool:

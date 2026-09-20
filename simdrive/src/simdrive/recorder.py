@@ -107,6 +107,7 @@ from typing import Any, Optional
 import yaml
 
 from . import act, errors, observe, sim, som
+from . import session as _session_mod
 from .observability.logger import get_logger
 from .session import Session
 
@@ -1778,6 +1779,17 @@ def replay(name: str, session: Session, on_drift: str = "halt",
             "marks_count_drift": marks_count_drift,
             "executed": False,
             "error": None,
+            # INIT-2026-641 Wave 2 / test plan 3a (CEO board review condition):
+            # per-step visibility into which perception tier actually produced
+            # this step's marks ("ax" / "ax_reactivated" / "ocr"). Present for
+            # EVERY step, not only degraded ones — a reviewer reading replay
+            # output after the fact must be able to tell a mid-run AX->OCR
+            # slide apart from a run that used AX throughout, without
+            # re-running the sequence live or reading source. Sourced from the
+            # same `live_obs` this step already used for its SSIM/marks-count
+            # check, so it reflects what actually resolved this step, not a
+            # single top-level summary for the whole replay.
+            "resolution_method": live_obs.get("resolution_method", "ocr"),
         }
         if marks_drift_info:
             step_result["marks_drift_info"] = marks_drift_info
@@ -2054,18 +2066,42 @@ def _observe_for_replay(session: Session) -> dict:
             "marks": list(marks or []),
             "screenshot_w": w,
             "screenshot_h": h,
+            # Host AX (INIT-2026-641 Wave 2) is simulator-only; WDA/XCUITest
+            # device marks are a different (already ground-truth) mechanism,
+            # so this is never a degraded read — reported as "ocr" for a
+            # uniform `resolution_method` field across every replay step.
+            "resolution_method": "ocr",
         }
 
     # Sim path OR device path without WDA client (test/CI fallback).
-    live = observe.observe(session.device.udid, session.workdir / "replay",
-                           target=session.target)
+    live = observe.observe(
+        session.device.udid, session.workdir / "replay",
+        target=session.target,
+        device_name=session.device.name,
+        allow_ax=_ax_routing_allowed_for_replay(session),
+    )
     return {
         "screenshot_path": live.screenshot_path,
         "marks_count": len(live.marks or []),
         "marks": list(live.marks or []),
         "screenshot_w": live.screenshot_w,
         "screenshot_h": live.screenshot_h,
+        "resolution_method": getattr(live, "resolution_method", "ocr"),
     }
+
+
+def _ax_routing_allowed_for_replay(s: Session) -> bool:
+    """Replay's own copy of server.py's `_ax_routing_allowed` single-sim
+    guard (INIT-2026-641 Wave 2) — duplicated rather than imported to avoid a
+    recorder<->server import cycle (server.py already imports recorder).
+    Same logic, same reasoning: more than one concurrent "simulator"-target
+    session makes a host-AX call from any one of them a cross-targeting
+    hazard, so AX is skipped (not attempted-and-caught) in that case.
+    """
+    concurrent_sim_sessions = sum(
+        1 for other in _session_mod.all_sessions() if other.target == "simulator"
+    )
+    return concurrent_sim_sessions <= 1
 
 
 def _mark_center_compat(m) -> tuple[int, int]:
