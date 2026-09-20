@@ -275,14 +275,24 @@ def test_capture_observability_with_compact(tmp_path):
 
 
 def test_defaults_match_legacy_payload(tmp_path):
-    """A call with no new args must produce the same top-level keys as before PR A."""
+    """A call with no new args must produce the same top-level keys as before PR A,
+    plus INIT-2026-641 Wave 2's `resolution_method`/`degraded`. Those two are
+    deliberately NOT opt-in like the PR A knobs below — the whole point of the
+    visible-degradation requirement (Chairman condition of approval) is that a
+    caller never has to ask for the field telling it whether AX silently gave
+    way to OCR. `degraded_reason` stays opt-in-shaped (only present when
+    truthy), which is why it's absent here with no AX ever attempted.
+    """
     obs = _stub_observe(tmp_path, [_high_mark(1)])
     d = obs.to_dict()
     expected = {
         "screenshot_path", "annotated_path", "screenshot_size_pixels",
         "window_bounds_macos", "captured_at", "marks", "recent_logs",
+        "resolution_method", "degraded",
     }
     assert set(d.keys()) == expected
+    assert d["resolution_method"] == "ocr"
+    assert d["degraded"] is False
 
 
 # ---------------------------------------------------------------------------

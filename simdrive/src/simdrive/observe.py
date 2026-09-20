@@ -21,7 +21,7 @@ from typing import Literal
 
 from PIL import Image
 
-from . import sim, som
+from . import ax, sim, som
 from .observability.logger import get_logger
 from .observability.metrics import record_histogram
 from .som import Mark
@@ -59,6 +59,25 @@ class Observation:
     # caller keeps the legacy behavior — server.py routes new args through here.
     compact: bool = False
     capture_observability: bool = False
+    # INIT-2026-641 Wave 2 — AX-primary perception, visible degradation.
+    #
+    # `resolution_method` is ALWAYS present (never inferred from mark
+    # contents) so a caller — human or agent — can tell what actually
+    # produced this observation without cross-referencing per-mark `source`
+    # fields:
+    #   "ax"             — clean host-AX walk, merged onto OCR.
+    #   "ax_reactivated" — AX recovered after a reactivate/retry (spike's
+    #                      live "AXWindows went empty mid-session" finding).
+    #   "ocr"            — AX unavailable, exhausted its retry budget, routed
+    #                      away from (multi-sim/headless guard), or this is a
+    #                      device-target observation (host AX is
+    #                      simulator-only; OCR/WDA marks are the only path).
+    # `degraded` is True whenever this observation did NOT get a clean "ax"
+    # read; `degraded_reason` names why. The whole point (Chairman condition
+    # of approval): a silent AX->OCR slide must never be invisible.
+    resolution_method: str = "ocr"
+    degraded: bool = False
+    degraded_reason: str | None = None
 
     def to_dict(self) -> dict:
         if self.compact:
@@ -82,7 +101,11 @@ class Observation:
             "captured_at": self.captured_at,
             "marks": mark_dicts,
             "recent_logs": self.recent_logs,
+            "resolution_method": self.resolution_method,
+            "degraded": self.degraded,
         }
+        if self.degraded_reason:
+            payload["degraded_reason"] = self.degraded_reason
         if self.capture_observability:
             # One entry per *returned* mark, ordered to align with `marks[i]`.
             # Audit finding #10: agents debugging "why is this low-confidence?"
@@ -167,6 +190,8 @@ def observe(
     confidence_floor: ConfidenceFloor | None = None,
     mark_limit: int | None = None,
     capture_observability: bool = False,
+    device_name: str | None = None,
+    allow_ax: bool = True,
 ) -> Observation:
     """Capture a screenshot + measure it; optionally annotate with SoM marks; optionally tail logs.
 
@@ -185,6 +210,27 @@ def observe(
       ``to_dict()`` payload — one entry per *returned* mark, surfacing the
       band derivation (raw confidence, dictionary-check outcome, reason).
       Default off; useful for debugging unexpected band assignments.
+
+    AX-primary perception (INIT-2026-641 Wave 2) — all backward compatible:
+    * `device_name`: the Simulator window title fragment (e.g. "iPhone 17 Pro
+      Max") used to scope the host-AX walk. Required for AX to run at all —
+      when None (every pre-Wave-2 caller), this function behaves exactly as
+      before: OCR only, `resolution_method="ocr"`, `degraded=False`. This is
+      the safe default, not a routing decision — the actual multi-sim/
+      headless routing decision belongs to the caller (server.py computes
+      `allow_ax` from live session state; see its docstring there).
+    * `allow_ax`: caller-computed routing gate. When False, AX is never
+      attempted (not even `ax.is_available()`) — used for multi-sim fleets
+      and headless CI where a host-AX call could cross-target another
+      session's on-screen window. Default True is safe because `device_name`
+      being None already no-ops AX for legacy callers.
+
+    Degradation is always visible: `resolution_method` ("ax" / "ax_reactivated"
+    / "ocr") and `degraded`/`degraded_reason` are on every `Observation`,
+    never inferred from mark contents. AX failures of every kind (unavailable,
+    reactivate-retry exhausted, unexpected exception) fall back to OCR marks
+    rather than raising to the caller — this function must never crash an
+    agent's turn because host AX blinked.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     _t_start = time.time()
@@ -210,10 +256,62 @@ def observe(
     # When annotate=True, also draw the SoM overlay and set annotated_path.
     # When annotate=False, skip drawing — marks are still returned, annotated_path stays None.
     marks = som.detect_marks(raw_path)
+
+    resolution_method = "ocr"
+    degraded = False
+    degraded_reason: str | None = None
+
+    if target == "simulator" and device_name:
+        if not allow_ax:
+            # Explicit routing decision, computed by the caller from live
+            # session state (multi-sim fleet, or a headless/no-GUI session) —
+            # NOT a config flag this function reads. AX entry points
+            # (`ax.is_available`, `ax.select_window`) are never touched: a
+            # multi-sim host-AX call risks cross-targeting another session's
+            # on-screen window, and a headless sim has no window for it
+            # anyway. OCR is the correct primary here, not a degraded
+            # fallback from a failed attempt.
+            degraded = True
+            degraded_reason = "ax_routing_disabled_multi_sim_or_headless"
+        elif not ax.is_available():
+            degraded = True
+            degraded_reason = "ax_unavailable"
+        else:
+            try:
+                ax_result = ax.observe_pixel_elements(device_name, w, h)
+                marks = som.merge_ax_and_ocr(marks, ax_result["elements"])
+                resolution_method = ax_result["resolution_method"]
+                if resolution_method == "ax_reactivated":
+                    degraded = True
+                    degraded_reason = "ax_reactivated"
+                    log.info(
+                        "AX perception recovered after a reactivate/retry",
+                        extra={"udid": udid, "device_name": device_name},
+                    )
+            except ax.AXError as exc:
+                # Reactivate-retry budget exhausted (or AX failed outright
+                # mid-walk). Fall back to OCR-only marks already computed
+                # above — never raise to the caller.
+                degraded = True
+                degraded_reason = f"ax_exhausted: {exc}"
+                log.warning(
+                    "AX perception exhausted its retry budget; falling back to OCR",
+                    extra={"udid": udid, "device_name": device_name, "error": str(exc)},
+                )
+            except Exception as exc:  # noqa: BLE001 — AX must never crash observe()
+                degraded = True
+                degraded_reason = f"ax_error: {exc}"
+                log.warning(
+                    "AX perception raised an unexpected error; falling back to OCR",
+                    extra={"udid": udid, "device_name": device_name, "error": str(exc)},
+                )
+
     if annotate and marks:
         annotated_path = out_dir / f"observe-{ts}-som.png"
         # Annotate the *unfiltered* image so the on-disk PNG keeps the full
         # context for human review — filtering is for the JSON payload only.
+        # Annotated AFTER the AX merge so the overlay draws real control
+        # rects, not glyph-only OCR boxes, when AX perception succeeded.
         som.annotate(raw_path, marks, annotated_path)
     # Apply token-efficiency filters AFTER annotation so the PNG retains
     # every detected mark, but the in-memory + JSON `marks` list reflects
@@ -251,6 +349,9 @@ def observe(
         recent_logs=logs_text,
         compact=compact,
         capture_observability=capture_observability,
+        resolution_method=resolution_method,
+        degraded=degraded,
+        degraded_reason=degraded_reason,
     )
 
     # Persist a sidecar JSON next to the screenshot so anyone reading the
