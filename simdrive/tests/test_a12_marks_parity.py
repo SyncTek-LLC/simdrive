@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ── Canonical 10-key mark set (from som.Mark.to_dict) ────────────────────────
+# ── Canonical 14-key mark set (from som.Mark.to_dict) ────────────────────────
 _CANONICAL_MARK_KEYS = frozenset({
     "id",
     "stable_id",
@@ -32,6 +32,9 @@ _CANONICAL_MARK_KEYS = frozenset({
     "confidence_band",
     "alternates",  # F#4 (b5): OCR alternate readings field
     "english_like",  # INIT-2026-641 item 4.1: dictionary-fence outcome, standalone
+    "source",  # INIT-2026-641 item 5.1: provenance ("ocr" | "ax")
+    "role",  # INIT-2026-641 item 5.1: AX semantic role, None for OCR marks
+    "enabled",  # INIT-2026-641 item 5.1: AX enabled/disabled state, None for OCR marks
 })
 
 # ── Minimal 1×1 PNG (PIL-readable) ───────────────────────────────────────────

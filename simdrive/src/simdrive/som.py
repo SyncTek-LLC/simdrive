@@ -10,7 +10,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 
 # v0.3.0a3 — small inline dictionary used to dictionary-gate raw OCR confidence.
@@ -254,6 +254,23 @@ class Mark:
     # callers may set this after construction.
     alternates: list = field(default_factory=list)
 
+    # INIT-2026-641 item 5.1 (D1/D4) — provenance. "ocr" is the safe default for
+    # every existing caller (Vision OCR is what built every Mark before this
+    # field existed). The AX-primary perception path (Wave 2) constructs marks
+    # with source="ax"; wda/som_device.py's XCUITest-tree marks are also
+    # accessibility ground truth and are threaded as source="ax" too. D4's
+    # fence-skip (Wave 2 item 5.4) reads this field to decide whether the
+    # dictionary-gate fence in _compute_band()/_clamped_confidence() applies —
+    # it must not apply to ground-truth marks, only to OCR's probabilistic reads.
+    source: Literal["ocr", "ax"] = "ocr"
+    # Populated by the AX walk (role e.g. "AXButton"/"AXStaticText"/"AXTextField")
+    # and by device-path XCUITest marks. None for OCR marks, which carry no
+    # semantic role. Wave 2 surface; unused by Wave 1.
+    role: Optional[str] = None
+    # Live enabled/disabled state, when known (AX-backed marks only). None
+    # means "unknown" (OCR has no concept of control state). Wave 2 surface.
+    enabled: Optional[bool] = None
+
     def __post_init__(self) -> None:
         # If callers constructed a Mark with only `confidence`, that value is
         # the raw OCR score — preserve it as `raw_confidence`, then compute the
@@ -365,6 +382,12 @@ class Mark:
             "english_like": self.english_like,
             # F#4 — alternate OCR readings seen across consecutive observations.
             "alternates": list(self.alternates),
+            # INIT-2026-641 item 5.1 — provenance + semantic fields. "ocr" /
+            # None / None for every mark built before this field existed;
+            # populated by Wave 2's AX-primary walk and by device-path marks.
+            "source": self.source,
+            "role": self.role,
+            "enabled": self.enabled,
         }
 
     def to_compact_dict(self) -> dict:
@@ -376,7 +399,7 @@ class Mark:
         text, geometry, quality bucket, and english-likeness.
 
         INIT-2026-641 D4 correction: this dict has fewer *keys* than to_dict()
-        (7 vs. 11), but `bbox`, `center`, and `text` are identical in both and
+        (8 vs. 14), but `bbox`, `center`, and `text` are identical in both and
         make up most of the bytes, so the real payload saving measured on the
         wire is roughly 1.7x, not the 5-6x an earlier version of this
         docstring claimed by counting dropped keys instead of dropped bytes.
@@ -389,6 +412,10 @@ class Mark:
             "bbox": [self.x, self.y, self.w, self.h],
             "confidence_band": self.confidence_band,
             "english_like": self.english_like,
+            # INIT-2026-641 item 5.1 — provenance stays in the compact shape
+            # too: a caller filtering compact marks still needs to tell an
+            # AX-backed (ground truth) mark from an OCR (probabilistic) one.
+            "source": self.source,
         }
 
 
