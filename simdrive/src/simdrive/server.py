@@ -1373,10 +1373,28 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
     Accepts every argument tool_tap accepts. Settle duration is the same
     documented _KEYBOARD_SETTLE_SEC server constant used by type_text's
     own internal tap+settle path, so behavior is consistent across tools.
+
+    INIT-2026-641 item 4.5 (D2): now a thin wrapper over tool_tap, which
+    itself defaults verify_change=True and returns an equivalent, cheaper
+    (compact, capped) post_state (item 4.3). Plain `tap` calls now carry
+    that post_state too — this tool still exists specifically for the
+    keyboard-timing case and its full-annotate response contract, so its
+    compact post_state is popped and replaced with the full observation
+    below, exactly as before the collapse.
     """
     _entitlement_gate()
-    tap_response = tool_tap(arguments)
-    time.sleep(_KEYBOARD_SETTLE_SEC)
+    # Route the keyboard settle through tap's own settle_ms handling instead
+    # of a bare time.sleep() after tap returns, so _record_act_step's
+    # post-tap screenshot (captured inside tool_tap, when a recorder is
+    # attached) reflects the settled, keyboard-visible state rather than a
+    # pre-settle frame. Always apply at least the keyboard settle even if the
+    # caller passed their own (shorter) settle_ms — the two constants may
+    # differ, and a caller who never passes settle_ms must not silently lose
+    # the keyboard-specific wait.
+    keyboard_settle_ms = int(_KEYBOARD_SETTLE_SEC * 1000)
+    tap_args = dict(arguments)
+    tap_args["settle_ms"] = max(int(arguments.get("settle_ms", 0)), keyboard_settle_ms)
+    tap_response = tool_tap(tap_args)
     # Upgrade the just-recorded step's action so replays preserve the
     # tap-and-wait-for-keyboard semantic. Without this, the recorder
     # serializes the underlying tool_tap call as a bare 'tap' and the
@@ -1390,6 +1408,10 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
         # Default to annotate=True so the agent can spot the keyboard marks.
         "annotate": bool(arguments.get("annotate", True)),
     })
+    # Pop tap's new compact post_state before merging so it never leaks
+    # through: this tool's contract is the FULL annotated observation under
+    # post_state, not tap's cheap, capped sanity check.
+    tap_response.pop("post_state", None)
     return {**tap_response, "post_state": observe_response}
 
 
@@ -2725,7 +2747,9 @@ _TOOLS: list[dict] = [
             "text field and confirm the keyboard appeared BEFORE sending keystrokes "
             "via type_text. Returns the tap response plus a `post_state` key with "
             "the post-tap observation (marks, screenshot_path). Saves ~2 round-trips "
-            "vs chaining tap + sleep + observe manually."
+            "vs chaining tap + sleep + observe manually. Always waits at least the "
+            "keyboard settle time before observing, even if settle_ms is passed or "
+            "omitted."
         ),
         "inputSchema": {
             "type": "object",
@@ -2739,6 +2763,7 @@ _TOOLS: list[dict] = [
                 "stable_id_loose": {"type": "string"},
                 "text": {"type": "string"},
                 "annotate": {"type": "boolean", "description": "Whether the post-tap observe annotates marks. Default true.", "default": True},
+                "settle_ms": {"type": "integer", "description": "Extra settle time in ms before the underlying tap's own post-action capture, on top of the built-in keyboard settle (whichever is larger wins). Default 0."},
             },
         },
         "handler": tool_tap_and_wait_keyboard,
