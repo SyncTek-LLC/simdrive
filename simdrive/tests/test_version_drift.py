@@ -12,6 +12,9 @@ TDD: written BEFORE the fix. All tests must FAIL on current code.
 """
 from __future__ import annotations
 
+import importlib.metadata
+import json
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -187,3 +190,274 @@ class TestDiskVersionReadsSimdrivePackage:
             f"instead of 'simdrive' (which returns {simdrive.__version__!r}). "
             "Fix: change the package name lookup in server.py:_disk_version()."
         )
+
+
+# ─── INIT-2026-641 Wave 0, item 3.3 ──────────────────────────────────────
+#
+# _disk_version() compares importlib.metadata.version("simdrive") against
+# _LOADED_VERSION. For an EDITABLE install (`pip install -e .`), both reads
+# hit the SAME static .dist-info version string, which is baked in at
+# install time and never changes just because the working tree's commits
+# move. Measured live: a checkout 8 commits behind origin/main, with no
+# version bump, reported `drift: false` the whole time while driving every
+# iOS repo.
+#
+# The fix reads git ground truth instead of package metadata for an
+# editable install: PEP 610's direct_url.json points at the source tree,
+# then `git rev-parse HEAD` / `git status --porcelain` / commits-behind
+# `origin/main` tell the real story.
+#
+# Three states must be distinguishable, never collapsed to two:
+#   1. behind by N            -> git_commits_behind: <int >= 0>
+#   2. current, verified      -> git_commits_behind: 0
+#   3. could not determine    -> git_commits_behind: None, git_state_error set
+# State 3 must never render as state 2 (== 0) or as git_sha_drift: False.
+#
+# TDD: written BEFORE the fix. All tests in this section must FAIL on
+# current code (no _editable_install_git_state, no _LOADED_GIT_SHA, no
+# extra keys on tool_version's return dict).
+
+
+def _git(cwd, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+    )
+    return result.stdout.strip()
+
+
+def _init_repo(path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-b", "main")
+    _git(path, "config", "user.email", "test@example.com")
+    _git(path, "config", "user.name", "Test")
+
+
+def _commit_file(repo, name: str, content: str) -> str:
+    (repo / name).write_text(content)
+    _git(repo, "add", name)
+    _git(repo, "commit", "-m", f"add {name}")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _make_origin_and_clone(tmp_path):
+    """A seeded origin repo plus a clone of it (the 'editable install' checkout)."""
+    origin = tmp_path / "origin"
+    _init_repo(origin)
+    _commit_file(origin, "seed.txt", "seed")
+
+    work = tmp_path / "work"
+    _git(tmp_path, "clone", str(origin), str(work))
+    _git(work, "config", "user.email", "test@example.com")
+    _git(work, "config", "user.name", "Test")
+    return origin, work
+
+
+def _patch_direct_url(monkeypatch, source_dir, editable: bool = True) -> None:
+    payload = json.dumps({"dir_info": {"editable": editable}, "url": source_dir.as_uri()})
+
+    class _FakeDist:
+        def read_text(self, name: str) -> str:
+            if name == "direct_url.json":
+                return payload
+            raise FileNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda _name: _FakeDist())
+
+
+class TestEditableInstallGitState:
+    """Unit tests for the new helper, `server._editable_install_git_state()`."""
+
+    def test_returns_none_for_non_editable_install(self, monkeypatch) -> None:
+        """A normal (non-editable) install has no direct_url.json editable flag;
+        the existing importlib.metadata version comparison already covers it
+        correctly, so this function has nothing to add and must return None."""
+        class _FakeDist:
+            def read_text(self, name: str) -> str:
+                raise FileNotFoundError(name)
+
+        monkeypatch.setattr(importlib.metadata, "distribution", lambda _n: _FakeDist())
+
+        from simdrive import server
+        assert server._editable_install_git_state() is None
+
+    def test_reports_current_verified_when_checkout_matches_origin_main(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        """State 2: current, genuinely verified. commits_behind must be
+        exactly 0, not None, and no error must be reported."""
+        _origin, work = _make_origin_and_clone(tmp_path)
+        _patch_direct_url(monkeypatch, work)
+
+        from simdrive import server
+        state = server._editable_install_git_state()
+
+        assert state["editable"] is True
+        assert state["git_state_error"] is None
+        assert state["git_commits_behind"] == 0
+        assert state["working_tree_dirty"] is False
+        assert state["git_sha_disk"] == _git(work, "rev-parse", "HEAD")
+
+    def test_reports_behind_by_n_when_origin_moves_ahead(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        """State 1: behind by N. The working tree does not pull; only
+        `git fetch` updates local knowledge of origin/main."""
+        origin, work = _make_origin_and_clone(tmp_path)
+        for i in range(3):
+            _commit_file(origin, f"file{i}.txt", str(i))
+        _git(work, "fetch", "origin")
+        _patch_direct_url(monkeypatch, work)
+
+        from simdrive import server
+        state = server._editable_install_git_state()
+
+        assert state["git_state_error"] is None
+        assert state["git_commits_behind"] == 3
+
+    def test_working_tree_dirty_detected(self, tmp_path, monkeypatch) -> None:
+        _origin, work = _make_origin_and_clone(tmp_path)
+        (work / "seed.txt").write_text("modified, uncommitted")
+        _patch_direct_url(monkeypatch, work)
+
+        from simdrive import server
+        state = server._editable_install_git_state()
+
+        assert state["working_tree_dirty"] is True
+
+    def test_undetermined_when_no_origin_remote(self, tmp_path, monkeypatch) -> None:
+        """State 3: could not determine. No remote at all -- must not be
+        reported as 0 commits behind."""
+        work = tmp_path / "work"
+        _init_repo(work)
+        _commit_file(work, "a.txt", "a")
+        _patch_direct_url(monkeypatch, work)
+
+        from simdrive import server
+        state = server._editable_install_git_state()
+
+        assert state["git_commits_behind"] is None
+        assert state["git_state_error"] is not None
+        assert "origin" in state["git_state_error"].lower()
+        # sha and dirty are independently knowable even with no remote
+        assert state["git_sha_disk"] is not None
+        assert state["working_tree_dirty"] is False
+
+    def test_undetermined_when_no_origin_main_ref(self, tmp_path, monkeypatch) -> None:
+        """State 3: an origin remote is configured but has never been
+        fetched, so no local origin/main ref exists to compare against."""
+        origin = tmp_path / "origin"
+        _init_repo(origin)
+        _commit_file(origin, "seed.txt", "seed")
+
+        work = tmp_path / "work"
+        _init_repo(work)
+        _commit_file(work, "a.txt", "a")
+        _git(work, "remote", "add", "origin", str(origin))
+        # deliberately never fetched: no refs/remotes/origin/main locally
+        _patch_direct_url(monkeypatch, work)
+
+        from simdrive import server
+        state = server._editable_install_git_state()
+
+        assert state["git_commits_behind"] is None
+        assert state["git_state_error"] is not None
+
+    def test_undetermined_when_not_a_git_checkout(self, tmp_path, monkeypatch) -> None:
+        """State 3: direct_url.json points somewhere real, but it is not a
+        git checkout at all."""
+        not_a_repo = tmp_path / "not_a_repo"
+        not_a_repo.mkdir()
+        _patch_direct_url(monkeypatch, not_a_repo)
+
+        from simdrive import server
+        state = server._editable_install_git_state()
+
+        assert state["git_sha_disk"] is None
+        assert state["git_commits_behind"] is None
+        assert state["git_state_error"] is not None
+
+
+class TestToolVersionGitDrift:
+    """Integration tests: `tool_version()`'s extended return dict."""
+
+    def test_editable_install_reports_git_drift(self, tmp_path, monkeypatch) -> None:
+        """The core acceptance test named in the architecture plan. A process
+        loaded at commit A, whose disk checkout has since moved to commit B,
+        must report git_sha_drift: True -- not the version-string `drift`
+        key, which stays False the whole time on an editable install since
+        the version string never changes."""
+        origin, work = _make_origin_and_clone(tmp_path)
+        sha_a = _git(work, "rev-parse", "HEAD")
+
+        from simdrive import server
+        _patch_direct_url(monkeypatch, work)
+        monkeypatch.setattr(server, "_LOADED_GIT_SHA", sha_a)
+
+        _commit_file(origin, "b.txt", "b")
+        _git(work, "pull", "origin", "main")
+        sha_b = _git(work, "rev-parse", "HEAD")
+        assert sha_b != sha_a
+
+        result = server.tool_version({})
+
+        assert result["editable"] is True
+        assert result["git_sha_loaded"] == sha_a
+        assert result["git_sha_disk"] == sha_b
+        assert result["git_sha_drift"] is True
+        assert result["working_tree_dirty"] is False
+        assert result["git_commits_behind"] == 0
+        assert result["git_state_error"] is None
+        # The pre-fix behavior this regression-tests: version-string drift
+        # stays false the whole time for an editable install.
+        assert result["drift"] is False
+
+    def test_no_drift_when_disk_matches_loaded_sha(self, tmp_path, monkeypatch) -> None:
+        _origin, work = _make_origin_and_clone(tmp_path)
+        sha = _git(work, "rev-parse", "HEAD")
+
+        from simdrive import server
+        _patch_direct_url(monkeypatch, work)
+        monkeypatch.setattr(server, "_LOADED_GIT_SHA", sha)
+
+        result = server.tool_version({})
+        assert result["git_sha_drift"] is False
+        assert result["git_commits_behind"] == 0
+
+    def test_never_reports_current_or_false_drift_when_undetermined(
+        self, tmp_path, monkeypatch,
+    ) -> None:
+        """The critical guard: a detector that cannot determine the answer
+        must never render as 'current' (commits_behind == 0) or as
+        'no drift' (git_sha_drift is False). Both must be None, with
+        git_state_error explaining why."""
+        not_a_repo = tmp_path / "not_a_repo"
+        not_a_repo.mkdir()
+
+        from simdrive import server
+        _patch_direct_url(monkeypatch, not_a_repo)
+        monkeypatch.setattr(server, "_LOADED_GIT_SHA", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+
+        result = server.tool_version({})
+
+        assert result["editable"] is True
+        assert result["git_commits_behind"] is None
+        assert result["git_sha_drift"] is None
+        assert result["git_state_error"] is not None
+        assert result["git_commits_behind"] != 0
+        assert result["git_sha_drift"] is not False
+
+    def test_non_editable_install_reports_editable_false_with_no_error(
+        self, monkeypatch,
+    ) -> None:
+        """A normal pip install: nothing new to report, and 'nothing to
+        report' must not be confused with 'could not determine'."""
+        from simdrive import server
+        monkeypatch.setattr(server, "_editable_install_git_state", lambda: None)
+
+        result = server.tool_version({})
+
+        assert result["editable"] is False
+        assert result["git_sha_disk"] is None
+        assert result["git_commits_behind"] is None
+        assert result["git_sha_drift"] is None
+        assert result["git_state_error"] is None
