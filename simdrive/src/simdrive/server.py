@@ -64,6 +64,7 @@ import base64
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -2339,6 +2340,57 @@ def tool_load_journey(arguments: dict) -> dict:
 
 # ----------------------------- MCP wiring ------------------------------- #
 
+# INIT-2026-641 item 4.2 (D4) — schema-to-handler sync guard.
+#
+# The concrete drift this closes: observe.py's compact/confidence_floor/
+# mark_limit/capture_observability parameters were implemented, tested, and
+# wired into tool_observe's own body, but never added to observe's advertised
+# inputSchema, so no agent reading the tool description could discover them.
+# The same defect independently affected tap's verify_change. Both are one
+# instance of a general defect class: nothing checked that a handler's
+# actually-accepted arguments were a subset of what the schema advertised.
+# This is that check, generalized to every tool in _TOOLS so the class stays
+# closed rather than being re-fixed one parameter at a time.
+_ARG_GET_RE = re.compile(r'arguments\.get\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]')
+_ARG_ITEM_RE = re.compile(r'arguments\[\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]\s*\]')
+
+# Tool name -> set of param names a handler is known to accept but that are
+# deliberately not advertised in the schema (e.g. an internal/legacy alias).
+# Empty by design: every currently-known case has been fixed by declaring the
+# parameter, not by exempting it. Keep this empty unless a future case has a
+# genuine reason to stay hidden, and say why in a comment next to the entry.
+_SCHEMA_SYNC_EXEMPT: dict[str, set[str]] = {}
+
+
+def _handler_accepted_params(handler) -> set[str]:
+    """Every parameter name `handler` reads directly off its own `arguments`
+    dict, found by regex over the handler's own source.
+
+    This mirrors the pattern every handler in this module uses: a single
+    `arguments: dict` parameter read via `arguments.get("name", ...)` or
+    `arguments["name"]`. It deliberately does NOT follow calls into helper
+    functions that take a differently-named parameter (e.g. `_resolve_target_xy`'s
+    `args`) — the guarantee this check enforces is specifically about what a
+    handler reads off the top-level `arguments` object the MCP dispatch hands
+    it, which is exactly the surface a schema is supposed to describe.
+    """
+    src = inspect.getsource(handler)
+    return set(_ARG_GET_RE.findall(src)) | set(_ARG_ITEM_RE.findall(src))
+
+
+def _schema_declared_params(tool: dict) -> set[str]:
+    return set((tool.get("inputSchema") or {}).get("properties", {}).keys())
+
+
+def _schema_handler_undeclared(tool: dict) -> set[str]:
+    """Params `tool["handler"]` accepts that `tool["inputSchema"]` does not
+    advertise, minus any documented exemption for that tool name.
+    """
+    accepted = _handler_accepted_params(tool["handler"])
+    declared = _schema_declared_params(tool)
+    exempt = _SCHEMA_SYNC_EXEMPT.get(tool.get("name", ""), set())
+    return accepted - declared - exempt
+
 
 # Tool name → (handler, json schema for arguments, description)
 _TOOLS: list[dict] = [
@@ -2365,7 +2417,8 @@ _TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "target": {"type": "string", "enum": ["simulator", "device"], "default": "simulator", "description": "'simulator' (default) or 'device' for a real iPhone/iPad. Real-device sessions support observe, logs, app lifecycle, and (after `simdrive bootstrap-device`) tap/swipe/type_text/press_key via WebDriverAgent."},
-                "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted."},
+                "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted. Alias: 'device_name'."},
+                "device_name": {"type": "string", "description": "Alias for 'device'. Accepted by the handler but missing from this schema until INIT-2026-641 item 4.2, so no agent could discover it."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
                 "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
                 "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
@@ -2406,7 +2459,9 @@ _TOOLS: list[dict] = [
             "boxes drawn over each mark), marks (id, bbox, center, text). The agent can "
             "either look at the annotated image and tap by mark id/text, or look at the "
             "raw screenshot and tap by pixel coords. Set annotate=false to skip the SoM "
-            "pass and get a faster, raw-only observation."
+            "pass and get a faster, raw-only observation. Token-efficiency knobs "
+            "compact/confidence_floor/mark_limit trim the marks payload for dense "
+            "screens; capture_observability adds a debug breadcrumb per returned mark."
         ),
         "inputSchema": {
             "type": "object",
@@ -2418,6 +2473,10 @@ _TOOLS: list[dict] = [
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
                 "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
+                "compact": {"type": "boolean", "default": False, "description": "Emit the slim 7-key mark dict (id, stable_id, text, center, bbox, confidence_band, english_like) instead of the full diagnostic dict. Roughly 1.7x smaller on the wire (bbox/center/text are identical in both shapes, so most bytes are shared)."},
+                "confidence_floor": {"type": "string", "enum": ["low", "med", "medium", "high"], "description": "Drop marks whose confidence_band ranks below this floor before returning. Default keeps every band."},
+                "mark_limit": {"type": "integer", "description": "Cap the returned mark list to the top-N by (confidence_band, area), applied after confidence_floor. Default keeps every mark."},
+                "capture_observability": {"type": "boolean", "default": False, "description": "Include a `_observability` array, one entry per returned mark, with the raw confidence, dictionary-check outcome, and reasoning behind its confidence_band — useful for debugging an unexpectedly low band. Default off."},
             },
         },
         "handler": tool_observe,
