@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to SpecterQA iOS are documented in this file.
+All notable changes to SimDrive are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,6 +8,41 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 ---
 
 ## [Unreleased]
+
+---
+
+## 1.0.0b13 (2026-08-27)
+
+This file was not updated between b5 (2026-05-22) and this entry; b6 through
+b12 shipped with no corresponding note here. Catching up in one entry rather
+than reconstructing per-version archaeology after the fact: full per-release
+detail for that span lives in the canonical, actively maintained changelog at
+`simdrive/CHANGELOG.md` (rendered to simdrive.dev/changelog and PyPI).
+
+### Highlights, b6 through b13
+- `simdrive version` / `simdrive doctor` subcommands with `--required-version` CI gating (b6)
+- NOTICE corrected to Elastic-2.0 (was misstated as MIT) (b7)
+- MCP registry metadata (`server.json`) and opt-in trial-source telemetry (b8)
+- Accessibility automation: `perform_accessibility_action`, `get_announcements`, `set_text`, accessibility journeys (b9, b10)
+- MCP auto-restart disabled in MCP-server mode, fixing a stdio-transport desync (b11)
+- Host-AX content-group resolution fixed for iOS 26 (b12)
+- License privilege-escalation fix: a forged dev-trial signature could no longer claim enterprise tier, seats, or expiry (b13)
+- HIGH-severity `mcp` / `pillow` CVEs cleared, 24 findings (b13)
+- `replay` now verifies POST-action state against a recorded outcome, not only the pre-action state (b13)
+
+### Commercial retirement (2026-08-26/27)
+- SimDrive was retired as a commercial product. Trial, license, and paywall
+  messaging, and false CI-replay-cost claims ("zero AI cost on replay",
+  "replays free in CI forever"), were removed from all public-facing
+  surfaces; there was never a headless replay entry point that could make
+  those claims true (`[project.scripts]` exposed only `simdrive` and
+  `simdrive-mcp`). SimDrive remains installed and used internally.
+
+### Housekeeping
+- This file's title corrected from "SpecterQA iOS" to SimDrive, and the
+  compare-links footer below corrected from the pre-rename
+  `SyncTek-LLC/specterqa-ios` repo to `SyncTek-LLC/simdrive` (the GitHub
+  rename already happened; this file had not caught up).
 
 ---
 
@@ -1594,12 +1629,12 @@ Hotfix release addressing 5 release blockers in v13.2.0 surfaced by dogfood (a u
 
 ---
 
-[Unreleased]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v11.3.0...HEAD
-[11.3.0]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v11.2.2...v11.3.0
-[11.2.2]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v11.2.1...v11.2.2
-[11.2.1]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v11.2.0...v11.2.1
-[11.2.0]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v11.1.0...v11.2.0
-[11.1.0]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v11.0.0...v11.1.0
-[11.0.0]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v10.1.0...v11.0.0
-[10.1.0]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v10.0.0...v10.1.0
-[10.0.0]: https://github.com/SyncTek-LLC/specterqa-ios/compare/v9.0.0...v10.0.0
+[Unreleased]: https://github.com/SyncTek-LLC/simdrive/compare/v11.3.0...HEAD
+[11.3.0]: https://github.com/SyncTek-LLC/simdrive/compare/v11.2.2...v11.3.0
+[11.2.2]: https://github.com/SyncTek-LLC/simdrive/compare/v11.2.1...v11.2.2
+[11.2.1]: https://github.com/SyncTek-LLC/simdrive/compare/v11.2.0...v11.2.1
+[11.2.0]: https://github.com/SyncTek-LLC/simdrive/compare/v11.1.0...v11.2.0
+[11.1.0]: https://github.com/SyncTek-LLC/simdrive/compare/v11.0.0...v11.1.0
+[11.0.0]: https://github.com/SyncTek-LLC/simdrive/compare/v10.1.0...v11.0.0
+[10.1.0]: https://github.com/SyncTek-LLC/simdrive/compare/v10.0.0...v10.1.0
+[10.0.0]: https://github.com/SyncTek-LLC/simdrive/compare/v9.0.0...v10.0.0
