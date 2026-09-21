@@ -13,6 +13,108 @@
  filter catch what slips through.
 -->
 
+## [1.0.0b14] — 2026-09-20
+
+This release closes the biggest correctness gap in `version()`'s drift check,
+clears two more dependency CVEs, and ships two larger features: AX-primary
+perception (accessibility data as the primary source for `observe`, with OCR
+kept as a permanent fallback) and a set of replay evidence upgrades, including
+a headless CLI so a recording can be validated without a token-billed agent
+session.
+
+### Fixed: `version()` could report "current" while 8 commits behind
+
+- `version()` compared two reads of the same installed package metadata
+  against each other, so an editable install (`pip install -e .`, how every
+  agent on this machine runs simdrive) reported `drift: false` no matter how
+  far the working tree had drifted from `origin/main`. Measured live: a
+  checkout 8 commits behind main, never bumped, reported no drift the entire
+  time it was driving every iOS repo on the machine.
+- `version()` now reads the editable install's source tree (via PEP 610's
+  `direct_url.json`) and checks it against git directly: current sha, working
+  tree cleanliness, and commits behind `origin/main`. It reports one of three
+  states, never collapsed into each other: behind by N commits, current and
+  verified, or could not be determined (with a reason: no origin remote, no
+  `origin/main` ref, not a git checkout, and so on). The undetermined state is
+  never reported as "current."
+
+### Security: `anyio` CVEs cleared, `mcp` and `Pillow` pins tightened
+
+- Bumped `anyio` 4.13.0 to 4.14.2, clearing CVE-2026-64847 and
+  CVE-2026-63374.
+- `mcp` and `Pillow` were already upgraded in the lockfile by a prior
+  release, but `pyproject.toml` still carried open-ended lower bounds, so a
+  fresh install or lockfile regeneration could silently re-resolve an older,
+  vulnerable version. Both now carry upper bounds that pin the fix in place.
+
+### Changed: retired commercial language removed from the PyPI listing
+
+- The package description on PyPI still carried a speed claim and other
+  metadata left over from when simdrive was sold commercially. Removed, now
+  that the product has been retired as a commercial offering.
+
+### Added: `tap` and `type_text` verify their own effect by default
+
+- `tap` and `type_text` now default `verify_change` to true and return the
+  result nested under `post_state` (marks, whether the screen changed, the
+  SSIM delta, and the screenshot path), instead of requiring a caller to ask
+  for verification and handle a flatter, collision-prone response shape.
+- `tap_and_wait_keyboard` is now a thin wrapper over `tap`, so a scripted
+  ten-step journey that previously needed 21 MCP tool calls now needs 11.
+
+### Added: `observe`'s undocumented parameters are now declared
+
+- `compact`, `confidence_floor`, and `mark_limit` were implemented and
+  tested but missing from `observe`'s MCP schema, so no agent could discover
+  them without reading source. All three are now declared.
+- A general schema-to-handler sync guard was added so this class of gap gets
+  caught automatically going forward. It already found three real gaps on
+  its first run (the ones listed above).
+
+### Added: `Mark` gains `source`, `role`, and `enabled`
+
+- Every mark now reports whether it came from OCR or accessibility data
+  (`source`), its accessibility role where known, and whether it is enabled.
+- `english_like` (whether a mark's text reads as dictionary English) is now
+  its own field instead of being folded into `confidence`, so an
+  accessibility-backed mark can report high confidence even when its text
+  does not look like a dictionary word.
+
+### Added: AX-primary perception for `observe`, with OCR as a permanent fallback
+
+- `observe` now reads the macOS accessibility tree for the simulator's own
+  UI elements as its primary source, giving marks a real role, enabled
+  state, and control rectangle instead of an OCR-guessed text box. OCR
+  remains a permanent, visible fallback, not a one-time bridge: every
+  observation reports which method produced it (`resolution_method`), and
+  replay output now shows the method used per step.
+- **Known limits:** this requires an actual on-screen Simulator window.
+  Headless runs and multi-simulator setups stay on OCR. A later run in the
+  same live acceptance session hit real staleness in the host's
+  accessibility data; the fallback correctly dropped to OCR and reported
+  why, rather than failing silently.
+
+### Added: replay now checks more than a screenshot diff
+
+- `final_expect`: a recording can assert specific text is present in the
+  final screen, closing a gap where a small, meaningful on-screen change
+  (a countdown-chip-sized difference, measured at the time) scored above
+  the similarity threshold and was not caught.
+- Crash cross-check: replay now checks for a crash produced during the run
+  itself, not only at launch, and reports a distinct halt reason
+  (`crash_detected`) so an operator can tell "the app crashed" from "the
+  outcome changed" without reading logs. Crash-to-app attribution was
+  tightened from a substring match to an exact bundle-id match, so a crash
+  in a share extension no longer gets attributed to its host app.
+- `simdrive replay <name> --json`: a headless CLI subcommand that runs a
+  recording and prints a pass or fail result with a matching exit code, so a
+  recording can be validated in a script or CI job without an agent session
+  billing tokens for it.
+- **Known limits:** `final_expect` cannot yet distinguish a genuine failure
+  from an OCR misread of text that is actually present. The crash
+  cross-check is tested against a mocked crash report, not a real crash
+  produced live during a run.
+
 ## [1.0.0b13] — 2026-08-27
 
 This release ships two security fixes — a license privilege-escalation fix and

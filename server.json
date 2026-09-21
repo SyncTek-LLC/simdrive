@@ -3,7 +3,7 @@
   "name": "io.github.SyncTek-LLC/simdrive",
   "title": "SimDrive",
   "description": "MCP server that drives the iOS Simulator and real devices via Claude. 36 vision-first tools for record/replay, bug reproduction, and CI test execution.",
-  "version": "1.0.0b13",
+  "version": "1.0.0b14",
   "repository": {
     "url": "https://github.com/SyncTek-LLC/simdrive",
     "source": "github"
@@ -24,7 +24,7 @@
     {
       "registryType": "pypi",
       "identifier": "simdrive",
-      "version": "1.0.0b13",
+      "version": "1.0.0b14",
       "transport": {"type": "stdio"},
       "runtimeHint": "uvx"
     }
