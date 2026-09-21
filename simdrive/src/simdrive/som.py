@@ -10,7 +10,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 
 # v0.3.0a3 — small inline dictionary used to dictionary-gate raw OCR confidence.
@@ -254,12 +254,33 @@ class Mark:
     # callers may set this after construction.
     alternates: list = field(default_factory=list)
 
+    # INIT-2026-641 item 5.1 (D1/D4) — provenance. "ocr" is the safe default for
+    # every existing caller (Vision OCR is what built every Mark before this
+    # field existed). The AX-primary perception path (Wave 2) constructs marks
+    # with source="ax"; wda/som_device.py's XCUITest-tree marks are also
+    # accessibility ground truth and are threaded as source="ax" too. D4's
+    # fence-skip (Wave 2 item 5.4) reads this field to decide whether the
+    # dictionary-gate fence in _compute_band()/_clamped_confidence() applies —
+    # it must not apply to ground-truth marks, only to OCR's probabilistic reads.
+    source: Literal["ocr", "ax"] = "ocr"
+    # Populated by the AX walk (role e.g. "AXButton"/"AXStaticText"/"AXTextField")
+    # and by device-path XCUITest marks. None for OCR marks, which carry no
+    # semantic role. Wave 2 surface; unused by Wave 1.
+    role: Optional[str] = None
+    # Live enabled/disabled state, when known (AX-backed marks only). None
+    # means "unknown" (OCR has no concept of control state). Wave 2 surface.
+    enabled: Optional[bool] = None
+
     def __post_init__(self) -> None:
         # If callers constructed a Mark with only `confidence`, that value is
         # the raw OCR score — preserve it as `raw_confidence`, then compute the
         # band and clamp `confidence` accordingly.
         if self.raw_confidence is None:
             self.raw_confidence = float(self.confidence)
+        # INIT-2026-641 item 4.1 — compute and stash english-likeness once,
+        # so it can be surfaced as its own field (see `english_like` property
+        # below) instead of only ever being folded into `confidence_band`.
+        self._english_like_val = _english_likeness(self.text)
         # Compute band once.
         self._band = self._compute_band()
         # Clamp legacy confidence per the band.
@@ -273,8 +294,18 @@ class Mark:
         with a perfect engine-side score. That's the dogfood signal real-app
         engineers can trust.
         """
+        # INIT-2026-641 item 5.4 (D4 fence-skip) — the dictionary fence exists
+        # to catch OCR misreads (stylized cover art OCRing as plausible-looking
+        # gibberish). It has no business clamping a ground-truth AX-backed
+        # mark: the text came from the app's own accessibility tree, not a
+        # probabilistic read, so "doesn't look like English" is not evidence
+        # of anything wrong. `english_like` (item 4.1) still independently
+        # reports the dictionary-check outcome for AX marks — this only
+        # skips the fence's effect on confidence_band/confidence.
+        if self.source == "ax":
+            return "high"
         raw = float(self.raw_confidence or 0.0)
-        english_like = _english_likeness(self.text)
+        english_like = self._english_like_val
         if not english_like:
             # Dictionary fence failed — the OCR doesn't read as English. Don't
             # promote on raw confidence alone; this is the case the v0.3.0a3
@@ -295,6 +326,22 @@ class Mark:
     @property
     def confidence_band(self) -> str:
         return self._band or self._compute_band()
+
+    @property
+    def english_like(self) -> bool:
+        """Whether ``text`` reads as real English per the dictionary fence.
+
+        INIT-2026-641 item 4.1 — this was always computed internally to build
+        `confidence_band`, then discarded. Surfacing it as its own field lets
+        a correct, ground-truth read (e.g. an accessibility-backed mark) keep
+        a high `confidence`/`confidence_band` while still reporting that its
+        text happens not to be dictionary-English, instead of the two being
+        conflated into one value the way `confidence_band` did alone.
+        """
+        val = getattr(self, "_english_like_val", None)
+        if val is None:
+            val = _english_likeness(self.text)
+        return val
 
     @property
     def center(self) -> tuple[int, int]:
@@ -339,20 +386,33 @@ class Mark:
             "raw_confidence": round(float(self.raw_confidence or 0.0), 3),
             # `confidence_band` is the human-readable quality bucket.
             "confidence_band": self.confidence_band,
+            # INIT-2026-641 item 4.1 — dictionary-fence outcome, independent of
+            # confidence/confidence_band. Ground-truth (e.g. AX-backed) marks can
+            # be `english_like=False` and still `confidence_band="high"`.
+            "english_like": self.english_like,
             # F#4 — alternate OCR readings seen across consecutive observations.
             "alternates": list(self.alternates),
+            # INIT-2026-641 item 5.1 — provenance + semantic fields. "ocr" /
+            # None / None for every mark built before this field existed;
+            # populated by Wave 2's AX-primary walk and by device-path marks.
+            "source": self.source,
+            "role": self.role,
+            "enabled": self.enabled,
         }
 
     def to_compact_dict(self) -> dict:
         """Slim mark dict for token-efficient `observe(compact=True)` responses.
 
         Drops OCR diagnostic fields (`raw_confidence`, `confidence`,
-        `stable_id_loose`) that most agents never read. Retains the six keys
+        `stable_id_loose`) that most agents never read. Retains the fields
         agents typically need to act on a mark: identifier, stable identifier,
-        text, geometry, and quality bucket.
+        text, geometry, quality bucket, and english-likeness.
 
-        Token cost per mark drops from ~20 keys (to_dict) to 6 — roughly
-        5-6x reduction in JSON payload size on dense screens.
+        INIT-2026-641 D4 correction: this dict has fewer *keys* than to_dict()
+        (8 vs. 14), but `bbox`, `center`, and `text` are identical in both and
+        make up most of the bytes, so the real payload saving measured on the
+        wire is roughly 1.7x, not the 5-6x an earlier version of this
+        docstring claimed by counting dropped keys instead of dropped bytes.
         """
         return {
             "id": self.id,
@@ -361,7 +421,129 @@ class Mark:
             "center": list(self.center),
             "bbox": [self.x, self.y, self.w, self.h],
             "confidence_band": self.confidence_band,
+            "english_like": self.english_like,
+            # INIT-2026-641 item 5.1 — provenance stays in the compact shape
+            # too: a caller filtering compact marks still needs to tell an
+            # AX-backed (ground truth) mark from an OCR (probabilistic) one.
+            "source": self.source,
         }
+
+
+def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    """Intersection-over-union of two (x, y, w, h) pixel boxes."""
+    ax0, ay0, aw, ah = a
+    bx0, by0, bw, bh = b
+    ax1, ay1 = ax0 + aw, ay0 + ah
+    bx1, by1 = bx0 + bw, by0 + bh
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    iw, ih = max(0, ix1 - ix0), max(0, iy1 - iy0)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _bbox_contains_center(outer: tuple[int, int, int, int], point: tuple[float, float]) -> bool:
+    ox, oy, ow, oh = outer
+    px, py = point
+    return ox <= px <= ox + ow and oy <= py <= oy + oh
+
+
+# INIT-2026-641 Wave 2 (D1) — AX elements carrying neither a role we
+# recognize nor any label add no signal (bare AXGroup/AXGenericElement
+# containers that only exist to lay out other elements). Including them as
+# marks would flood the returned list with noise a caller can't act on.
+_MERGE_MATCH_IOU_THRESHOLD = 0.10
+
+
+def merge_ax_and_ocr(
+    ocr_marks: "list[Mark]",
+    ax_elements: "list[dict]",
+    iou_threshold: float = _MERGE_MATCH_IOU_THRESHOLD,
+) -> "list[Mark]":
+    """Overlay host-AX elements onto OCR marks — the core of D1's AX-primary
+    perception path (INIT-2026-641).
+
+    ``ax_elements`` is the pixel-space output of
+    ``ax.observe_pixel_elements()``: each item is
+    ``{"role": <normalized role or "unknown">, "label": str, "enabled":
+    bool|None, "bbox": [x, y, w, h]}`` already transformed into screenshot
+    pixel coordinates via the content-group-relative scale.
+
+    Resolution, per AX element:
+      * Skip elements with role == "unknown" and no label — pure layout
+        containers, not actionable controls or readable text.
+      * Otherwise, find the best-overlapping *unused* OCR mark by IoU. If one
+        clears ``iou_threshold``, that OCR mark (and any other OCR mark that
+        falls entirely inside this AX element's bbox — the "label + hint
+        fragment" collapse) is consumed and replaced by a single AX-sourced
+        mark using the AX element's own bbox (the real control rect, not the
+        OCR glyph box) and label (ground truth beats a probabilistic read).
+      * With no matching OCR mark, the AX element still becomes its own new
+        mark (e.g. an icon-only button OCR never rendered as text).
+
+    Every OCR mark left unconsumed passes through unchanged, still
+    ``source="ocr"`` — AX has nothing to say about it (background texture,
+    off-screen decoration, whatever). The full merged list is re-sorted into
+    reading order and given fresh sequential ids, mirroring
+    ``detect_marks()``'s own convention, so ids never collide across
+    OCR-origin and AX-origin marks.
+    """
+    consumed: set[int] = set()
+    merged: list[Mark] = []
+
+    for el in ax_elements:
+        role = el.get("role") or "unknown"
+        label = (el.get("label") or "").strip()
+        if role == "unknown" and not label:
+            continue
+        bbox = tuple(int(v) for v in el["bbox"])
+        x, y, w, h = bbox
+        cx, cy = x + w / 2.0, y + h / 2.0
+
+        # Consume every unused OCR mark this AX element's bbox meaningfully
+        # overlaps: either a strong IoU match, or an OCR mark whose own
+        # center sits inside the AX bbox (catches a small hint-text fragment
+        # sitting inside a much larger control rect, where IoU alone would
+        # be too small to clear the threshold).
+        best_text: str | None = None
+        best_iou = 0.0
+        for i, m in enumerate(ocr_marks):
+            if i in consumed:
+                continue
+            m_bbox = (m.x, m.y, m.w, m.h)
+            iou = _bbox_iou(bbox, m_bbox)
+            inside = _bbox_contains_center(bbox, m.center)
+            if iou >= iou_threshold or inside:
+                consumed.add(i)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_text = m.text
+
+        text = label or best_text or ""
+        merged.append(
+            Mark(
+                id=0,  # renumbered below
+                x=x, y=y, w=w, h=h,
+                text=text,
+                confidence=1.0,
+                raw_confidence=1.0,
+                source="ax",
+                role=role,
+                enabled=el.get("enabled"),
+            )
+        )
+
+    for i, m in enumerate(ocr_marks):
+        if i not in consumed:
+            merged.append(m)
+
+    merged.sort(key=lambda m: (m.y // 40, m.x))
+    for new_id, m in enumerate(merged, start=1):
+        m.id = new_id
+    return merged
 
 
 def vision_available() -> bool:

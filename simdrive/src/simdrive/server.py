@@ -64,10 +64,12 @@ import base64
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -274,6 +276,171 @@ def _disk_version() -> str | None:
     _DISK_VERSION_CACHE["version"] = v
     _DISK_VERSION_CACHE["checked_at"] = now
     return v
+
+
+# INIT-2026-641, Wave 0 item 3.3 — editable-install git drift detection.
+#
+# _disk_version() above compares two reads of importlib.metadata.version()
+# against each other. For a NORMAL install that's the right check: the
+# version string on disk really does change on every `pip install
+# --upgrade`. For an EDITABLE install (`pip install -e .`, which is how
+# every agent on this machine runs simdrive), both reads hit the SAME
+# static .dist-info version string baked in at `pip install -e .` time. It
+# does not change just because commits land on the working tree. Measured
+# live: a checkout 8 commits behind origin/main, with no version bump,
+# reported `drift: false` the entire time while it drove every iOS repo.
+#
+# The fix reads git ground truth instead. PEP 610's direct_url.json (which
+# pip writes for every editable install) names the source tree; from there
+# `git rev-parse HEAD`, `git status --porcelain`, and commits-behind
+# `origin/main` tell the real story.
+#
+# Three states, never two:
+#   - behind by N          -> git_commits_behind: <int >= 0>, git_state_error: None
+#   - current, verified    -> git_commits_behind: 0,          git_state_error: None
+#   - could not determine  -> git_commits_behind: None,       git_state_error: <reason>
+# The third state must never be reported as the second (0) or surface as
+# git_sha_drift: False. A detector that reports confidence it has not
+# earned is the exact defect this exists to eliminate.
+
+
+def _run_git_best_effort(args: list[str], cwd: str, timeout: float = 3.0) -> tuple[bool, str]:
+    """Run a git command, never raising. Returns (ok, stdout-or-error-text)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:  # pragma: no cover - defensive, e.g. git binary missing
+        return False, f"git {' '.join(args)} raised {exc!r}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        return False, detail or f"git {' '.join(args)} exited {proc.returncode}"
+    return True, proc.stdout.strip()
+
+
+def _editable_install_git_state() -> dict | None:
+    """Best-effort git-based drift state for an editable simdrive install.
+
+    Returns ``None`` when this doesn't apply at all: no distribution found,
+    no direct_url.json (not a PEP 610 install), or a normal non-editable
+    install (whose version string IS a reliable drift signal already, via
+    ``_disk_version()``). ``None`` here means "not applicable," never
+    "could not determine" -- that distinction matters, see module docs above.
+
+    When it IS an editable install, always returns a dict (never None) with:
+      - "editable": True
+      - "source_dir": the source tree direct_url.json points at
+      - "git_sha_disk": current HEAD sha, or None if undeterminable
+      - "working_tree_dirty": bool, or None if undeterminable
+      - "git_commits_behind": commits behind local knowledge of
+        origin/main (0 means current, verified), or None if undeterminable
+      - "git_state_error": None when every field above was determined;
+        otherwise a human-readable reason (no origin remote, no
+        origin/main ref, not a git checkout, rev-list failed, timeout).
+
+    Never raises into the caller (tool_version).
+    """
+    try:
+        import importlib.metadata as _md
+        dist = _md.distribution("simdrive")
+    except Exception:
+        return None
+
+    try:
+        raw = dist.read_text("direct_url.json")
+    except Exception:
+        raw = None
+    if not raw:
+        return None
+
+    try:
+        info = json.loads(raw)
+    except Exception as exc:
+        return {
+            "editable": False,
+            "source_dir": None,
+            "git_sha_disk": None,
+            "working_tree_dirty": None,
+            "git_commits_behind": None,
+            "git_state_error": f"direct_url.json unparsable: {exc!r}",
+        }
+
+    if not info.get("dir_info", {}).get("editable"):
+        return None
+
+    url = str(info.get("url") or "")
+    if not url.startswith("file://"):
+        return {
+            "editable": True,
+            "source_dir": None,
+            "git_sha_disk": None,
+            "working_tree_dirty": None,
+            "git_commits_behind": None,
+            "git_state_error": f"editable install url is not a local file path: {url!r}",
+        }
+
+    source_dir = urllib.parse.unquote(urllib.parse.urlparse(url).path)
+
+    state: dict = {
+        "editable": True,
+        "source_dir": source_dir,
+        "git_sha_disk": None,
+        "working_tree_dirty": None,
+        "git_commits_behind": None,
+        "git_state_error": None,
+    }
+
+    if not os.path.isdir(source_dir):
+        state["git_state_error"] = f"editable source directory does not exist: {source_dir!r}"
+        return state
+
+    ok, out = _run_git_best_effort(["rev-parse", "HEAD"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"not a git checkout (git rev-parse HEAD failed: {out})"
+        return state
+    state["git_sha_disk"] = out
+
+    ok, out = _run_git_best_effort(["status", "--porcelain"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"git status failed: {out}"
+        return state
+    state["working_tree_dirty"] = bool(out)
+
+    ok, out = _run_git_best_effort(["remote", "get-url", "origin"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"no origin remote configured: {out}"
+        return state
+
+    ok, out = _run_git_best_effort(["rev-parse", "--verify", "origin/main"], cwd=source_dir)
+    if not ok:
+        state["git_state_error"] = f"no origin/main ref known locally (fetch needed?): {out}"
+        return state
+
+    ok, out = _run_git_best_effort(
+        ["rev-list", "--count", f"{state['git_sha_disk']}..origin/main"], cwd=source_dir,
+    )
+    if not ok:
+        state["git_state_error"] = f"git rev-list failed: {out}"
+        return state
+    try:
+        state["git_commits_behind"] = int(out)
+    except ValueError:
+        state["git_state_error"] = f"git rev-list returned non-integer output: {out!r}"
+
+    return state
+
+
+# Captured once at import time, mirroring _LOADED_VERSION/_LOADED_AT: the git
+# sha this process actually loaded its code from, for an editable install.
+# None for a non-editable install or when undeterminable at import time.
+_LOADED_GIT_STATE: dict | None = _editable_install_git_state()
+_LOADED_GIT_SHA: str | None = (
+    _LOADED_GIT_STATE.get("git_sha_disk") if _LOADED_GIT_STATE else None
+)
 
 
 # F#1 — MCP server self-restart on version drift.
@@ -717,6 +884,32 @@ def tool_session_status(arguments: dict) -> dict:
     }
 
 
+def _ax_routing_allowed(s) -> bool:
+    """INIT-2026-641 Wave 2 — explicit single-sim/GUI guard for host AX.
+
+    Host AX vends whatever Simulator window is currently on-screen; it has no
+    notion of "this call is scoped to session X" beyond the device-name title
+    match `ax.select_window` does. With more than one simulator session
+    active concurrently, a host-AX call from one session's `observe` risks
+    resolving another session's on-screen window (or fighting over which
+    window is frontmost) — a correctness hazard a single-sim deployment never
+    hits. This is computed from the actual live session count, not a global
+    config flag a caller could get wrong or forget to set: the routing
+    decision IS the state of `session.all_sessions()` at call time.
+
+    Returns False (AX must not be attempted) when more than one
+    "simulator"-target session is currently active. True otherwise — this
+    function does not (and cannot) detect a headless `simctl boot` device;
+    that case is caught downstream by `ax.is_available()` returning False
+    (no on-screen Simulator.app process to vend a window from), which
+    `observe.observe()` treats as a normal, visible OCR fallback.
+    """
+    concurrent_sim_sessions = sum(
+        1 for other in session.all_sessions() if other.target == "simulator"
+    )
+    return concurrent_sim_sessions <= 1
+
+
 def tool_observe(arguments: dict) -> dict:
     _entitlement_gate()
     sid = arguments["session_id"]
@@ -851,6 +1044,8 @@ def tool_observe(arguments: dict) -> dict:
         confidence_floor=arguments.get("confidence_floor"),
         mark_limit=arguments.get("mark_limit"),
         capture_observability=bool(arguments.get("capture_observability", False)),
+        device_name=s.device.name,
+        allow_ax=_ax_routing_allowed(s),
     )
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
@@ -995,6 +1190,51 @@ def _mark_center(m: "som.Mark | dict") -> tuple[int, int]:
     return m.center
 
 
+# INIT-2026-641 item 4.3/4.4 (D2) — verified composite actions. `post_state`
+# on tap/type_text is a cheap sanity check, not a full observe replacement,
+# so its marks are always compact and capped at a small fixed count. Reuses
+# the same (confidence_band rank desc, area desc) sort observe._apply_filters
+# uses for mark_limit, generalized to accept a12 dict marks (Session.last_marks)
+# as well as Mark dataclasses, since the two composite-action code paths below
+# have marks in both shapes depending on whether a recorder is attached.
+_POST_STATE_MARK_LIMIT = 20
+_POST_STATE_BAND_RANK = {"low": 0, "medium": 1, "high": 2}
+_COMPACT_MARK_KEYS = ("id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like", "source")
+
+
+def _mark_area(m: "som.Mark | dict") -> int:
+    if isinstance(m, dict):
+        bbox = m.get("bbox") or [0, 0, 0, 0]
+        return int(bbox[2]) * int(bbox[3])
+    return int(m.w) * int(m.h)
+
+
+def _compact_capped_marks(marks: list, limit: int = _POST_STATE_MARK_LIMIT) -> list[dict]:
+    """Project `marks` (Mark dataclasses or a12 dict marks) to the compact
+    dict shape, capped to `limit` by (confidence_band rank desc, area desc),
+    with reading order (ascending id) restored within the capped slice —
+    the exact semantics of observe._apply_filters's mark_limit handling.
+    """
+    if not marks:
+        return []
+    ranked = sorted(
+        marks,
+        key=lambda m: (
+            _POST_STATE_BAND_RANK.get(_mark_attr(m, "confidence_band") or "low", 0),
+            _mark_area(m),
+        ),
+        reverse=True,
+    )[:limit]
+    ranked.sort(key=lambda m: _mark_attr(m, "id") or 0)
+    out: list[dict] = []
+    for m in ranked:
+        if isinstance(m, dict):
+            out.append({k: m.get(k) for k in _COMPACT_MARK_KEYS if k in m})
+        else:
+            out.append(m.to_compact_dict())
+    return out
+
+
 def _position_hint(cx: int, cy: int, screen_w: int, screen_h: int) -> str:
     """F#6 — coarse 9-cell grid label for a bbox center.
 
@@ -1115,17 +1355,38 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
     # Capture post-screenshot for the recording.
     # Pass s.target so device sessions use the WDA/devicectl screenshot path,
     # not simctl (which rejects real device UDIDs with "Invalid device").
-    post_obs = observe.observe(s.device.udid, s.workdir / "observations", target=s.target)
+    # INIT-2026-641 item 4.3/C: annotate=False — nothing downstream of this
+    # call ever reads an annotated PNG (add_step only stores the raw
+    # screenshot path), so drawing one wasted ~1.8s server-side on every
+    # single recorded action for an image nobody opens.
+    post_obs = observe.observe(
+        s.device.udid, s.workdir / "observations", target=s.target, annotate=False,
+    )
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
     # marks_count: embed in args AND pass to add_step for replay drift detection (a13).
     # Stored in both locations so test engineering fixtures (args.marks_count) and the
     # recorder's step-level field (step.marks_count) are both populated.
+    # Deliberately read BEFORE the s.last_marks refresh below: this is the
+    # pre-action mark count (per the docstring above), the recorded baseline
+    # replay compares a live post-action count against for drift detection.
     marks_count = len(s.last_marks) if s.last_marks else None
     if marks_count is not None:
         args = {**args, "marks_count": marks_count}
-    return s.recorder.add_step(action, args, pre_path, post_obs.screenshot_path, marks_count=marks_count)
+    step_id = s.recorder.add_step(
+        action, args, pre_path, post_obs.screenshot_path, marks_count=marks_count,
+    )
+    # INIT-2026-641 item 4.3 (D2 correctness gap) — refresh s.last_marks from
+    # THIS post-action observation, which today runs unconditionally whenever
+    # a recorder is attached and was discarding its marks entirely. Ordered
+    # after marks_count above so that field keeps its pre-action-baseline
+    # meaning; a follow-up tap(mark:/stable_id:) with no intervening
+    # tool_observe now resolves against the post-action screen instead of a
+    # stale pre-action mark cache.
+    if post_obs.marks:
+        s.last_marks = [m.to_dict() for m in post_obs.marks]
+    return step_id
 
 
 def tool_tap(arguments: dict) -> dict:
@@ -1197,8 +1458,12 @@ def tool_tap(arguments: dict) -> dict:
                 resp["step_id"] = step_id
         return resp
 
-    # F#8: capture the pre-tap screenshot path for verify_change before the tap occurs.
-    verify_change = bool(arguments.get("verify_change", False))
+    # F#8 / INIT-2026-641 item 4.3 (D2): capture the pre-tap screenshot path
+    # for verify_change before the tap occurs. Defaults to True — a tap that
+    # returns ok:true with no verification of what actually happened is worse
+    # than useless, an agent trusts it. Schema-declared (see tap's
+    # inputSchema) so the default is a real, discoverable opt-out.
+    verify_change = bool(arguments.get("verify_change", True))
     verify_pre_path = s.last_screenshot_path if verify_change else None
 
     sx, sy = act.tap(x, y, sw, sh, udid=s.device.udid)
@@ -1245,10 +1510,15 @@ def tool_tap(arguments: dict) -> dict:
         }
     if step_id is not None:
         response["step_id"] = step_id
-    # F#8: verify_change — compare pre/post screenshots via SSIM. The settle
-    # already happened above, so this reads the settled screen.
+    # F#8 / INIT-2026-641 item 4.3 (D2): verify_change — compare pre/post
+    # screenshots via SSIM and return a fresh, compact marks array under a
+    # nested `post_state`, following tool_tap_and_wait_keyboard's existing
+    # precedent exactly (do not flatten: `tap`'s own ok/screenshot_size_pixels
+    # keys would collide with observe's own ok/screenshot_path/marks keys).
+    # The settle already happened above, so this reads the settled screen.
     if verify_change:
         post_path = s.last_screenshot_path
+        post_marks_source: list = []
         if post_path == verify_pre_path or post_path is None:
             # No recorder attached, so nothing has captured a post-tap frame and
             # last_screenshot_path is still the PRE frame — comparing it with
@@ -1256,19 +1526,37 @@ def tool_tap(arguments: dict) -> dict:
             # including taps that did change the screen. Capture one.
             # A failed capture must not fail the tap: verify_change is a
             # diagnostic, so fall back to the (uninformative) old comparison.
+            # annotate=False (item C/lazy annotation): post_state never
+            # surfaces an annotated_path, so drawing one here is pure waste.
             try:
                 post_obs = observe.observe(s.device.udid, s.workdir / "observations",
-                                           target=s.target)
+                                           target=s.target, annotate=False)
                 post_path = post_obs.screenshot_path
                 s.last_screenshot_path = post_path
                 s.last_screenshot_w = post_obs.screenshot_w
                 s.last_screenshot_h = post_obs.screenshot_h
+                # D2 correctness gap: this OCR pass was previously discarded
+                # entirely. Refresh s.last_marks from it so a follow-up
+                # tap(mark:/stable_id:) resolves against the post-tap screen
+                # instead of the stale pre-tap cache.
+                if post_obs.marks:
+                    s.last_marks = [m.to_dict() for m in post_obs.marks]
+                post_marks_source = post_obs.marks
             except Exception as exc:
                 _log.debug("tap.verify_change_capture_failed", extra={"error": str(exc)})
+        else:
+            # A recorder is attached: _record_act_step already ran a fresh
+            # post-tap observation above and refreshed s.last_marks from it —
+            # reuse that OCR pass rather than observing a second time.
+            post_marks_source = s.last_marks or []
         ssim_val = _compute_ssim(verify_pre_path, post_path)
         ssim_delta = round(1.0 - ssim_val, 4)
-        response["screen_changed"] = ssim_delta > 0.05
-        response["ssim_delta"] = float(ssim_delta)
+        response["post_state"] = {
+            "marks": _compact_capped_marks(post_marks_source),
+            "screen_changed": ssim_delta > 0.05,
+            "ssim_delta": float(ssim_delta),
+            "screenshot_path": str(post_path) if post_path else None,
+        }
     return response
 
 
@@ -1294,10 +1582,28 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
     Accepts every argument tool_tap accepts. Settle duration is the same
     documented _KEYBOARD_SETTLE_SEC server constant used by type_text's
     own internal tap+settle path, so behavior is consistent across tools.
+
+    INIT-2026-641 item 4.5 (D2): now a thin wrapper over tool_tap, which
+    itself defaults verify_change=True and returns an equivalent, cheaper
+    (compact, capped) post_state (item 4.3). Plain `tap` calls now carry
+    that post_state too — this tool still exists specifically for the
+    keyboard-timing case and its full-annotate response contract, so its
+    compact post_state is popped and replaced with the full observation
+    below, exactly as before the collapse.
     """
     _entitlement_gate()
-    tap_response = tool_tap(arguments)
-    time.sleep(_KEYBOARD_SETTLE_SEC)
+    # Route the keyboard settle through tap's own settle_ms handling instead
+    # of a bare time.sleep() after tap returns, so _record_act_step's
+    # post-tap screenshot (captured inside tool_tap, when a recorder is
+    # attached) reflects the settled, keyboard-visible state rather than a
+    # pre-settle frame. Always apply at least the keyboard settle even if the
+    # caller passed their own (shorter) settle_ms — the two constants may
+    # differ, and a caller who never passes settle_ms must not silently lose
+    # the keyboard-specific wait.
+    keyboard_settle_ms = int(_KEYBOARD_SETTLE_SEC * 1000)
+    tap_args = dict(arguments)
+    tap_args["settle_ms"] = max(int(arguments.get("settle_ms", 0)), keyboard_settle_ms)
+    tap_response = tool_tap(tap_args)
     # Upgrade the just-recorded step's action so replays preserve the
     # tap-and-wait-for-keyboard semantic. Without this, the recorder
     # serializes the underlying tool_tap call as a bare 'tap' and the
@@ -1311,6 +1617,10 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
         # Default to annotate=True so the agent can spot the keyboard marks.
         "annotate": bool(arguments.get("annotate", True)),
     })
+    # Pop tap's new compact post_state before merging so it never leaks
+    # through: this tool's contract is the FULL annotated observation under
+    # post_state, not tap's cheap, capped sanity check.
+    tap_response.pop("post_state", None)
     return {**tap_response, "post_state": observe_response}
 
 
@@ -1483,8 +1793,21 @@ def tool_type_text(arguments: dict) -> dict:
         f"[F-009] simctl type_text path reached on target={s.target!r} "
         f"(session {s.session_id!r}). Route device type_text through wda.type_text()."
     )
-    pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
-    pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
+    # INIT-2026-641 item 4.4 (D2): pre-type screenshot capture is now
+    # unconditional (previously gated behind `if s.recorder`), so type_text
+    # can offer the same verify_change guarantee tap has (item 4.3) even with
+    # no recorder attached — the harder case, since nothing else in this path
+    # captures a pre-action frame otherwise. New construction, not a default
+    # flip: this observe did not run at all before in the no-recorder case.
+    # A failed capture must not fail the actual typing: verify_change is a
+    # diagnostic. annotate=False (item C): this frame is only ever compared
+    # via SSIM, never shown to the agent as an annotated image.
+    try:
+        pre_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=False)
+        pre_path = pre_obs.screenshot_path
+    except Exception as exc:
+        _log.debug("type_text.pre_observe_failed", extra={"error": str(exc)})
+        pre_path = s.last_screenshot_path
     act.type_text(text, udid=s.device.udid)
     dispatch_succeeded = True  # type_text only reaches here if act.type_text didn't raise
     backend_used = act._backend()  # capture which backend actually dispatched
@@ -1511,7 +1834,10 @@ def tool_type_text(arguments: dict) -> dict:
     # having to chain an extra observe() call. Heuristic: keyboard chrome shows
     # well-known key labels OR a row of 1-2 char marks in the bottom 45% of the screen.
     # a12 — normalise to list[dict] so last_marks remains dict-shaped after this observe.
-    post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=True)
+    # annotate=False (INIT-2026-641 item C): this call already ran unconditionally
+    # purely to derive keyboard_visible; nothing here ever surfaced an
+    # annotated_path, so drawing one wasted ~1.8s on every type_text call.
+    post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=False)
     s.last_screenshot_w = post_obs.screenshot_w
     s.last_screenshot_h = post_obs.screenshot_h
     s.last_screenshot_path = post_obs.screenshot_path
@@ -1566,6 +1892,20 @@ def tool_type_text(arguments: dict) -> dict:
         )
     if step_id is not None:
         response["step_id"] = step_id
+    # INIT-2026-641 item 4.4 (D2): verify_change, same contract as tap's
+    # (item 4.3) — default true, schema-declared, nested post_state. Reuses
+    # the post-type observe above (already unconditional and already
+    # refreshing s.last_marks) rather than running a second OCR pass.
+    verify_change = bool(arguments.get("verify_change", True))
+    if verify_change:
+        ssim_val = _compute_ssim(pre_path, post_obs.screenshot_path)
+        ssim_delta = round(1.0 - ssim_val, 4)
+        response["post_state"] = {
+            "marks": _compact_capped_marks(post_obs.marks),
+            "screen_changed": ssim_delta > 0.05,
+            "ssim_delta": float(ssim_delta),
+            "screenshot_path": str(post_obs.screenshot_path),
+        }
     return response
 
 
@@ -2317,14 +2657,64 @@ def tool_version(arguments: dict) -> dict:
     `drift=True` means the running MCP server is stale relative to what's on
     disk (after `pip install --upgrade simdrive` without restarting). The
     fix is to restart the agent host / MCP server so the new code is loaded.
+
+    INIT-2026-641 Wave 0 additions (additive only; `drift` above keeps its
+    original version-string meaning, unchanged): for an editable install,
+    the version string alone cannot see a working tree that has drifted
+    from origin/main with no version bump. These fields carry that signal:
+
+      - `editable`: True when this is an editable install (`pip install -e .`)
+      - `git_sha_loaded`: the git sha this process loaded its code from
+      - `git_sha_disk`: the git sha currently checked out on disk
+      - `git_sha_drift`: sha_loaded != sha_disk, or None if undeterminable
+      - `git_commits_behind`: commits behind local knowledge of
+        origin/main (0 means current, verified), or None if undeterminable
+      - `working_tree_dirty`: uncommitted changes present, or None if
+        undeterminable
+      - `git_state_error`: None when every field above was determined;
+        otherwise why not (no origin remote, no origin/main ref, not a git
+        checkout, etc). An undeterminable state is NEVER reported as
+        `git_commits_behind: 0` or `git_sha_drift: False` -- both stay
+        None, with the reason named here.
+
+    All of the above are None (with `editable: False`, `git_state_error:
+    None`) for a normal, non-editable install: nothing new applies there,
+    which is a legitimate "not applicable," not "could not determine."
     """
     _entitlement_gate()
     disk = _disk_version()
+    git_state = _editable_install_git_state()
+
+    if git_state is None:
+        editable = False
+        git_sha_disk = None
+        working_tree_dirty = None
+        git_commits_behind = None
+        git_state_error = None
+    else:
+        editable = True
+        git_sha_disk = git_state.get("git_sha_disk")
+        working_tree_dirty = git_state.get("working_tree_dirty")
+        git_commits_behind = git_state.get("git_commits_behind")
+        git_state_error = git_state.get("git_state_error")
+
+    if git_state_error is not None or git_sha_disk is None or _LOADED_GIT_SHA is None:
+        git_sha_drift: bool | None = None
+    else:
+        git_sha_drift = git_sha_disk != _LOADED_GIT_SHA
+
     return {
         "version": _LOADED_VERSION,
         "loaded_at": _LOADED_AT,
         "disk_version": disk,
         "drift": (disk is not None and disk != _LOADED_VERSION),
+        "editable": editable,
+        "git_sha_loaded": _LOADED_GIT_SHA,
+        "git_sha_disk": git_sha_disk,
+        "git_sha_drift": git_sha_drift,
+        "git_commits_behind": git_commits_behind,
+        "working_tree_dirty": working_tree_dirty,
+        "git_state_error": git_state_error,
     }
 
 
@@ -2629,6 +3019,57 @@ def tool_load_journey(arguments: dict) -> dict:
 
 # ----------------------------- MCP wiring ------------------------------- #
 
+# INIT-2026-641 item 4.2 (D4) — schema-to-handler sync guard.
+#
+# The concrete drift this closes: observe.py's compact/confidence_floor/
+# mark_limit/capture_observability parameters were implemented, tested, and
+# wired into tool_observe's own body, but never added to observe's advertised
+# inputSchema, so no agent reading the tool description could discover them.
+# The same defect independently affected tap's verify_change. Both are one
+# instance of a general defect class: nothing checked that a handler's
+# actually-accepted arguments were a subset of what the schema advertised.
+# This is that check, generalized to every tool in _TOOLS so the class stays
+# closed rather than being re-fixed one parameter at a time.
+_ARG_GET_RE = re.compile(r'arguments\.get\(\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]')
+_ARG_ITEM_RE = re.compile(r'arguments\[\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]\s*\]')
+
+# Tool name -> set of param names a handler is known to accept but that are
+# deliberately not advertised in the schema (e.g. an internal/legacy alias).
+# Empty by design: every currently-known case has been fixed by declaring the
+# parameter, not by exempting it. Keep this empty unless a future case has a
+# genuine reason to stay hidden, and say why in a comment next to the entry.
+_SCHEMA_SYNC_EXEMPT: dict[str, set[str]] = {}
+
+
+def _handler_accepted_params(handler) -> set[str]:
+    """Every parameter name `handler` reads directly off its own `arguments`
+    dict, found by regex over the handler's own source.
+
+    This mirrors the pattern every handler in this module uses: a single
+    `arguments: dict` parameter read via `arguments.get("name", ...)` or
+    `arguments["name"]`. It deliberately does NOT follow calls into helper
+    functions that take a differently-named parameter (e.g. `_resolve_target_xy`'s
+    `args`) — the guarantee this check enforces is specifically about what a
+    handler reads off the top-level `arguments` object the MCP dispatch hands
+    it, which is exactly the surface a schema is supposed to describe.
+    """
+    src = inspect.getsource(handler)
+    return set(_ARG_GET_RE.findall(src)) | set(_ARG_ITEM_RE.findall(src))
+
+
+def _schema_declared_params(tool: dict) -> set[str]:
+    return set((tool.get("inputSchema") or {}).get("properties", {}).keys())
+
+
+def _schema_handler_undeclared(tool: dict) -> set[str]:
+    """Params `tool["handler"]` accepts that `tool["inputSchema"]` does not
+    advertise, minus any documented exemption for that tool name.
+    """
+    accepted = _handler_accepted_params(tool["handler"])
+    declared = _schema_declared_params(tool)
+    exempt = _SCHEMA_SYNC_EXEMPT.get(tool.get("name", ""), set())
+    return accepted - declared - exempt
+
 
 # Tool name → (handler, json schema for arguments, description)
 _TOOLS: list[dict] = [
@@ -2655,7 +3096,8 @@ _TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "target": {"type": "string", "enum": ["simulator", "device"], "default": "simulator", "description": "'simulator' (default) or 'device' for a real iPhone/iPad. Real-device sessions support observe, logs, app lifecycle, and (after `simdrive bootstrap-device`) tap/swipe/type_text/press_key via WebDriverAgent."},
-                "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted."},
+                "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted. Alias: 'device_name'."},
+                "device_name": {"type": "string", "description": "Alias for 'device'. Accepted by the handler but missing from this schema until INIT-2026-641 item 4.2, so no agent could discover it."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
                 "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
                 "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
@@ -2696,7 +3138,17 @@ _TOOLS: list[dict] = [
             "boxes drawn over each mark), marks (id, bbox, center, text). The agent can "
             "either look at the annotated image and tap by mark id/text, or look at the "
             "raw screenshot and tap by pixel coords. Set annotate=false to skip the SoM "
-            "pass and get a faster, raw-only observation."
+            "pass and get a faster, raw-only observation. Token-efficiency knobs "
+            "compact/confidence_floor/mark_limit trim the marks payload for dense "
+            "screens; capture_observability adds a debug breadcrumb per returned mark. "
+            "On a single-simulator session, marks are AX-primary: each mark's `source` "
+            "field is \"ax\" (ground truth from the app's own accessibility tree — real "
+            "role, real enabled state, real control rect) or \"ocr\" (Vision text "
+            "detection — no role/enabled, glyph-only bbox). The top-level "
+            "`resolution_method` (\"ax\"/\"ax_reactivated\"/\"ocr\") and `degraded` "
+            "fields report which path actually produced this observation — check them "
+            "rather than assuming AX ran; a multi-simulator session or a headless sim "
+            "always reports resolution_method=\"ocr\"."
         ),
         "inputSchema": {
             "type": "object",
@@ -2708,6 +3160,10 @@ _TOOLS: list[dict] = [
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
                 "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
+                "compact": {"type": "boolean", "default": False, "description": "Emit the slim 7-key mark dict (id, stable_id, text, center, bbox, confidence_band, english_like) instead of the full diagnostic dict. Roughly 1.7x smaller on the wire (bbox/center/text are identical in both shapes, so most bytes are shared)."},
+                "confidence_floor": {"type": "string", "enum": ["low", "med", "medium", "high"], "description": "Drop marks whose confidence_band ranks below this floor before returning. Default keeps every band."},
+                "mark_limit": {"type": "integer", "description": "Cap the returned mark list to the top-N by (confidence_band, area), applied after confidence_floor. Default keeps every mark."},
+                "capture_observability": {"type": "boolean", "default": False, "description": "Include a `_observability` array, one entry per returned mark, with the raw confidence, dictionary-check outcome, and reasoning behind its confidence_band — useful for debugging an unexpectedly low band. Default off."},
             },
         },
         "handler": tool_observe,
@@ -2729,7 +3185,11 @@ _TOOLS: list[dict] = [
             "`ambiguous_text_target` with `details.candidates` (up to 5; each "
             "carries stable_id, mark, bbox, confidence, text, position_hint) — "
             "re-call with stable_id, mark, or x/y to disambiguate. Single exact "
-            "match still resolves even when other prefix/substring matches exist."
+            "match still resolves even when other prefix/substring matches exist. "
+            "verify_change defaults to true: the response carries a `post_state` "
+            "key with a fresh compact marks array (capped at 20), screen_changed, "
+            "ssim_delta, and screenshot_path, captured after settle_ms. Pass "
+            "verify_change=false to skip this and get the bare tap response."
         ),
         "inputSchema": {
             "type": "object",
@@ -2743,6 +3203,7 @@ _TOOLS: list[dict] = [
                 "stable_id_loose": {"type": "string", "description": "Coarser stable hash (text + 60px bucketed position) — tolerates >3px layout drift that breaks the tight stable_id."},
                 "text": {"type": "string", "description": "Match a mark by visible text (exact > prefix > substring)."},
                 "settle_ms": {"type": "integer", "description": "Sleep this many ms after the tap before returning. Useful for animations. Default 0.", "default": 0},
+                "verify_change": {"type": "boolean", "default": True, "description": "Default true. Capture a post-tap screenshot, compare it against the pre-tap frame via SSIM, and return `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path}. Reuses whichever post-action OCR pass already ran rather than paying for a second one. Pass false to skip."},
             },
         },
         "handler": tool_tap,
@@ -2828,7 +3289,9 @@ _TOOLS: list[dict] = [
             "text field and confirm the keyboard appeared BEFORE sending keystrokes "
             "via type_text. Returns the tap response plus a `post_state` key with "
             "the post-tap observation (marks, screenshot_path). Saves ~2 round-trips "
-            "vs chaining tap + sleep + observe manually."
+            "vs chaining tap + sleep + observe manually. Always waits at least the "
+            "keyboard settle time before observing, even if settle_ms is passed or "
+            "omitted."
         ),
         "inputSchema": {
             "type": "object",
@@ -2842,6 +3305,7 @@ _TOOLS: list[dict] = [
                 "stable_id_loose": {"type": "string"},
                 "text": {"type": "string"},
                 "annotate": {"type": "boolean", "description": "Whether the post-tap observe annotates marks. Default true.", "default": True},
+                "settle_ms": {"type": "integer", "description": "Extra settle time in ms before the underlying tap's own post-action capture, on top of the built-in keyboard settle (whichever is larger wins). Default 0."},
             },
         },
         "handler": tool_tap_and_wait_keyboard,
@@ -2880,7 +3344,12 @@ _TOOLS: list[dict] = [
             "keystrokes landed; reliable signal under HID where the soft keyboard isn't "
             "drawn), keyboard_visible (heuristic from a post-type observe; useful on the "
             "cliclick path), and focused_field (the stable_id of the tap_first target "
-            "when one was supplied and resolved via mark/stable_id/text, else null)."
+            "when one was supplied and resolved via mark/stable_id/text, else null). "
+            "On the simulator path, verify_change defaults to true: the response also "
+            "carries a `post_state` key with a fresh compact marks array (capped at 20), "
+            "screen_changed, ssim_delta, and screenshot_path, reusing the same post-type "
+            "observation keyboard_visible is derived from. Pass verify_change=false to "
+            "skip it."
         ),
         "inputSchema": {
             "type": "object",
@@ -2894,6 +3363,7 @@ _TOOLS: list[dict] = [
                     "default": False,
                     "description": "Send Cmd-A + delete after focusing (and before typing) to clear the field.",
                 },
+                "verify_change": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Returns `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path} built from the same post-type observation keyboard_visible already uses. Pass false to skip."},
             },
         },
         "handler": tool_type_text,
@@ -4020,6 +4490,78 @@ def _cmd_lint_recordings(args: list[str]) -> None:
     sys.exit(1 if fail_count else 0)
 
 
+def _cmd_replay(args: list[str]) -> None:
+    """Handle `simdrive replay <name> [--json] [...]` CLI subcommand.
+
+    INIT-2026-641 item 4.8 (D3) — runs a recorded journey headlessly, with
+    no MCP session and no agent in the loop, so a replay result can be
+    attached to a PR as evidence instead of the same agent that made the
+    fix generating and paraphrasing its own "fix validated" claim. Boots or
+    attaches to a real simulator/device directly via session.start()
+    (bypassing the MCP dispatch layer entirely, since there is no client to
+    dispatch through), defaulting device/os_version/app_bundle_id/target
+    from the recording's own metadata when not passed explicitly.
+
+    Exit code reflects the replay result's "ok" key (0 pass, 1 fail), so
+    this can gate a CI job or a pre-merge check without parsing output.
+    Exit code 2 means the recording itself could not be found/run at all
+    (a setup failure, distinct from a replay that ran and failed).
+    """
+    import argparse
+    import sys as _sys
+    import yaml as _yaml
+
+    from . import recorder as recorder_mod
+
+    parser = argparse.ArgumentParser(
+        prog="simdrive replay",
+        description="Replay a recorded journey headlessly, no agent session required.",
+    )
+    parser.add_argument("name", help="Recording name (a directory under the recordings root).")
+    parser.add_argument("--json", action="store_true",
+                        help="Print the full replay result as JSON to stdout.")
+    parser.add_argument("--udid", help="Simulator UDID / device UUID. Defaults to booting or "
+                                       "finding one matching the recording's own device metadata.")
+    parser.add_argument("--target", choices=["simulator", "device"], default=None,
+                        help="Defaults to the recording's own recorded target.")
+    parser.add_argument("--on-drift", choices=["halt", "warn", "force"], default="halt")
+    parsed = parser.parse_args(args)
+
+    rec_dir = recorder_mod.recordings_root() / parsed.name
+    yaml_path = rec_dir / "recording.yaml"
+    if not yaml_path.exists():
+        print(f"ERROR: recording {parsed.name!r} not found at {yaml_path}", file=_sys.stderr)
+        _sys.exit(2)
+    payload = _yaml.safe_load(yaml_path.read_text()) or {}
+
+    target = parsed.target or payload.get("target", "simulator")
+    device_name = payload.get("device")
+    os_version = payload.get("os_version")
+    app_bundle_id = payload.get("app_bundle_id")
+
+    s = session.start(
+        device_name=device_name, os_version=os_version, udid=parsed.udid,
+        app_bundle_id=app_bundle_id, target=target, verify_launch=True,
+    )
+    try:
+        result = recorder_mod.replay(parsed.name, s, on_drift=parsed.on_drift)
+    finally:
+        # Headless CLI cleanup: end the session we started, but the sim/
+        # device stays booted (matching session_end's own default), so a
+        # follow-up manual inspection or another replay run isn't disrupted.
+        try:
+            session.end(s.session_id, terminate_app=False)
+        except Exception:
+            pass
+
+    if parsed.json:
+        print(json.dumps(result, default=str))
+    else:
+        status = "PASS" if result.get("ok") else "FAIL"
+        print(f"replay {parsed.name}: {status} (halt_reason={result.get('halt_reason')})")
+    _sys.exit(0 if result.get("ok") else 1)
+
+
 def _cmd_migrate_recording(args: list[str]) -> None:
     """Handle `simdrive migrate-recording <name> [--force] [--dry-run]` CLI subcommand.
 
@@ -4581,6 +5123,7 @@ _SUBCOMMANDS: dict = {
     "update-check": _cmd_update_check,
     "lint-recordings": _cmd_lint_recordings,
     "migrate-recording": _cmd_migrate_recording,
+    "replay": _cmd_replay,
 }
 
 
@@ -4595,6 +5138,7 @@ def serve() -> None:
       "wda-down"         → _cmd_wda_down
       "trial"            → _cmd_trial
       "license"          → _cmd_license
+      "replay"           → _cmd_replay
     """
     import sys
     # Local-first, scrubbed crash sink (WS-4): records unhandled exceptions to

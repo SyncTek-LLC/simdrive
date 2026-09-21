@@ -268,12 +268,17 @@ def cmd_license_status(
     Returns a dict with: valid, tier, seats, expires_at, mode, message.
     """
     if not license_path.exists():
+        # INIT-2026-610 (2026-08-26): SimDrive was retired as a commercial
+        # product. No license is required — every tool works without one.
+        # This branch used to point users at `simdrive trial start` /
+        # a 14-day trial, advertising a purchase path for a product that is
+        # no longer for sale. Do not reintroduce that copy here.
         return {
             "valid": False,
             "mode": "no_license",
             "message": (
-                "No license found. Run `simdrive trial start --email <you@example.com>` "
-                "to begin a 14-day free trial."
+                "No license found — none is required. SimDrive is free and "
+                "every tool works without a license.json."
             ),
         }
 

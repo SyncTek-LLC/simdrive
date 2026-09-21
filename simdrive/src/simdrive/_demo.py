@@ -185,8 +185,11 @@ def run_demo(args: argparse.Namespace) -> int:
     t0 = time.time()
     _print_section_header(stdout)
 
-    # 1. License gate. Re-uses the same recovery message the rest of the
-    # CLI surfaces so users get the canonical trial/auth/pricing hints.
+    # 1. License gate. check_entitlement() returns a free entitlement when no
+    # license.json is present (INIT-2026-610 — SimDrive is free, no license
+    # required) so this only raises for a genuinely broken/expired license
+    # file; that message is sanitized at the source (license/errors.py) and
+    # carries no trial/pricing advertising.
     try:
         check_entitlement()
     except LicenseError as exc:

@@ -13,7 +13,6 @@ from typing import Optional
 
 from nacl.signing import VerifyKey
 
-from simdrive.license.errors import license_not_found
 from simdrive.license.trial import assert_trial_clock_trustworthy, load_license_data
 from simdrive.license.validator import validate_license
 from simdrive.license.public_key import get_public_key
@@ -48,6 +47,7 @@ class Entitlement:
             "pro": 250,
             "team": 1000,
             "enterprise": None,
+            "free": None,  # INIT-2026-610 — retired-product no-license default.
         }
         return quotas.get(self.tier)
 
@@ -60,6 +60,7 @@ class Entitlement:
             "pro": 4,
             "team": 5,
             "enterprise": None,
+            "free": None,  # INIT-2026-610 — retired-product no-license default.
         }
         return limits.get(self.tier)
 
@@ -83,13 +84,15 @@ def check_entitlement(
     -------
     Entitlement
         Validated entitlement with tier, seats, expires_at, customer_email.
+        When no license.json exists at the given path, this returns a free,
+        unlimited entitlement rather than raising — see the note on the
+        no-license branch below.
 
     Raises
     ------
-    LicenseError(code="license_not_found")
-        No license.json at the given path.
     LicenseError(code="license_invalid")
-        Signature invalid.
+        A license.json exists but its signature is invalid or the file is
+        unreadable/malformed.
     LicenseError(code="license_expired")
         Key has expired (online mode).
     LicenseError(code="license_offline_grace_exhausted")
@@ -98,7 +101,33 @@ def check_entitlement(
     if license_path is None:
         license_path = _DEFAULT_LICENSE_PATH
     if not license_path.exists():
-        raise license_not_found(str(license_path))
+        # INIT-2026-610 (Chairman decision, 2026-08-26): SimDrive was retired
+        # as a commercial product. Every public surface — simdrive.dev/pricing,
+        # the README, the CHANGELOG — now says SimDrive is free and requires
+        # no license or account. Before this change, this branch raised
+        # `license_not_found`, which advertised a 14-day trial and a pricing
+        # page for a product that is no longer for sale: a fresh
+        # `pip install simdrive` wired into an MCP client failed its very
+        # first tool call with an upsell for something not on offer.
+        #
+        # This is intentional and permanent, NOT a bug to "fix" back to
+        # enforcing a paywall: the no-license path returns an unlimited free
+        # entitlement so every MCP tool works out of the box on a clean
+        # machine, with no license file required.
+        #
+        # `gate.py` and its 38 call sites in server.py are deliberately left
+        # in place and still invoke this function on every tool call — they
+        # are not being ripped out, because INIT-2026-569's offline
+        # self-hosted entitlement paths may still route through this
+        # chokepoint. This branch only covers "no license.json is present at
+        # all"; a license.json that IS present is still fully validated below
+        # (signature, expiry, clock-skew) so that plumbing keeps working.
+        return Entitlement(
+            tier="free",
+            seats=1,
+            expires_at=4070908800,  # 2099-01-01T00:00:00Z — never expires.
+            customer_email="",
+        )
 
     try:
         data = load_license_data(license_path)

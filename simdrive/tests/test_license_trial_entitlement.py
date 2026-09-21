@@ -91,13 +91,17 @@ class TestEntitlement:
         ent = check_entitlement(license_path=license_file, verify_key=keypair[1])
         assert ent.expires_at > time.time()
 
-    def test_missing_license_file_raises(self, keypair, tmp_path: Path) -> None:
+    def test_missing_license_file_returns_free_entitlement(self, keypair, tmp_path: Path) -> None:
+        """INIT-2026-610: SimDrive was retired as a commercial product
+        2026-08-26. A missing license.json is the normal, expected state for
+        every install — it must resolve to a working free/unlimited
+        entitlement, not raise `license_not_found`."""
         from simdrive.license.entitlement import check_entitlement
-        from simdrive.license.errors import LicenseError
         missing = tmp_path / "nonexistent.json"
-        with pytest.raises(LicenseError) as exc_info:
-            check_entitlement(license_path=missing, verify_key=keypair[1])
-        assert exc_info.value.code == "license_not_found"
+        ent = check_entitlement(license_path=missing, verify_key=keypair[1])
+        assert ent.tier != "trial"
+        assert ent.journey_quota_per_month is None
+        assert ent.max_simulators is None
 
     def test_expired_license_raises(self, keypair, license_file: Path) -> None:
         """A license that expired > 7 days ago raises even offline (grace exhausted)."""

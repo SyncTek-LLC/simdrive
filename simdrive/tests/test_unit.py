@@ -38,7 +38,9 @@ def test_tool_count():
     History:
         29 pre-existing + load_journey (1.0.0a7)
                        + lint_recordings + migrate_recording (a9.1) = 32
-                       + tap_and_wait_keyboard + 3 host-AX a11y tools    = 36
+                       + tap_and_wait_keyboard (1.0.0b3) = 33
+                       + perform_accessibility_action + get_announcements
+                         + set_text (Host-AX) = 36
                        + app_defaults + set_app_defaults (QA evidence)   = 38
                        + capture_motion + detect_flicker + liveness_probe = 41
     """

@@ -404,6 +404,211 @@ def _resolve_content_group(window: Any) -> Any | None:
 
 
 # ---------------------------------------------------------------------------
+# AX-primary perception (INIT-2026-641 Wave 2)
+#
+# The root defect this closes: OCR-only perception can't tell a button from a
+# caption, can't see enabled/disabled state, and reports glyph bounding boxes
+# instead of real hit rects. The macOS AX tree exposes all three for the iOS
+# app's own elements, proven live against RefSource on a booted iPhone 17 Pro
+# Max (INIT-2026-641 spike): `AXButton 'Continue' enabled=False`,
+# `AXTextField 'name@example.com' enabled=True`, under an `iOSContentGroup`.
+#
+# Host AX requires an on-screen Simulator.app window — a headless `simctl
+# boot` device is invisible to it, and (per the spike) a window can go from
+# populated to `AXWindows: []` mid-session with the process still alive.
+# `observe_pixel_elements` is therefore AX-primary with a bounded
+# reactivate-retry loop, never a silent no-op: exhausting the retry budget
+# raises AXError so the caller (observe.py) falls back to OCR and marks the
+# response degraded — it never returns an empty result pretending that's a
+# real zero-control screen.
+# ---------------------------------------------------------------------------
+
+# AXRole -> the normalized role name a Mark surfaces. Roles not in this map
+# still become marks when they carry a non-empty label (e.g. a custom
+# element with an unusual role but a real accessibility label); roles with
+# neither a mapped name nor a label are layout noise and are dropped by
+# `walk_interactive_elements`.
+_INTERACTIVE_ROLES: dict[str, str] = {
+    "AXButton": "button",
+    "AXTextField": "text_field",
+    "AXSecureTextField": "secure_text_field",
+    "AXTextArea": "text_area",
+    "AXTextView": "text_area",
+    "AXStaticText": "static_text",
+    "AXCheckBox": "checkbox",
+    "AXRadioButton": "radio_button",
+    "AXSwitch": "switch",
+    "AXSlider": "slider",
+    "AXLink": "link",
+    "AXImage": "image",
+    "AXTabGroup": "tab_group",
+    "AXTab": "tab",
+    "AXMenuItem": "menu_item",
+    "AXCell": "cell",
+}
+
+
+def _element_label(elem: Any) -> str:
+    """Best available human-readable label for *elem*.
+
+    Title beats value beats description beats placeholder — matches the
+    precedence the spike's probe used when printing the tree (title/value/
+    desc/placeholder), and puts a text field's live value ahead of a static
+    description so ``AXTextField`` elements surface what's actually typed.
+    """
+    for name in ("AXTitle", "AXValue", "AXDescription", "AXPlaceholderValue"):
+        v = _attr(elem, name)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            return s
+    return ""
+
+
+def walk_interactive_elements(
+    root: Any, depth: int = 0, maxdepth: int = 60, _out: list[dict] | None = None,
+) -> list[dict]:
+    """DFS *root*'s subtree; return role/label/enabled/frame for every
+    element worth surfacing as a mark.
+
+    An element is included when its ``AXRole`` maps to a known interactive/
+    text role (see ``_INTERACTIVE_ROLES``) OR it carries a non-empty label —
+    either way it AND its frame must be readable, else it's dropped (an
+    element AX can't place on screen can't become a tappable/verifiable
+    mark). Bare layout containers (``AXGroup``/``AXGenericElement`` with no
+    label) are skipped so the result doesn't flood with structural noise.
+
+    Frames are returned in macOS SCREEN POINTS (raw ``AXFrame``) — the same
+    coordinate space as the content-group frame. Callers convert to
+    screenshot pixel space via ``content_group_scale`` / ``ax_frame_to_pixel_bbox``.
+    """
+    top = _out is None
+    out: list[dict] = _out if _out is not None else []
+    if depth > maxdepth:
+        return out
+
+    role = str(_attr(root, "AXRole") or "")
+    normalized_role = _INTERACTIVE_ROLES.get(role)
+    label = _element_label(root)
+    if normalized_role is not None or label:
+        frame = _frame(root)
+        if frame is not None:
+            enabled = _attr(root, "AXEnabled")
+            out.append({
+                "ax_role": role,
+                "role": normalized_role or "unknown",
+                "label": label,
+                "enabled": bool(enabled) if enabled is not None else None,
+                "frame": frame,
+            })
+
+    for child in _children(root):
+        walk_interactive_elements(child, depth + 1, maxdepth, out)
+
+    return out if top else out
+
+
+def content_group_scale(group_frame: dict, screenshot_w: int, screenshot_h: int) -> float:
+    """Pixels-per-point scale factor: ``screenshot_w / content_group.width``.
+
+    Verified live in the INIT-2026-641 spike (3.0592 on an iPhone 17 Pro Max)
+    to agree with ``screenshot_h / content_group.height`` on both axes, so a
+    single width-derived ratio is sufficient — this mirrors the spike's own
+    proven transform rather than reintroducing a second, potentially
+    disagreeing, height-derived scale.
+    """
+    width = group_frame.get("width", 0)
+    if not width or width <= 0:
+        raise AXError(f"content group frame has non-positive width: {group_frame!r}")
+    return screenshot_w / width
+
+
+def ax_frame_to_pixel_bbox(
+    frame: dict, group_frame: dict, scale: float,
+) -> tuple[int, int, int, int]:
+    """Map an AXFrame (macOS screen points) to a screenshot-pixel bbox.
+
+    Per the spike's corrected transform: coordinates are computed relative to
+    the ``iOSContentGroup`` frame, NOT the raw ``AXWindow`` frame — the window
+    includes the ~52pt toolbar + bezel, and scaling against it shifts every y
+    coordinate. ``px = (ax.pt - group.pt) * scale``.
+    """
+    x = (frame["x"] - group_frame["x"]) * scale
+    y = (frame["y"] - group_frame["y"]) * scale
+    w = frame["width"] * scale
+    h = frame["height"] * scale
+    return int(round(x)), int(round(y)), int(round(w)), int(round(h))
+
+
+def observe_pixel_elements(
+    device_name: str,
+    screenshot_w: int,
+    screenshot_h: int,
+    *,
+    auto_raise: bool = False,
+    reactivate_retries: int = 1,
+) -> dict:
+    """AX-primary perception entry point used by ``observe.py``.
+
+    Resolves *device_name*'s on-screen window, resolves its iOS content
+    group, walks it for interactive/labeled elements, and converts every
+    element's frame into screenshot pixel space.
+
+    Reactivate-retry loop (the spike's live finding: ``AXWindows`` returned
+    empty mid-session with the Simulator process still alive, recovered by
+    one ``osascript activate``): a failed ``select_window`` OR a resolved
+    content group with zero walkable elements is treated as the same
+    transient failure shape. Up to *reactivate_retries* times, call
+    ``raise_window(device_name)``, pause briefly, and retry the whole
+    resolve-and-walk. Only after the budget is exhausted does this raise
+    ``AXError`` — the caller (``observe.py``) is expected to fall back to OCR
+    and mark its response degraded; this function never silently returns an
+    empty element list as if that were a real zero-control screen.
+
+    Returns ``{"elements": [...], "resolution_method": "ax"|"ax_reactivated",
+    "reactivated": bool}`` on success.
+    """
+    reactivated = False
+    last_exc: Exception | None = None
+
+    for attempt in range(reactivate_retries + 1):
+        try:
+            window = select_window(device_name, auto_raise=auto_raise)
+            group = _resolve_content_group(window) or window
+            elements = walk_interactive_elements(group)
+            if elements:
+                group_frame = _frame(group)
+                if group_frame is None:
+                    raise AXError("content group resolved but has no readable AXFrame")
+                scale = content_group_scale(group_frame, screenshot_w, screenshot_h)
+                pixel_elements = []
+                for el in elements:
+                    bbox = ax_frame_to_pixel_bbox(el["frame"], group_frame, scale)
+                    pixel_elements.append({**el, "bbox": list(bbox)})
+                return {
+                    "elements": pixel_elements,
+                    "resolution_method": "ax_reactivated" if reactivated else "ax",
+                    "reactivated": reactivated,
+                }
+            # Empty subtree — the same failure shape as the spike's live
+            # "AXWindows: []" finding: the process is alive but the window
+            # isn't presenting content right now. Fall through to retry.
+            last_exc = AXError(
+                f"content group for {device_name!r} resolved but had zero elements"
+            )
+        except AXError as exc:
+            last_exc = exc
+
+        if attempt < reactivate_retries:
+            reactivated = True
+            raise_window(device_name)
+            time.sleep(0.5)
+
+    raise last_exc or AXError(f"AX perception failed for {device_name!r}")
+
+
+# ---------------------------------------------------------------------------
 # Element + action-carrier resolution
 # ---------------------------------------------------------------------------
 

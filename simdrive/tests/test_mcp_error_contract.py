@@ -101,18 +101,23 @@ class TestMcpWrapperErrorEnvelope:
     def test_license_error_to_dict_is_superset_of_simdrive_error_schema(self) -> None:
         """LicenseError.to_dict() must remain compatible with SimdriveError consumers.
 
-        [internal-tracker].5: LicenseError adds UX-affordance fields
-        (``error: "license_required"``, ``pricing_url``, command hints) so
-        agent hosts can surface a copy-pasteable upsell. Existing fields
-        (``code``, ``message``, ``details``) are preserved — the envelope is a
-        SUPERSET of the SimdriveError envelope, not an exact match.
+        [internal-tracker].5: LicenseError adds the ``error: "license_required"``
+        umbrella field so hosts can distinguish license-domain errors. Existing
+        fields (``code``, ``message``, ``details``) are preserved — the envelope
+        is a SUPERSET of the SimdriveError envelope, not an exact match.
+
+        INIT-2026-610: the envelope previously also carried ``pricing_url``,
+        ``trial_command_hint``, and ``auth_command_hint`` (a copy-pasteable
+        upsell). SimDrive was retired as a commercial product 2026-08-26 — the
+        product is not for sale, so those advertising fields were removed and
+        must NOT reappear here.
         """
         from simdrive.license.errors import LicenseError
         from simdrive.errors import SimdriveError
 
         lic_err = LicenseError(
             code="license_expired",
-            message="License expired. Recovery: renew at https://simdrive.dev/pricing.",
+            message="License expired. Recovery: delete license.json to run unlicensed.",
             details={"expires_at": 1000000},
         )
         sim_err = SimdriveError(
@@ -136,10 +141,11 @@ class TestMcpWrapperErrorEnvelope:
             f"LicenseError envelope dropped SimdriveError keys: {missing}"
         )
 
-        # LicenseError adds the W1.5 UX-affordance fields.
-        expected_extras = {"error", "pricing_url", "trial_command_hint", "auth_command_hint"}
+        # LicenseError adds only the umbrella `error` field — no advertising.
+        expected_extras = {"error"}
         actual_extras = set(lic_dict["error"].keys()) - set(sim_dict["error"].keys())
-        assert expected_extras <= actual_extras, (
-            f"LicenseError envelope missing W1.5 UX fields: "
-            f"{expected_extras - actual_extras}"
+        assert actual_extras == expected_extras, (
+            f"LicenseError envelope extras {actual_extras} != {expected_extras} — "
+            "pricing_url/trial_command_hint/auth_command_hint must not reappear "
+            "(INIT-2026-610: SimDrive is retired and not for sale)."
         )

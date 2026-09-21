@@ -16,27 +16,32 @@ Error codes surfaced here:
   - trial_rate_limited
   - cloud_unreachable
 
+INIT-2026-610 (Chairman decision, 2026-08-26): SimDrive was retired as a
+commercial product — every public surface says it is free and unsold, and
+``simdrive.license.entitlement.check_entitlement()`` no longer raises when no
+license.json is present (see that module for the no-license default). None of
+the codes above fire on a normal install any more. They stay in place —
+inert, not deleted — because a license.json that IS present (a leftover file,
+or a future INIT-2026-569 offline self-hosted entitlement) is still fully
+validated, and these codes are how that validation failure is reported.
+
 UX envelope:
   When the MCP-tool wrapper serialises a LicenseError to the agent host, the
   envelope is enriched with:
     error: "license_required"           - umbrella code agents switch on
     code:  <specific code>              - granular code (license_not_found, …)
     message:                            - human-readable
-    pricing_url:                        - https://simdrive.dev/pricing
-    trial_command_hint:                 - exact CLI string to start a trial
-    auth_command_hint:                  - exact CLI string to install a key
-  Hosts (Claude Code, Cursor) surface this verbatim so users can
-  copy-paste the command without leaving the agent loop.
+  Prior to INIT-2026-610 this envelope also carried ``pricing_url``,
+  ``trial_command_hint``, and ``auth_command_hint`` so hosts could render a
+  copy-pasteable upsell. Those fields — and any recovery copy that pointed at
+  a trial signup or the pricing page — are removed: SimDrive is not for sale,
+  so a purchase path must never be advertised, no matter which of these codes
+  fires.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-
-
-PRICING_URL = "https://simdrive.dev/pricing"
-TRIAL_COMMAND_HINT = "simdrive trial start --email <your-email>"
-AUTH_COMMAND_HINT = "simdrive auth <your-license-key>"
 
 
 from simdrive.errors import SimdriveError
@@ -51,9 +56,11 @@ class LicenseError(SimdriveError):
     preserving the structured error envelope rather than wrapping it as
     code="internal".
 
-    ``to_dict()`` returns the W1.5 "license_required" envelope rather than the
-    generic SimdriveError shape so agent hosts get pricing + command hints
-    without parsing the message prose.
+    ``to_dict()`` returns the "license_required" envelope rather than the
+    generic SimdriveError shape so callers can still switch on the umbrella
+    ``error`` field — but (INIT-2026-610) it no longer carries pricing_url or
+    trial/auth command hints. SimDrive is a retired, free product; nothing in
+    this envelope may advertise a purchase path.
     """
 
     code: str
@@ -67,16 +74,13 @@ class LicenseError(SimdriveError):
         return {
             "ok": False,
             "error": {
-                # Umbrella code — host switches on this to render the upsell UX.
+                # Umbrella code — host switches on this for license-domain errors.
                 "error": "license_required",
                 # Granular code (license_not_found / license_expired / …) for
                 # callers that want to differentiate trial-expired from missing.
                 "code": self.code,
                 "message": self.message,
                 "details": self.details,
-                "pricing_url": PRICING_URL,
-                "trial_command_hint": TRIAL_COMMAND_HINT,
-                "auth_command_hint": AUTH_COMMAND_HINT,
             },
         }
 
@@ -103,10 +107,11 @@ def license_invalid(reason: str) -> LicenseError:
     return LicenseError(
         code="license_invalid",
         message=(
-            f"Your SimDrive license is invalid: {reason}. "
-            "Recovery: run `simdrive license show` to inspect it, "
-            "`simdrive auth <your-license-key>` to install a new one, or "
-            "`simdrive trial start --email you@example.com` to begin a trial."
+            f"Your SimDrive license is invalid: {reason}. SimDrive itself is "
+            "free and does not require a license — this only fires because a "
+            "license.json is present but unreadable. "
+            "Recovery: run `simdrive license show` to inspect it, or delete "
+            "the file at the path above to run SimDrive unlicensed."
         ),
         details={"reason": reason},
     )
@@ -116,10 +121,11 @@ def license_expired(expires_at: int) -> LicenseError:
     return LicenseError(
         code="license_expired",
         message=(
-            "SimDrive Pro license required — your trial has expired. "
-            f"Recovery: renew at {PRICING_URL} and run "
-            "`simdrive auth <your-license-key>` to reactivate. "
-            f"(License expired at {expires_at}.)"
+            "The license.json on disk has expired. SimDrive itself is free "
+            "and does not require a license. "
+            "Recovery: delete the expired license.json to run SimDrive "
+            "unlicensed, or run `simdrive auth <your-license-key>` if your "
+            f"license administrator has issued a renewed key. (License expired at {expires_at}.)"
         ),
         details={"expires_at": expires_at},
     )
@@ -130,8 +136,9 @@ def license_offline_grace_exhausted(expires_at: int, grace_days: int = 7) -> Lic
         code="license_offline_grace_exhausted",
         message=(
             f"License expired at {expires_at} and offline grace period of {grace_days} days has elapsed. "
+            "SimDrive itself is free and does not require a license. "
             "Recovery: connect to the internet and run `simdrive license status` to refresh, "
-            "or visit https://simdrive.dev/pricing to renew."
+            "or delete the license.json to run SimDrive unlicensed."
         ),
         details={"expires_at": expires_at, "grace_days": grace_days},
     )
@@ -143,7 +150,9 @@ def license_tier_insufficient(required: str, current: str) -> LicenseError:
         message=(
             f"This feature requires {required!r} tier or above; "
             f"your license is {current!r}. "
-            "Recovery: visit https://simdrive.dev/pricing to upgrade."
+            "Recovery: contact whoever issued your license.json to request "
+            f"a {required!r}-tier key, or delete the file to fall back to "
+            "unlicensed use of everything else."
         ),
         details={"required": required, "current": current},
     )
@@ -153,8 +162,10 @@ def trial_already_used(email: str) -> LicenseError:
     return LicenseError(
         code="trial_already_used",
         message=(
-            f"A trial has already been activated for {email!r}. "
-            "Recovery: visit https://simdrive.dev/pricing to purchase a license."
+            f"A trial has already been activated for {email!r}. SimDrive no "
+            "longer requires a trial or license to use. "
+            "Recovery: skip the trial and just run SimDrive — every tool "
+            "works unlicensed."
         ),
         details={"email": email},
     )
@@ -164,10 +175,10 @@ def license_not_found(path: str) -> LicenseError:
     return LicenseError(
         code="license_not_found",
         message=(
-            "No SimDrive license found. "
-            "Recovery: run `simdrive trial start --email you@example.com` to "
-            "start a 14-day trial, or `simdrive auth <your-license-key>` if "
-            f"you already have a paid key. (Looked at: {path})"
+            f"No SimDrive license found at {path!r}. This is not an error — "
+            "SimDrive is free and runs fully unlicensed by default. "
+            "Recovery: no action needed; if you expected an existing license "
+            "to be picked up, confirm it is at the path above."
         ),
         details={"path": path},
     )
@@ -177,10 +188,10 @@ def cloud_unreachable(detail: str) -> LicenseError:
     return LicenseError(
         code="cloud_unreachable",
         message=(
-            f"Could not reach the license server: {detail}. "
-            "Recovery: check your network connection, or use "
-            "`simdrive trial start --email <you@example.com> --offline-dev` "
-            "to self-issue a local dev trial without network access."
+            f"Could not reach the license server: {detail}. This only "
+            "affects optional license-management commands — SimDrive itself "
+            "is free and runs unlicensed without any network access. "
+            "Recovery: check your network connection and retry."
         ),
         details={"detail": detail},
     )

@@ -63,10 +63,11 @@ def _stub_observe(tmp_path: Path, marks: list[Mark], **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def test_to_compact_dict_returns_exactly_six_keys():
+def test_to_compact_dict_returns_exactly_eight_keys():
+    """INIT-2026-641 items 4.1/5.1 add `english_like` and `source`, so this grew from 6 to 8 keys."""
     m = _high_mark(7)
     d = m.to_compact_dict()
-    assert set(d.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+    assert set(d.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like", "source"}
 
 
 def test_to_compact_dict_drops_diagnostic_fields():
@@ -102,7 +103,7 @@ def test_observe_compact_emits_compact_marks(tmp_path):
     d = obs.to_dict()
     assert d["marks"], "compact=True should still emit marks"
     for md in d["marks"]:
-        assert set(md.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+        assert set(md.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like", "source"}
 
 
 def test_observe_compact_false_keeps_legacy_payload(tmp_path):
@@ -263,7 +264,7 @@ def test_capture_observability_with_compact(tmp_path):
     )
     d = obs.to_dict()
     # Marks are compact (6 keys) but _observability still present.
-    assert all(set(m.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+    assert all(set(m.keys()) == {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like", "source"}
                for m in d["marks"])
     assert len(d["_observability"]) == 2
 
@@ -274,14 +275,24 @@ def test_capture_observability_with_compact(tmp_path):
 
 
 def test_defaults_match_legacy_payload(tmp_path):
-    """A call with no new args must produce the same top-level keys as before PR A."""
+    """A call with no new args must produce the same top-level keys as before PR A,
+    plus INIT-2026-641 Wave 2's `resolution_method`/`degraded`. Those two are
+    deliberately NOT opt-in like the PR A knobs below — the whole point of the
+    visible-degradation requirement (Chairman condition of approval) is that a
+    caller never has to ask for the field telling it whether AX silently gave
+    way to OCR. `degraded_reason` stays opt-in-shaped (only present when
+    truthy), which is why it's absent here with no AX ever attempted.
+    """
     obs = _stub_observe(tmp_path, [_high_mark(1)])
     d = obs.to_dict()
     expected = {
         "screenshot_path", "annotated_path", "screenshot_size_pixels",
         "window_bounds_macos", "captured_at", "marks", "recent_logs",
+        "resolution_method", "degraded",
     }
     assert set(d.keys()) == expected
+    assert d["resolution_method"] == "ocr"
+    assert d["degraded"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +375,7 @@ def test_tool_observe_device_compact_drops_diagnostic_keys(tmp_path):
                return_value=(fake_marks, None)):
         result = server.tool_observe({"session_id": "devfilt", "compact": True})
     for m in result["marks"]:
-        assert set(m.keys()) <= {"id", "stable_id", "text", "center", "bbox", "confidence_band"}
+        assert set(m.keys()) <= {"id", "stable_id", "text", "center", "bbox", "confidence_band", "english_like", "source"}
         assert "raw_confidence" not in m
         assert "dictionary_check" not in m
 
@@ -400,3 +411,75 @@ def test_tool_observe_device_capture_observability_emits_per_mark(tmp_path):
     for entry in result["_observability"]:
         assert entry["dictionary_check"] in {"passed", "failed"}
         assert isinstance(entry["raw_confidence"], float)
+
+
+# ---------------------------------------------------------------------------
+# Item 4.1 (INIT-2026-641, D4) — english_like surfaced as its own field.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_to_dict_reports_english_like_independently_of_confidence():
+    """A non-dictionary proper noun at raw_confidence=1.0 must report
+    english_like=False WITHOUT changing confidence/confidence_band, which stay
+    governed by the existing dictionary-gated band logic. Before this item,
+    to_dict() carried no `english_like` key at all.
+    """
+    m = Mark(id=1, x=0, y=0, w=50, h=20, text="RefSource.", confidence=1.0)
+    d = m.to_dict()
+    assert "english_like" in d
+    assert d["english_like"] is False
+    # Band/confidence are unchanged by this item — RefSource. still fails the
+    # dictionary fence today, so it still clamps to "low" / 0.3.
+    assert d["confidence_band"] == "low"
+    assert d["confidence"] == pytest.approx(0.3)
+
+
+def test_mark_to_compact_dict_also_reports_english_like():
+    m = Mark(id=1, x=0, y=0, w=50, h=20, text="RefSource.", confidence=1.0)
+    d = m.to_compact_dict()
+    assert d["english_like"] is False
+
+
+def test_mark_english_like_true_for_dictionary_text():
+    m = Mark(id=1, x=0, y=0, w=50, h=20, text="Sign In", confidence=1.0)
+    d = m.to_dict()
+    assert d["english_like"] is True
+    assert d["confidence_band"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# Item 5.1 (INIT-2026-641, D1/D4) — Mark.source/role/enabled provenance
+# fields. Landed early, ahead of Wave 2, to unblock the parallel AX-primary
+# perception lane (feat/641-wave2-ax) which needs this field to exist.
+# ---------------------------------------------------------------------------
+
+
+def test_mark_source_field_defaults_and_round_trips():
+    m_default = Mark(id=1, x=0, y=0, w=10, h=10, text="Sign In", confidence=0.9)
+    assert m_default.source == "ocr"
+    assert m_default.role is None
+    assert m_default.enabled is None
+
+    m_ax = Mark(
+        id=2, x=0, y=0, w=10, h=10, text="Continue", confidence=1.0,
+        source="ax", role="AXButton", enabled=False,
+    )
+    assert m_ax.source == "ax"
+    assert m_ax.role == "AXButton"
+    assert m_ax.enabled is False
+
+
+def test_mark_to_dict_carries_source_role_enabled():
+    m = Mark(
+        id=1, x=0, y=0, w=10, h=10, text="Continue", confidence=1.0,
+        source="ax", role="AXButton", enabled=True,
+    )
+    d = m.to_dict()
+    assert d["source"] == "ax"
+    assert d["role"] == "AXButton"
+    assert d["enabled"] is True
+
+
+def test_mark_to_compact_dict_carries_source():
+    m = Mark(id=1, x=0, y=0, w=10, h=10, text="Continue", confidence=1.0, source="ax")
+    assert m.to_compact_dict()["source"] == "ax"

@@ -106,7 +106,8 @@ from typing import Any, Optional
 
 import yaml
 
-from . import act, errors, observe, sim, som
+from . import act, diagnostics, errors, observe, sim, som
+from . import session as _session_mod
 from .observability.logger import get_logger
 from .session import Session
 
@@ -1631,6 +1632,11 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     if on_drift not in {"halt", "warn", "force"}:
         raise ValueError("on_drift must be halt|warn|force")
 
+    # INIT-2026-641 item 4.7 (D3): captured before any step executes, so the
+    # end-of-replay crash cross-check below only attributes a .ips report to
+    # THIS run, not a stale crash from session start or an earlier replay.
+    _replay_start_ts = time.time()
+
     rec_dir = recordings_root() / name
     yaml_path = rec_dir / "recording.yaml"
     if not yaml_path.exists():
@@ -1778,6 +1784,17 @@ def replay(name: str, session: Session, on_drift: str = "halt",
             "marks_count_drift": marks_count_drift,
             "executed": False,
             "error": None,
+            # INIT-2026-641 Wave 2 / test plan 3a (CEO board review condition):
+            # per-step visibility into which perception tier actually produced
+            # this step's marks ("ax" / "ax_reactivated" / "ocr"). Present for
+            # EVERY step, not only degraded ones — a reviewer reading replay
+            # output after the fact must be able to tell a mid-run AX->OCR
+            # slide apart from a run that used AX throughout, without
+            # re-running the sequence live or reading source. Sourced from the
+            # same `live_obs` this step already used for its SSIM/marks-count
+            # check, so it reflects what actually resolved this step, not a
+            # single top-level summary for the whole replay.
+            "resolution_method": live_obs.get("resolution_method", "ocr"),
         }
         if marks_drift_info:
             step_result["marks_drift_info"] = marks_drift_info
@@ -1864,9 +1881,48 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     # was ever armed.) Comparing the final live frame against the last step's
     # recorded post-state closes that hole for every recording, including ones
     # captured before this existed — post-screenshots were always stored.
+    #
+    # INIT-2026-641 items 4.6/4.7: fetch the final live frame ONCE here (when
+    # there's something recorded to compare it against) and reuse it for the
+    # outcome check, final_expect, below, instead of each running its own
+    # separate live capture.
+    final_live: Optional[dict] = None
+    if steps:
+        _last_step = steps[-1]
+        _last_rel = _last_step.get("post_screenshot")
+        if _last_rel and (rec_dir / _last_rel).exists():
+            final_live = _observe_for_replay(session)
+
     final_state = _assert_final_outcome(
-        steps, rec_dir, session, masks, effective_threshold
+        steps, rec_dir, session, masks, effective_threshold, live=final_live
     )
+
+    # item 4.6 (D3): final_expect text assertions. Reuses final_live's marks
+    # when available; a recording with final_expect set but no comparable
+    # recorded post-frame (final_live is None above) still gets one fresh
+    # capture here, since final_expect doesn't depend on a recorded outcome
+    # frame existing the way SSIM comparison does.
+    final_expect_cfg = payload.get("final_expect")
+    expect_result: Optional[dict] = None
+    if final_expect_cfg:
+        if final_live is None:
+            final_live = _observe_for_replay(session)
+        expect_result = _assert_final_expect(final_expect_cfg, final_live.get("marks") or [])
+
+    # item 4.7 (D3): crash cross-check. Nothing inside the per-step loop
+    # above checks for a crash mid-replay — only session_start's one-time
+    # _verify_launch() does, so all steps can pass their SSIM checks while
+    # the app actually crashed and silently relaunched or left a `.ips`
+    # behind. `since_ts=_replay_start_ts` (captured before step 1 dispatched)
+    # excludes stale crashes from session start or an earlier replay.
+    new_crashes: list = []
+    if session.app_bundle_id:
+        try:
+            new_crashes = diagnostics.list_crashes(
+                since_ts=_replay_start_ts, bundle_id=session.app_bundle_id, max_results=5,
+            )
+        except Exception as exc:
+            log.debug("replay.crash_check_failed", extra={"error": str(exc)})
 
     out = {
         "ok": True,
@@ -1901,6 +1957,24 @@ def replay(name: str, session: Session, on_drift: str = "halt",
                     "not match the state the capture ended in — the last action "
                     "did not take effect. Compare the two screenshots above."
                 )
+    # item 4.6: a missing final_expect assertion halts regardless of what the
+    # SSIM check decided above — closing the measured 0.9824 near-identical-
+    # frame blind spot SSIM alone cannot see.
+    if expect_result is not None:
+        if expect_result["ok"]:
+            out["final_expect_ok"] = True
+        else:
+            out["ok"] = False
+            out["halt_reason"] = "final_expect_failed"
+            out["missing_expectations"] = expect_result["missing"]
+            if final_state is not None:
+                out["halted_at"] = final_state["step_id"]
+    # item 4.7: a crash is the strongest possible evidence of failure and must
+    # not be shadowed by an otherwise-passing SSIM/final_expect result.
+    if new_crashes:
+        out["ok"] = False
+        out["halt_reason"] = "crash_detected"
+        out["crashes"] = new_crashes
     if state_warning:
         out["_simdrive_warning"] = state_warning
     return out
@@ -1979,12 +2053,19 @@ def _retry_if_tap_was_swallowed(step: dict, session: Session,
 
 def _assert_final_outcome(steps: list, rec_dir: Path, session: Session,
                           masks: Optional[list],
-                          threshold: float) -> Optional[dict]:
+                          threshold: float,
+                          live: Optional[dict] = None) -> Optional[dict]:
     """Compare the live screen against the last step's recorded post-state.
 
     Returns None when there is nothing to compare against (no steps, or the
     recording predates post-screenshot storage / the file went missing), so an
     incomplete recording degrades to the old behaviour instead of hard-failing.
+
+    `live`: an already-captured ``_observe_for_replay()`` result. INIT-2026-641
+    item 4.6 passes this in so ``replay()``'s own ``final_expect`` check reuses
+    the exact same live frame/marks instead of paying for a second OCR pass.
+    When None (any caller that doesn't pre-fetch, preserving prior behavior
+    exactly), this function captures its own as before.
     """
     if not steps:
         return None
@@ -1996,7 +2077,8 @@ def _assert_final_outcome(steps: list, rec_dir: Path, session: Session,
     if not expected.exists():
         return None
 
-    live = _observe_for_replay(session)
+    if live is None:
+        live = _observe_for_replay(session)
     score = _ssim_or_fallback(live["screenshot_path"], expected, masks=masks)
     # Same hysteresis as the per-step check: one noisy frame shouldn't fail a run.
     if score < threshold:
@@ -2018,6 +2100,32 @@ def _assert_final_outcome(steps: list, rec_dir: Path, session: Session,
         "expected_screenshot_path": str(expected),
         "actual_screenshot_path": str(live["screenshot_path"]),
     }
+
+
+def _assert_final_expect(expected: Optional[list], live_marks: list) -> Optional[dict]:
+    """INIT-2026-641 item 4.6 (D3) — text assertions against the final live
+    frame's OCR/AX marks, closing the measured SSIM blind spot: two frames
+    differing only by a small rendered region (a countdown chip) can score
+    0.9824 against the 0.85 threshold and pass SSIM alone, while the text
+    on screen plainly differs.
+
+    `expected`: the recording's `final_expect` list of strings, or None/[]
+    when the recording doesn't opt in (returns None so replay's SSIM-only
+    behavior is unchanged for every recording that predates this field).
+    Case-insensitive substring match against each live mark's text.
+
+    Returns {"ok": bool, "missing": [...]} naming every expectation not
+    found in any live mark, not just a bare pass/fail, so a partial miss
+    reports which specific assertion failed.
+    """
+    if not expected:
+        return None
+    live_texts = [_mark_text_of(m).lower() for m in (live_marks or [])]
+    missing = [
+        exp for exp in expected
+        if not any(str(exp).strip().lower() in t for t in live_texts)
+    ]
+    return {"ok": not missing, "missing": missing}
 
 
 def _observe_for_replay(session: Session) -> dict:
@@ -2054,18 +2162,42 @@ def _observe_for_replay(session: Session) -> dict:
             "marks": list(marks or []),
             "screenshot_w": w,
             "screenshot_h": h,
+            # Host AX (INIT-2026-641 Wave 2) is simulator-only; WDA/XCUITest
+            # device marks are a different (already ground-truth) mechanism,
+            # so this is never a degraded read — reported as "ocr" for a
+            # uniform `resolution_method` field across every replay step.
+            "resolution_method": "ocr",
         }
 
     # Sim path OR device path without WDA client (test/CI fallback).
-    live = observe.observe(session.device.udid, session.workdir / "replay",
-                           target=session.target)
+    live = observe.observe(
+        session.device.udid, session.workdir / "replay",
+        target=session.target,
+        device_name=session.device.name,
+        allow_ax=_ax_routing_allowed_for_replay(session),
+    )
     return {
         "screenshot_path": live.screenshot_path,
         "marks_count": len(live.marks or []),
         "marks": list(live.marks or []),
         "screenshot_w": live.screenshot_w,
         "screenshot_h": live.screenshot_h,
+        "resolution_method": getattr(live, "resolution_method", "ocr"),
     }
+
+
+def _ax_routing_allowed_for_replay(s: Session) -> bool:
+    """Replay's own copy of server.py's `_ax_routing_allowed` single-sim
+    guard (INIT-2026-641 Wave 2) — duplicated rather than imported to avoid a
+    recorder<->server import cycle (server.py already imports recorder).
+    Same logic, same reasoning: more than one concurrent "simulator"-target
+    session makes a host-AX call from any one of them a cross-targeting
+    hazard, so AX is skipped (not attempted-and-caught) in that case.
+    """
+    concurrent_sim_sessions = sum(
+        1 for other in _session_mod.all_sessions() if other.target == "simulator"
+    )
+    return concurrent_sim_sessions <= 1
 
 
 def _mark_center_compat(m) -> tuple[int, int]:
