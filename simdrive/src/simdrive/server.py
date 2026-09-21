@@ -74,8 +74,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import (
-    __version__, act, ax, diagnostics, errors, observe, perf, recorder,
-    robustness, session, sim, som,
+    __version__, act, ax, diagnostics, errors, motion, observe, perf, prefs,
+    recorder, robustness, session, sim, som,
 )
 from .cloud.middleware.quotas import check_local_quota
 from .license.gate import gate as _entitlement_gate
@@ -831,6 +831,21 @@ def tool_session_end(arguments: dict) -> dict:
     _entitlement_gate()
     sid = arguments["session_id"]
     session.end(sid, terminate_app=bool(arguments.get("terminate_app", True)))
+    # Tear down the host-AX announcement observer once the last session ends.
+    # The observer attaches an AXObserver run-loop source to the Simulator
+    # process, which engages the simulator's accessibility globally — apps then
+    # report UIAccessibility.isVoiceOverRunning == true and silently take their
+    # VoiceOver code path (e.g. an accessibility toolbar instead of the normal
+    # UI). Because stop_announcement_observer() was never called, that state
+    # leaked across every later session for the MCP server's lifetime. The
+    # observer restarts lazily on the next get_announcements /
+    # perform_accessibility_action call, so AX features are unaffected.
+    try:
+        remaining = session.all_sessions()
+    except Exception:  # noqa: BLE001 — teardown must never break session_end
+        remaining = []
+    if not remaining:
+        ax.stop_announcement_observer()
     return {"ended": sid}
 
 
@@ -1030,7 +1045,10 @@ def tool_observe(arguments: dict) -> dict:
         mark_limit=arguments.get("mark_limit"),
         capture_observability=bool(arguments.get("capture_observability", False)),
         device_name=s.device.name,
-        allow_ax=_ax_routing_allowed(s),
+        # The caller may narrow to OCR, never widen: `_ax_routing_allowed` is
+        # a correctness constraint (AX reads whichever Simulator window is
+        # frontmost), so a caller-supplied True cannot override it.
+        allow_ax=_ax_routing_allowed(s) and bool(arguments.get("allow_ax", True)),
     )
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
@@ -1046,62 +1064,50 @@ def tool_observe(arguments: dict) -> dict:
     return obs.to_dict()
 
 
+_SSIM_SAMPLE_EDGE = 256
+
+
 def _compute_ssim(pre_path: Optional[str], post_path: Optional[str]) -> float:
     """Compute SSIM similarity between two screenshot files.
 
     Returns a float in [0.0, 1.0] where 1.0 means identical.  Falls back to 1.0
-    (no change detected) when images cannot be loaded, so callers get a safe
-    default rather than a spurious "screen changed" signal.
+    (no change detected) when the two images genuinely cannot be compared — a
+    missing path, an unreadable file, or mismatched dimensions — so callers get
+    a safe default rather than a spurious "screen changed" signal.
 
-    Uses only stdlib — reads raw PNG data and computes a lightweight pixel-level
-    comparison. For full SSIM accuracy, callers may monkeypatch this function in
-    tests (which the F#8 tests do).
+    Decoding goes through Pillow, which is already a hard dependency of this
+    package and is imported elsewhere in this module. The previous hand-rolled
+    stdlib PNG reader kept only the FIRST IDAT chunk of the file, so every
+    screenshot large enough to span several chunks (a simulator frame carries
+    ~62) failed to decompress and fell into the 1.0 default. That made
+    `screen_changed` false for every tap and type in the product, including
+    ones that navigated to an entirely different screen, and the failure was
+    indistinguishable from a genuine no-change result.
+
+    Frames are compared on a downscaled greyscale copy: a full simulator frame
+    is ~3.2M pixels, and the question this answers — did the screen change? —
+    survives the reduction at a fraction of the cost.
     """
+    if not pre_path or not post_path:
+        return 1.0
     try:
-        import struct
-        import zlib
+        from PIL import Image
 
-        def _load_pixels(path: str) -> tuple[int, int, list[int]]:
-            """Load a PNG and return (width, height, flat RGBA pixel list)."""
-            data = Path(path).read_bytes()
-            if data[:8] != b"\x89PNG\r\n\x1a\n":
-                return 0, 0, []
-            chunks: dict[bytes, bytes] = {}
-            i = 8
-            while i < len(data):
-                length = struct.unpack(">I", data[i:i+4])[0]
-                ctype = data[i+4:i+8]
-                cdata = data[i+8:i+8+length]
-                chunks.setdefault(ctype, cdata)
-                i += 12 + length
-            ihdr = chunks.get(b"IHDR", b"")
-            if len(ihdr) < 13:
-                return 0, 0, []
-            w, h = struct.unpack(">II", ihdr[:8])
-            # Only handle 8-bit RGB/RGBA; others return empty.
-            bit_depth, color_type = ihdr[8], ihdr[9]
-            if bit_depth != 8 or color_type not in (2, 6):
-                return 0, 0, []
-            raw = zlib.decompress(b"".join(
-                v for k, v in chunks.items() if k == b"IDAT"
-            ) or chunks.get(b"IDAT", b""))
-            channels = 3 if color_type == 2 else 4
-            pixels: list[int] = []
-            stride = w * channels
-            idx = 0
-            for _row in range(h):
-                filter_byte = raw[idx]; idx += 1
-                row = list(raw[idx:idx+stride]); idx += stride
-                if filter_byte == 1:  # Sub
-                    for c in range(channels, len(row)):
-                        row[c] = (row[c] + row[c - channels]) & 0xFF
-                pixels.extend(row[:stride:channels])  # just R channel for speed
-            return w, h, pixels
+        with Image.open(pre_path) as im_pre, Image.open(post_path) as im_post:
+            if im_pre.size != im_post.size:
+                return 1.0  # can't compare → assume no change
+            g1 = im_pre.convert("L")
+            g2 = im_post.convert("L")
+            if max(g1.size) > _SSIM_SAMPLE_EDGE:
+                sample = (_SSIM_SAMPLE_EDGE, _SSIM_SAMPLE_EDGE)
+                g1 = g1.resize(sample)
+                g2 = g2.resize(sample)
+            # tobytes() on an "L" image is one byte per pixel, and unlike
+            # getdata() it is not deprecated in Pillow 14.
+            p1 = list(g1.tobytes())
+            p2 = list(g2.tobytes())
 
-        w1, h1, p1 = _load_pixels(pre_path or "")
-        w2, h2, p2 = _load_pixels(post_path or "")
-
-        if not p1 or not p2 or w1 != w2 or h1 != h2 or len(p1) != len(p2):
+        if not p1 or not p2 or len(p1) != len(p2):
             return 1.0  # can't compare → assume no change
 
         n = len(p1)
@@ -2033,6 +2039,20 @@ def tool_logs(arguments: dict) -> dict:
             "predicate_kind", predicate_kind,
             "must be 'nspredicate', 'regex', or 'substring'",
         )
+    # Default to 'info': `log show` drops .info records without --info, which is
+    # the level most apps narrate at. 'default' is kept for noise-sensitive
+    # callers; 'debug' is the firehose.
+    level = str(arguments.get("level", "info"))
+    if level not in sim.LOG_LEVELS:
+        raise errors.invalid_argument(
+            "level", level,
+            f"must be one of {sorted(sim.LOG_LEVELS)}",
+        )
+    last = str(arguments.get("last", "30s"))
+    try:
+        sim._parse_log_window(last)
+    except sim.SimError as exc:
+        raise errors.invalid_argument("last", last, str(exc))
     if s.target == "device":
         from . import device
         try:
@@ -2071,7 +2091,10 @@ def tool_logs(arguments: dict) -> dict:
             # Pass no predicate to log show; filter in Python after capture.
             raw_predicate = None
             post_filter_kind = predicate_kind
-        text = sim.get_log_tail(s.device.udid, lines=lines, predicate=raw_predicate)
+        text = sim.get_log_tail(
+            s.device.udid, lines=lines, predicate=raw_predicate,
+            level=level, last=last,
+        )
         if post_filter_kind and predicate:
             raw_lines = [ln for ln in text.splitlines() if ln]
             if post_filter_kind == "regex":
@@ -2089,7 +2112,265 @@ def tool_logs(arguments: dict) -> dict:
             else:
                 raw_lines = [ln for ln in raw_lines if predicate in ln]
             text = "\n".join(raw_lines[-lines:])
-    return {"ok": True, "lines": len(text.splitlines()), "logs": text}
+    # Echo level/last so the agent can tell what noise floor and window produced
+    # this payload — "the app logged nothing" and "we only looked at the last
+    # 30 seconds of default-level records" are very different facts.
+    return {
+        "ok": True,
+        "lines": len(text.splitlines()),
+        "logs": text,
+        "level": level,
+        "last": last,
+    }
+
+
+# --------------------- App preferences (NSUserDefaults) ----------------- #
+
+
+def _resolve_prefs_bundle_id(s, arguments: dict) -> str:
+    """Bundle id for a preferences call: explicit argument, else the session's app."""
+    bid = arguments.get("bundle_id") or arguments.get("app_bundle_id") or s.app_bundle_id
+    if not bid:
+        raise errors.invalid_argument(
+            "bundle_id", None,
+            "no bundle_id on the session (session_start was called without "
+            "app_bundle_id) and none provided in arguments",
+        )
+    return str(bid)
+
+
+def _require_simulator(s, tool_name: str) -> None:
+    if s.target == "device":
+        raise errors.SimdriveError(
+            code="not_supported_on_device",
+            message=(
+                f"{tool_name} is simulator-only — it reads the app container via "
+                "`simctl get_app_container`, which has no real-device equivalent."
+            ),
+            details={"tool": tool_name, "target": s.target},
+        )
+
+
+def tool_app_defaults(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "app_defaults")
+    bundle_id = _resolve_prefs_bundle_id(s, arguments)
+    raw_keys = arguments.get("keys")
+    if raw_keys is not None and not isinstance(raw_keys, list):
+        raise errors.invalid_argument("keys", raw_keys, "must be an array of key names")
+    keys = [str(k) for k in raw_keys] if raw_keys else None
+    result = prefs.read_defaults(s.device.udid, bundle_id, keys=keys)
+    s.last_action_at = _now()
+    return {"ok": True, "bundle_id": bundle_id, **result}
+
+
+def tool_set_app_defaults(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "set_app_defaults")
+    bundle_id = _resolve_prefs_bundle_id(s, arguments)
+    values = arguments.get("values")
+    if not isinstance(values, dict) or not values:
+        raise errors.invalid_argument(
+            "values", values, "must be a non-empty object of {key: value} pairs",
+        )
+    try:
+        result = prefs.write_defaults(s.device.udid, bundle_id, values)
+    except sim.SimError as exc:
+        raise errors.invalid_argument("values", values, str(exc))
+    s.last_action_at = _now()
+    return {"ok": True, "bundle_id": bundle_id, **result}
+
+
+# --------------------- Motion capture (animation evidence) -------------- #
+
+# Below this measured frame rate a flicker verdict is not supportable: the
+# screenshot-sampling fallback runs at ~1 fps, and you cannot resolve a
+# several-Hz oscillation from a handful of samples. Refusing beats guessing.
+_FLICKER_MIN_FPS = 4.0
+_MOTION_DEFAULT_DURATION_MS = 2000
+_LIVENESS_MAX_SECONDS = 60
+
+
+def _parse_rect(raw, name: str):
+    """Coerce an [x, y, w, h] / {x, y, w, h} rectangle, or None."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        try:
+            return (int(raw["x"]), int(raw["y"]), int(raw["w"]), int(raw["h"]))
+        except (KeyError, TypeError, ValueError):
+            raise errors.invalid_argument(name, raw, "must have integer x, y, w, h")
+    if isinstance(raw, (list, tuple)) and len(raw) == 4:
+        try:
+            return tuple(int(v) for v in raw)  # type: ignore[return-value]
+        except (TypeError, ValueError):
+            raise errors.invalid_argument(name, raw, "must be four integers [x, y, w, h]")
+    raise errors.invalid_argument(
+        name, raw, "must be [x, y, w, h] or {x, y, w, h} in screenshot pixel coordinates",
+    )
+
+
+def _run_motion_capture(s, arguments: dict, duration_ms: int, roi=None) -> dict:
+    """Shared capture path for capture_motion / detect_flicker / liveness_probe."""
+    sw, sh = _ensure_screenshot_dims(s)
+    fps = int(arguments.get("fps", 30))
+    if fps < 1 or fps > 60:
+        raise errors.invalid_argument("fps", fps, "must be between 1 and 60")
+    masks = arguments.get("mask_regions")
+    mask_rects = [_parse_rect(m, "mask_regions") for m in masks] if masks else None
+    try:
+        return motion.capture_motion(
+            s.device.udid,
+            s.workdir / "motion",
+            duration_ms=duration_ms,
+            fps=fps,
+            roi=roi,
+            mask_regions=mask_rects,
+            source=str(arguments.get("source", "auto")),
+            reference_size=(sw, sh),
+        )
+    except motion.MotionError as exc:
+        raise errors.SimdriveError(
+            code="motion_capture_failed", message=str(exc),
+            details={"udid": s.device.udid, "duration_ms": duration_ms},
+        )
+
+
+def tool_capture_motion(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "capture_motion")
+    duration_ms = int(arguments.get("duration_ms", _MOTION_DEFAULT_DURATION_MS))
+    if duration_ms < 1 or duration_ms > motion._MAX_DURATION_MS:
+        raise errors.invalid_argument(
+            "duration_ms", duration_ms,
+            f"must be between 1 and {motion._MAX_DURATION_MS}",
+        )
+    roi = _parse_rect(arguments.get("roi"), "roi")
+    result = _run_motion_capture(s, arguments, duration_ms, roi=roi)
+    s.last_action_at = _now()
+    return {"ok": True, **result}
+
+
+def tool_detect_flicker(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "detect_flicker")
+    roi = _parse_rect(arguments.get("roi"), "roi")
+    if roi is None:
+        raise errors.invalid_argument(
+            "roi", None,
+            "detect_flicker requires an roi — a whole-screen delta is dominated by "
+            "the status-bar clock and cannot isolate one oscillating control",
+        )
+    duration_ms = int(arguments.get("duration_ms", _MOTION_DEFAULT_DURATION_MS))
+    if duration_ms < 1 or duration_ms > motion._MAX_DURATION_MS:
+        raise errors.invalid_argument(
+            "duration_ms", duration_ms,
+            f"must be between 1 and {motion._MAX_DURATION_MS}",
+        )
+    analysis = _run_motion_capture(s, arguments, duration_ms, roi=roi)
+    measured_fps = float(analysis.get("effective_fps") or 0.0)
+    if measured_fps < _FLICKER_MIN_FPS:
+        return {
+            "ok": False,
+            "error": {
+                "code": "insufficient_frame_rate",
+                "message": (
+                    f"captured at {measured_fps} fps via '{analysis.get('source')}', below the "
+                    f"{_FLICKER_MIN_FPS} fps needed to resolve a flicker. A verdict from this "
+                    "sampling would not be trustworthy. Recovery: install ffmpeg "
+                    "(`brew install ffmpeg`) so capture uses simctl recordVideo."
+                ),
+                "details": {
+                    "effective_fps": measured_fps,
+                    "source": analysis.get("source"),
+                    "frames": analysis.get("frames"),
+                },
+            },
+        }
+    verdict = motion.flicker_verdict(analysis, duration_ms=duration_ms)
+    s.last_action_at = _now()
+    return {
+        "ok": True,
+        **verdict,
+        "roi": list(roi),
+        "frames": analysis["frames"],
+        "effective_fps": measured_fps,
+        "delta_series": analysis["delta_series"],
+        "state_sequence": analysis["state_sequence"],
+        "representative_frames": analysis["representative_frames"],
+        "warnings": analysis["warnings"],
+    }
+
+
+def tool_liveness_probe(arguments: dict) -> dict:
+    _entitlement_gate()
+    s = session.get(arguments["session_id"])
+    _require_simulator(s, "liveness_probe")
+    seconds = int(arguments.get("seconds", 5))
+    if seconds < 1 or seconds > _LIVENESS_MAX_SECONDS:
+        raise errors.invalid_argument(
+            "seconds", seconds, f"must be between 1 and {_LIVENESS_MAX_SECONDS}",
+        )
+    sw, sh = _ensure_screenshot_dims(s)
+    # Default to the middle of the screen: a tap there lands on content on
+    # essentially any screen and is unlikely to trigger navigation.
+    x = int(arguments.get("x", sw // 2))
+    y = int(arguments.get("y", sh // 2))
+
+    tap_error = None
+    try:
+        act.tap(x, y, sw, sh, udid=s.device.udid)
+    except Exception as exc:  # noqa: BLE001 — a failed tap is part of the verdict
+        tap_error = str(exc)
+
+    analysis = _run_motion_capture(s, arguments, seconds * 1000)
+    responsive = motion.liveness_verdict(analysis)
+
+    # Corroborate with CPU: a frozen UI at 100% CPU is a spin, at ~0% a deadlock.
+    # The campaign established its freeze exactly this way, by hand.
+    cpu_pct = None
+    if s.app_bundle_id:
+        try:
+            cpu_pct = perf.snapshot(s.device.udid, s.app_bundle_id).get("cpu_pct")
+        except Exception:  # noqa: BLE001 — corroboration is optional
+            cpu_pct = None
+
+    if responsive:
+        verdict = "the UI changed in response to the touch"
+    elif cpu_pct is not None and cpu_pct > 50.0:
+        verdict = (
+            f"no UI change after the touch while the app burns {cpu_pct}% CPU — "
+            "consistent with a spin/busy-loop rather than an idle deadlock"
+        )
+    else:
+        verdict = (
+            "no UI change after the touch"
+            + (f" and the app is near-idle at {cpu_pct}% CPU" if cpu_pct is not None else "")
+            + " — consistent with a hang. Corroborate with `logs` silence over the same window."
+        )
+
+    s.last_action_at = _now()
+    return {
+        "ok": True,
+        "responsive": responsive,
+        "tapped": [x, y],
+        "tap_error": tap_error,
+        "seconds": seconds,
+        "max_delta": analysis["max_delta"],
+        "mean_delta": analysis["mean_delta"],
+        "frames": analysis["frames"],
+        "distinct_states": analysis["distinct_states"],
+        "transitions": analysis["transitions"],
+        "effective_fps": analysis["effective_fps"],
+        "source": analysis["source"],
+        "cpu_pct": cpu_pct,
+        "verdict": verdict,
+        "warnings": analysis["warnings"],
+    }
 
 
 # --------------------- Performance / diagnostics / robustness ----------- #
@@ -2869,6 +3150,7 @@ _TOOLS: list[dict] = [
                 "capture_logs": {"type": "boolean", "default": False, "description": "Include a tail of recent simulator logs."},
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
+                "allow_ax": {"type": "boolean", "default": True, "description": "Default true. Pass false to force the OCR view of the screen. AX-primary perception is ground truth where the app exposes its tree, but on some content-dense screens the tree yields only a few container marks while OCR resolves every visible label — if `marks` looks implausibly short for what is on screen, re-observe with allow_ax=false and compare. This can only narrow to OCR: a multi-simulator or headless session already reports resolution_method=\"ocr\" and passing true will not re-enable AX."},
                 "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
                 "compact": {"type": "boolean", "default": False, "description": "Emit the slim 7-key mark dict (id, stable_id, text, center, bbox, confidence_band, english_like) instead of the full diagnostic dict. Roughly 1.7x smaller on the wire (bbox/center/text are identical in both shapes, so most bytes are shared)."},
                 "confidence_floor": {"type": "string", "enum": ["low", "med", "medium", "high"], "description": "Drop marks whose confidence_band ranks below this floor before returning. Default keeps every band."},
@@ -3199,8 +3481,14 @@ _TOOLS: list[dict] = [
     {
         "name": "logs",
         "description": (
-            "(sim + device) Tail iOS logs. On simulator: uses `log show --last 30s` "
-            "(NSPredicate supported natively). On device: uses idevicesyslog — "
+            "(sim + device) Tail iOS logs. On simulator: uses `log show` "
+            "(NSPredicate supported natively). "
+            "IMPORTANT: `log show` hides .info and .debug records unless asked for them, "
+            "and most apps narrate at .info — so `level` defaults to 'info' here. "
+            "Set level='debug' only when you need it: it is a firehose. "
+            "`last` sets the capture window ('30s', '5m', '2h'); `lines` slices AFTER "
+            "capture, so raise `last` — not `lines` — to reach further back than 30s. "
+            "On device: uses idevicesyslog — level/last do not apply; "
             "NSPredicate is NOT supported; pass predicate_kind='substring' or 'regex' "
             "for reliable filtering, or omit predicate_kind (defaults to 'nspredicate' "
             "which auto-downgrades to substring on device with a logged WARNING). "
@@ -3214,6 +3502,28 @@ _TOOLS: list[dict] = [
             "properties": {
                 "session_id": {"type": "string"},
                 "lines": {"type": "integer", "default": 200},
+                "level": {
+                    "type": "string",
+                    "enum": ["default", "info", "debug"],
+                    "default": "info",
+                    "description": (
+                        "(sim only) Log-level floor. 'default': default-level records only "
+                        "— quietest, matches bare `log show`. 'info' (default): adds --info, "
+                        "which is where most apps' own narration lives. 'debug': adds "
+                        "--info --debug — very noisy, and on a busy app can bury the lines "
+                        "you came for; choose it deliberately."
+                    ),
+                },
+                "last": {
+                    "type": "string",
+                    "default": "30s",
+                    "description": (
+                        "(sim only) Capture window passed to `log show --last`: an integer "
+                        "plus an optional s/m/h/d suffix ('30s', '5m', '2h'). `lines` slices "
+                        "after capture, so this is what bounds how far back the tail reaches "
+                        "— widen it for a defect you noticed a minute ago."
+                    ),
+                },
                 "predicate": {"type": "string", "description": "Filter string. Interpretation depends on predicate_kind."},
                 "predicate_kind": {
                     "type": "string",
@@ -3229,6 +3539,205 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_logs,
+    },
+    # ── App preferences (NSUserDefaults) ────────────────────────────────
+    {
+        "name": "app_defaults",
+        "description": (
+            "(sim only) Read the app's NSUserDefaults from its own container plist on disk. "
+            "USE THIS instead of `xcrun simctl spawn <udid> defaults read <bundle> <key>`. "
+            "That command is not just stale — it reads a DIFFERENT FILE. A simulator keeps "
+            "two plists per domain: the app's sandboxed "
+            "Containers/Data/Application/<uuid>/Library/Preferences/<bundle>.plist (what "
+            "NSUserDefaults uses) and a device-wide data/Library/Preferences/<bundle>.plist "
+            "(what a simctl-spawned `defaults` uses). They never sync, so keys the app wrote "
+            "are invisible to `defaults read`, and keys `defaults write` set are invisible to "
+            "the app. That is what produced a confidently-wrong 'this setting never persists' "
+            "finding against a setting that persisted fine. "
+            "Pass `keys` to filter; omit for the whole domain. A missing plist returns "
+            "values={} plus a note, not an error. Keys found ONLY in the device-wide domain "
+            "are reported in `device_domain_only` — that means someone set them with "
+            "`simctl spawn defaults write` and the app has never seen them. "
+            "Data values come back as {__type__:'data', base64:...} and dates as ISO-8601. "
+            "Caveat: a live app may not have flushed a just-set value yet; background or "
+            "relaunch the app and re-read if a fresh write seems missing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Defaults to the session's launched app bundle id.",
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Only return these keys. Keys not present in the plist come back "
+                        "in `missing_keys` — absent is a distinct answer from false/0."
+                    ),
+                },
+            },
+        },
+        "handler": tool_app_defaults,
+    },
+    {
+        "name": "set_app_defaults",
+        "description": (
+            "(sim only) Write app NSUserDefaults into the domain the app actually reads, "
+            "and VERIFY the result against disk. "
+            "Do NOT hand-roll `simctl spawn <udid> defaults write <bundle> ...`: on a "
+            "simulator that writes the DEVICE-WIDE plist, not the app's sandboxed one, so "
+            "the app never sees it while `defaults read` cheerfully echoes it back at you. "
+            "This tool runs `defaults` inside the simulator against the app's container "
+            "plist as a path domain (so the simulator's cfprefsd, which a live app reads "
+            "through, mediates the write), then re-reads that plist from disk to confirm. "
+            "Anything not confirmed is reported in `unverified` rather than claimed as "
+            "written — `defaults write` exiting 0 is not proof. "
+            "Supported value types: bool, int, float, string, array, object. "
+            "Relaunch the app after writing if it reads the value only at startup."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "values"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "values": {
+                    "type": "object",
+                    "description": "{key: value} pairs to write. Types are preserved (a bool stays a bool, not the string \"1\").",
+                },
+                "bundle_id": {
+                    "type": "string",
+                    "description": "Defaults to the session's launched app bundle id.",
+                },
+            },
+        },
+        "handler": tool_set_app_defaults,
+    },
+    # ── Motion capture (animation evidence) ─────────────────────────────
+    {
+        "name": "capture_motion",
+        "description": (
+            "(sim only) Measure on-screen MOTION over a time window and return NUMBERS, "
+            "not frames. Use when the question is about animation rather than state: "
+            "does this flicker, does the skeleton ever resolve, is the morph smooth, is "
+            "the UI alive. A pair of screenshots can never answer any of those. "
+            "Records with `simctl io recordVideo` and decodes with ffmpeg (install it: "
+            "`brew install ffmpeg`); without ffmpeg it falls back to polling screenshots "
+            "at roughly 1 fps and says so in `warnings` and `effective_fps`. "
+            "PASS AN ROI. Whole-screen deltas are dominated by the status-bar clock; "
+            "roi=[x,y,w,h] in screenshot pixel coordinates (same space as observe marks) "
+            "crops before analysis. mask_regions blanks noisy rectangles instead. "
+            "Returns: delta_series (per-frame difference vs the previous frame, 0-1), "
+            "distinct_states (frames clustered perceptually), transitions, "
+            "settled_at_ms (when motion stopped, or null if it never did), "
+            "max_gap_ms, and representative_frames — ONE saved image per distinct state, "
+            "never one per frame. "
+            "Note: recordVideo is change-driven, so a static screen yields very few frames; "
+            "that shows up as a `warnings` entry and is itself evidence of stillness. "
+            "This is a separate channel from replay and does not affect drift semantics."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "duration_ms": {
+                    "type": "integer", "default": 2000,
+                    "description": "Capture window in milliseconds (max 120000).",
+                },
+                "fps": {
+                    "type": "integer", "default": 30,
+                    "description": "Frames per second to decode (1-60). The video path honours "
+                                   "this; the screenshot fallback cannot — read `effective_fps`.",
+                },
+                "roi": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 4, "maxItems": 4,
+                    "description": "[x, y, w, h] in screenshot pixels. Strongly recommended: "
+                                   "an unfocused capture measures the clock, not your control.",
+                },
+                "mask_regions": {
+                    "type": "array",
+                    "description": "Rectangles to blank before analysis, [x,y,w,h] each. "
+                                   "Same concept as replay's mask_regions.",
+                    "items": {"type": "array", "items": {"type": "integer"},
+                              "minItems": 4, "maxItems": 4},
+                },
+                "source": {
+                    "type": "string", "enum": ["auto", "video", "screenshots"], "default": "auto",
+                    "description": "'auto' uses recordVideo+ffmpeg when available and degrades "
+                                   "to screenshot polling; 'video' fails loudly without ffmpeg.",
+                },
+            },
+        },
+        "handler": tool_capture_motion,
+    },
+    {
+        "name": "detect_flicker",
+        "description": (
+            "(sim only) Decide whether a region is OSCILLATING rather than merely changing. "
+            "The motivating case: a button alternating between two labels several times a "
+            "second, which screenshot sampling can neither prove nor disprove. "
+            "A flicker is FEW distinct states visited MANY times — a one-way change, or a "
+            "wizard stepping through screens, is not flicker no matter how many transitions. "
+            "roi is REQUIRED: whole-screen motion cannot isolate one control. "
+            "Returns {flickering, transitions, period_ms (a full cycle, not a half), states, "
+            "revisits, transitions_per_second} plus the delta series and state sequence. "
+            "If the capture rate is too low to support a verdict (no ffmpeg), returns "
+            "ok=false with code 'insufficient_frame_rate' rather than guessing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id", "roi"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "roi": {
+                    "type": "array", "items": {"type": "integer"},
+                    "minItems": 4, "maxItems": 4,
+                    "description": "[x, y, w, h] in screenshot pixels — the control under suspicion.",
+                },
+                "duration_ms": {"type": "integer", "default": 2000,
+                                "description": "How long to watch. 2000-3000 ms catches a "
+                                               "several-Hz flicker comfortably."},
+                "fps": {"type": "integer", "default": 30},
+                "source": {"type": "string", "enum": ["auto", "video", "screenshots"],
+                           "default": "auto"},
+            },
+        },
+        "handler": tool_detect_flicker,
+    },
+    {
+        "name": "liveness_probe",
+        "description": (
+            "(sim only) Is the UI alive? Injects a touch, samples the screen for `seconds`, "
+            "and reports whether anything changed — with the app's CPU% alongside, so a spin "
+            "(frozen at high CPU) reads differently from a deadlock (frozen at idle). "
+            "Replaces the hand-rolled `ps` + log-silence routine that took an agent five "
+            "minutes to establish a freeze. "
+            "Taps the centre of the screen by default; pass x/y to probe a specific control. "
+            "Works without ffmpeg (a coarse sampling rate is sufficient to answer "
+            "'did anything change at all'). "
+            "Corroborate a not-responsive verdict with `logs` over the same window."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["session_id"],
+            "properties": {
+                "session_id": {"type": "string"},
+                "seconds": {"type": "integer", "default": 5,
+                            "description": "How long to watch after the touch (1-60)."},
+                "x": {"type": "integer", "description": "Tap x in screenshot pixels (default: centre)."},
+                "y": {"type": "integer", "description": "Tap y in screenshot pixels (default: centre)."},
+                "fps": {"type": "integer", "default": 10},
+                "source": {"type": "string", "enum": ["auto", "video", "screenshots"],
+                           "default": "auto"},
+            },
+        },
+        "handler": tool_liveness_probe,
     },
     # ── Performance monitoring ──────────────────────────────────────────
     {

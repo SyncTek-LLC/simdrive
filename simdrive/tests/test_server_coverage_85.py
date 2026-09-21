@@ -634,7 +634,7 @@ def test_tool_logs_sim_substring_filter(tmp_path, monkeypatch):
     s = _sim_session(tmp_path, "logs-sub")
     text = "line one\nKEEP me\nthrow away\nKEEP also\n"
     monkeypatch.setattr("simdrive.sim.get_log_tail",
-                        lambda udid, lines, predicate: text)
+                        lambda udid, lines, predicate, **kw: text)
     result = server.tool_logs({
         "session_id": s.session_id,
         "predicate": "KEEP",
@@ -650,7 +650,7 @@ def test_tool_logs_sim_regex_filter(tmp_path, monkeypatch):
     s = _sim_session(tmp_path, "logs-rx")
     text = "alpha\nERROR foo\nbeta\nERROR bar\n"
     monkeypatch.setattr("simdrive.sim.get_log_tail",
-                        lambda udid, lines, predicate: text)
+                        lambda udid, lines, predicate, **kw: text)
     result = server.tool_logs({
         "session_id": s.session_id,
         "predicate": "^ERROR",

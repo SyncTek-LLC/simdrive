@@ -78,7 +78,7 @@ def test_logs_predicate_kind_regex_sim(tmp_path, monkeypatch):
     raw_lines = ["ERROR: bad thing", "INFO: all good", "WARNING: check this", "ERROR: second"]
     monkeypatch.setattr(
         "simdrive.sim.get_log_tail",
-        lambda udid, lines, predicate: "\n".join(raw_lines),
+        lambda udid, lines, predicate, **kw: "\n".join(raw_lines),
     )
 
     result = server_mod.tool_logs({

@@ -18,6 +18,7 @@ Run under: pytest -m "not live"
 from __future__ import annotations
 
 import io
+import random
 import struct
 import zlib
 from pathlib import Path
@@ -46,6 +47,37 @@ def _write_png(path: Path, w: int = 4, h: int = 4,
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_png_bytes(w, h, color))
     return path
+
+
+def _write_multi_idat_png(path: Path, seed: int, w: int = 400, h: int = 400) -> Path:
+    """Write a PNG whose compressed data spans SEVERAL IDAT chunks.
+
+    A real simulator screenshot carries ~62 IDAT chunks; a small solid-colour
+    fixture carries exactly one, which is why the single-chunk fixtures above
+    cannot reach the multi-chunk decode path. Incompressible noise reproduces
+    the real shape at a fraction of the size.
+    """
+    rnd = random.Random(seed)
+    img = Image.new("RGB", (w, h))
+    img.putdata([
+        (rnd.randrange(256), rnd.randrange(256), rnd.randrange(256))
+        for _ in range(w * h)
+    ])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(path, format="PNG")
+    return path
+
+
+def _count_idat_chunks(path: Path) -> int:
+    """Number of IDAT chunks in a PNG — used to assert a fixture's own shape."""
+    data = path.read_bytes()
+    i, n = 8, 0
+    while i < len(data):
+        length = struct.unpack(">I", data[i:i + 4])[0]
+        if data[i + 4:i + 8] == b"IDAT":
+            n += 1
+        i += 12 + length
+    return n
 
 
 def _sim_session(tmp_path: Path, sid: str = "cov-e-sim"):
@@ -125,6 +157,43 @@ class TestComputeSsim:
         result = _compute_ssim(str(pre), str(post))
         assert result < 1.0, (
             f"Different PNGs must return < 1.0; got {result!r}"
+        )
+
+    def test_multi_idat_pngs_are_actually_compared(self, tmp_path):
+        """A screenshot-shaped PNG (many IDAT chunks) must still compare.
+
+        Regression: the chunk parser kept only the FIRST IDAT chunk, so
+        zlib.decompress raised on every real screenshot and the bare except
+        returned the 1.0 "no change" default. screen_changed was therefore
+        false for every tap in the product, including taps that navigated to
+        a different screen. The single-chunk fixtures above cannot catch this.
+        """
+        from simdrive.server import _compute_ssim
+
+        pre = _write_multi_idat_png(tmp_path / "pre.png", seed=1)
+        post = _write_multi_idat_png(tmp_path / "post.png", seed=2)
+
+        # Guard the fixture itself: if these ever collapse to one chunk the
+        # test silently stops covering the case it exists for.
+        assert _count_idat_chunks(pre) > 1, (
+            f"fixture must span multiple IDAT chunks; got {_count_idat_chunks(pre)}"
+        )
+
+        result = _compute_ssim(str(pre), str(post))
+        assert result < 1.0, (
+            "two different multi-IDAT PNGs must compare as changed; got "
+            f"{result!r} (1.0 means the decode failed into the no-change default)"
+        )
+
+    def test_multi_idat_identical_still_returns_near_1_0(self, tmp_path):
+        """The multi-chunk fix must not make identical frames look changed."""
+        from simdrive.server import _compute_ssim
+
+        img = _write_multi_idat_png(tmp_path / "same.png", seed=3)
+        assert _count_idat_chunks(img) > 1
+        result = _compute_ssim(str(img), str(img))
+        assert result >= 0.99, (
+            f"identical multi-IDAT PNGs must return ~1.0; got {result!r}"
         )
 
     def test_mismatched_dimensions_return_1_0(self, tmp_path):

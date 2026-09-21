@@ -116,3 +116,65 @@ def test_tool_observe_disables_ax_when_multiple_sim_sessions_active(tmp_path):
         server.tool_observe({"session_id": s1.session_id})
 
     assert captured["allow_ax"] is False
+
+
+def test_tool_observe_caller_can_force_ocr_with_allow_ax_false(tmp_path):
+    """A caller must be able to opt out of AX perception.
+
+    AX-primary observe collapses some content-dense screens to a handful of
+    container marks (a Palace catalog grid returns 5 marks against OCR's 41,
+    and the tab items are not individually addressable), so an agent needs a
+    way to ask for the OCR view. `observe.observe()` has always taken
+    `allow_ax`; the MCP tool did not expose it, leaving no escape hatch on
+    the surface agents actually drive.
+    """
+    pngfile = _png(tmp_path / "src-force-ocr.png")
+    s = _sim_session(tmp_path, "ax-routing-force-ocr")
+    captured = {}
+
+    def fake_observe(udid, out_dir, **kwargs):
+        captured.update(kwargs)
+        return _fake_observation(pngfile)
+
+    with patch("simdrive.observe.observe", side_effect=fake_observe):
+        server.tool_observe({"session_id": s.session_id, "allow_ax": False})
+
+    assert captured["allow_ax"] is False
+
+
+def test_tool_observe_allow_ax_true_cannot_override_the_routing_guard(tmp_path):
+    """`allow_ax` may only NARROW to OCR, never widen.
+
+    The multi-sim guard is a correctness constraint (AX reads whichever
+    Simulator window is frontmost), not a preference. A caller passing
+    allow_ax=True while two sim sessions are live must still get OCR.
+    """
+    pngfile = _png(tmp_path / "src-no-widen.png")
+    s1 = _sim_session(tmp_path, "ax-routing-no-widen-1")
+    _s2 = _sim_session(tmp_path, "ax-routing-no-widen-2")
+    captured = {}
+
+    def fake_observe(udid, out_dir, **kwargs):
+        captured.update(kwargs)
+        return _fake_observation(pngfile)
+
+    with patch("simdrive.observe.observe", side_effect=fake_observe):
+        server.tool_observe({"session_id": s1.session_id, "allow_ax": True})
+
+    assert captured["allow_ax"] is False
+
+
+def test_tool_observe_defaults_to_ax_when_allow_ax_omitted(tmp_path):
+    """Omitting the new parameter must not change existing behaviour."""
+    pngfile = _png(tmp_path / "src-default.png")
+    s = _sim_session(tmp_path, "ax-routing-default")
+    captured = {}
+
+    def fake_observe(udid, out_dir, **kwargs):
+        captured.update(kwargs)
+        return _fake_observation(pngfile)
+
+    with patch("simdrive.observe.observe", side_effect=fake_observe):
+        server.tool_observe({"session_id": s.session_id})
+
+    assert captured["allow_ax"] is True

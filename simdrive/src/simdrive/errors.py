@@ -96,7 +96,12 @@ def target_not_found(form: str, query: Any, available: Optional[list] = None) ->
         message=(
             f"no {form} match for {query!r} in last observe. "
             f"Available: {available[:30] if available else '(none)'}. "
-            "Recovery: call `observe` to refresh the screen state, then retry with a visible element."
+            "Recovery: if the screen has since moved on, call `observe` and retry. "
+            "If the available list looks far shorter than what is on screen, the "
+            "observation was AX-primary and collapsed the content to a few "
+            "containers — re-observe with allow_ax=false for the OCR view, which "
+            "resolves individual labels. Re-observing with the same settings will "
+            "return the same marks."
         ),
         details={"form": form, "query": query, "available": available},
     )

@@ -81,7 +81,7 @@ def test_logs_predicate_kind_nspredicate_on_sim_uses_log_show(tmp_path, monkeypa
 
     captured = {}
 
-    def _fake_get_log_tail(udid_, lines=200, predicate=None):
+    def _fake_get_log_tail(udid_, lines=200, predicate=None, **kw):
         captured["udid"] = udid_
         captured["predicate"] = predicate
         return "sim log line\n"
