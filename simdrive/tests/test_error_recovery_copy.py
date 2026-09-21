@@ -116,3 +116,19 @@ def test_license_error_has_recovery(name: str, factory) -> None:
     assert "Recovery:" in err.message, (
         f"license error {name!r} is missing 'Recovery:'.\nCurrent: {err.message!r}"
     )
+
+
+def test_target_not_found_recovery_names_the_ocr_escape_hatch():
+    """A short `available` list usually means AX collapsed the screen.
+
+    The old copy said only "call `observe` to refresh", which loops: on an
+    AX-collapsed screen a refresh returns the identical short mark list, so an
+    agent following the advice retries forever. The recovery must name the
+    way out (allow_ax=false) and say that a plain re-observe changes nothing.
+    """
+    err = _errors.target_not_found("text", "My Books", ["Catalog", "tab.bar.label"])
+    msg = err.message
+    assert "allow_ax=false" in msg, f"recovery must name the OCR escape hatch; got: {msg}"
+    assert "same marks" in msg, (
+        f"recovery must warn that a plain re-observe returns the same marks; got: {msg}"
+    )

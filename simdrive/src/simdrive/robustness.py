@@ -133,6 +133,15 @@ def list_replays(replays_root: Path, min_steps: int = 1) -> list[dict]:
     return out
 
 
+def _current_simdrive_version() -> str:
+    """Installed simdrive version, or "" when it cannot be determined."""
+    try:
+        from . import __version__
+        return str(__version__)
+    except Exception:
+        return ""
+
+
 def validate_replay(replays_root: Path, name: str) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
@@ -199,10 +208,35 @@ def validate_replay(replays_root: Path, name: str) -> dict:
             if not ref.exists():
                 warnings.append(f"step {i}: post_screenshot file missing: {ref}")
 
+    # Environment skew. This validator is static — it has no session, so it
+    # cannot know which device a replay will run against. What it CAN do is
+    # stop reporting a bare ok=True for a recording that cannot possibly run
+    # here: surface the captured environment as `requires`, and warn when the
+    # recording was made by a different simdrive version (mark geometry and
+    # the perception path both moved between releases).
+    recorded_version = str(data.get("simdrive_version", "") or "")
+    current_version = _current_simdrive_version()
+    if recorded_version and current_version and recorded_version != current_version:
+        warnings.append(
+            f"recorded by simdrive {recorded_version}, host runs {current_version} "
+            "— mark geometry and the AX/OCR perception path may both differ; "
+            "replay re-checks this against the live device at run time"
+        )
+
+    requires = {
+        key: data[key]
+        for key in ("device", "os_version", "app_bundle_id", "app_version")
+        if data.get(key)
+    }
+
     return {
         "ok": len(errors) == 0,
         "errors": errors,
         "warnings": warnings,
         "step_count": len(steps),
         "simdrive_version": data.get("simdrive_version", ""),
+        # The environment the recording was captured in. A replay whose host
+        # does not match halts at step 0 with state_contract_mismatch, so a
+        # caller can compare these up front instead of discovering it on run.
+        "requires": requires,
     }

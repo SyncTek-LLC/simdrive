@@ -2223,3 +2223,80 @@ def test_find_by_text_returns_none_when_neither_exact_nor_alias_matches():
     from simdrive.som import Mark, find_by_text
     other = Mark(id=1, x=10, y=10, w=20, h=20, text="Foo", confidence=0.7)
     assert find_by_text([other], "search") is None
+
+
+def test_validate_replay_warns_on_simdrive_version_skew(tmp_path, monkeypatch):
+    """A recording from another simdrive release must not validate silently.
+
+    Every Palace recording in the corpus was captured under 1.0.0b12 and then
+    halted at step 0 on a b14 host, while validate_replay reported ok=True with
+    zero warnings — so the static check could not distinguish a runnable
+    recording from an unrunnable one.
+    """
+    import yaml as _yaml
+    from simdrive import server, recorder
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    rec_dir = recorder.recordings_root() / "skewed"
+    (rec_dir / "snapshots").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (10, 10), (1, 2, 3)).save(rec_dir / "snapshots" / "001_pre.png")
+
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump({
+        "name": "skewed",
+        "created_at": 1.0,
+        "simdrive_version": "0.0.1-ancient",
+        "device": "iPhone 16 Pro (rc330-ios18)",
+        "os_version": "18.0",
+        "app_bundle_id": "org.thepalaceproject.palace",
+        "app_version": "498",
+        "steps": [{
+            "id": 1, "action": "tap", "args": {"x": 1, "y": 1},
+            "pre_screenshot": "snapshots/001_pre.png",
+        }],
+    }))
+
+    result = server.tool_validate_replay({"name": "skewed"})
+
+    # Schema really is valid — the skew is a warning, not an error.
+    assert result["ok"] is True
+    assert result["errors"] == []
+    assert any("0.0.1-ancient" in w for w in result["warnings"]), (
+        f"expected a version-skew warning; got {result['warnings']}"
+    )
+    # The captured environment must be visible without running the replay.
+    assert result["requires"] == {
+        "device": "iPhone 16 Pro (rc330-ios18)",
+        "os_version": "18.0",
+        "app_bundle_id": "org.thepalaceproject.palace",
+        "app_version": "498",
+    }
+
+
+def test_validate_replay_no_version_warning_when_versions_match(tmp_path, monkeypatch):
+    """The skew warning must not fire for a recording made by this version."""
+    import yaml as _yaml
+    import simdrive
+    from simdrive import server, recorder
+    from PIL import Image
+
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
+    rec_dir = recorder.recordings_root() / "current"
+    (rec_dir / "snapshots").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (10, 10), (1, 2, 3)).save(rec_dir / "snapshots" / "001_pre.png")
+
+    (rec_dir / "recording.yaml").write_text(_yaml.safe_dump({
+        "name": "current",
+        "created_at": 1.0,
+        "simdrive_version": simdrive.__version__,
+        "steps": [{
+            "id": 1, "action": "tap", "args": {"x": 1, "y": 1},
+            "pre_screenshot": "snapshots/001_pre.png",
+        }],
+    }))
+
+    result = server.tool_validate_replay({"name": "current"})
+    assert result["ok"] is True
+    assert not any("host runs" in w for w in result["warnings"]), (
+        f"no skew warning expected; got {result['warnings']}"
+    )

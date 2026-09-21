@@ -1045,7 +1045,10 @@ def tool_observe(arguments: dict) -> dict:
         mark_limit=arguments.get("mark_limit"),
         capture_observability=bool(arguments.get("capture_observability", False)),
         device_name=s.device.name,
-        allow_ax=_ax_routing_allowed(s),
+        # The caller may narrow to OCR, never widen: `_ax_routing_allowed` is
+        # a correctness constraint (AX reads whichever Simulator window is
+        # frontmost), so a caller-supplied True cannot override it.
+        allow_ax=_ax_routing_allowed(s) and bool(arguments.get("allow_ax", True)),
     )
     s.last_screenshot_w = obs.screenshot_w
     s.last_screenshot_h = obs.screenshot_h
@@ -1061,62 +1064,50 @@ def tool_observe(arguments: dict) -> dict:
     return obs.to_dict()
 
 
+_SSIM_SAMPLE_EDGE = 256
+
+
 def _compute_ssim(pre_path: Optional[str], post_path: Optional[str]) -> float:
     """Compute SSIM similarity between two screenshot files.
 
     Returns a float in [0.0, 1.0] where 1.0 means identical.  Falls back to 1.0
-    (no change detected) when images cannot be loaded, so callers get a safe
-    default rather than a spurious "screen changed" signal.
+    (no change detected) when the two images genuinely cannot be compared — a
+    missing path, an unreadable file, or mismatched dimensions — so callers get
+    a safe default rather than a spurious "screen changed" signal.
 
-    Uses only stdlib — reads raw PNG data and computes a lightweight pixel-level
-    comparison. For full SSIM accuracy, callers may monkeypatch this function in
-    tests (which the F#8 tests do).
+    Decoding goes through Pillow, which is already a hard dependency of this
+    package and is imported elsewhere in this module. The previous hand-rolled
+    stdlib PNG reader kept only the FIRST IDAT chunk of the file, so every
+    screenshot large enough to span several chunks (a simulator frame carries
+    ~62) failed to decompress and fell into the 1.0 default. That made
+    `screen_changed` false for every tap and type in the product, including
+    ones that navigated to an entirely different screen, and the failure was
+    indistinguishable from a genuine no-change result.
+
+    Frames are compared on a downscaled greyscale copy: a full simulator frame
+    is ~3.2M pixels, and the question this answers — did the screen change? —
+    survives the reduction at a fraction of the cost.
     """
+    if not pre_path or not post_path:
+        return 1.0
     try:
-        import struct
-        import zlib
+        from PIL import Image
 
-        def _load_pixels(path: str) -> tuple[int, int, list[int]]:
-            """Load a PNG and return (width, height, flat RGBA pixel list)."""
-            data = Path(path).read_bytes()
-            if data[:8] != b"\x89PNG\r\n\x1a\n":
-                return 0, 0, []
-            chunks: dict[bytes, bytes] = {}
-            i = 8
-            while i < len(data):
-                length = struct.unpack(">I", data[i:i+4])[0]
-                ctype = data[i+4:i+8]
-                cdata = data[i+8:i+8+length]
-                chunks.setdefault(ctype, cdata)
-                i += 12 + length
-            ihdr = chunks.get(b"IHDR", b"")
-            if len(ihdr) < 13:
-                return 0, 0, []
-            w, h = struct.unpack(">II", ihdr[:8])
-            # Only handle 8-bit RGB/RGBA; others return empty.
-            bit_depth, color_type = ihdr[8], ihdr[9]
-            if bit_depth != 8 or color_type not in (2, 6):
-                return 0, 0, []
-            raw = zlib.decompress(b"".join(
-                v for k, v in chunks.items() if k == b"IDAT"
-            ) or chunks.get(b"IDAT", b""))
-            channels = 3 if color_type == 2 else 4
-            pixels: list[int] = []
-            stride = w * channels
-            idx = 0
-            for _row in range(h):
-                filter_byte = raw[idx]; idx += 1
-                row = list(raw[idx:idx+stride]); idx += stride
-                if filter_byte == 1:  # Sub
-                    for c in range(channels, len(row)):
-                        row[c] = (row[c] + row[c - channels]) & 0xFF
-                pixels.extend(row[:stride:channels])  # just R channel for speed
-            return w, h, pixels
+        with Image.open(pre_path) as im_pre, Image.open(post_path) as im_post:
+            if im_pre.size != im_post.size:
+                return 1.0  # can't compare → assume no change
+            g1 = im_pre.convert("L")
+            g2 = im_post.convert("L")
+            if max(g1.size) > _SSIM_SAMPLE_EDGE:
+                sample = (_SSIM_SAMPLE_EDGE, _SSIM_SAMPLE_EDGE)
+                g1 = g1.resize(sample)
+                g2 = g2.resize(sample)
+            # tobytes() on an "L" image is one byte per pixel, and unlike
+            # getdata() it is not deprecated in Pillow 14.
+            p1 = list(g1.tobytes())
+            p2 = list(g2.tobytes())
 
-        w1, h1, p1 = _load_pixels(pre_path or "")
-        w2, h2, p2 = _load_pixels(post_path or "")
-
-        if not p1 or not p2 or w1 != w2 or h1 != h2 or len(p1) != len(p2):
+        if not p1 or not p2 or len(p1) != len(p2):
             return 1.0  # can't compare → assume no change
 
         n = len(p1)
@@ -3159,6 +3150,7 @@ _TOOLS: list[dict] = [
                 "capture_logs": {"type": "boolean", "default": False, "description": "Include a tail of recent simulator logs."},
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
+                "allow_ax": {"type": "boolean", "default": True, "description": "Default true. Pass false to force the OCR view of the screen. AX-primary perception is ground truth where the app exposes its tree, but on some content-dense screens the tree yields only a few container marks while OCR resolves every visible label — if `marks` looks implausibly short for what is on screen, re-observe with allow_ax=false and compare. This can only narrow to OCR: a multi-simulator or headless session already reports resolution_method=\"ocr\" and passing true will not re-enable AX."},
                 "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
                 "compact": {"type": "boolean", "default": False, "description": "Emit the slim 7-key mark dict (id, stable_id, text, center, bbox, confidence_band, english_like) instead of the full diagnostic dict. Roughly 1.7x smaller on the wire (bbox/center/text are identical in both shapes, so most bytes are shared)."},
                 "confidence_floor": {"type": "string", "enum": ["low", "med", "medium", "high"], "description": "Drop marks whose confidence_band ranks below this floor before returning. Default keeps every band."},
