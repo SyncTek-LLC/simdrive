@@ -1,7 +1,7 @@
 {
   "name": "SimDrive",
   "description": "MCP-native iOS simulator and device automation, driven by Claude. Record tests once, replay deterministically. 36 vision-first tools for agent-driven iOS QA.",
-  "version": "1.0.0b13",
+  "version": "1.0.0b14",
   "provider": {
     "name": "SyncTek LLC",
     "url": "https://simdrive.dev"
