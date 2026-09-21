@@ -206,3 +206,104 @@ def test_merge_output_is_renumbered_in_reading_order():
     ids = [m.id for m in merged]
     assert ids == sorted(ids)
     assert ids == list(range(1, len(merged) + 1))
+
+
+# ---------------------------------------------------------------------------
+# Layout containers must not swallow the content inside them
+# ---------------------------------------------------------------------------
+
+
+def _ocr(id_, x, y, w, h, text):
+    return Mark(id=id_, x=x, y=y, w=w, h=h, text=text,
+                confidence=1.0, raw_confidence=1.0, source="ocr")
+
+
+def test_full_screen_container_does_not_consume_the_content_inside_it():
+    """A layout container must not absorb every OCR mark it encloses.
+
+    Real geometry from Palace 3.3.0 on iPhone 17 Pro (1206x2622): the catalog
+    scroll view comes back from host AX as one element labelled "Catalog" with
+    bbox [0, 349, 1206, 2273] — 86% of the screen. Because containment alone
+    consumed an OCR mark, every book title on the grid was swallowed and
+    replaced by that single container mark: observe returned 5 marks where OCR
+    alone returned 43, and the titles became untappable.
+    """
+    ocr_marks = [
+        _ocr(1, 79, 1398, 197, 23, "Dobbs v. Jackson"),
+        _ocr(2, 692, 1379, 163, 19, "The Covid Archive:"),
+        _ocr(3, 410, 1444, 163, 35, "U.S. LEADERSHIP"),
+    ]
+    ax_elements = [
+        {"role": "unknown", "label": "Catalog", "enabled": True,
+         "bbox": [0, 349, 1206, 2273]},
+    ]
+
+    merged = merge_ax_and_ocr(ocr_marks, ax_elements, screen_size=(1206, 2622))
+    texts = [m.text for m in merged]
+
+    for title in ("Dobbs v. Jackson", "The Covid Archive:", "U.S. LEADERSHIP"):
+        assert title in texts, f"{title!r} was swallowed by the container; got {texts}"
+
+
+def test_tab_bar_container_does_not_consume_the_tab_labels():
+    """The tab bar is only ~9% of the screen but still a container.
+
+    iOS 26 vends it as one element labelled "tab.bar.label" over bbox
+    [0, 2373, 1206, 249]. A screen-fraction rule alone would let this one
+    through, so the guard keys on whether the OCR text plausibly renders the
+    element's OWN label — "My Books" is not a rendering of "tab.bar.label".
+    This is the case that made tap(text:"My Books") fail on Palace.
+    """
+    ocr_marks = [
+        _ocr(1, 83, 2480, 133, 38, "Catalog"),
+        _ocr(2, 368, 2480, 163, 39, "My Books"),
+        _ocr(3, 700, 2480, 102, 30, "Holds"),
+        _ocr(4, 981, 2480, 141, 39, "Settings"),
+    ]
+    ax_elements = [
+        {"role": "unknown", "label": "tab.bar.label", "enabled": True,
+         "bbox": [0, 2373, 1206, 249]},
+    ]
+
+    merged = merge_ax_and_ocr(ocr_marks, ax_elements, screen_size=(1206, 2622))
+    texts = [m.text for m in merged]
+
+    for tab in ("Catalog", "My Books", "Holds", "Settings"):
+        assert tab in texts, f"tab {tab!r} was swallowed by the tab bar; got {texts}"
+
+
+def test_control_still_absorbs_its_own_split_label():
+    """The collapse this rule exists for must keep working.
+
+    A control rect larger than its glyph box, whose label the OCR text is a
+    fragment of, should still consume those fragments into one AX mark.
+    """
+    ocr_marks = [
+        _ocr(1, 100, 510, 90, 20, "Email"),
+        _ocr(2, 195, 510, 95, 20, "address"),
+    ]
+    ax_elements = [
+        {"role": "text_field", "label": "Email address", "enabled": True,
+         "bbox": [90, 480, 400, 80]},
+    ]
+
+    merged = merge_ax_and_ocr(ocr_marks, ax_elements, screen_size=(1206, 2622))
+    texts = [m.text for m in merged]
+
+    assert texts == ["Email address"], (
+        f"control should absorb its own split label into one mark; got {texts}"
+    )
+
+
+def test_button_absorbs_its_matching_glyph():
+    """A normal button whose label matches its glyph still collapses to one mark."""
+    ocr_marks = [_ocr(1, 520, 1500, 160, 40, "Borrow")]
+    ax_elements = [
+        {"role": "button", "label": "Borrow", "enabled": True,
+         "bbox": [480, 1464, 246, 132]},
+    ]
+
+    merged = merge_ax_and_ocr(ocr_marks, ax_elements, screen_size=(1206, 2622))
+    assert [m.text for m in merged] == ["Borrow"]
+    assert merged[0].source == "ax"
+    assert merged[0].role == "button"

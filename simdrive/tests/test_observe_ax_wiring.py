@@ -216,3 +216,94 @@ def test_device_target_never_attempts_host_ax(tmp_path):
 
     assert obs.resolution_method == "ocr"
     assert obs.degraded is False
+
+
+def test_ax_merge_collapse_is_reported_as_degraded(tmp_path):
+    """A merge that erases most of the screen must not read as a clean AX read.
+
+    The original defect: on a Palace catalog the AX scroll-view element
+    consumed every OCR mark inside its bbox, so observe returned 5 marks
+    where OCR alone found 43 — and reported degraded=false. The merge rule
+    now prevents that, but an agent cannot tell a sparse screen from a
+    collapsed one, so the canary makes the next container-shaped regression
+    announce itself rather than look healthy.
+    """
+    many_ocr = [
+        Mark(id=i, x=10 * i, y=100 + 10 * i, w=40, h=12, text=f"title {i}",
+             confidence=1.0, raw_confidence=1.0, source="ocr")
+        for i in range(1, 21)
+    ]
+
+    with patch("simdrive.observe.sim.screenshot", side_effect=_fake_screenshot), \
+         patch("simdrive.observe.som.detect_marks", return_value=many_ocr), \
+         patch("simdrive.observe.get_bounds", return_value=WindowBounds(0, 0, 100, 200)), \
+         patch("simdrive.observe.ax.is_available", return_value=True), \
+         patch("simdrive.observe.som.merge_ax_and_ocr", return_value=many_ocr[:2]), \
+         patch(
+             "simdrive.observe.ax.observe_pixel_elements",
+             return_value={
+                 "elements": _AX_ELEMENTS,
+                 "resolution_method": "ax",
+                 "reactivated": False,
+             },
+         ):
+        obs = observe.observe("UDID", tmp_path, annotate=False,
+                              device_name="iPhone 17 Pro Max")
+
+    assert obs.degraded is True, "a 20 -> 2 collapse must not report as healthy"
+    assert "ax_merge_collapsed" in (obs.degraded_reason or ""), obs.degraded_reason
+
+
+def test_normal_ax_merge_does_not_trip_the_collapse_canary(tmp_path):
+    """Folding a label's fragments together is the merge working, not a collapse."""
+    ocr = [
+        Mark(id=i, x=10 * i, y=100 + 10 * i, w=40, h=12, text=f"title {i}",
+             confidence=1.0, raw_confidence=1.0, source="ocr")
+        for i in range(1, 21)
+    ]
+
+    with patch("simdrive.observe.sim.screenshot", side_effect=_fake_screenshot), \
+         patch("simdrive.observe.som.detect_marks", return_value=ocr), \
+         patch("simdrive.observe.get_bounds", return_value=WindowBounds(0, 0, 100, 200)), \
+         patch("simdrive.observe.ax.is_available", return_value=True), \
+         patch("simdrive.observe.som.merge_ax_and_ocr", return_value=ocr[:18]), \
+         patch(
+             "simdrive.observe.ax.observe_pixel_elements",
+             return_value={
+                 "elements": _AX_ELEMENTS,
+                 "resolution_method": "ax",
+                 "reactivated": False,
+             },
+         ):
+        obs = observe.observe("UDID", tmp_path, annotate=False,
+                              device_name="iPhone 17 Pro Max")
+
+    assert obs.degraded is False, f"20 -> 18 is a normal merge; got {obs.degraded_reason}"
+
+
+def test_merge_receives_the_screenshot_dimensions(tmp_path):
+    """The container size check needs the screen size — it must be threaded in."""
+    captured = {}
+
+    def fake_merge(ocr_marks, ax_elements, **kwargs):
+        captured.update(kwargs)
+        return list(ocr_marks)
+
+    with patch("simdrive.observe.sim.screenshot", side_effect=_fake_screenshot), \
+         patch("simdrive.observe.som.detect_marks", return_value=list(_OCR_MARKS)), \
+         patch("simdrive.observe.get_bounds", return_value=WindowBounds(0, 0, 100, 200)), \
+         patch("simdrive.observe.ax.is_available", return_value=True), \
+         patch("simdrive.observe.som.merge_ax_and_ocr", side_effect=fake_merge), \
+         patch(
+             "simdrive.observe.ax.observe_pixel_elements",
+             return_value={
+                 "elements": _AX_ELEMENTS,
+                 "resolution_method": "ax",
+                 "reactivated": False,
+             },
+         ):
+        observe.observe("UDID", tmp_path, annotate=False,
+                        device_name="iPhone 17 Pro Max")
+
+    assert "screen_size" in captured, "merge must receive screen_size"
+    assert captured["screen_size"] is not None

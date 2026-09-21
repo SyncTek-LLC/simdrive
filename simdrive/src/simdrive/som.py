@@ -458,10 +458,37 @@ def _bbox_contains_center(outer: tuple[int, int, int, int], point: tuple[float, 
 _MERGE_MATCH_IOU_THRESHOLD = 0.10
 
 
+# A host-AX element large enough to be a layout container rather than a
+# control. Only consulted for elements with NO label, where text
+# correspondence cannot be checked.
+_MERGE_CONTAINER_SCREEN_FRACTION = 0.10
+
+
+def _normalize_for_correspondence(text: str) -> str:
+    """Casefolded alphanumerics only — for comparing a label to a glyph read."""
+    return "".join(ch for ch in text.casefold() if ch.isalnum())
+
+
+def _texts_correspond(label: str, ocr_text: str) -> bool:
+    """True when `ocr_text` plausibly renders (part of) `label`, or vice versa.
+
+    Containment alone is not evidence that an OCR mark belongs to an AX
+    element: a scroll view's bbox contains every title on the screen. What
+    makes the "label + hint fragment" collapse legitimate is that the
+    fragments ARE the element's label. So require that correspondence.
+    """
+    a = _normalize_for_correspondence(label)
+    b = _normalize_for_correspondence(ocr_text)
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
 def merge_ax_and_ocr(
     ocr_marks: "list[Mark]",
     ax_elements: "list[dict]",
     iou_threshold: float = _MERGE_MATCH_IOU_THRESHOLD,
+    screen_size: "tuple[int, int] | None" = None,
 ) -> "list[Mark]":
     """Overlay host-AX elements onto OCR marks — the core of D1's AX-primary
     perception path (INIT-2026-641).
@@ -476,11 +503,19 @@ def merge_ax_and_ocr(
       * Skip elements with role == "unknown" and no label — pure layout
         containers, not actionable controls or readable text.
       * Otherwise, find the best-overlapping *unused* OCR mark by IoU. If one
-        clears ``iou_threshold``, that OCR mark (and any other OCR mark that
-        falls entirely inside this AX element's bbox — the "label + hint
-        fragment" collapse) is consumed and replaced by a single AX-sourced
-        mark using the AX element's own bbox (the real control rect, not the
-        OCR glyph box) and label (ground truth beats a probabilistic read).
+        clears ``iou_threshold``, that OCR mark is consumed and replaced by a
+        single AX-sourced mark using the AX element's own bbox (the real
+        control rect, not the OCR glyph box) and label (ground truth beats a
+        probabilistic read).
+      * An OCR mark that only sits *inside* the AX bbox, without clearing the
+        IoU threshold, is consumed only with evidence it belongs to this
+        element: its text must correspond to the element's own label (the
+        "label + hint fragment" collapse). Containment alone is not evidence
+        — a scroll view's bbox contains every title on screen, and consuming
+        on containment alone collapsed a Palace catalog from 43 marks to 5,
+        taking the tab items with it. Elements with no label at all fall back
+        to a size check (``_MERGE_CONTAINER_SCREEN_FRACTION``) when
+        ``screen_size`` is supplied.
       * With no matching OCR mark, the AX element still becomes its own new
         mark (e.g. an icon-only button OCR never rendered as text).
 
@@ -493,6 +528,9 @@ def merge_ax_and_ocr(
     """
     consumed: set[int] = set()
     merged: list[Mark] = []
+    screen_area = (
+        max(screen_size[0] * screen_size[1], 1) if screen_size else None
+    )
 
     for el in ax_elements:
         role = el.get("role") or "unknown"
@@ -510,12 +548,28 @@ def merge_ax_and_ocr(
         # be too small to clear the threshold).
         best_text: str | None = None
         best_iou = 0.0
+        # An element with no label cannot be checked for text correspondence,
+        # so fall back to a size sanity check for that case alone.
+        el_area = max(w * h, 1)
+        oversized = (
+            screen_area is not None
+            and el_area >= screen_area * _MERGE_CONTAINER_SCREEN_FRACTION
+        )
         for i, m in enumerate(ocr_marks):
             if i in consumed:
                 continue
             m_bbox = (m.x, m.y, m.w, m.h)
             iou = _bbox_iou(bbox, m_bbox)
             inside = _bbox_contains_center(bbox, m.center)
+            if inside and iou < iou_threshold:
+                # Containment-only match. Consume it only with evidence that
+                # this OCR text belongs to THIS element — otherwise a scroll
+                # view swallows every title it encloses, which is exactly how
+                # a Palace catalog screen collapsed from 43 marks to 5.
+                if label:
+                    inside = _texts_correspond(label, m.text)
+                elif oversized:
+                    inside = False
             if iou >= iou_threshold or inside:
                 consumed.add(i)
                 if iou > best_iou:

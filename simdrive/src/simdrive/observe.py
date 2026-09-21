@@ -178,6 +178,13 @@ def _apply_filters(
     return out
 
 
+# Collapse canary thresholds — see the AX merge block in observe().
+# Deliberately conservative: a legitimate merge folds a label's fragments
+# together, it does not erase three quarters of the screen.
+_COLLAPSE_CANARY_RATIO = 0.25
+_COLLAPSE_CANARY_MIN_OCR_MARKS = 8
+
+
 def observe(
     udid: str,
     out_dir: Path,
@@ -279,8 +286,38 @@ def observe(
         else:
             try:
                 ax_result = ax.observe_pixel_elements(device_name, w, h)
-                marks = som.merge_ax_and_ocr(marks, ax_result["elements"])
+                ocr_only_count = len(marks)
+                marks = som.merge_ax_and_ocr(
+                    marks, ax_result["elements"], screen_size=(w, h),
+                )
                 resolution_method = ax_result["resolution_method"]
+                # Collapse canary. A merge should refine the mark list, not
+                # empty it: when an AX element swallows the content inside it
+                # the screen silently loses most of its detail while the
+                # response still looks like a clean AX read. That is how a
+                # Palace catalog came back with 5 marks where OCR alone found
+                # 43, with degraded=false. The merge rule now requires label
+                # correspondence before consuming by containment, so this
+                # should not fire — it is here so the next container-shaped
+                # regression announces itself instead of reading as healthy.
+                if (
+                    ocr_only_count >= _COLLAPSE_CANARY_MIN_OCR_MARKS
+                    and len(marks) < ocr_only_count * _COLLAPSE_CANARY_RATIO
+                ):
+                    degraded = True
+                    degraded_reason = (
+                        f"ax_merge_collapsed: {ocr_only_count} OCR marks -> "
+                        f"{len(marks)} after AX merge"
+                    )
+                    log.warning(
+                        "AX merge collapsed the mark list; treating as degraded",
+                        extra={
+                            "udid": udid,
+                            "device_name": device_name,
+                            "ocr_marks": ocr_only_count,
+                            "merged_marks": len(marks),
+                        },
+                    )
                 if resolution_method == "ax_reactivated":
                     degraded = True
                     degraded_reason = "ax_reactivated"
