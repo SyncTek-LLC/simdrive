@@ -84,7 +84,7 @@ pydantic-core==2.46.4
     # via pydantic
 pydantic-settings==2.14.2
     # via mcp
-pyjwt[crypto]==2.13.0
+pyjwt[crypto]==2.15.1
     # via mcp
 pynacl==1.6.2
     # via simdrive (pyproject.toml)
@@ -149,7 +149,7 @@ typing-inspection==0.4.2
     #   mcp
     #   pydantic
     #   pydantic-settings
-urllib3==2.7.0
+urllib3==2.8.0
     # via
     #   botocore
     #   requests
