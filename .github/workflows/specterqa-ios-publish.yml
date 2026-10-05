@@ -49,17 +49,20 @@ jobs:
         id: parse
         env:
           GITHUB_REF: ${{ github.ref }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF#refs/tags/}"
+          # push: tag from ref; workflow_dispatch (dry run): derived from pyproject.
+          TAG="$(python scripts/release_tag.py --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF")"
           echo "Tag: $TAG"
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           python - <<'PY'
           import os, sys, pathlib
           sys.path.insert(0, str(pathlib.Path('.').resolve()))
           from tests.packaging.test_publish_gates import (
               parse_tag, parse_pyproject_version, check_publish_gates,
           )
-          tag = os.environ['GITHUB_REF'].removeprefix('refs/tags/')
+          tag = os.environ['RELEASE_TAG']
           py = pathlib.Path('simdrive/pyproject.toml').read_text()
           cl = pathlib.Path('simdrive/CHANGELOG.md').read_text()
           check_publish_gates(tag, py, cl)
