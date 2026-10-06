@@ -282,3 +282,15 @@ class TestAppDiedProbe:
         calls = self._states(monkeypatch, [])
         assert _REAL_APP_DIED(self._session(tmp_path, target="device")) is False
         assert calls == []
+
+
+def test_list_crashes_skips_reportcrash_in_progress_temp_file(tmp_path):
+    """ReportCrash writes `.<App>-<ts>.ips` and renames it when done; a lookup
+    that returns the temp path hands the caller a file that is about to
+    vanish (observed in the live CI job)."""
+    header = json.dumps({"bundleID": BUNDLE}) + "\n{}"
+    (tmp_path / ".TestKitApp-2026-10-06-041839.ips").write_text(header)
+    assert diagnostics.list_crashes(bundle_id=BUNDLE, reports_dir=tmp_path) == []
+    (tmp_path / "TestKitApp-2026-10-06-041839.ips").write_text(header)
+    [crash] = diagnostics.list_crashes(bundle_id=BUNDLE, reports_dir=tmp_path)
+    assert crash["name"] == "TestKitApp-2026-10-06-041839.ips"

@@ -420,7 +420,10 @@ def list_crashes(
         return []
     candidates: list[tuple[float, Path]] = []
     for p in base.iterdir():
-        if p.suffix != ".ips":
+        # A leading dot is ReportCrash's in-progress temp file; it is renamed
+        # to the final name once written (seen live on a GitHub macOS runner:
+        # `.TestKitApp-<ts>.ips`, gone by the time the path was opened).
+        if p.suffix != ".ips" or p.name.startswith("."):
             continue
         try:
             mtime = p.stat().st_mtime
