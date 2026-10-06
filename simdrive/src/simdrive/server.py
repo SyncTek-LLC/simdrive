@@ -3418,7 +3418,11 @@ _TOOLS: list[dict] = [
             "After the final step the live screen is compared against that step's recorded "
             "POST-state and reported as `final_state`, halting with halt_reason='outcome_drift' "
             "— without it a recording whose payload IS its last action passes no matter what "
-            "the action did. retry_noop_taps (default off, or per-recording via "
+            "the action did. A recording's final_expect strings are checked against the final "
+            "screen; a miss halts with 'final_expect_failed', or 'final_expect_ocr_uncertain' "
+            "when OCR read something nearly identical (evidence in `final_expect`). A crash "
+            "during the run halts with 'crash_detected' (or 'app_exited' if the app vanished "
+            "with no report) on every halt path, with `crash_after_step`. retry_noop_taps (default off, or per-recording via "
             "replay_policy.retry_noop_taps) re-sends a tap the UI provably ignored, which is "
             "common on freshly-presented SwiftUI menus; leave it off for flows with "
             "non-idempotent taps (Borrow, Return, Sign in) where a slow request is "
@@ -4549,9 +4553,39 @@ def _cmd_replay(args: list[str]) -> None:
     if parsed.json:
         print(json.dumps(result, default=str))
     else:
-        status = "PASS" if result.get("ok") else "FAIL"
-        print(f"replay {parsed.name}: {status} (halt_reason={result.get('halt_reason')})")
+        print(_format_replay_summary(parsed.name, result))
     _sys.exit(0 if result.get("ok") else 1)
+
+
+def _format_replay_summary(name: str, result: dict) -> str:
+    """Human-readable `simdrive replay` verdict. The headline line is
+    unchanged; a failing `final_expect` or a crash adds the evidence an
+    engineer needs to tell a real failure from an OCR misread (FU-2026-070)
+    and to find the crash report (FU-2026-071) without re-running --json."""
+    status = "PASS" if result.get("ok") else "FAIL"
+    lines = [f"replay {name}: {status} (halt_reason={result.get('halt_reason')})"]
+    fe = result.get("final_expect") or {}
+    if fe and not fe.get("ok"):
+        lines.append(f"  final_expect: {fe.get('failure_kind')} "
+                     f"(confidence={fe.get('confidence')})")
+        for ev in fe.get("evidence") or []:
+            nearest = ev.get("nearest_text")
+            read = (f"nearest read {nearest!r} similarity={ev.get('nearest_similarity')}"
+                    f" ocr_confidence={ev.get('nearest_ocr_confidence')}"
+                    if nearest is not None else "nothing read")
+            lines.append(f"    expected {ev.get('expected')!r}: {ev.get('failure_kind')} "
+                         f"[{ev.get('confidence')}] — {read}")
+        for path in fe.get("screenshot_paths") or []:
+            lines.append(f"    screenshot: {path}")
+    if result.get("halt_reason") in ("crash_detected", "app_exited"):
+        where = (f" after step {result['crash_after_step']}"
+                 if result.get("crash_after_step") is not None else "")
+        before = result.get("halt_reason_before_crash_check")
+        lines.append(f"  {result['halt_reason']}{where}"
+                     + (f" (replay alone saw: {before})" if before else ""))
+        for c in result.get("crashes") or []:
+            lines.append(f"    crash report: {c.get('path')} ({c.get('exception')})")
+    return "\n".join(lines)
 
 
 def _cmd_migrate_recording(args: list[str]) -> None:

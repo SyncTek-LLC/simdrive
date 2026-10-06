@@ -82,6 +82,18 @@ After this, `~/Library/MobileDevice/Provisioning Profiles/` will populate as nee
 
 `simdrive bootstrap-device` checks for this state pre-flight and raises `wda_xcode_account_not_authenticated` with this same recovery if the profiles directory is empty.
 
+### Replay does not detect app crashes on a real device
+
+Replay's crash check (`halt_reason: "crash_detected"`) reads crash reports
+from the Mac's `~/Library/Logs/DiagnosticReports`, which is where a
+simulator app's reports land. A physical device keeps its reports on the
+device, so a crash during a device replay is reported by whatever check
+fails next (usually `drift`), not as a crash. The reports can be pulled with
+`xcrun devicectl device copy from --device <udid> --domain-type
+systemCrashLogs --source / --destination <dir>`; replay does not do this yet.
+The simulator path is covered by a live test that replays into a real crash
+(`scripts/live_crash_injection.sh`).
+
 ## Background-mode caveats
 
 Under the HID injection backend (the default when the bundled `simdrive-input`

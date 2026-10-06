@@ -39,6 +39,9 @@ DERIVED_DATA="$BUILD_DIR/DerivedData"
 mkdir -p "$DERIVED_DATA"
 
 echo "Building $SCHEME (iphonesimulator)..."
+# xcpretty when available. The old `| xcpretty || cat` fallback hung forever
+# without it: xcpretty failed, then `cat` sat reading the shell's stdin.
+if command -v xcpretty >/dev/null 2>&1; then PRETTY=xcpretty; else PRETTY=cat; fi
 xcodebuild build \
     -project "$SCRIPT_DIR/TestKitApp.xcodeproj" \
     -scheme "$SCHEME" \
@@ -49,7 +52,7 @@ xcodebuild build \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \
     ONLY_ACTIVE_ARCH=YES \
-    2>&1 | xcpretty 2>/dev/null || cat  # fall back to raw output if xcpretty absent
+    < /dev/null 2>&1 | "$PRETTY"
 
 # ── 3. Locate the .app bundle ─────────────────────────────────────────────────
 APP_PATH=$(find "$DERIVED_DATA" -name "TestKitApp.app" -type d | head -n 1)

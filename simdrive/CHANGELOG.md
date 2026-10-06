@@ -13,6 +13,44 @@
  filter catch what slips through.
 -->
 
+## [Unreleased]
+
+### Fixed: replay reports a mid-run crash as a crash
+
+- A crash partway through a replay now halts with `crash_detected`, even
+  when the next step's screen check would otherwise have reported it as
+  `drift` first. Previously the crash check ran only after the last step,
+  so a crash at step 10 of 15 was reported as a screen mismatch at step 11
+  and the crash report was never looked for. The result now names the step
+  the crash followed (`crash_after_step`) and keeps the reason the replay
+  would otherwise have given (`halt_reason_before_crash_check`).
+- The simulator writes a crash report about 15 seconds after the app dies.
+  When a replay has failed and the app is no longer running, replay now
+  waits for that report (up to 30 s) instead of checking once and finding
+  nothing. If the app is gone and no report arrives, the result is
+  `app_exited`.
+- Crash entries from the `crashes` tool now include `captured_at`, the time
+  of the crash itself rather than the time the report was written.
+- The crash check is now proven against a real crash: the bundled TestKit
+  demo app crashes on the N-th tap when launched with
+  `SIMDRIVE_CRASH_ON_TAP=N`, and a live test replays a 15-step recording
+  into a crash at step 10. Real devices are not covered: replay looks for
+  crash reports on the Mac, and a device's reports stay on the device.
+
+### Fixed: `final_expect` tells an OCR misread from a real failure
+
+- When an expected string is missing, replay reads the screen a second time
+  and passes if either read contains it, the same two-read approach the
+  recorded starting-state check uses.
+- A string that is still missing gets a verdict: `final_expect_failed` when
+  nothing close was read (high confidence when the accessibility tree was
+  checked), or `final_expect_ocr_uncertain` when the text recognizer read
+  something almost identical, such as "JAMES PATERSON" for
+  "JAMES PATTERSON". Both still fail the run. The new `final_expect` block in
+  the result lists, for each string, the nearest text read, its similarity
+  and recognizer confidence, and the screenshot of every read. The
+  `simdrive replay` CLI prints the same evidence.
+
 ## [1.0.0b14] — 2026-09-20
 
 This release closes the biggest correctness gap in `version()`'s drift check,

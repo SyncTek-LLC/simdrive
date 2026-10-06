@@ -141,3 +141,20 @@ def _neutralize_self_restart(monkeypatch):
     # Reset the latch so the next test starts fresh even if the test that
     # just ran flipped it via a deeper monkeypatch.
     _server._RESTART_SCHEDULED = False
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_replay_liveness_probe(request, monkeypatch):
+    """Hermetic tests use fake simulator UDIDs, for which the real
+    ``diagnostics.app_state`` (``simctl spawn ... launchctl list``) fails and
+    reads as "not-running" — which would make every failing replay wait
+    ``_CRASH_REPORT_FLUSH_WAIT_S`` for a crash report that cannot exist.
+    Default the probe to "app alive"; tests that exercise the crash wait
+    patch it themselves. Live tests keep the real probe.
+    """
+    if request.node.get_closest_marker("live"):
+        yield
+        return
+    from simdrive import recorder as _recorder
+    monkeypatch.setattr(_recorder, "_app_died_during_replay", lambda session: False)
+    yield
