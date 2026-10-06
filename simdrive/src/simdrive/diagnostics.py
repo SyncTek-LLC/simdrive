@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import plistlib
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
@@ -376,6 +378,35 @@ def _ips_body_backtrace(path: Path) -> list[str]:
     return []
 
 
+_CAPTURE_TIME_RE = re.compile(r'"captureTime"\s*:\s*"([^"]+)"')
+_CAPTURE_TIME_FORMATS = ("%Y-%m-%d %H:%M:%S.%f %z", "%Y-%m-%d %H:%M:%S %z")
+
+
+def _ips_capture_time(path: Path) -> Optional[float]:
+    """Epoch seconds of the crash itself, from the body's ``captureTime``.
+
+    Not the header ``timestamp`` and not the file mtime: both record when
+    ReportCrash *wrote* the report, which on the simulator lands ~15 s after
+    the process died (measured 2026-10-05: captureTime 23:04:25, written
+    23:04:40). Attributing a crash to a replay step needs the crash time.
+    None when the field is missing or unparseable. Never raises.
+    """
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            head = f.read(16384)
+    except OSError:
+        return None
+    m = _CAPTURE_TIME_RE.search(head)
+    if not m:
+        return None
+    for fmt in _CAPTURE_TIME_FORMATS:
+        try:
+            return datetime.strptime(m.group(1), fmt).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
 def list_crashes(
     since_ts: float = 0.0,
     bundle_id: Optional[str] = None,
@@ -389,7 +420,10 @@ def list_crashes(
         return []
     candidates: list[tuple[float, Path]] = []
     for p in base.iterdir():
-        if p.suffix != ".ips":
+        # A leading dot is ReportCrash's in-progress temp file; it is renamed
+        # to the final name once written (seen live on a GitHub macOS runner:
+        # `.TestKitApp-<ts>.ips`, gone by the time the path was opened).
+        if p.suffix != ".ips" or p.name.startswith("."):
             continue
         try:
             mtime = p.stat().st_mtime
@@ -423,6 +457,7 @@ def list_crashes(
             "exception": header.get("exception", "") or header.get("bug_type", ""),
             "bundle_id": crash_bundle,
             "mtime": mtime,
+            "captured_at": _ips_capture_time(p),
             "backtrace_first_lines": _ips_body_backtrace(p),
         })
         if len(out) >= max_results:

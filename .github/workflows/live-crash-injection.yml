@@ -1,0 +1,53 @@
+name: live crash injection
+
+# FU-2026-071: proves the replay crash cross-check catches a REAL app crash
+# mid-replay, not just a mocked list_crashes. Boots a throwaway simulator,
+# builds TestKitApp, records a 15-tap journey and replays it into a
+# deliberate crash at tap 10 (scripts/live_crash_injection.sh).
+#
+# Not a required check: it needs a simulator and takes ~10 minutes, so it
+# runs on changes to the code it proves, nightly, and on demand.
+
+on:
+  pull_request:
+    paths:
+      - "simdrive/src/simdrive/recorder.py"
+      - "simdrive/src/simdrive/diagnostics.py"
+      - "simdrive/tests/test_live_replay_crash_injection.py"
+      - "TestKitApp/**"
+      - "scripts/live_crash_injection.sh"
+      - ".github/workflows/live-crash-injection.yml"
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-crash-injection:
+    name: Real crash mid-replay is caught (simulator)
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build native HID helper
+        working-directory: simdrive
+        run: cd native && make clean && make
+
+      - name: Install simdrive + dev extras
+        working-directory: simdrive
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Record, crash at step 10 of 15, assert crash_detected
+        env:
+          PYTHON: python
+        run: scripts/live_crash_injection.sh

@@ -98,11 +98,12 @@ whatever field is currently first responder).
 """
 from __future__ import annotations
 
+import difflib
 import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import yaml
 
@@ -1573,6 +1574,27 @@ property a state contract needs. Two samples removes the noise cheaply; more
 would cost a screenshot each for diminishing returns.
 """
 
+_FINAL_EXPECT_MISREAD_SIMILARITY = 0.8
+"""Similarity at or above which a missing ``final_expect`` string that OCR read
+*almost* verbatim is reported as a possible misread, not a genuine failure
+(FU-2026-070). "JAMES PATTERSON" vs "JAMES PATERSON" scores 0.97; "Timer Armed"
+vs "Timer Off" scores well under. The run still fails either way — this only
+decides which verdict it carries. A real one-character change ("Count: 5" vs
+"Count: 6") also lands here, which is the honest answer: from OCR alone the two
+cannot be told apart, and the evidence names both strings and the screenshots
+so a human can.
+"""
+
+_CRASH_REPORT_FLUSH_WAIT_S = 60.0
+"""How long a failing replay waits for a crash report once the app process is
+gone (FU-2026-071). The simulator's ReportCrash writes the ``.ips`` well after
+the process dies — measured live at 15-21 s on a dev Mac and 37 s on a GitHub
+macOS runner — so an immediate lookup misses a crash that has certainly happened.
+Only paid when the run already failed AND the app is not running."""
+
+_CRASH_REPORT_POLL_S = 1.0
+_APP_STATE_RECHECK_S = 0.5
+
 
 def replay(name: str, session: Session, on_drift: str = "halt",
            drift_threshold: Optional[float] = None,
@@ -1702,6 +1724,8 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     results: list[dict] = []
     drift_events: list[dict] = []
     noop_retries: list[dict] = []
+    # (step_id, time dispatched) — attributes a crash to the step it followed.
+    dispatched: list[tuple[Any, float]] = []
 
     for step in steps:
         # marks_count: stored at step level (recorder a13 path) or in step.args
@@ -1839,9 +1863,12 @@ def replay(name: str, session: Session, on_drift: str = "halt",
             }
             if state_warning:
                 out["_simdrive_warning"] = state_warning
-            return out
+            # A crash at step N shows up as drift at step N+1's pre-check —
+            # the screen is SpringBoard now. Check before reporting it as drift.
+            return _with_crash_check(out, session, _replay_start_ts, dispatched)
 
         # Execute the step against the live session.
+        dispatched.append((step["id"], time.time()))
         try:
             _execute_step_for_session(step, session, live_obs=live_obs)
             step_result["executed"] = True
@@ -1869,7 +1896,7 @@ def replay(name: str, session: Session, on_drift: str = "halt",
                 out["noop_retries"] = noop_retries
             if state_warning:
                 out["_simdrive_warning"] = state_warning
-            return out
+            return _with_crash_check(out, session, _replay_start_ts, dispatched)
 
         results.append(step_result)
 
@@ -1907,22 +1934,10 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     if final_expect_cfg:
         if final_live is None:
             final_live = _observe_for_replay(session)
-        expect_result = _assert_final_expect(final_expect_cfg, final_live.get("marks") or [])
-
-    # item 4.7 (D3): crash cross-check. Nothing inside the per-step loop
-    # above checks for a crash mid-replay — only session_start's one-time
-    # _verify_launch() does, so all steps can pass their SSIM checks while
-    # the app actually crashed and silently relaunched or left a `.ips`
-    # behind. `since_ts=_replay_start_ts` (captured before step 1 dispatched)
-    # excludes stale crashes from session start or an earlier replay.
-    new_crashes: list = []
-    if session.app_bundle_id:
-        try:
-            new_crashes = diagnostics.list_crashes(
-                since_ts=_replay_start_ts, bundle_id=session.app_bundle_id, max_results=5,
-            )
-        except Exception as exc:
-            log.debug("replay.crash_check_failed", extra={"error": str(exc)})
+        expect_result = _assert_final_expect(
+            final_expect_cfg, final_live,
+            resample=lambda: _observe_for_replay(session),
+        )
 
     out = {
         "ok": True,
@@ -1960,24 +1975,38 @@ def replay(name: str, session: Session, on_drift: str = "halt",
     # item 4.6: a missing final_expect assertion halts regardless of what the
     # SSIM check decided above — closing the measured 0.9824 near-identical-
     # frame blind spot SSIM alone cannot see.
+    #
+    # FU-2026-070: the failure carries its own verdict — a genuine miss
+    # ("final_expect_failed") vs text OCR read almost verbatim
+    # ("final_expect_ocr_uncertain") — plus the evidence behind it, so an
+    # engineer can tell "the fix did not work" from "the recognizer stumbled".
     if expect_result is not None:
+        out["final_expect"] = expect_result
         if expect_result["ok"]:
             out["final_expect_ok"] = True
         else:
             out["ok"] = False
-            out["halt_reason"] = "final_expect_failed"
+            out["halt_reason"] = (
+                "final_expect_failed"
+                if expect_result["failure_kind"] == "assertion_failed"
+                else "final_expect_ocr_uncertain"
+            )
             out["missing_expectations"] = expect_result["missing"]
             if final_state is not None:
                 out["halted_at"] = final_state["step_id"]
-    # item 4.7: a crash is the strongest possible evidence of failure and must
-    # not be shadowed by an otherwise-passing SSIM/final_expect result.
-    if new_crashes:
-        out["ok"] = False
-        out["halt_reason"] = "crash_detected"
-        out["crashes"] = new_crashes
+            if expect_result["failure_kind"] == "possible_ocr_misread":
+                out["remedy"] = (
+                    "Every expected string that is missing was read by OCR as "
+                    "something very close to it (see final_expect.evidence), so "
+                    "a text-recognizer misread cannot be ruled out. Look at the "
+                    "screenshots in final_expect.screenshot_paths before "
+                    "concluding the fix did not work."
+                )
     if state_warning:
         out["_simdrive_warning"] = state_warning
-    return out
+    # item 4.7: a crash is the strongest possible evidence of failure and must
+    # not be shadowed by an otherwise-passing SSIM/final_expect result.
+    return _with_crash_check(out, session, _replay_start_ts, dispatched)
 
 
 def _settle_for_step(step: dict) -> None:
@@ -2102,7 +2131,8 @@ def _assert_final_outcome(steps: list, rec_dir: Path, session: Session,
     }
 
 
-def _assert_final_expect(expected: Optional[list], live_marks: list) -> Optional[dict]:
+def _assert_final_expect(expected: Optional[list], live: dict, *,
+                         resample: Optional[Callable[[], dict]] = None) -> Optional[dict]:
     """INIT-2026-641 item 4.6 (D3) — text assertions against the final live
     frame's OCR/AX marks, closing the measured SSIM blind spot: two frames
     differing only by a small rendered region (a countdown chip) can score
@@ -2113,19 +2143,255 @@ def _assert_final_expect(expected: Optional[list], live_marks: list) -> Optional
     when the recording doesn't opt in (returns None so replay's SSIM-only
     behavior is unchanged for every recording that predates this field).
     Case-insensitive substring match against each live mark's text.
+    `live`: an ``_observe_for_replay()`` result.
 
-    Returns {"ok": bool, "missing": [...]} naming every expectation not
-    found in any live mark, not just a bare pass/fail, so a partial miss
-    reports which specific assertion failed.
+    FU-2026-070 — a miss is no longer a bare list, because an OCR misread and
+    a genuine failure looked identical. On a miss:
+
+      * one more observation is taken via `resample` (the state contract's
+        two-sample mitigation, ``_STATE_CONTRACT_SAMPLES``): a string either
+        read saw verbatim was on screen, and passes as
+        ``recovered_on_resample``;
+      * every string still missing gets an evidence entry
+        (``_classify_missing_expectation``): its verdict, confidence, the
+        nearest text actually read with its similarity, OCR confidence and
+        source, and whether the AX tree was consulted;
+      * the result carries a headline ``failure_kind`` — "assertion_failed"
+        if any miss is genuine, else "possible_ocr_misread" — plus the
+        screenshot of every read, so a human can check.
+
+    Returns {"ok", "missing", "samples", ...}; see above for the failure keys.
     """
     if not expected:
         return None
-    live_texts = [_mark_text_of(m).lower() for m in (live_marks or [])]
-    missing = [
+    samples = [live]
+    missing = _missing_expectations(expected, live.get("marks"))
+    recovered: list = []
+    if missing and resample is not None:
+        try:
+            again = resample()
+        except Exception as exc:  # a failed re-read must not mask the verdict
+            log.debug("replay.final_expect_resample_failed", extra={"error": str(exc)})
+        else:
+            samples.append(again)
+            still = _missing_expectations(missing, again.get("marks"))
+            recovered = [e for e in missing if e not in still]
+            missing = still
+
+    result: dict = {"ok": not missing, "missing": missing, "samples": len(samples)}
+    if recovered:
+        result["recovered_on_resample"] = recovered
+    if not missing:
+        return result
+
+    evidence = [_classify_missing_expectation(exp, samples) for exp in missing]
+    genuine = [e for e in evidence if e["failure_kind"] == "assertion_failed"]
+    if genuine:
+        result["failure_kind"] = "assertion_failed"
+        result["confidence"] = (
+            "high" if any(e["confidence"] == "high" for e in genuine) else "medium"
+        )
+    else:
+        result["failure_kind"] = "possible_ocr_misread"
+        result["confidence"] = "low"
+    result["evidence"] = evidence
+    result["resolution_methods"] = [s.get("resolution_method", "ocr") for s in samples]
+    result["screenshot_paths"] = [str(s["screenshot_path"]) for s in samples]
+    return result
+
+
+def _missing_expectations(expected: list, marks: Optional[list]) -> list:
+    live_texts = [_mark_text_of(m).lower() for m in (marks or [])]
+    return [
         exp for exp in expected
         if not any(str(exp).strip().lower() in t for t in live_texts)
     ]
-    return {"ok": not missing, "missing": missing}
+
+
+def _classify_missing_expectation(expected: Any, samples: list[dict]) -> dict:
+    """Verdict + evidence for one `final_expect` string no read contained.
+
+    * The nearest text read (any sample) is OCR's and within
+      ``_FINAL_EXPECT_MISREAD_SIMILARITY`` → "possible_ocr_misread", low
+      confidence: the recognizer may have stumbled on text that is there.
+    * Otherwise "assertion_failed". Confidence is "high" when a read was
+      AX-backed (labels are ground truth, so an AX near-miss is a real
+      difference, not a misread), "medium" when only OCR looked — two reads
+      agreeing there is nothing close is strong, but not ground truth.
+    """
+    exp = str(expected).strip()
+    ax_checked = any(
+        str(s.get("resolution_method", "ocr")).startswith("ax") for s in samples
+    )
+    best: Optional[tuple[float, Any]] = None
+    for s in samples:
+        for m in s.get("marks") or []:
+            score = _text_similarity(exp, _mark_text_of(m))
+            if best is None or score > best[0]:
+                best = (score, m)
+
+    evidence: dict = {
+        "expected": exp,
+        "ax_checked": ax_checked,
+        "nearest_text": None,
+        "nearest_similarity": 0.0,
+        "nearest_source": None,
+        "nearest_ocr_confidence": None,
+    }
+    if best is not None:
+        score, m = best
+        source = _mark_attr(m, "source") or "ocr"
+        evidence.update(
+            nearest_text=_mark_text_of(m),
+            nearest_similarity=round(score, 3),
+            nearest_source=source,
+            nearest_ocr_confidence=(
+                _mark_raw_confidence(m) if source == "ocr" else None
+            ),
+        )
+
+    if (evidence["nearest_source"] == "ocr"
+            and evidence["nearest_similarity"] >= _FINAL_EXPECT_MISREAD_SIMILARITY):
+        evidence.update(failure_kind="possible_ocr_misread", confidence="low", basis="ocr")
+    elif ax_checked:
+        evidence.update(failure_kind="assertion_failed", confidence="high", basis="ax")
+    else:
+        evidence.update(failure_kind="assertion_failed", confidence="medium", basis="ocr")
+    return evidence
+
+
+def _text_similarity(expected: str, text: str) -> float:
+    """Best ``difflib`` ratio of `expected` against `text` or any window of it
+    about `expected`'s length, case-insensitive — so a near-verbatim read
+    inside a longer mark ("by JAMES PATERSON (2024)") still scores high."""
+    e, t = expected.strip().lower(), (text or "").strip().lower()
+    if not e or not t:
+        return 0.0
+    best = difflib.SequenceMatcher(None, e, t).ratio()
+    if len(t) > len(e):
+        for width in {max(1, len(e) - 1), len(e), len(e) + 1}:
+            for i in range(0, len(t) - width + 1):
+                sm = difflib.SequenceMatcher(None, e, t[i:i + width])
+                # quick_ratio() is an upper bound on ratio(), and cheap.
+                if sm.quick_ratio() > best:
+                    best = max(best, sm.ratio())
+    return best
+
+
+def _mark_attr(m: Any, name: str) -> Any:
+    return m.get(name) if isinstance(m, dict) else getattr(m, name, None)
+
+
+def _mark_raw_confidence(m: Any) -> Optional[float]:
+    for name in ("raw_confidence", "confidence"):
+        v = _mark_attr(m, name)
+        if v is not None:
+            try:
+                return round(float(v), 3)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _with_crash_check(out: dict, session: Session, since_ts: float,
+                      dispatched: list[tuple[Any, float]]) -> dict:
+    """INIT-2026-641 item 4.7 / FU-2026-071 — look for an app crash produced
+    during this replay, on EVERY exit path, before reporting the result.
+
+    Runs on drift and execute_error halts too, not only after the last step:
+    a crash at step N makes step N+1's pre-check see SpringBoard, which used
+    to return early as ``halt_reason="drift"`` with the crash never looked for.
+
+    ``since_ts`` (taken before step 1) excludes stale crashes from session
+    start or an earlier replay. When the run already failed and the app
+    process is gone, waits up to ``_CRASH_REPORT_FLUSH_WAIT_S`` for the
+    late-written ``.ips``. Outcomes:
+
+      * report found → ``halt_reason="crash_detected"``, ``crashes``, and
+        ``crash_after_step`` (the last step dispatched before the crash's
+        capture time) when that time is known;
+      * app gone but no report in time → ``halt_reason="app_exited"``;
+      * either way the replaced reason is kept as
+        ``halt_reason_before_crash_check``.
+    """
+    if not session.app_bundle_id:
+        return out
+    crashes = _lookup_replay_crashes(session, since_ts)
+    app_exited = False
+    if not crashes and not out.get("ok") and _app_died_during_replay(session):
+        deadline = time.monotonic() + _CRASH_REPORT_FLUSH_WAIT_S
+        while not crashes and time.monotonic() < deadline:
+            time.sleep(_CRASH_REPORT_POLL_S)
+            crashes = _lookup_replay_crashes(session, since_ts)
+        app_exited = not crashes
+    if not crashes and not app_exited:
+        return out
+
+    prior = out.get("halt_reason")
+    out["ok"] = False
+    if prior:
+        out["halt_reason_before_crash_check"] = prior
+    if crashes:
+        out["halt_reason"] = "crash_detected"
+        out["crashes"] = crashes
+        step = _step_before(crashes[0].get("captured_at"), dispatched)
+        if step is not None:
+            out["crash_after_step"] = step
+    else:
+        out["halt_reason"] = "app_exited"
+        earlier = out.get("remedy")
+        out["remedy"] = (
+            f"The app process ({session.app_bundle_id}) is no longer running, "
+            f"but no crash report appeared within {_CRASH_REPORT_FLUSH_WAIT_S:.0f}s. "
+            "It exited or was killed during the replay; check the `logs` tool."
+        ) + (f" Before that: {earlier}" if earlier else "")
+    return out
+
+
+def _lookup_replay_crashes(session: Session, since_ts: float) -> list:
+    try:
+        return diagnostics.list_crashes(
+            since_ts=since_ts, bundle_id=session.app_bundle_id, max_results=5,
+        )
+    except Exception as exc:
+        log.debug("replay.crash_check_failed", extra={"error": str(exc)})
+        return []
+
+
+def _app_died_during_replay(session: Session) -> bool:
+    """True when two consecutive ``app_state`` reads say not-running — the
+    same rule session start uses, since one launchctl read can flap. A read
+    that failed (simctl error) counts as "unknown", not as dead.
+
+    Simulator only: ``list_crashes`` reads the host's DiagnosticReports, where
+    a real device's crash reports never land, so waiting for one on a device
+    session would only add latency.
+    """
+    if session.target != "simulator" or not session.app_bundle_id:
+        return False
+    for attempt in range(2):
+        try:
+            info = diagnostics.app_state(session.device.udid, session.app_bundle_id)
+        except Exception:
+            return False
+        # app_state also reports "not-running" when `simctl spawn` itself
+        # failed (with a `detail`); a wedged simulator is not a dead app.
+        if info.get("state") != "not-running" or info.get("detail"):
+            return False
+        if attempt == 0:
+            time.sleep(_APP_STATE_RECHECK_S)
+    return True
+
+
+def _step_before(captured_at: Optional[float], dispatched: list[tuple[Any, float]]) -> Any:
+    """The last step dispatched at or before the crash, or None if unknown."""
+    if captured_at is None:
+        return None
+    step = None
+    for step_id, ts in dispatched:
+        if ts <= captured_at:
+            step = step_id
+    return step
 
 
 def _observe_for_replay(session: Session) -> dict:
