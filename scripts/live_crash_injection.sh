@@ -49,6 +49,11 @@ echo "simulator: $UDID ($DEVTYPE, $RUNTIME)"
 xcrun simctl boot "$UDID"
 xcrun simctl bootstatus "$UDID" -b
 "$ROOT/TestKitApp/build.sh" "$UDID"
+# Warm-up launch: the first launch on a cold simulator can outlast simdrive's
+# 15 s launch timeout. Take that cost here, outside the test.
+xcrun simctl launch "$UDID" io.synctek.specterqa.testkit
+sleep 5
+xcrun simctl terminate "$UDID" io.synctek.specterqa.testkit || true
 
 cd "$ROOT/simdrive"
 SIMDRIVE_LIVE_UDID="$UDID" PYTHONPATH="$ROOT/simdrive/src${PYTHONPATH:+:$PYTHONPATH}" \

@@ -2271,9 +2271,10 @@ def _text_similarity(expected: str, text: str) -> float:
     if len(t) > len(e):
         for width in {max(1, len(e) - 1), len(e), len(e) + 1}:
             for i in range(0, len(t) - width + 1):
-                r = difflib.SequenceMatcher(None, e, t[i:i + width]).ratio()
-                if r > best:
-                    best = r
+                sm = difflib.SequenceMatcher(None, e, t[i:i + width])
+                # quick_ratio() is an upper bound on ratio(), and cheap.
+                if sm.quick_ratio() > best:
+                    best = max(best, sm.ratio())
     return best
 
 
@@ -2338,11 +2339,12 @@ def _with_crash_check(out: dict, session: Session, since_ts: float,
             out["crash_after_step"] = step
     else:
         out["halt_reason"] = "app_exited"
+        earlier = out.get("remedy")
         out["remedy"] = (
             f"The app process ({session.app_bundle_id}) is no longer running, "
             f"but no crash report appeared within {_CRASH_REPORT_FLUSH_WAIT_S:.0f}s. "
             "It exited or was killed during the replay; check the `logs` tool."
-        )
+        ) + (f" Before that: {earlier}" if earlier else "")
     return out
 
 
@@ -2358,7 +2360,8 @@ def _lookup_replay_crashes(session: Session, since_ts: float) -> list:
 
 def _app_died_during_replay(session: Session) -> bool:
     """True when two consecutive ``app_state`` reads say not-running — the
-    same rule session start uses, since one launchctl read can flap.
+    same rule session start uses, since one launchctl read can flap. A read
+    that failed (simctl error) counts as "unknown", not as dead.
 
     Simulator only: ``list_crashes`` reads the host's DiagnosticReports, where
     a real device's crash reports never land, so waiting for one on a device
@@ -2368,10 +2371,12 @@ def _app_died_during_replay(session: Session) -> bool:
         return False
     for attempt in range(2):
         try:
-            state = diagnostics.app_state(session.device.udid, session.app_bundle_id).get("state")
+            info = diagnostics.app_state(session.device.udid, session.app_bundle_id)
         except Exception:
             return False
-        if state != "not-running":
+        # app_state also reports "not-running" when `simctl spawn` itself
+        # failed (with a `detail`); a wedged simulator is not a dead app.
+        if info.get("state") != "not-running" or info.get("detail"):
             return False
         if attempt == 0:
             time.sleep(_APP_STATE_RECHECK_S)

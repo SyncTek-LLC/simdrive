@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import pwd
+import subprocess
 import time
 from pathlib import Path
 
@@ -67,11 +68,20 @@ def home(tmp_path, monkeypatch) -> Path:
     return tmp_path
 
 
+def _terminate(udid: str) -> None:
+    """Best effort: on a freshly booted CI simulator `simctl terminate` of an
+    app that is not running has been seen to hang past 10 s."""
+    try:
+        sim._simctl("terminate", udid, TESTKIT, timeout=30.0)
+    except subprocess.TimeoutExpired:
+        pass
+    time.sleep(0.5)
+
+
 def _fresh_session(udid: str, crash_on_tap: int | None) -> str:
     """Relaunch TestKitApp (simctl launch inherits SIMCTL_CHILD_* from this
     process's environment) and open a session on it."""
-    sim._simctl("terminate", udid, TESTKIT, timeout=10.0)
-    time.sleep(0.5)
+    _terminate(udid)
     if crash_on_tap is not None:
         os.environ[CRASH_ENV] = str(crash_on_tap)
     try:

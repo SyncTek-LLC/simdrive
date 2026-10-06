@@ -30,6 +30,8 @@ from simdrive import recorder as rec_mod
 GREY = (210, 210, 210)
 BLACK = (0, 0, 0)
 BUNDLE = "io.synctek.specterqa.testkit"
+# Captured at import, before conftest's autouse fixture stubs it per test.
+_REAL_APP_DIED = rec_mod._app_died_during_replay
 
 
 def _make_sim_session(tmp_path: Path, sid: str = "crash-mid-run"):
@@ -234,3 +236,49 @@ class TestCrashReportCaptureTime:
         p.write_text(json.dumps({"bundleID": BUNDLE}) + "\n{not json")
         [crash] = diagnostics.list_crashes(bundle_id=BUNDLE, reports_dir=tmp_path)
         assert crash["captured_at"] is None
+
+
+class TestAppDiedProbe:
+    """The real `_app_died_during_replay` (conftest stubs it for every other
+    hermetic test)."""
+
+    def _session(self, tmp_path, target="simulator"):
+        s = _make_sim_session(tmp_path)
+        s.target = target
+        return s
+
+    def _states(self, monkeypatch, states):
+        seq = iter(states)
+        calls = []
+
+        def _fake(udid, bundle_id):
+            calls.append(1)
+            nxt = next(seq)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
+        monkeypatch.setattr(diagnostics, "app_state", _fake)
+        monkeypatch.setattr(rec_mod, "_APP_STATE_RECHECK_S", 0.0)
+        return calls
+
+    def test_two_not_running_reads_means_dead(self, tmp_path, monkeypatch):
+        self._states(monkeypatch, [{"state": "not-running"}, {"state": "not-running"}])
+        assert _REAL_APP_DIED(self._session(tmp_path)) is True
+
+    def test_one_flap_is_not_dead(self, tmp_path, monkeypatch):
+        self._states(monkeypatch, [{"state": "not-running"}, {"state": "foreground"}])
+        assert _REAL_APP_DIED(self._session(tmp_path)) is False
+
+    def test_simctl_failure_is_not_dead(self, tmp_path, monkeypatch):
+        calls = self._states(monkeypatch, [{"state": "not-running", "detail": "Unable to lookup"}])
+        assert _REAL_APP_DIED(self._session(tmp_path)) is False
+        assert len(calls) == 1
+
+    def test_exception_is_not_dead(self, tmp_path, monkeypatch):
+        self._states(monkeypatch, [RuntimeError("simctl gone")])
+        assert _REAL_APP_DIED(self._session(tmp_path)) is False
+
+    def test_device_session_never_probes(self, tmp_path, monkeypatch):
+        calls = self._states(monkeypatch, [])
+        assert _REAL_APP_DIED(self._session(tmp_path, target="device")) is False
+        assert calls == []
