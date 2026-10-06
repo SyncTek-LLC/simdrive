@@ -76,6 +76,9 @@ def _terminate(udid: str) -> None:
     except subprocess.TimeoutExpired:
         pass
     time.sleep(0.5)
+    marker = _armed_marker(udid)
+    if marker is not None and marker.exists():
+        marker.unlink()  # a stale marker from an earlier armed launch
 
 
 def _fresh_session(udid: str, crash_on_tap: int | None) -> str:
@@ -97,8 +100,31 @@ def _fresh_session(udid: str, crash_on_tap: int | None) -> str:
     finally:
         os.environ.pop(CRASH_ENV, None)
     assert res["state"] == "active", res
-    time.sleep(2.0)  # first frame + the injector attaching on the next runloop turn
+    if crash_on_tap is not None:
+        _wait_until_armed(udid)
+    else:
+        time.sleep(2.0)  # first frame
     return res["session_id"]
+
+
+def _armed_marker(udid: str) -> Path | None:
+    res = sim._simctl("get_app_container", udid, TESTKIT, "data", timeout=30.0)
+    if res.returncode != 0:
+        return None
+    return Path(res.stdout.strip()) / "Library" / "Caches" / "simdrive-crash-armed"
+
+
+def _wait_until_armed(udid: str, timeout_s: float = 60.0) -> None:
+    """Block until TestKitApp's injector has attached to the key window. On a
+    GitHub runner a fixed sleep was not enough: the injector attached late and
+    missed the first 4 taps (crash on tap 14, not 10)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        marker = _armed_marker(udid)
+        if marker is not None and marker.exists():
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"TestKitApp crash injector never armed within {timeout_s:.0f}s")
 
 
 def test_real_crash_at_step_10_of_15_is_caught(udid, home):

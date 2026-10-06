@@ -24,10 +24,10 @@
   and the crash report was never looked for. The result now names the step
   the crash followed (`crash_after_step`) and keeps the reason the replay
   would otherwise have given (`halt_reason_before_crash_check`).
-- The simulator writes a crash report about 15 seconds after the app dies.
+- The simulator writes a crash report 15 to 40 seconds after the app dies.
   When a replay has failed and the app is no longer running, replay now
-  waits for that report (up to 30 s) instead of checking once and finding
-  nothing. If the app is gone and no report arrives, the result is
+  waits for that report (up to 60 s) instead of checking once and finding
+  nothing. Crash reports that are still being written are skipped. If the app is gone and no report arrives, the result is
   `app_exited`.
 - Crash entries from the `crashes` tool now include `captured_at`, the time
   of the crash itself rather than the time the report was written.

@@ -1585,11 +1585,11 @@ cannot be told apart, and the evidence names both strings and the screenshots
 so a human can.
 """
 
-_CRASH_REPORT_FLUSH_WAIT_S = 30.0
+_CRASH_REPORT_FLUSH_WAIT_S = 60.0
 """How long a failing replay waits for a crash report once the app process is
 gone (FU-2026-071). The simulator's ReportCrash writes the ``.ips`` well after
-the process dies — measured live at 15 s (captureTime 23:04:25, file written
-23:04:40) — so an immediate lookup misses a crash that has certainly happened.
+the process dies — measured live at 15-21 s on a dev Mac and 37 s on a GitHub
+macOS runner — so an immediate lookup misses a crash that has certainly happened.
 Only paid when the run already failed AND the app is not running."""
 
 _CRASH_REPORT_POLL_S = 1.0
