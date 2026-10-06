@@ -85,6 +85,12 @@ def _fresh_session(udid: str, crash_on_tap: int | None) -> str:
     if crash_on_tap is not None:
         os.environ[CRASH_ENV] = str(crash_on_tap)
     try:
+        # Launch it ourselves first, with room to spare: on a GitHub macOS
+        # runner a cold `simctl launch` outlasted simdrive's 15 s launch
+        # timeout. session_start's own launch then just foregrounds the
+        # already-running process (and its environment).
+        launched = sim._simctl("launch", udid, TESTKIT, timeout=120.0)
+        assert launched.returncode == 0, launched.stderr
         res = server.tool_session_start(
             {"udid": udid, "app_bundle_id": TESTKIT, "replace_existing": True}
         )
