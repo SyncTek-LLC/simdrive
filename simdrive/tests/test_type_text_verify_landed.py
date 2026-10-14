@@ -426,3 +426,47 @@ class TestReaderSelection:
             r = readback.read_focused_field(_FAKE_UDID, "Test Sim", "pasteboard")
         assert r.method == "ax"
         pb.assert_not_called()
+
+
+@pytest.mark.real_readback
+class TestAXWindowMatch:
+    """The AX reader must read the target sim's window, not a sim whose name
+    merely starts with the target's (a headless "iPhone 16" next to a visible
+    "iPhone 16 Pro")."""
+
+    def _read(self, titles, device_name):
+        windows = [{"AXTitle": t, "field": {"AXValue": f"value of {t}", "AXRole": "AXTextField"}}
+                   for t in titles]
+        app = {"AXWindows": windows}
+
+        def attr(elem, name):
+            return elem.get(name)
+
+        with patch.object(readback.ax, "is_available", return_value=True), \
+             patch.object(readback.ax, "_app_element", return_value=app), \
+             patch.object(readback.ax, "_attr", side_effect=attr), \
+             patch.object(readback, "_find_focused_editable", side_effect=lambda w: w["field"]):
+            return readback.read_focused_field(_FAKE_UDID, device_name, "auto")
+
+    def test_longer_name_with_same_prefix_is_not_matched(self):
+        r = self._read(["iPhone 16 Pro – iOS 26.1"], "iPhone 16")
+        assert r.value is None
+        assert r.reason == readback.NO_SIDE_EFFECT_FREE_READER
+
+    def test_exact_name_before_title_separator_is_matched(self):
+        r = self._read(["iPhone 16 Pro – iOS 26.1", "iPhone 16 – iOS 26.1"], "iPhone 16")
+        assert r.method == "ax"
+        assert r.value == "value of iPhone 16 – iOS 26.1"
+
+    def test_bare_title_equal_to_name_is_matched(self):
+        r = self._read(["iPhone 16"], "iPhone 16")
+        assert r.value == "value of iPhone 16"
+
+
+def test_off_is_declared_in_the_verify_schema_and_accepted(tmp_path):
+    tool = next(t for t in server._TOOLS if t["name"] == "type_text")
+    string_enum = next(o["enum"] for o in tool["inputSchema"]["properties"]["verify"]["oneOf"] if "enum" in o)
+    assert "off" in string_enum
+    r = _run(tmp_path, {"text": "hello", "verify": "off"}, [])
+    assert r.consumed == []
+    assert r.resp["verified"] is None

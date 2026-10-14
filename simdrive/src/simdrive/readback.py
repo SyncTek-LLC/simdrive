@@ -113,7 +113,7 @@ def read_ax(device_name: str) -> FieldRead | None:
         app = ax._app_element()
         windows = [
             w for w in (ax._attr(app, "AXWindows") or [])
-            if device_name and device_name in str(ax._attr(w, "AXTitle") or "")
+            if _title_names_device(str(ax._attr(w, "AXTitle") or ""), device_name)
         ]
         if len(windows) != 1:
             return None
@@ -136,6 +136,20 @@ def read_ax(device_name: str) -> FieldRead | None:
     except Exception as exc:  # noqa: BLE001 — AX is best-effort
         _log.debug("readback.ax_failed: %s", exc)
         return None
+
+
+def _title_names_device(title: str, device_name: str) -> bool:
+    """True when a Simulator window *title* belongs to *device_name*.
+
+    Titles are ``"<device name> – <OS version>"`` (en dash), e.g.
+    ``"iPhone 16 Pro (pool-3) – iOS 26.0"``. A substring match would let a
+    visible "iPhone 16 Pro" window answer for a headless "iPhone 16", so the
+    name must be the whole title or be followed by the separator. Kept local
+    to this reader: ``ax.select_window`` still matches by substring.
+    """
+    if not device_name:
+        return False
+    return title == device_name or title.startswith((f"{device_name} \u2013 ", f"{device_name} - "))
 
 
 def _find_focused_editable(root, depth: int = 0, maxdepth: int = 60):

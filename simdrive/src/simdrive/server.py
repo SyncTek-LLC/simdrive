@@ -3537,7 +3537,7 @@ _TOOLS: list[dict] = [
                 },
                 "verify_change": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Returns `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path} built from the same post-type observation keyboard_visible already uses. Pass false to skip."},
                 "verify": {
-                    "oneOf": [{"type": "string", "enum": ["auto", "pasteboard"]}, {"type": "boolean"}],
+                    "oneOf": [{"type": "string", "enum": ["auto", "pasteboard", "off"]}, {"type": "boolean"}],
                     "default": "auto",
                     "description": (
                         "Simulator path only. Read the focused field back after typing and compare it to "
@@ -3551,7 +3551,7 @@ _TOOLS: list[dict] = [
                         "effects: the pasteboard's text is restored but non-text contents are lost; in "
                         "append mode the caret is moved to the end of the field before typing. A field "
                         "that copies nothing (empty, secure, or without focus) gives `verified` null. "
-                        "false: off. "
+                        "false or \"off\": off. "
                         "On a mismatch in a field known to be plain text, clear and retype once; a "
                         "remaining mismatch sets ok=false and `error` (expected, landed, diff). Text "
                         "containing a newline is never verified or retyped. Replays do not verify."
