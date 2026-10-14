@@ -1689,79 +1689,126 @@ def tool_swipe(arguments: dict) -> dict:
     return response
 
 
-def _verify_typed_text(s, text, clear_first, pre_read, post_obs):
+def _parse_verify(value) -> str | None:
+    """Normalise type_text's `verify` argument to a reader mode, or None (off).
+
+    `true` means the default, "auto"; it does not opt in to the pasteboard
+    reader, whose side effects must be asked for by name.
+    """
+    if value is None or value is True:
+        return "auto"
+    if value is False or value == "off":
+        return None
+    if value in readback.MODES:
+        return value
+    raise errors.invalid_argument(
+        "verify", value, 'expected "auto" (default), "pasteboard", or false',
+    )
+
+
+def _verify_typed_text(s, text, clear_first, pre_read, mode):
     """Read the focused field back and compare it to what type_text should
     have produced; on a mismatch, clear and retype once (PP-5036).
+
+    Retyping is only done when it cannot destroy content the reader could
+    not see: the field must be known plain text (AX role, or a pasteboard
+    copy that succeeded), or the caller cleared it first. A secure field read
+    by AX is retyped only after clear_first, because its previous content is
+    only bullets.
 
     Returns (verified, verification, error, retried). ``verified`` is True,
     False, or None when the field could not be read.
     """
     from . import hid_inject
 
-    if pre_read is not None and pre_read.value is None:
-        return None, {"reason": f"could not read the field before typing: {pre_read.reason}"}, None, False
-    previous = "" if (clear_first or pre_read is None) else pre_read.value
+    udid = s.device.udid
+    previous = ""
+    plain_known = False
+    if pre_read is not None:
+        plain_known = pre_read.plain
+        if not clear_first:
+            if pre_read.value is None:
+                return None, {"mode": mode, "reason": f"could not read the field before typing: {pre_read.reason}"}, None, False
+            if not pre_read.copied:
+                return None, {"mode": mode, "reason": (
+                    "nothing could be copied from the field before typing (empty, secure, "
+                    "or without focus); not verifying, so content that could not be read is never retyped"
+                )}, None, False
+            previous = pre_read.value
     expected = previous + text
 
     def _describe(read, match, attempts):
-        info: dict = {"method": read.method, "attempts": attempts, "match": match}
+        info: dict = {"mode": mode, "method": read.method, "attempts": attempts, "match": match}
         if read.secure:
             info.update(secure=True, expected_length=len(expected), landed_length=len(read.value))
         else:
             info.update(expected=expected, landed=read.value)
         return info
 
+    def _collapse(read, info):
+        # The caret was at the end of the text before this read's Cmd-A
+        # (the append pre-read moved it there; typing leaves it there), so
+        # collapsing the selection to its end puts it back.
+        if not read.selected:
+            return
+        try:
+            readback.collapse_selection(udid)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+            info["warning"] = f"field text may be left selected: {exc}"
+
     attempts = 1
-    read = readback.read_focused_field(s.device.udid, s.device.name)
+    read = readback.read_focused_field(udid, s.device.name, mode)
     while True:
         if read.value is None:
-            return None, {"attempts": attempts, "reason": read.reason}, None, attempts > 1
-        match = readback.compare(expected, read.value, secure=read.secure)
-        if match is not None:
-            return True, _describe(read, match, attempts), None, attempts > 1
-        if attempts == 1 and not read.copied and _text_visible(post_obs.marks, text):
-            # Nothing was copied, yet the text is on screen: the field most
-            # likely committed and resigned focus. Retyping would go nowhere.
+            return None, {"mode": mode, "attempts": attempts, "reason": read.reason}, None, attempts > 1
+        plain_known = plain_known or read.plain
+        if not read.copied and not plain_known:
             return None, {
-                "method": read.method, "attempts": attempts,
-                "reason": "copy returned nothing but the typed text is visible on screen; "
-                          "the field probably committed and lost focus",
-            }, None, False
-        if attempts == 2:
+                "mode": mode, "method": read.method, "attempts": attempts,
+                "reason": "nothing could be copied from the field: it is empty, secure, or "
+                          "without focus, and the reader cannot tell which; not retrying",
+            }, None, attempts > 1
+        match = readback.compare(
+            expected, read.value, secure=read.secure,
+            previous=None if clear_first else previous, text=text,
+        )
+        if match is not None:
+            info = _describe(read, match, attempts)
+            _collapse(read, info)
+            return True, info, None, attempts > 1
+        retry_allowed = clear_first or not read.secure
+        if attempts == 2 or not retry_allowed:
             break
         attempts = 2
-        hid_inject.chord(s.device.udid, "cmd", "a")
-        act.press_key("delete", udid=s.device.udid)
-        act.type_text(expected, udid=s.device.udid)
-        read = readback.read_focused_field(s.device.udid, s.device.name)
+        try:
+            hid_inject.chord(udid, "cmd", "a")
+            act.press_key("delete", udid=udid)
+            act.type_text(expected, udid=udid)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+            info = _describe(read, None, attempts)
+            return False, info, {
+                "code": "retry_failed",
+                "message": f"The text did not land and the clear-and-retype failed: {exc}",
+            }, True
+        read = readback.read_focused_field(udid, s.device.name, mode)
 
     info = _describe(read, None, attempts)
+    _collapse(read, info)
     error: dict = {
         "code": "text_not_landed",
         "message": (
-            "The field does not hold the expected text after one automatic clear-and-retype. "
-            "Check that the intended field has focus (tap_first), then retry; pass verify=false "
-            "for fields whose content cannot be copied or that reformat input."
+            "The field does not hold the expected text"
+            + (" after one automatic clear-and-retype. " if attempts == 2 else
+               " (not retyped: a secure field's previous content cannot be read). ")
+            + "Check that the intended field has focus (tap_first), then retry; pass "
+            "verify=false for fields that autocomplete or reformat input."
         ),
     }
     if read.secure:
         error.update(expected_length=len(expected), landed_length=len(read.value))
     else:
         error.update(expected=expected, landed=read.value, diff=readback.diff(expected, read.value))
-        if not read.copied:
-            error["message"] += " Nothing could be copied from the field: it is empty, secure, or lost focus."
-    return False, info, error, True
-
-
-def _text_visible(marks, text: str) -> bool:
-    needle = "".join(text.split()).lower()
-    if len(needle) < 2:
-        return False
-    for mk in marks or []:
-        t = mk.get("text") if isinstance(mk, dict) else getattr(mk, "text", None)
-        if needle in "".join((t or "").split()).lower():
-            return True
-    return False
+    return False, info, error, attempts > 1
 
 
 def tool_type_text(arguments: dict) -> dict:
@@ -1771,7 +1818,7 @@ def tool_type_text(arguments: dict) -> dict:
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
     clear_first = bool(arguments.get("clear_first", False))
-    verify = bool(arguments.get("verify", True))
+    verify_mode = _parse_verify(arguments.get("verify", "auto"))
     focused_mark = None  # Mark of the tap_first target if resolved via mark/stable_id/text
 
     if s.target == "device":
@@ -1829,7 +1876,7 @@ def tool_type_text(arguments: dict) -> dict:
             "verification": {
                 "reason": (
                     "disabled by caller (verify=false)"
-                    if not verify else "read-back is not implemented for real devices"
+                    if verify_mode is None else "read-back is not implemented for real devices"
                 ),
             },
         }
@@ -1842,6 +1889,28 @@ def tool_type_text(arguments: dict) -> dict:
         tx, ty, _, focused_mark = _resolve_target_xy(s, tap_target)
         act.tap(tx, ty, sw, sh, udid=s.device.udid)
         time.sleep(_KEYBOARD_SETTLE_SEC)
+
+    # PP-5036: text with a newline usually submits the field, so it is never
+    # read back or retyped. Otherwise, read the field before typing: append
+    # mode needs the previous value, and in pasteboard mode a successful copy
+    # also proves the field is plain text. In clear_first mode the pasteboard
+    # reader's selection is replaced by the clear below; in append mode it is
+    # collapsed to the end, so the text is appended at the end of the field.
+    skip_reason = None
+    if verify_mode is not None and ("\n" in text or "\r" in text):
+        skip_reason = "text contains a newline, which usually submits the field; not verified or retyped"
+    pre_read: readback.FieldRead | None = None
+    if verify_mode is not None and skip_reason is None and (
+        not clear_first or verify_mode == "pasteboard"
+    ):
+        pre_read = readback.read_focused_field(s.device.udid, s.device.name, verify_mode)
+        if pre_read.selected and not clear_first:
+            try:
+                readback.collapse_selection(s.device.udid)
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                raise errors.HIDUnavailableError(
+                    f"could not collapse the read-back selection before typing: {e}"
+                ) from e
 
     # v0.3.0a3 — clear_first sends Cmd-A then delete BEFORE typing the new text.
     # Replaces the five-press_key idiom for resetting search fields. Done after
@@ -1860,12 +1929,6 @@ def tool_type_text(arguments: dict) -> dict:
                 raise errors.KeyboardNotReadyError(
                     f"clear_first delete keypress failed: {e}"
                 ) from e
-
-    # Append mode: the field's expected end state is its previous value plus
-    # the text, so read the previous value before typing (PP-5036).
-    pre_read: readback.FieldRead | None = None
-    if verify and not clear_first:
-        pre_read = readback.read_focused_field(s.device.udid, s.device.name)
 
     # Safety guard: the simulator path must never be reached on a device session.
     # If this assertion fires, a new code path is routing device sessions here.
@@ -1929,9 +1992,11 @@ def tool_type_text(arguments: dict) -> dict:
     post_obs = _post_observe()
 
     verified, verification, verify_error = None, {"reason": "disabled by caller (verify=false)"}, None
-    if verify:
+    if skip_reason is not None:
+        verification = {"mode": verify_mode, "reason": skip_reason}
+    elif verify_mode is not None:
         verified, verification, verify_error, retried = _verify_typed_text(
-            s, text, clear_first, pre_read, post_obs,
+            s, text, clear_first, pre_read, verify_mode,
         )
         if retried:
             post_obs = _post_observe()
@@ -3451,11 +3516,12 @@ _TOOLS: list[dict] = [
             "screen_changed, ssim_delta, and screenshot_path, reusing the same post-type "
             "observation keyboard_visible is derived from. Pass verify_change=false to "
             "skip it. On the simulator path the field is also read back (verify, default "
-            "true): `verified` is true when the field holds the expected text, false "
-            "(with ok=false and an `error` naming expected vs landed) when it still does "
-            "not after one automatic clear-and-retype, and null with a "
-            "`verification.reason` when the field could not be read. dispatch_succeeded "
-            "only means the keystrokes were sent."
+            "\"auto\" = host AX only, no extra input): `verified` is true when the field holds "
+            "the expected text, false (with ok=false and an `error` naming expected vs landed) "
+            "when it still does not after one automatic clear-and-retype, and null with a "
+            "`verification.reason` when the field could not be read. verify=\"pasteboard\" "
+            "reads headless sims by copying the field (see the parameter for side effects). "
+            "dispatch_succeeded only means the keystrokes were sent."
         ),
         "inputSchema": {
             "type": "object",
@@ -3470,7 +3536,27 @@ _TOOLS: list[dict] = [
                     "description": "Send Cmd-A + delete after focusing (and before typing) to clear the field.",
                 },
                 "verify_change": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Returns `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path} built from the same post-type observation keyboard_visible already uses. Pass false to skip."},
-                "verify": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Read the focused field back after typing (host AX, else Cmd-A/Cmd-C through the device pasteboard, which is restored) and compare it to the expected value: the text when clear_first, else the previous value plus the text. First-letter auto-capitalization and curly quotes are accepted; secure fields compare length only. On a mismatch, clear and retype once. Returns `verified` true/false/null and `verification`; false also sets ok=false and `error` (expected, landed, diff). Pass false for fields whose content cannot be copied or that reformat input."},
+                "verify": {
+                    "oneOf": [{"type": "string", "enum": ["auto", "pasteboard"]}, {"type": "boolean"}],
+                    "default": "auto",
+                    "description": (
+                        "Simulator path only. Read the focused field back after typing and compare it to "
+                        "the expected value: the text when clear_first, else the previous value plus the "
+                        "text. First-letter auto-capitalization and curly quotes are accepted; secure "
+                        "fields compare length only. "
+                        "\"auto\" (default; true means the same): read only through host AX, which sends "
+                        "no input; when AX cannot see the field (headless sim) nothing is read and "
+                        "`verified` is null. "
+                        "\"pasteboard\": also read by Cmd-A/Cmd-C through the device pasteboard. Side "
+                        "effects: the pasteboard's text is restored but non-text contents are lost; in "
+                        "append mode the caret is moved to the end of the field before typing. A field "
+                        "that copies nothing (empty, secure, or without focus) gives `verified` null. "
+                        "false: off. "
+                        "On a mismatch in a field known to be plain text, clear and retype once; a "
+                        "remaining mismatch sets ok=false and `error` (expected, landed, diff). Text "
+                        "containing a newline is never verified or retyped. Replays do not verify."
+                    ),
+                },
             },
         },
         "handler": tool_type_text,

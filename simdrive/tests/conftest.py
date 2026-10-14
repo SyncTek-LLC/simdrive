@@ -69,6 +69,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "no_license: remove the session dev-trial license for this test "
         "(use for tests that explicitly verify license-missing behaviour).",
     )
+    config.addinivalue_line(
+        "markers",
+        "real_readback: keep type_text's real field reader (its own unit tests "
+        "patch the HID and simctl calls underneath it).",
+    )
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -167,13 +172,13 @@ def _neutralize_type_text_readback(request, monkeypatch):
     hermetic tests default it to "unreadable"; tests of the read-back patch it
     themselves. Live tests keep the real reader.
     """
-    if request.node.get_closest_marker("live"):
+    if request.node.get_closest_marker("live") or request.node.get_closest_marker("real_readback"):
         yield
         return
     from simdrive import readback as _readback
     monkeypatch.setattr(
         _readback, "read_focused_field",
-        lambda udid, device_name: _readback.FieldRead(
+        lambda udid, device_name, mode="auto": _readback.FieldRead(
             value=None, method=None, reason="read-back neutralized in hermetic tests",
         ),
     )
