@@ -202,6 +202,20 @@ def set_pasteboard(udid: str, text: str) -> None:
         raise SimError(f"simctl pbcopy failed: {res.stderr.strip()}")
 
 
+def get_pasteboard(udid: str) -> str:
+    """Return the simulator pasteboard's text (``simctl pbpaste``)."""
+    res = subprocess.run(
+        ["xcrun", "simctl", "pbpaste", udid],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=5.0,
+    )
+    if res.returncode != 0:
+        raise SimError(f"simctl pbpaste failed: {res.stderr.strip()}")
+    return res.stdout
+
+
 # ── log capture ─────────────────────────────────────────────────────────────
 #
 # `log show` reports only default-level records unless told otherwise: `.info`

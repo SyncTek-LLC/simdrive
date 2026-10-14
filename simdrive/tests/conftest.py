@@ -158,3 +158,23 @@ def _neutralize_replay_liveness_probe(request, monkeypatch):
     from simdrive import recorder as _recorder
     monkeypatch.setattr(_recorder, "_app_died_during_replay", lambda session: False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_type_text_readback(request, monkeypatch):
+    """type_text reads the focused field back after typing (PP-5036). Against
+    a fake UDID the real reader would send HID chords and `simctl pbpaste`, so
+    hermetic tests default it to "unreadable"; tests of the read-back patch it
+    themselves. Live tests keep the real reader.
+    """
+    if request.node.get_closest_marker("live"):
+        yield
+        return
+    from simdrive import readback as _readback
+    monkeypatch.setattr(
+        _readback, "read_focused_field",
+        lambda udid, device_name: _readback.FieldRead(
+            value=None, method=None, reason="read-back neutralized in hermetic tests",
+        ),
+    )
+    yield

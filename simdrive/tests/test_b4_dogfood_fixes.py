@@ -199,7 +199,8 @@ def test_tap_and_wait_keyboard_no_recorder_is_safe(tmp_path):
 def test_type_text_emits_keyboard_visible_reason_when_dispatched_but_collapsed(tmp_path):
     """When dispatch_succeeded=True but the post-type observe finds no
     keyboard chrome (the reader app's instant-search scenario), the response must
-    include a `keyboard_visible_reason` so the agent does NOT retry the type.
+    include a `keyboard_visible_reason` that points the agent at `verified`
+    (PP-5036) rather than treating the absent keyboard as a failed type.
     """
     s = _make_sim_session(tmp_path)
     from simdrive import observe as observe_mod
@@ -222,7 +223,8 @@ def test_type_text_emits_keyboard_visible_reason_when_dispatched_but_collapsed(t
     assert "keyboard_visible_reason" in result
     reason = result["keyboard_visible_reason"]
     assert "dispatch_succeeded=true" in reason
-    assert "do NOT retry" in reason
+    assert "do NOT retry" not in reason
+    assert "verified" in reason
 
 
 def test_type_text_no_reason_when_keyboard_visible_true(tmp_path):

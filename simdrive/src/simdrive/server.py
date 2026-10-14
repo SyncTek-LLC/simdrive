@@ -75,7 +75,7 @@ from typing import Optional
 
 from . import (
     __version__, act, ax, diagnostics, errors, motion, observe, perf, prefs,
-    recorder, robustness, session, sim, som,
+    readback, recorder, robustness, session, sim, som,
 )
 from .cloud.middleware.quotas import check_local_quota
 from .license.gate import gate as _entitlement_gate
@@ -1689,6 +1689,81 @@ def tool_swipe(arguments: dict) -> dict:
     return response
 
 
+def _verify_typed_text(s, text, clear_first, pre_read, post_obs):
+    """Read the focused field back and compare it to what type_text should
+    have produced; on a mismatch, clear and retype once (PP-5036).
+
+    Returns (verified, verification, error, retried). ``verified`` is True,
+    False, or None when the field could not be read.
+    """
+    from . import hid_inject
+
+    if pre_read is not None and pre_read.value is None:
+        return None, {"reason": f"could not read the field before typing: {pre_read.reason}"}, None, False
+    previous = "" if (clear_first or pre_read is None) else pre_read.value
+    expected = previous + text
+
+    def _describe(read, match, attempts):
+        info: dict = {"method": read.method, "attempts": attempts, "match": match}
+        if read.secure:
+            info.update(secure=True, expected_length=len(expected), landed_length=len(read.value))
+        else:
+            info.update(expected=expected, landed=read.value)
+        return info
+
+    attempts = 1
+    read = readback.read_focused_field(s.device.udid, s.device.name)
+    while True:
+        if read.value is None:
+            return None, {"attempts": attempts, "reason": read.reason}, None, attempts > 1
+        match = readback.compare(expected, read.value, secure=read.secure)
+        if match is not None:
+            return True, _describe(read, match, attempts), None, attempts > 1
+        if attempts == 1 and not read.copied and _text_visible(post_obs.marks, text):
+            # Nothing was copied, yet the text is on screen: the field most
+            # likely committed and resigned focus. Retyping would go nowhere.
+            return None, {
+                "method": read.method, "attempts": attempts,
+                "reason": "copy returned nothing but the typed text is visible on screen; "
+                          "the field probably committed and lost focus",
+            }, None, False
+        if attempts == 2:
+            break
+        attempts = 2
+        hid_inject.chord(s.device.udid, "cmd", "a")
+        act.press_key("delete", udid=s.device.udid)
+        act.type_text(expected, udid=s.device.udid)
+        read = readback.read_focused_field(s.device.udid, s.device.name)
+
+    info = _describe(read, None, attempts)
+    error: dict = {
+        "code": "text_not_landed",
+        "message": (
+            "The field does not hold the expected text after one automatic clear-and-retype. "
+            "Check that the intended field has focus (tap_first), then retry; pass verify=false "
+            "for fields whose content cannot be copied or that reformat input."
+        ),
+    }
+    if read.secure:
+        error.update(expected_length=len(expected), landed_length=len(read.value))
+    else:
+        error.update(expected=expected, landed=read.value, diff=readback.diff(expected, read.value))
+        if not read.copied:
+            error["message"] += " Nothing could be copied from the field: it is empty, secure, or lost focus."
+    return False, info, error, True
+
+
+def _text_visible(marks, text: str) -> bool:
+    needle = "".join(text.split()).lower()
+    if len(needle) < 2:
+        return False
+    for mk in marks or []:
+        t = mk.get("text") if isinstance(mk, dict) else getattr(mk, "text", None)
+        if needle in "".join((t or "").split()).lower():
+            return True
+    return False
+
+
 def tool_type_text(arguments: dict) -> dict:
     _entitlement_gate()
     from . import hid_inject
@@ -1696,6 +1771,7 @@ def tool_type_text(arguments: dict) -> dict:
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
     clear_first = bool(arguments.get("clear_first", False))
+    verify = bool(arguments.get("verify", True))
     focused_mark = None  # Mark of the tap_first target if resolved via mark/stable_id/text
 
     if s.target == "device":
@@ -1749,6 +1825,13 @@ def tool_type_text(arguments: dict) -> dict:
             "dispatch_succeeded": True,
             "keyboard_visible": False,
             "focused_field": focused_field,
+            "verified": None,
+            "verification": {
+                "reason": (
+                    "disabled by caller (verify=false)"
+                    if not verify else "read-back is not implemented for real devices"
+                ),
+            },
         }
         if step_id is not None:
             resp["step_id"] = step_id
@@ -1777,6 +1860,12 @@ def tool_type_text(arguments: dict) -> dict:
                 raise errors.KeyboardNotReadyError(
                     f"clear_first delete keypress failed: {e}"
                 ) from e
+
+    # Append mode: the field's expected end state is its previous value plus
+    # the text, so read the previous value before typing (PP-5036).
+    pre_read: readback.FieldRead | None = None
+    if verify and not clear_first:
+        pre_read = readback.read_focused_field(s.device.udid, s.device.name)
 
     # Safety guard: the simulator path must never be reached on a device session.
     # If this assertion fires, a new code path is routing device sessions here.
@@ -1828,12 +1917,24 @@ def tool_type_text(arguments: dict) -> dict:
     # annotate=False (INIT-2026-641 item C): this call already ran unconditionally
     # purely to derive keyboard_visible; nothing here ever surfaced an
     # annotated_path, so drawing one wasted ~1.8s on every type_text call.
-    post_obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=False)
-    s.last_screenshot_w = post_obs.screenshot_w
-    s.last_screenshot_h = post_obs.screenshot_h
-    s.last_screenshot_path = post_obs.screenshot_path
-    if post_obs.marks:
-        s.last_marks = [m.to_dict() for m in post_obs.marks]
+    def _post_observe():
+        obs = observe.observe(s.device.udid, s.workdir / "observations", annotate=False)
+        s.last_screenshot_w = obs.screenshot_w
+        s.last_screenshot_h = obs.screenshot_h
+        s.last_screenshot_path = obs.screenshot_path
+        if obs.marks:
+            s.last_marks = [m.to_dict() for m in obs.marks]
+        return obs
+
+    post_obs = _post_observe()
+
+    verified, verification, verify_error = None, {"reason": "disabled by caller (verify=false)"}, None
+    if verify:
+        verified, verification, verify_error, retried = _verify_typed_text(
+            s, text, clear_first, pre_read, post_obs,
+        )
+        if retried:
+            post_obs = _post_observe()
 
     keyboard_chrome_words = {"return", "search", "go", "next", "done", "shift", "delete", "space"}
     keyboard_visible = False
@@ -1866,7 +1967,12 @@ def tool_type_text(arguments: dict) -> dict:
         "dispatch_succeeded": dispatch_succeeded,
         "keyboard_visible": keyboard_visible,
         "focused_field": focused_field,
+        "verified": verified,
+        "verification": verification,
     }
+    if verify_error is not None:
+        response["ok"] = False
+        response["error"] = verify_error
     # b4 — disambiguate the false-negative case b3 dogfood surfaced
     # (F-B3-011). When dispatch_succeeded but the post-type observe failed to
     # find keyboard chrome, the keyboard most likely auto-collapsed on commit
@@ -1876,10 +1982,13 @@ def tool_type_text(arguments: dict) -> dict:
     # latter does NOT require a retry.
     if dispatch_succeeded and not keyboard_visible:
         response["keyboard_visible_reason"] = (
-            "dispatched_but_keyboard_not_detected_post_type — keystrokes landed "
+            "dispatched_but_keyboard_not_detected_post_type — keystrokes were sent "
             "(dispatch_succeeded=true); the absent keyboard chrome usually means "
-            "the field auto-committed and dismissed (e.g. instant-search). "
-            "Treat dispatch_succeeded as ground truth; do NOT retry on this signal."
+            "the field auto-committed and dismissed (e.g. instant-search), and "
+            "under HID the soft keyboard is not drawn at all. Use `verified` to "
+            "decide on a retry: true means the field holds the expected text; "
+            "false means it did not land even after one automatic clear-and-retype; "
+            "null means the field could not be read, so observe before retyping."
         )
     if step_id is not None:
         response["step_id"] = step_id
@@ -3333,15 +3442,20 @@ _TOOLS: list[dict] = [
             "Cmd-A + delete after focusing and before typing — convenient for resetting "
             "search fields. Returns ok, chars, injection_method ('hid' or 'cliclick' — "
             "the backend that actually dispatched), dispatch_succeeded (True when the "
-            "keystrokes landed; reliable signal under HID where the soft keyboard isn't "
-            "drawn), keyboard_visible (heuristic from a post-type observe; useful on the "
+            "keystrokes were sent without error; it does not confirm they reached the "
+            "field — see verified), keyboard_visible (heuristic from a post-type observe; useful on the "
             "cliclick path), and focused_field (the stable_id of the tap_first target "
             "when one was supplied and resolved via mark/stable_id/text, else null). "
             "On the simulator path, verify_change defaults to true: the response also "
             "carries a `post_state` key with a fresh compact marks array (capped at 20), "
             "screen_changed, ssim_delta, and screenshot_path, reusing the same post-type "
             "observation keyboard_visible is derived from. Pass verify_change=false to "
-            "skip it."
+            "skip it. On the simulator path the field is also read back (verify, default "
+            "true): `verified` is true when the field holds the expected text, false "
+            "(with ok=false and an `error` naming expected vs landed) when it still does "
+            "not after one automatic clear-and-retype, and null with a "
+            "`verification.reason` when the field could not be read. dispatch_succeeded "
+            "only means the keystrokes were sent."
         ),
         "inputSchema": {
             "type": "object",
@@ -3356,6 +3470,7 @@ _TOOLS: list[dict] = [
                     "description": "Send Cmd-A + delete after focusing (and before typing) to clear the field.",
                 },
                 "verify_change": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Returns `post_state` {marks (compact, capped at 20), screen_changed, ssim_delta, screenshot_path} built from the same post-type observation keyboard_visible already uses. Pass false to skip."},
+                "verify": {"type": "boolean", "default": True, "description": "Simulator path only. Default true. Read the focused field back after typing (host AX, else Cmd-A/Cmd-C through the device pasteboard, which is restored) and compare it to the expected value: the text when clear_first, else the previous value plus the text. First-letter auto-capitalization and curly quotes are accepted; secure fields compare length only. On a mismatch, clear and retype once. Returns `verified` true/false/null and `verification`; false also sets ok=false and `error` (expected, landed, diff). Pass false for fields whose content cannot be copied or that reformat input."},
             },
         },
         "handler": tool_type_text,

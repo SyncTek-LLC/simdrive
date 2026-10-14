@@ -15,6 +15,26 @@
 
 ## [Unreleased]
 
+### Fixed: `type_text` checks that the text landed
+
+- On the simulator, `type_text` now reads the focused field back after
+  typing and reports `verified`. The expected value is the typed text with
+  `clear_first`, otherwise the field's previous value plus the text.
+  First-letter auto-capitalization and curly quotes are accepted; secure
+  fields compare length only and never echo the value.
+- On a mismatch it clears the field and retypes once. If the field is still
+  wrong, the result has `ok: false`, `verified: false` and an `error` with
+  the expected value, what landed, and a character diff. Previously a lost
+  string still returned `dispatch_succeeded: true`, and the response told
+  agents not to retry.
+- `verified: null` with a `verification.reason` means the field could not be
+  read (for example, it committed and lost focus). Pass `verify: false` to
+  skip the read-back for fields that cannot be copied or that reformat input.
+- The field is read through host Accessibility when the Simulator window is
+  on-screen, otherwise by copying it through the device pasteboard; the
+  pasteboard's previous text is restored and the selection collapsed.
+  Real devices report `verified: null` for now.
+
 ### Fixed: replay reports a mid-run crash as a crash
 
 - A crash partway through a replay now halts with `crash_detected`, even
