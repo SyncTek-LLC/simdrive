@@ -463,14 +463,34 @@ def launch_app(udid: str, bundle_id: str) -> int:
         return 0
 
 
-def terminate_app(udid: str, bundle_id: str) -> None:
-    # devicectl process kill needs PID; we don't track PIDs persistently, so
-    # do a best-effort signal via terminate-by-bundle (Xcode 26+ supports this).
-    subprocess.run(
-        ["xcrun", "devicectl", "device", "process", "signal",
-         "--device", udid, "--signal", "SIGTERM", "--bundle-id", bundle_id],
-        capture_output=True, timeout=10.0, check=False,
+def terminate_app(udid: str, bundle_id: str) -> bool:
+    """Terminate ``bundle_id`` on the device. Returns True if a process was
+    terminated, False if it was not running.
+
+    ``devicectl device process terminate`` (and ``signal``) only accept
+    ``--pid``; there is no bundle-id form. The PID comes from the devicectl
+    process list via ``diagnostics.app_state_device``.
+    Raises DeviceError when the process list or the terminate call fails.
+    """
+    from . import diagnostics as _diag
+    try:
+        info = _diag.app_state_device(udid, bundle_id)
+    except Exception as exc:
+        raise DeviceError(f"devicectl process list failed: {exc}") from exc
+    pid = info.get("pid")
+    if info.get("state") != "running" or not pid:
+        return False
+    res = subprocess.run(
+        ["xcrun", "devicectl", "device", "process", "terminate",
+         "--device", udid, "--pid", str(int(pid))],
+        capture_output=True, text=True, timeout=30.0, check=False,
     )
+    if res.returncode != 0:
+        raise DeviceError(
+            "devicectl terminate failed: "
+            f"{_filter_devicectl_stderr(res.stderr, res.returncode).strip() or res.stdout.strip()}"
+        )
+    return True
 
 
 # ----------------------- Developer Disk Image ----------------------- #

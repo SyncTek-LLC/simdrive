@@ -148,6 +148,14 @@ def _wda_client_for(udid: str):
     return WdaClient(host=host, port=port)
 
 
+def _require_device_wda(s) -> None:
+    """Fail fast with wda_not_bootstrapped for an input tool on a device
+    session that has no WebDriverAgent, before any screenshot is taken."""
+    if getattr(s, "target", "simulator") == "device" and getattr(s, "wda_client", None) is None:
+        # Keep the resolved client so the tool body does not resolve it again.
+        s.wda_client = _wda_client_for(s.device.udid)
+
+
 # Module-level scale cache keyed by UDID. Pixel/point ratio is a stable physical
 # property of the device hardware — it does not change across sessions for the
 # same UDID. Caching at the module level avoids a WDA round-trip on the first
@@ -817,6 +825,15 @@ def tool_session_start(arguments: dict) -> dict:
         "crash_report_path": None,
         "recovery": None,
     }
+    if s.target == "device":
+        out["hid_available"] = getattr(s, "wda_client", None) is not None
+        if not out["hid_available"]:
+            out["hid_note"] = (
+                "No WebDriverAgent registry for this device: observe (screenshot + OCR), "
+                "logs, app_state, apps and app launch/terminate work; tap/swipe/type_text/"
+                "press_key return wda_not_bootstrapped. Run `simdrive bootstrap-device "
+                f"{s.device.udid}` to enable input."
+            )
     # F#2 — surface launch-verification failure (or unavailability) on the
     # session_start response so the agent sees the crash on the first
     # roundtrip instead of after multiple blind tap/type calls.
@@ -915,7 +932,20 @@ def tool_observe(arguments: dict) -> dict:
     sid = arguments["session_id"]
     s = session.get(sid)
 
+    device_wda = None
     if s.target == "device":
+        device_wda = s.wda_client
+        if device_wda is None:
+            try:
+                device_wda = _wda_client_for(s.device.udid)
+            except errors.SimdriveError as exc:
+                if exc.code != "wda_not_bootstrapped":
+                    raise
+                # No WebDriverAgent: screenshot via libimobiledevice + OCR marks
+                # (the generic path below, with target="device").
+                device_wda = None
+
+    if s.target == "device" and device_wda is not None:
         # Route through WDA /screenshot (no session required) instead of
         # idevicescreenshot — CoreDevice UUIDs are not recognized by
         # idevicescreenshot, causing "No device found" errors.
@@ -926,7 +956,7 @@ def tool_observe(arguments: dict) -> dict:
         # Prefer the session-stored WdaClient (which already holds the open WDA
         # session_id) over a fresh client. A fresh client has _session_id=None,
         # which is fine for screenshot_any() but wastes a new httpx.Client object (F-005).
-        wda = s.wda_client or _wda_client_for(s.device.udid)
+        wda = device_wda
         png_bytes = wda.screenshot_any()
 
         obs_dir = s.workdir / "observations"
@@ -947,10 +977,9 @@ def tool_observe(arguments: dict) -> dict:
         annotated_path = None
         if bool(arguments.get("annotate", True)):
             from .wda.som_device import annotate_device_screenshot
-            wda_annotate = s.wda_client or wda
             point_scale: float = float(s.pixel_per_point_scale or 1.0)
             marks, annotated_path = annotate_device_screenshot(
-                screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
+                screenshot_path, (w, h), wda, point_scale=point_scale,
             )
             # Persist UNFILTERED marks to the session so resolver tools (tap by
             # text/stable_id, etc.) still see the full set even when an observe
@@ -1032,8 +1061,11 @@ def tool_observe(arguments: dict) -> dict:
             result["screenshot_b64"] = base64.b64encode(png_bytes).decode("ascii")
         return result
 
+    obs_udid = s.device.udid
+    if s.target == "device":
+        obs_udid = getattr(s, "hardware_udid", None) or s.device.udid
     obs = observe.observe(
-        s.device.udid,
+        obs_udid,
         s.workdir / "observations",
         annotate=bool(arguments.get("annotate", True)),
         capture_logs=bool(arguments.get("capture_logs", False)),
@@ -1383,6 +1415,7 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
 def tool_tap(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     sw, sh = _ensure_screenshot_dims(s)
     x, y, resolved_via, matched_mark = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
@@ -1618,6 +1651,7 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
 def tool_swipe(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     duration_ms = int(arguments.get("duration_ms", 300))
     sw, sh = _ensure_screenshot_dims(s)
 
@@ -1693,6 +1727,7 @@ def tool_type_text(arguments: dict) -> dict:
     _entitlement_gate()
     from . import hid_inject
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
     clear_first = bool(arguments.get("clear_first", False))
@@ -1903,6 +1938,7 @@ def tool_type_text(arguments: dict) -> dict:
 def tool_press_key(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     key = str(arguments["key"])
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
@@ -2061,12 +2097,13 @@ def tool_logs(arguments: dict) -> dict:
             # to 'substring' and logs a one-time WARNING about the limitation.
             # idevicesyslog needs the hardware UDID; session.device.udid may be
             # the CoreDevice UUID (get_log_tail maps it if so).
+            extra = {"process": arguments["process"]} if arguments.get("process") else {}
             text = device.get_log_tail(
                 getattr(s, "hardware_udid", None) or s.device.udid,
                 lines=lines,
                 predicate=predicate,
                 predicate_kind=predicate_kind,
-                process=arguments.get("process") or None,
+                **extra,
             )
         except device.DeviceError as exc:
             # F-003: surface missing idevicesyslog as a structured error rather
@@ -2567,6 +2604,7 @@ def tool_set_appearance(arguments: dict) -> dict:
 def tool_dismiss_sheet(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     sw, sh = _ensure_screenshot_dims(s)
     direction = str(arguments.get("direction", "down")).lower()
     if direction not in ("down", "up"):
@@ -2806,6 +2844,7 @@ def tool_clear_field(arguments: dict) -> dict:
     _entitlement_gate()
     from . import hid_inject
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     target = arguments.get("target")
     # Capture pre-state so the recorder can serialize a clear_field step with a
     # "before" screenshot. Without this, b3 dogfood reported that
@@ -3096,7 +3135,7 @@ _TOOLS: list[dict] = [
                 "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted. Alias: 'device_name'."},
                 "device_name": {"type": "string", "description": "Alias for 'device'. Accepted by the handler but missing from this schema until INIT-2026-641 item 4.2, so no agent could discover it."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
-                "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
+                "udid": {"type": "string", "description": "Simulator UDID, or (target='device') the CoreDevice UUID or hardware UDID. A device without a WebDriverAgent registry still gets a session (observe via screenshot + OCR, logs, app_state, apps, launch/terminate); input tools then return wda_not_bootstrapped. Alias: 'device_udid'."},
                 "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
                 "app_bundle_id": {"type": "string", "description": "Optional bundle id to launch after boot, e.g. 'com.apple.Preferences'."},
                 "replace_existing": {"type": "boolean", "default": False, "description": "When True, end any existing session for the same UDID before starting a new one (app stays foreground). Avoids the 'session already active' error on reconnect."},

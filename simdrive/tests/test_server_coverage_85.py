@@ -704,7 +704,7 @@ def test_tool_logs_device_unavailable_returns_structured_error(
     assert result["error"]["code"] == "device_logs_unavailable"
 
 
-def test_tool_logs_device_other_error_reraises(tmp_path, monkeypatch):
+def test_tool_logs_device_other_error_returns_device_logs_failed(tmp_path, monkeypatch):
     from simdrive import device as dev_mod
 
     s = _device_session(tmp_path, "logs-dev-other")
@@ -713,8 +713,9 @@ def test_tool_logs_device_other_error_reraises(tmp_path, monkeypatch):
         raise dev_mod.DeviceError("some other failure")
 
     monkeypatch.setattr("simdrive.device.get_log_tail", fake)
-    with pytest.raises(dev_mod.DeviceError):
-        server.tool_logs({"session_id": s.session_id})
+    out = server.tool_logs({"session_id": s.session_id})
+    assert out["ok"] is False
+    assert out["error"] == {"code": "device_logs_failed", "message": "some other failure"}
 
 
 # ── tool_app_state / tool_apps — device branches ───────────────────────────

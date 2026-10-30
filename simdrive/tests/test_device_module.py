@@ -429,9 +429,32 @@ def test_launch_app_raises_on_failure():
     assert "devicectl launch failed" in str(exc.value)
 
 
-def test_terminate_app_does_not_raise():
-    with patch("simdrive.device.subprocess.run", return_value=_ok()):
-        device.terminate_app("UDID", "com.example.App")  # No raise.
+def test_terminate_app_terminates_running_pid():
+    with patch("simdrive.diagnostics.app_state_device",
+               return_value={"state": "running", "pid": 4242}), \
+         patch("simdrive.device.subprocess.run", return_value=_ok()) as run:
+        assert device.terminate_app("UDID", "com.example.App") is True
+    argv = run.call_args.args[0]
+    assert argv[:5] == ["xcrun", "devicectl", "device", "process", "terminate"]
+    assert argv[argv.index("--pid") + 1] == "4242"
+    assert "--bundle-id" not in argv
+
+
+def test_terminate_app_not_running_skips_devicectl():
+    with patch("simdrive.diagnostics.app_state_device",
+               return_value={"state": "not-running", "pid": None}), \
+         patch("simdrive.device.subprocess.run") as run:
+        assert device.terminate_app("UDID", "com.example.App") is False
+    run.assert_not_called()
+
+
+def test_terminate_app_raises_on_devicectl_failure():
+    with patch("simdrive.diagnostics.app_state_device",
+               return_value={"state": "running", "pid": 7}), \
+         patch("simdrive.device.subprocess.run", return_value=_fail("no such pid")):
+        with pytest.raises(DeviceError) as exc:
+            device.terminate_app("UDID", "com.example.App")
+    assert "devicectl terminate failed" in str(exc.value)
 
 
 # ── is_developer_disk_mounted ───────────────────────────────────────────────

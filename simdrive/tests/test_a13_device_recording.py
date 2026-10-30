@@ -116,6 +116,10 @@ def test_record_captures_tap_with_screenshot(tmp_path, monkeypatch):
     monkeypatch.setattr(act, "tap", lambda *a, **kw: None)
 
     s = _make_device_session(tmp_path)
+    # A bootstrapped device: input tools need a WDA client before they observe.
+    from unittest.mock import MagicMock
+    s.wda_client = MagicMock()
+    s.wda_client.window_size_points.return_value = (440, 956)
     ses_mod._SESSIONS[s.session_id] = s
     recorder.start(s, "tap-test")
 
@@ -171,6 +175,10 @@ def test_record_captures_marks_count(tmp_path, monkeypatch):
     monkeypatch.setattr(act, "tap", lambda *a, **kw: None)
 
     s = _make_device_session(tmp_path)
+    # A bootstrapped device: input tools need a WDA client before they observe.
+    from unittest.mock import MagicMock
+    s.wda_client = MagicMock()
+    s.wda_client.window_size_points.return_value = (440, 956)
     ses_mod._SESSIONS[s.session_id] = s
     recorder.start(s, "marks-count-test")
 

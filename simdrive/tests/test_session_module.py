@@ -206,13 +206,16 @@ def test_start_device_no_udid_raises():
     assert exc.value.code == "no_device"
 
 
-def test_start_device_no_registry_raises():
+def test_start_device_no_registry_starts_session_without_wda(tmp_path, monkeypatch):
+    """No WDA registry: the device session still starts, with no WDA client."""
     session._SESSIONS.clear()
+    monkeypatch.setenv("SIMDRIVE_HOME", str(tmp_path))
     with patch("simdrive.wda.registry.load", return_value=None):
-        with pytest.raises(errors.SimdriveError) as exc:
-            session._start_device(udid="UDID-X", app_bundle_id=None)
-    # wda_not_bootstrapped is a SimdriveError subclass
-    assert "bootstrap" in (exc.value.message or "").lower() or exc.value.code == "wda_not_bootstrapped"
+        s = session._start_device(udid="UDID-X", app_bundle_id=None)
+    assert s.target == "device"
+    assert s.wda_client is None
+    assert s.hardware_udid == "UDID-X"
+    session._SESSIONS.clear()
 
 
 def test_workroot_default_uses_home(monkeypatch):
