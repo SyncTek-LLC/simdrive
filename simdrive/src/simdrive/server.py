@@ -2028,19 +2028,47 @@ def tool_list_devices(arguments: dict) -> dict:
 
     Args (all optional):
         compact: bool — when true, each device entry is just {udid, name, state,
-            hid_supported}. Drops model / transport / last_seen / unavailable_reason
-            and the top-level libimobiledevice_ready / missing_tools / hid_note
-            fields. Lower token cost when the agent only needs to pick a device.
+            reachable, hid_supported}. Drops model / transport / last_seen /
+            unavailable_reason and the top-level libimobiledevice_ready /
+            missing_tools / hid_note fields.
+        probe: bool — when true, run `devicectl device info lockState` (4 s cap,
+            in parallel) against every device with a transport and set
+            `reachable` from the result. Off by default to keep listing fast.
+
+    ``state`` only says devicectl knows a transport for the device; a phone
+    that is asleep or off the network keeps one. ``reachable`` is True when the
+    CoreDevice tunnel is connected (or the probe succeeded), False when the
+    probe failed or there is no transport, and None when unknown (tunnel not
+    connected and no probe requested).
     """
     _entitlement_gate()
     from . import device
     from .wda import registry as wda_registry
     compact = bool(arguments.get("compact", False))
+    probe = bool(arguments.get("probe", False))
     ok, missing = device.libimobiledevice_available()
     devs = []
     err: dict | None = None
     try:
-        for d in device.list_devices():
+        found = device.list_devices()
+        probed: dict[str, bool] = {}
+        if probe:
+            from concurrent.futures import ThreadPoolExecutor
+            targets = [d.udid for d in found if d.transport]
+            if targets:
+                with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+                    probed = dict(zip(targets, pool.map(device.probe_reachable, targets)))
+
+        def _reachable(d):
+            if not getattr(d, "transport", None):
+                return False
+            if d.udid in probed:
+                return probed[d.udid]
+            if getattr(d, "tunnel_state", None) == "connected":
+                return True
+            return None
+
+        for d in found:
             # hid_supported: True when a WDA registry entry exists for this UDID
             # (i.e. `simdrive bootstrap-device` has been run and WDA is ready).
             # tap/swipe/type_text/press_key all route through WDA on real devices.
@@ -2050,6 +2078,7 @@ def tool_list_devices(arguments: dict) -> dict:
                     "udid": d.udid,
                     "name": d.name,
                     "state": d.state,
+                    "reachable": _reachable(d),
                     "hid_supported": reg is not None,
                 })
             else:
@@ -2059,6 +2088,9 @@ def tool_list_devices(arguments: dict) -> dict:
                     "model": d.model,
                     "transport": d.transport,
                     "state": d.state,
+                    "reachable": _reachable(d),
+                    "tunnel_state": getattr(d, "tunnel_state", None),
+                    "coredevice_id": getattr(d, "coredevice_id", None),
                     "hid_supported": reg is not None,
                     "last_seen": d.last_seen,
                     "unavailable_reason": d.unavailable_reason,
@@ -3561,13 +3593,20 @@ _TOOLS: list[dict] = [
             "and support tap/swipe/type_text/press_key. Run "
             "`simdrive bootstrap-device <udid>` once to enable HID on a device. "
             "Pass compact=true to slim per-device entries to {udid, name, state, "
-            "hid_supported} — useful when you only need to pick one to attach to."
+            "reachable, hid_supported} — useful when you only need to pick one to attach to. "
+            "`state='available'` only means devicectl knows a transport (it stays set for a "
+            "sleeping or out-of-range phone). `reachable` is true when the CoreDevice tunnel "
+            "is connected, false with no transport or a failed probe, null when unknown; "
+            "pass probe=true to check each device with `devicectl device info lockState` "
+            "(about 4 s worst case, run in parallel)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "compact": {"type": "boolean", "default": False,
                             "description": "Slim per-device entries + drop diagnostic top-level fields."},
+                "probe": {"type": "boolean", "default": False,
+                          "description": "Probe each device with a transport (devicectl lockState, 4 s cap, parallel) and set `reachable` from the result."},
             },
         },
         "handler": tool_list_devices,
