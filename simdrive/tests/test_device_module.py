@@ -325,8 +325,8 @@ def test_get_log_tail_timeout_drains_partial_output():
     with patch("simdrive.device._which", return_value="/opt/homebrew/bin/idevicesyslog"), \
          patch("simdrive.device.subprocess.Popen", return_value=_fake_popen("", raise_timeout=True)):
         out = device.get_log_tail("UDID")
-    # Empty string on timeout with no partial.
-    assert out == ""
+    # An empty capture is reported, not returned as a silent "".
+    assert out.startswith("[simdrive] idevicesyslog captured no lines from UDID")
 
 
 def test_get_log_tail_substring_predicate():

@@ -2059,11 +2059,14 @@ def tool_logs(arguments: dict) -> dict:
             # Device path: idevicesyslog does not speak NSPredicate.
             # When predicate_kind='nspredicate' on device, get_log_tail downgrades
             # to 'substring' and logs a one-time WARNING about the limitation.
+            # idevicesyslog needs the hardware UDID; session.device.udid may be
+            # the CoreDevice UUID (get_log_tail maps it if so).
             text = device.get_log_tail(
-                s.device.udid,
+                getattr(s, "hardware_udid", None) or s.device.udid,
                 lines=lines,
                 predicate=predicate,
                 predicate_kind=predicate_kind,
+                process=arguments.get("process") or None,
             )
         except device.DeviceError as exc:
             # F-003: surface missing idevicesyslog as a structured error rather
@@ -2080,7 +2083,10 @@ def tool_logs(arguments: dict) -> dict:
                         ),
                     },
                 }
-            raise
+            return {
+                "ok": False,
+                "error": {"code": "device_logs_failed", "message": msg},
+            }
     else:
         # Simulator path: NSPredicate is passed natively to `log show --predicate`.
         # regex/substring kinds are applied Python-side after capture.
@@ -3529,6 +3535,7 @@ _TOOLS: list[dict] = [
                     ),
                 },
                 "predicate": {"type": "string", "description": "Filter string. Interpretation depends on predicate_kind."},
+                "process": {"type": "string", "description": "(device only) Process name passed to `idevicesyslog -p`, e.g. 'Palace'. Narrows capture to that process."},
                 "predicate_kind": {
                     "type": "string",
                     "enum": ["nspredicate", "regex", "substring"],
