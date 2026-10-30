@@ -2617,6 +2617,69 @@ def tool_crashes(arguments: dict) -> dict:
     return {"crashes": crashes}
 
 
+# --------------------- Device traces (xctrace) -------------------------- #
+
+
+def _trace_call(fn, *args, **kwargs) -> dict:
+    from . import trace as _trace
+    try:
+        return {"ok": True, **fn(*args, **kwargs)}
+    except _trace.TraceError as exc:
+        return {"ok": False, "error": {"code": "trace_failed", "message": str(exc)}}
+
+
+def tool_trace_start(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    device_id = arguments.get("udid")
+    sid = arguments.get("session_id")
+    if not device_id and sid:
+        s = session.get(sid)
+        if s.target != "device":
+            raise errors.SimdriveError(
+                code="not_supported_on_simulator",
+                message="trace_start records a real device; pass udid or a device session_id.",
+                details={"tool": "trace_start", "target": s.target},
+            )
+        device_id = getattr(s, "hardware_udid", None) or s.device.udid
+    if not device_id:
+        raise errors.invalid_argument("session_id|udid", None,
+                                      "supply a device session_id or a device udid")
+    return _trace_call(
+        _trace.start, device_id, str(arguments.get("attach") or ""),
+        template=str(arguments.get("template") or _trace.DEFAULT_TEMPLATE),
+        time_limit=str(arguments.get("time_limit") or "60s"),
+    )
+
+
+def tool_trace_status(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.status, str(arguments.get("trace_id") or ""))
+
+
+def tool_trace_stop(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.stop, str(arguments.get("trace_id") or ""),
+                       wait_s=float(arguments.get("wait_s", 30)))
+
+
+def tool_trace_export(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.export, str(arguments.get("trace_id") or ""),
+                       xpath=arguments.get("xpath"), toc=bool(arguments.get("toc", False)),
+                       name=arguments.get("name"))
+
+
+def tool_trace_import(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.import_file, str(arguments.get("path") or ""),
+                       template=str(arguments.get("template") or _trace.DEFAULT_TEMPLATE))
+
+
 def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
     """Tap permission-alert buttons; re-observe after each tap and retry once.
 
@@ -4000,6 +4063,88 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_crashes,
+    },
+    # ── Device traces (xctrace) ─────────────────────────────────────────
+    {
+        "name": "trace_start",
+        "description": (
+            "(device only) Start an Instruments recording on a real device in the background: "
+            "`xcrun xctrace record --device <udid> --template <template> --attach <process> "
+            "--time-limit <dur>`. Returns trace_id immediately; state lives under "
+            "~/.simdrive/traces/<trace_id>/. Poll trace_status, end early with trace_stop, "
+            "then trace_export."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "A target='device' session; its hardware UDID is used."},
+                "udid": {"type": "string", "description": "Device UDID or name, instead of session_id."},
+                "attach": {"type": "string", "description": "Process name (e.g. 'Palace') or pid to attach to. Required."},
+                "template": {"type": "string", "default": "Power Profiler", "description": "Instruments template name."},
+                "time_limit": {"type": "string", "default": "60s", "description": "Recording limit: 500ms, 30s, 5m, 1h."},
+            },
+            "required": ["attach"],
+        },
+        "handler": tool_trace_start,
+    },
+    {
+        "name": "trace_status",
+        "description": "(device only) State of a trace started by trace_start or trace_import: recording / finished / stopped / failed / imported, plus the recorder log tail.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["trace_id"],
+            "properties": {"trace_id": {"type": "string"}},
+        },
+        "handler": tool_trace_status,
+    },
+    {
+        "name": "trace_stop",
+        "description": "(device only) Stop a recording with SIGINT so xctrace finalizes the trace file, waiting up to wait_s seconds.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["trace_id"],
+            "properties": {
+                "trace_id": {"type": "string"},
+                "wait_s": {"type": "number", "default": 30},
+            },
+        },
+        "handler": tool_trace_stop,
+    },
+    {
+        "name": "trace_export",
+        "description": (
+            "(device only) `xctrace export` a finished trace to XML in the trace directory. "
+            "Pass toc=true for the table of contents, or an xpath for one table. Exit 139 "
+            "(xctrace segfault) after a non-empty file is reported with a warning, not an error."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["trace_id"],
+            "properties": {
+                "trace_id": {"type": "string"},
+                "toc": {"type": "boolean", "default": False},
+                "xpath": {"type": "string", "description": "e.g. /trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]"},
+                "name": {"type": "string", "description": "Output file stem (default toc / export-N)."},
+            },
+        },
+        "handler": tool_trace_export,
+    },
+    {
+        "name": "trace_import",
+        "description": (
+            "(device only) Import an on-device Performance Trace (Settings > Developer). A .aar "
+            "archive is unpacked with `aa extract`, then `xctrace import --template` builds a "
+            ".trace. Returns a trace_id usable with trace_export."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string"},
+                "template": {"type": "string", "default": "Power Profiler"},
+            },
+        },
+        "handler": tool_trace_import,
     },
     # ── Robustness ──────────────────────────────────────────────────────
     {

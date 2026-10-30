@@ -43,9 +43,10 @@ def test_tool_count():
                          + set_text (Host-AX) = 36
                        + app_defaults + set_app_defaults (QA evidence)   = 38
                        + capture_motion + detect_flicker + liveness_probe = 41
+                       + trace_start/status/stop/export/import (device) = 46
     """
     tools = server.list_tools()
-    assert len(tools) == 41, f"expected 41 tools, got {len(tools)}: {[t['name'] for t in tools]}"
+    assert len(tools) == 46, f"expected 46 tools, got {len(tools)}: {[t['name'] for t in tools]}"
 
 
 def test_tool_names_match_spec():
@@ -76,6 +77,8 @@ def test_tool_names_match_spec():
         "app_defaults", "set_app_defaults",
         # QA evidence primitives — quantified motion, a separate channel from replay
         "capture_motion", "detect_flicker", "liveness_probe",
+        # Device traces (xctrace)
+        "trace_start", "trace_status", "trace_stop", "trace_export", "trace_import",
     }
     got = {t["name"] for t in server.list_tools()}
     assert got == expected, f"missing: {expected - got}, extra: {got - expected}"
