@@ -2204,16 +2204,34 @@ def _resolve_prefs_bundle_id(s, arguments: dict) -> str:
     return str(bid)
 
 
-def _require_simulator(s, tool_name: str) -> None:
+_SIM_ONLY_REASON_DEFAULT = (
+    "it reads the app container via `simctl get_app_container`, which has no "
+    "real-device equivalent."
+)
+
+
+def _require_simulator(s, tool_name: str, reason: str = _SIM_ONLY_REASON_DEFAULT) -> None:
     if s.target == "device":
         raise errors.SimdriveError(
             code="not_supported_on_device",
-            message=(
-                f"{tool_name} is simulator-only — it reads the app container via "
-                "`simctl get_app_container`, which has no real-device equivalent."
-            ),
+            message=f"{tool_name} is simulator-only — {reason}",
             details={"tool": tool_name, "target": s.target},
         )
+
+
+# perf/memory sample the app process with host `ps`/`vmmap`, which only see
+# simulator processes (they run on the Mac). crashes scans the Mac's
+# DiagnosticReports, where device crash logs do not land.
+_PERF_SIM_ONLY = (
+    "it samples the app process with host tools (ps/vmmap), which cannot see "
+    "processes on a real device. For device performance use Instruments "
+    "(`xcrun xctrace record --device <udid>`)."
+)
+_CRASHES_SIM_ONLY = (
+    "it scans ~/Library/Logs/DiagnosticReports on this Mac, where real-device "
+    "crash logs do not land. Pull device crash logs with Xcode > Devices and "
+    "Simulators, or `xcrun devicectl device info files`."
+)
 
 
 def tool_app_defaults(arguments: dict) -> dict:
@@ -2454,6 +2472,7 @@ def _resolve_bundle_id(s, arguments: dict) -> str:
 def tool_perf(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "perf", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     snap = perf.snapshot(s.device.udid, bundle_id)
     if snap.get("pid") is None:
@@ -2469,6 +2488,7 @@ def tool_perf(arguments: dict) -> dict:
 def tool_perf_baseline(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "perf_baseline", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     label = str(arguments.get("label") or "default")
     snap = perf.snapshot(s.device.udid, bundle_id)
@@ -2486,6 +2506,7 @@ def tool_perf_baseline(arguments: dict) -> dict:
 def tool_perf_compare(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "perf_compare", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     label = str(arguments.get("label") or "default")
     baseline = s.perf_baselines.get(label)
@@ -2512,6 +2533,7 @@ def tool_perf_compare(arguments: dict) -> dict:
 def tool_memory(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "memory", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     return perf.memory_detail(s.device.udid, bundle_id)
 
@@ -2552,6 +2574,7 @@ def tool_apps(arguments: dict) -> dict:
 def tool_crashes(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "crashes", _CRASHES_SIM_ONLY)
     since = bool(arguments.get("since_session_start", True))
     since_ts = s.started_at if since else 0.0
     bundle_id = arguments.get("app_bundle_id") or s.app_bundle_id  # optional
