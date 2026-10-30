@@ -945,13 +945,11 @@ def install_wda(
         )
 
     print(f"[simdrive] Installing {app_bundle.name} on device {coredevice_uuid} ...", flush=True)
-    result = subprocess.run(
+    from ..device import run_devicectl_with_retry
+    result = run_devicectl_with_retry(
         ["xcrun", "devicectl", "device", "install", "app",
          "--device", coredevice_uuid, str(app_bundle)],
-        capture_output=True,
-        text=True,
         timeout=120,
-        check=False,
     )
     if result.returncode != 0:
         raise wda_install_failed(result.stderr or result.stdout)

@@ -39,6 +39,44 @@ class DeviceError(RuntimeError):
     """Raised when a real-device operation fails."""
 
 
+# devicectl intermittently fails install/launch with CoreDeviceError 1011
+# "unable to locate a device matching ecid_..." while other calls with the
+# same identifier succeed; an immediate retry usually works.
+_DEVICE_LOOKUP_FLAKE_MARKERS = (
+    "unable to locate a device matching",
+    "CoreDeviceError Code=1011",
+    "CoreDeviceError error 1011",
+)
+DEVICECTL_LOOKUP_RETRY_ATTEMPTS = 2
+DEVICECTL_LOOKUP_RETRY_BACKOFF_S = 2.0
+
+
+def is_device_lookup_flake(output: str) -> bool:
+    return any(m in (output or "") for m in _DEVICE_LOOKUP_FLAKE_MARKERS)
+
+
+def run_devicectl_with_retry(cmd: list[str], timeout: float,
+                             attempts: int = DEVICECTL_LOOKUP_RETRY_ATTEMPTS,
+                             backoff_s: float = DEVICECTL_LOOKUP_RETRY_BACKOFF_S,
+                             ) -> subprocess.CompletedProcess:
+    """Run a devicectl command, retrying only the device-lookup flake (1011).
+
+    Any other failure, or success, returns immediately. At most ``attempts``
+    runs with ``backoff_s`` between them.
+    """
+    res: Optional[subprocess.CompletedProcess] = None
+    for attempt in range(max(1, attempts)):
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        if res.returncode == 0:
+            return res
+        if not is_device_lookup_flake(f"{res.stderr or ''}{res.stdout or ''}"):
+            return res
+        if attempt < attempts - 1:
+            time.sleep(backoff_s)
+    assert res is not None
+    return res
+
+
 @dataclass(frozen=True)
 class RealDevice:
     udid: str
@@ -438,21 +476,21 @@ def _capture_stream(cmd: list[str], timeout_s: float) -> tuple[str, str, Optiona
 def install_app(udid: str, app_path: Path) -> None:
     if not Path(app_path).exists():
         raise DeviceError(f"app bundle not found: {app_path}")
-    res = subprocess.run(
+    res = run_devicectl_with_retry(
         ["xcrun", "devicectl", "device", "install", "app",
          "--device", udid, str(app_path)],
-        capture_output=True, text=True, timeout=120.0, check=False,
+        timeout=120.0,
     )
     if res.returncode != 0:
         raise DeviceError(f"devicectl install failed: {_filter_devicectl_stderr(res.stderr, res.returncode).strip() or res.stdout.strip()}")
 
 
 def launch_app(udid: str, bundle_id: str) -> int:
-    res = subprocess.run(
+    res = run_devicectl_with_retry(
         ["xcrun", "devicectl", "device", "process", "launch",
          "--device", udid, bundle_id,
          "--json-output", "/dev/stdout"],
-        capture_output=True, text=True, timeout=30.0, check=False,
+        timeout=30.0,
     )
     if res.returncode != 0:
         raise DeviceError(f"devicectl launch failed: {_filter_devicectl_stderr(res.stderr, res.returncode).strip() or res.stdout.strip()}")
