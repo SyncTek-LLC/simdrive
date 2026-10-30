@@ -975,12 +975,30 @@ def tool_observe(arguments: dict) -> dict:
 
         marks: list = []
         annotated_path = None
+        # allow_ax=False selects OCR marks from the screenshot instead of the
+        # WDA accessibility tree (/source), matching the simulator contract.
+        device_allow_ax = bool(arguments.get("allow_ax", True))
+        resolution_method = "wda_ax" if device_allow_ax else "ocr"
         if bool(arguments.get("annotate", True)):
-            from .wda.som_device import annotate_device_screenshot
-            point_scale: float = float(s.pixel_per_point_scale or 1.0)
-            marks, annotated_path = annotate_device_screenshot(
-                screenshot_path, (w, h), wda, point_scale=point_scale,
-            )
+            if device_allow_ax:
+                from .wda.som_device import annotate_device_screenshot
+                # Marks are emitted in screenshot pixels. WDA /source reports
+                # points, so the px/pt scale must be known before annotating;
+                # reading the cached value alone gave 1.0 on a session's first
+                # observe (points) and the real scale later (pixels).
+                point_scale = float(_session_scale(s, wda))
+                marks, annotated_path = annotate_device_screenshot(
+                    screenshot_path, (w, h), wda, point_scale=point_scale,
+                )
+            else:
+                from . import som as _som
+                ocr_marks = _som.detect_marks(screenshot_path)
+                marks = [m.to_dict() for m in ocr_marks]
+                if ocr_marks:
+                    annotated_path = _som.annotate(
+                        screenshot_path, ocr_marks,
+                        screenshot_path.with_name(f"{screenshot_path.stem}_annotated.png"),
+                    )
             # Persist UNFILTERED marks to the session so resolver tools (tap by
             # text/stable_id, etc.) still see the full set even when an observe
             # caller filters for token efficiency.
@@ -1038,6 +1056,10 @@ def tool_observe(arguments: dict) -> dict:
             "window_bounds_macos": None,
             "captured_at": _now(),
             "marks": emitted_marks,
+            # bbox/center of every mark are screenshot pixels (same space as
+            # tap pixel_x/pixel_y); WDA calls convert to points at the boundary.
+            "coordinate_space": "pixels",
+            "resolution_method": resolution_method,
             "recent_logs": None,
             "target": "device",
         }
@@ -3195,7 +3217,7 @@ _TOOLS: list[dict] = [
                 "capture_logs": {"type": "boolean", "default": False, "description": "Include a tail of recent simulator logs."},
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
-                "allow_ax": {"type": "boolean", "default": True, "description": "Default true. Pass false to force the OCR view of the screen. AX-primary perception is ground truth where the app exposes its tree, but on some content-dense screens the tree yields only a few container marks while OCR resolves every visible label — if `marks` looks implausibly short for what is on screen, re-observe with allow_ax=false and compare. This can only narrow to OCR: a multi-simulator or headless session already reports resolution_method=\"ocr\" and passing true will not re-enable AX."},
+                "allow_ax": {"type": "boolean", "default": True, "description": "Default true. Pass false to force the OCR view of the screen (on a device: OCR of the screenshot instead of the WebDriverAgent accessibility tree; device marks are always screenshot pixels, see `coordinate_space`). AX-primary perception is ground truth where the app exposes its tree, but on some content-dense screens the tree yields only a few container marks while OCR resolves every visible label — if `marks` looks implausibly short for what is on screen, re-observe with allow_ax=false and compare. This can only narrow to OCR: a multi-simulator or headless session already reports resolution_method=\"ocr\" and passing true will not re-enable AX."},
                 "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
                 "compact": {"type": "boolean", "default": False, "description": "Emit the slim 7-key mark dict (id, stable_id, text, center, bbox, confidence_band, english_like) instead of the full diagnostic dict. Roughly 1.7x smaller on the wire (bbox/center/text are identical in both shapes, so most bytes are shared)."},
                 "confidence_floor": {"type": "string", "enum": ["low", "med", "medium", "high"], "description": "Drop marks whose confidence_band ranks below this floor before returning. Default keeps every band."},
