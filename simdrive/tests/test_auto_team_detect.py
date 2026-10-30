@@ -68,8 +68,9 @@ def test_single_team_keychain_returns_team_id():
         result = auto_detect_team_id()
 
     assert result == "E52N8732YT", f"Expected 'E52N8732YT', got {result!r}"
-    # Only one subprocess call should have been made (the security command)
-    assert mock_run.call_count == 1
+    # The keychain answered, so the Xcode defaults fallback is not consulted.
+    # (Per-cert OU lookups also go through subprocess.run.)
+    assert not any(c.args[0][0] == "defaults" for c in mock_run.call_args_list)
 
 
 def test_multiple_teams_keychain_returns_none():

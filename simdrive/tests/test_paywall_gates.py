@@ -23,7 +23,7 @@ import pytest
 # The full canonical 32-tool registry — sourced from server._TOOLS at runtime.
 # A test below pins this count so adding/removing tools without updating the
 # gate is caught immediately.
-EXPECTED_TOOL_COUNT = 41  # +5: app_defaults, set_app_defaults, capture_motion, detect_flicker, liveness_probe
+EXPECTED_TOOL_COUNT = 46  # +5: trace_start, trace_status, trace_stop, trace_export, trace_import
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +139,12 @@ GATED_TOOLS: list[str] = [
     "capture_motion",
     "detect_flicker",
     "liveness_probe",
+    # Device traces (xctrace)
+    "trace_start",
+    "trace_status",
+    "trace_stop",
+    "trace_export",
+    "trace_import",
 ]
 
 

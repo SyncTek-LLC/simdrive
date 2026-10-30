@@ -201,7 +201,7 @@ def test_list_devices_compact_slims_per_device_entries(registry_dir):
         result = tool_list_devices({"compact": True})
 
     dev = result["devices"][0]
-    assert set(dev.keys()) == {"udid", "name", "state", "hid_supported"}
+    assert set(dev.keys()) == {"udid", "name", "state", "reachable", "hid_supported"}
     # Top-level diagnostic fields also dropped in compact mode.
     assert "libimobiledevice_ready" not in result
     assert "missing_tools" not in result

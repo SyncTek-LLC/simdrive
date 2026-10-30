@@ -61,11 +61,11 @@ record_stop(session_id="...", name="signin-smoke")  # save replay
 session_end(session_id="...")              # clean up
 ```
 
-## MCP Tool Registry (36 tools — canonical)
+## MCP Tool Registry (46 tools — canonical)
 
 The exhaustive machine-readable list lives in
 `simdrive/src/simdrive/server.py::_TOOLS`. The categorized human-readable
-surface lives in `docs/MCP_TOOL_SURFACE.md`. The 36 tools exposed by the MCP
+surface lives in `docs/MCP_TOOL_SURFACE.md`. The 46 tools exposed by the MCP
 server are:
 
 - `session_start` — Start a SimDrive session on a booted iOS Simulator (or
@@ -113,6 +113,16 @@ server are:
 - `get_announcements` — Read recent VoiceOver announcements.
 - `set_text` — Set text on fields HID input can't reach (e.g.
   `UIAlertController`).
+- `app_defaults` — Read an app's NSUserDefaults from its container plist (sim only).
+- `set_app_defaults` — Write NSUserDefaults into the domain the app reads and verify on disk (sim only).
+- `capture_motion` — Measure on-screen motion over a time window (sim only).
+- `detect_flicker` — Decide whether a region oscillates rather than merely changes (sim only).
+- `liveness_probe` — Inject a touch and report whether the UI changed, with app CPU% (sim only).
+- `trace_start` — Start a background `xctrace record` on a real device; returns trace_id.
+- `trace_status` — State of a trace (recording / finished / stopped / failed / imported).
+- `trace_stop` — Stop a recording with SIGINT so the trace is finalized.
+- `trace_export` — `xctrace export` a trace (TOC or one table) to XML.
+- `trace_import` — Import an on-device Performance Trace (.aar) into a .trace.
 
 ## Use via CLI
 

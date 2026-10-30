@@ -123,8 +123,9 @@ def auto_detect_team_id() -> Optional[str]:
     """Detect the Apple Developer Team ID from the local keychain or Xcode prefs.
 
     Resolution order:
-      a. ``security find-identity -p codesigning -v`` — parse team IDs from
-         "Apple Development: <name> (<TEAM>)" lines. If exactly one unique team
+      a. ``security find-identity -p codesigning -v`` — for each valid
+         identity read the certificate subject OU, which is the team ID (the
+         "(XXXXXXXXXX)" in the common name is the personal ID). If exactly one unique team
          appears across all valid identities, return it. If multiple unique
          teams, return None (caller must ask the user to pass --team-id
          explicitly).
@@ -144,7 +145,7 @@ def auto_detect_team_id() -> Optional[str]:
         check=False,
     )
     if result.returncode == 0 and result.stdout:
-        identities = _parse_identities(result.stdout)
+        identities = _with_cert_teams(_parse_identities(result.stdout))
         teams = {i["team_id"] for i in identities if i["team_id"]}
         if len(teams) == 1:
             return next(iter(teams))
@@ -402,6 +403,75 @@ def _parse_identities(output: str) -> list[dict]:
     return result
 
 
+# The parenthetical in an "Apple Development: Name (XXXXXXXXXX)" common name is
+# the developer's personal ID, not the team. The team is the certificate
+# subject's OU. Both openssl (``OU = X``) and LibreSSL (``/OU=X/``) forms match.
+_SUBJECT_OU_RE = re.compile(r'(?:^|[/,]\s*|subject=\s*)OU\s*=\s*([A-Z0-9]{10})\b')
+
+
+def _cert_subject_ou(name: str, sha1: Optional[str] = None) -> Optional[str]:
+    """Return the subject OU (the Apple team ID) of the keychain cert ``name``.
+
+    ``security find-certificate -a -Z -p -c <name>`` may return several certs
+    with the same common name (e.g. an expired one next to the valid one), so
+    when ``sha1`` is given only the PEM block whose SHA-1 matches is used.
+    Returns None when the cert or its OU cannot be read.
+    """
+    try:
+        pem = subprocess.run(
+            ["security", "find-certificate", "-a", "-Z", "-p", "-c", name],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if pem.returncode != 0 or not isinstance(pem.stdout, str):
+        return None
+    blocks: list[tuple[str, str]] = []  # (sha1, pem)
+    current_sha = ""
+    for m in re.finditer(
+        r"SHA-1 hash:\s*([A-F0-9]{40})|(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
+        pem.stdout, re.DOTALL,
+    ):
+        if m.group(1):
+            current_sha = m.group(1)
+        else:
+            blocks.append((current_sha, m.group(2)))
+    if not blocks:
+        return None
+    if sha1:
+        chosen = next((b for s, b in blocks if s.upper() == sha1.upper()), None)
+        if chosen is None:
+            return None
+    else:
+        chosen = blocks[0][1]
+    try:
+        info = subprocess.run(
+            ["openssl", "x509", "-noout", "-subject"],
+            input=chosen, capture_output=True, text=True, timeout=10, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if info.returncode != 0 or not isinstance(info.stdout, str):
+        return None
+    m = _SUBJECT_OU_RE.search(info.stdout.strip())
+    return m.group(1) if m else None
+
+
+def _with_cert_teams(identities: list[dict]) -> list[dict]:
+    """Set each identity's ``team_id`` to its certificate's subject OU.
+
+    The common-name parenthetical is kept as ``cn_id``. When the OU cannot be
+    read (cert not exportable, openssl missing), ``team_id`` keeps the
+    parenthetical, which is the team for distribution certs.
+    """
+    for ident in identities:
+        ident.setdefault("cn_id", ident.get("team_id", ""))
+        ou = _cert_subject_ou(ident["name"], ident.get("sha1"))
+        if ou:
+            ident["team_id"] = ou
+    return identities
+
+
 def _cert_not_before(name: str) -> Optional[str]:
     """Return the cert's `notBefore` date as a sortable string, or None.
 
@@ -505,9 +575,14 @@ def resolve_signing_identity(
     # Branch 1: explicit signing_identity overrides everything.
     if signing_identity:
         if not team_id:
+            team_id = _cert_subject_ou(signing_identity) or ""
+        if not team_id:
             tm = _TEAM_ID_RE.search(signing_identity)
             team_id = tm.group(1) if tm else ""
         return signing_identity, team_id
+
+    # Team = certificate subject OU, not the common-name parenthetical.
+    identities = _with_cert_teams(identities)
 
     # Branch 2: team_id supplied → filter keychain certs by team_id.
     if team_id:
@@ -870,13 +945,11 @@ def install_wda(
         )
 
     print(f"[simdrive] Installing {app_bundle.name} on device {coredevice_uuid} ...", flush=True)
-    result = subprocess.run(
+    from ..device import run_devicectl_with_retry
+    result = run_devicectl_with_retry(
         ["xcrun", "devicectl", "device", "install", "app",
          "--device", coredevice_uuid, str(app_bundle)],
-        capture_output=True,
-        text=True,
         timeout=120,
-        check=False,
     )
     if result.returncode != 0:
         raise wda_install_failed(result.stderr or result.stdout)
@@ -1322,7 +1395,9 @@ def bootstrap_device(
             found_teams: list[str] = []
             if _sec.returncode == 0:
                 found_teams = sorted({
-                    i["team_id"] for i in _parse_identities(_sec.stdout) if i["team_id"]
+                    i["team_id"]
+                    for i in _with_cert_teams(_parse_identities(_sec.stdout))
+                    if i["team_id"]
                 })
             if found_teams:
                 teams_str = ", ".join(found_teams)

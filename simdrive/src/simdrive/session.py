@@ -36,6 +36,9 @@ class Session:
     perf_baselines: dict = field(default_factory=dict)  # label -> snapshot dict (for perf_compare)
     started_at: float = field(default_factory=time.time)  # used by `crashes` to filter .ips by mtime
     wda_client: Optional[object] = None  # WdaClient instance for target="device" sessions
+    # Hardware UDID for target="device" (libimobiledevice needs it; device.udid
+    # may be the CoreDevice UUID). None for simulators.
+    hardware_udid: Optional[str] = None
     pixel_per_point_scale: Optional[float] = None  # cached px/pt scale for WDA coord conversion (F-002/F-006)
     # F#2 — populated when session_start launches an app and verify_launch
     # detects it never reached foreground (i.e. crashed during settle). The
@@ -300,13 +303,17 @@ def _start_device(
     app_bundle_id: Optional[str],
     verify_launch: bool = True,
 ) -> Session:
-    """Start a real-device WDA session.
+    """Start a real-device session.
 
     Reads the WDA registry entry written by ``simdrive bootstrap-device`` to
     discover the host:port where WebDriverAgent is serving, then creates a
-    Session pointing at that endpoint.  Never calls ``devicectl list`` — the
-    registry is the single source of truth for device connectivity once WDA has
-    been bootstrapped.
+    Session pointing at that endpoint. The registry may be keyed by either the
+    CoreDevice UUID or the hardware UDID, so a CoreDevice UUID is also mapped
+    (``devicectl list devices``, local only) and looked up by hardware UDID.
+
+    Without a registry entry the session still starts, with ``wda_client=None``:
+    observe (screenshot + OCR), logs, app_state, apps and launch/terminate work
+    through devicectl/libimobiledevice; HID tools raise ``wda_not_bootstrapped``.
 
     ``verify_launch`` (F#2, review feedback PR #144): when True and a bundle
     is provided, poll ``diagnostics.app_state_device`` after the launch using
@@ -317,14 +324,18 @@ def _start_device(
     """
     from .wda import registry as wda_registry
     from .wda.client import WdaClient
-    from .wda.errors import wda_not_bootstrapped
-
     if not udid:
         raise errors.no_device({"target": "device", "any_booted": True})
 
+    from . import device as _device_mod
+
     entry = wda_registry.load(udid)
     if entry is None:
-        raise wda_not_bootstrapped(udid)
+        mapped = _device_mod.resolve_hardware_udid(udid)
+        if mapped != udid:
+            entry = wda_registry.load(mapped)
+    if entry is None:
+        return _start_device_without_wda(udid, app_bundle_id, verify_launch)
 
     host = entry.get("host") or entry.get("ip") or "localhost"
     port = int(entry.get("port", 8100))
@@ -377,6 +388,7 @@ def _start_device(
         app_bundle_id=app_bundle_id,
         target="device",
         wda_client=wda,
+        hardware_udid=hardware_udid,
     )
 
     # F#2 — device launch verification using app_state_device (devicectl
@@ -390,6 +402,54 @@ def _start_device(
             s.state = result["state"]
             s.launch_verification = result  # type: ignore[attr-defined]
 
+    _SESSIONS[sid] = s
+    return s
+
+
+def _start_device_without_wda(
+    udid: str, app_bundle_id: Optional[str], verify_launch: bool,
+) -> Session:
+    """Device session with no WebDriverAgent: devicectl + libimobiledevice only."""
+    from . import device as _device_mod
+
+    hardware_udid = _device_mod.resolve_hardware_udid(udid)
+    name = "Real Device"
+    if hardware_udid != udid:
+        # resolve_hardware_udid already listed devices; the name is cheap to add.
+        try:
+            found = _device_mod.find_device(udid)
+            if found is not None:
+                name = found.name
+        except Exception:
+            pass
+    d = Device(udid=udid, name=name, os_version="", state="active")
+
+    launch_ts = time.time()
+    if app_bundle_id:
+        try:
+            _device_mod.launch_app(hardware_udid, app_bundle_id)
+        except Exception as exc:
+            raise errors.device_launch_failed(
+                udid=udid, bundle_id=app_bundle_id, reason=str(exc),
+            )
+
+    sid = secrets.token_urlsafe(8)
+    workdir = _workroot() / "sessions" / sid
+    workdir.mkdir(parents=True, exist_ok=True)
+    s = Session(
+        session_id=sid,
+        device=d,
+        workdir=workdir,
+        app_bundle_id=app_bundle_id,
+        target="device",
+        wda_client=None,
+        hardware_udid=hardware_udid,
+    )
+    if app_bundle_id and verify_launch:
+        result = _verify_launch_device(hardware_udid, app_bundle_id, launch_ts)
+        if result is not None:
+            s.state = result["state"]
+            s.launch_verification = result
     _SESSIONS[sid] = s
     return s
 
@@ -482,7 +542,11 @@ def end(session_id: str, terminate_app: bool = True) -> None:
         return
     if terminate_app and s.app_bundle_id:
         try:
-            sim.terminate_app(s.device.udid, s.app_bundle_id)
+            if s.target == "device":
+                from . import device as _device_mod
+                _device_mod.terminate_app(s.hardware_udid or s.device.udid, s.app_bundle_id)
+            else:
+                sim.terminate_app(s.device.udid, s.app_bundle_id)
         except Exception:
             pass
 

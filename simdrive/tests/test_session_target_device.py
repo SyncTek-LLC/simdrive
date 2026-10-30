@@ -151,23 +151,23 @@ def test_start_device_session_ip_fallback(wda_registry_dir):
 # ── error path: registry missing ──────────────────────────────────────────────
 
 
-def test_start_device_session_raises_when_registry_missing(wda_registry_dir):
-    """When ~/.simdrive/wda/<udid>.json doesn't exist, raise wda_not_bootstrapped
-    with a message that tells the user to run bootstrap-device."""
+def test_start_device_session_without_registry_reports_no_hid(wda_registry_dir):
+    """No ~/.simdrive/wda/<udid>.json: the session starts for observe/logs/app
+    lifecycle, says HID is unavailable, and input tools raise wda_not_bootstrapped."""
     from simdrive import server, errors
 
-    with pytest.raises(errors.SimdriveError) as exc_info:
-        server.tool_session_start({
-            "udid": "NEVER-BOOTSTRAPPED-UDID",
-            "target": "device",
-        })
+    out = server.tool_session_start({
+        "udid": "NEVER-BOOTSTRAPPED-UDID",
+        "target": "device",
+    })
+    assert out["target"] == "device"
+    assert out["hid_available"] is False
+    assert "bootstrap-device NEVER-BOOTSTRAPPED-UDID" in out["hid_note"]
 
-    err = exc_info.value
-    assert err.code == "wda_not_bootstrapped"
-    assert "bootstrap" in err.message.lower() or "registry" in err.message.lower(), (
-        f"Expected 'bootstrap' or 'registry' in error message, got: {err.message!r}"
-    )
-    assert "NEVER-BOOTSTRAPPED-UDID" in err.message or "NEVER-BOOTSTRAPPED-UDID" in str(err.details)
+    with pytest.raises(errors.SimdriveError) as exc_info:
+        server.tool_tap({"session_id": out["session_id"], "pixel_x": 10, "pixel_y": 10})
+    assert exc_info.value.code == "wda_not_bootstrapped"
+    assert "NEVER-BOOTSTRAPPED-UDID" in exc_info.value.message
 
 
 def test_start_device_session_raises_when_no_udid():

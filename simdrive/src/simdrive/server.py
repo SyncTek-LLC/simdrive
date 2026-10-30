@@ -148,6 +148,14 @@ def _wda_client_for(udid: str):
     return WdaClient(host=host, port=port)
 
 
+def _require_device_wda(s) -> None:
+    """Fail fast with wda_not_bootstrapped for an input tool on a device
+    session that has no WebDriverAgent, before any screenshot is taken."""
+    if getattr(s, "target", "simulator") == "device" and getattr(s, "wda_client", None) is None:
+        # Keep the resolved client so the tool body does not resolve it again.
+        s.wda_client = _wda_client_for(s.device.udid)
+
+
 # Module-level scale cache keyed by UDID. Pixel/point ratio is a stable physical
 # property of the device hardware — it does not change across sessions for the
 # same UDID. Caching at the module level avoids a WDA round-trip on the first
@@ -817,6 +825,15 @@ def tool_session_start(arguments: dict) -> dict:
         "crash_report_path": None,
         "recovery": None,
     }
+    if s.target == "device":
+        out["hid_available"] = getattr(s, "wda_client", None) is not None
+        if not out["hid_available"]:
+            out["hid_note"] = (
+                "No WebDriverAgent registry for this device: observe (screenshot + OCR), "
+                "logs, app_state, apps and app launch/terminate work; tap/swipe/type_text/"
+                "press_key return wda_not_bootstrapped. Run `simdrive bootstrap-device "
+                f"{s.device.udid}` to enable input."
+            )
     # F#2 — surface launch-verification failure (or unavailability) on the
     # session_start response so the agent sees the crash on the first
     # roundtrip instead of after multiple blind tap/type calls.
@@ -915,7 +932,20 @@ def tool_observe(arguments: dict) -> dict:
     sid = arguments["session_id"]
     s = session.get(sid)
 
+    device_wda = None
     if s.target == "device":
+        device_wda = s.wda_client
+        if device_wda is None:
+            try:
+                device_wda = _wda_client_for(s.device.udid)
+            except errors.SimdriveError as exc:
+                if exc.code != "wda_not_bootstrapped":
+                    raise
+                # No WebDriverAgent: screenshot via libimobiledevice + OCR marks
+                # (the generic path below, with target="device").
+                device_wda = None
+
+    if s.target == "device" and device_wda is not None:
         # Route through WDA /screenshot (no session required) instead of
         # idevicescreenshot — CoreDevice UUIDs are not recognized by
         # idevicescreenshot, causing "No device found" errors.
@@ -926,7 +956,7 @@ def tool_observe(arguments: dict) -> dict:
         # Prefer the session-stored WdaClient (which already holds the open WDA
         # session_id) over a fresh client. A fresh client has _session_id=None,
         # which is fine for screenshot_any() but wastes a new httpx.Client object (F-005).
-        wda = s.wda_client or _wda_client_for(s.device.udid)
+        wda = device_wda
         png_bytes = wda.screenshot_any()
 
         obs_dir = s.workdir / "observations"
@@ -945,13 +975,30 @@ def tool_observe(arguments: dict) -> dict:
 
         marks: list = []
         annotated_path = None
+        # allow_ax=False selects OCR marks from the screenshot instead of the
+        # WDA accessibility tree (/source), matching the simulator contract.
+        device_allow_ax = bool(arguments.get("allow_ax", True))
+        resolution_method = "wda_ax" if device_allow_ax else "ocr"
         if bool(arguments.get("annotate", True)):
-            from .wda.som_device import annotate_device_screenshot
-            wda_annotate = s.wda_client or wda
-            point_scale: float = float(s.pixel_per_point_scale or 1.0)
-            marks, annotated_path = annotate_device_screenshot(
-                screenshot_path, (w, h), wda_annotate, point_scale=point_scale,
-            )
+            if device_allow_ax:
+                from .wda.som_device import annotate_device_screenshot
+                # Marks are emitted in screenshot pixels. WDA /source reports
+                # points, so the px/pt scale must be known before annotating;
+                # reading the cached value alone gave 1.0 on a session's first
+                # observe (points) and the real scale later (pixels).
+                point_scale = float(_session_scale(s, wda))
+                marks, annotated_path = annotate_device_screenshot(
+                    screenshot_path, (w, h), wda, point_scale=point_scale,
+                )
+            else:
+                from . import som as _som
+                ocr_marks = _som.detect_marks(screenshot_path)
+                marks = [m.to_dict() for m in ocr_marks]
+                if ocr_marks:
+                    annotated_path = _som.annotate(
+                        screenshot_path, ocr_marks,
+                        screenshot_path.with_name(f"{screenshot_path.stem}_annotated.png"),
+                    )
             # Persist UNFILTERED marks to the session so resolver tools (tap by
             # text/stable_id, etc.) still see the full set even when an observe
             # caller filters for token efficiency.
@@ -1009,6 +1056,10 @@ def tool_observe(arguments: dict) -> dict:
             "window_bounds_macos": None,
             "captured_at": _now(),
             "marks": emitted_marks,
+            # bbox/center of every mark are screenshot pixels (same space as
+            # tap pixel_x/pixel_y); WDA calls convert to points at the boundary.
+            "coordinate_space": "pixels",
+            "resolution_method": resolution_method,
             "recent_logs": None,
             "target": "device",
         }
@@ -1032,8 +1083,11 @@ def tool_observe(arguments: dict) -> dict:
             result["screenshot_b64"] = base64.b64encode(png_bytes).decode("ascii")
         return result
 
+    obs_udid = s.device.udid
+    if s.target == "device":
+        obs_udid = getattr(s, "hardware_udid", None) or s.device.udid
     obs = observe.observe(
-        s.device.udid,
+        obs_udid,
         s.workdir / "observations",
         annotate=bool(arguments.get("annotate", True)),
         capture_logs=bool(arguments.get("capture_logs", False)),
@@ -1383,6 +1437,7 @@ def _record_act_step(s, action: str, args: dict, pre_path: Path) -> int | None:
 def tool_tap(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     sw, sh = _ensure_screenshot_dims(s)
     x, y, resolved_via, matched_mark = _resolve_target_xy(s, arguments)
     pre_path = s.last_screenshot_path
@@ -1618,6 +1673,7 @@ def tool_tap_and_wait_keyboard(arguments: dict) -> dict:
 def tool_swipe(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     duration_ms = int(arguments.get("duration_ms", 300))
     sw, sh = _ensure_screenshot_dims(s)
 
@@ -1693,6 +1749,7 @@ def tool_type_text(arguments: dict) -> dict:
     _entitlement_gate()
     from . import hid_inject
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     text = str(arguments["text"])
     tap_target = arguments.get("tap_first")  # optional target dict to focus a field first
     clear_first = bool(arguments.get("clear_first", False))
@@ -1903,6 +1960,7 @@ def tool_type_text(arguments: dict) -> dict:
 def tool_press_key(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     key = str(arguments["key"])
     pre_obs = observe.observe(s.device.udid, s.workdir / "observations") if s.recorder else None
     pre_path = pre_obs.screenshot_path if pre_obs else s.last_screenshot_path
@@ -1970,19 +2028,47 @@ def tool_list_devices(arguments: dict) -> dict:
 
     Args (all optional):
         compact: bool — when true, each device entry is just {udid, name, state,
-            hid_supported}. Drops model / transport / last_seen / unavailable_reason
-            and the top-level libimobiledevice_ready / missing_tools / hid_note
-            fields. Lower token cost when the agent only needs to pick a device.
+            reachable, hid_supported}. Drops model / transport / last_seen /
+            unavailable_reason and the top-level libimobiledevice_ready /
+            missing_tools / hid_note fields.
+        probe: bool — when true, run `devicectl device info lockState` (4 s cap,
+            in parallel) against every device with a transport and set
+            `reachable` from the result. Off by default to keep listing fast.
+
+    ``state`` only says devicectl knows a transport for the device; a phone
+    that is asleep or off the network keeps one. ``reachable`` is True when the
+    CoreDevice tunnel is connected (or the probe succeeded), False when the
+    probe failed or there is no transport, and None when unknown (tunnel not
+    connected and no probe requested).
     """
     _entitlement_gate()
     from . import device
     from .wda import registry as wda_registry
     compact = bool(arguments.get("compact", False))
+    probe = bool(arguments.get("probe", False))
     ok, missing = device.libimobiledevice_available()
     devs = []
     err: dict | None = None
     try:
-        for d in device.list_devices():
+        found = device.list_devices()
+        probed: dict[str, bool] = {}
+        if probe:
+            from concurrent.futures import ThreadPoolExecutor
+            targets = [d.udid for d in found if d.transport]
+            if targets:
+                with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+                    probed = dict(zip(targets, pool.map(device.probe_reachable, targets)))
+
+        def _reachable(d):
+            if not getattr(d, "transport", None):
+                return False
+            if d.udid in probed:
+                return probed[d.udid]
+            if getattr(d, "tunnel_state", None) == "connected":
+                return True
+            return None
+
+        for d in found:
             # hid_supported: True when a WDA registry entry exists for this UDID
             # (i.e. `simdrive bootstrap-device` has been run and WDA is ready).
             # tap/swipe/type_text/press_key all route through WDA on real devices.
@@ -1992,6 +2078,7 @@ def tool_list_devices(arguments: dict) -> dict:
                     "udid": d.udid,
                     "name": d.name,
                     "state": d.state,
+                    "reachable": _reachable(d),
                     "hid_supported": reg is not None,
                 })
             else:
@@ -2001,6 +2088,9 @@ def tool_list_devices(arguments: dict) -> dict:
                     "model": d.model,
                     "transport": d.transport,
                     "state": d.state,
+                    "reachable": _reachable(d),
+                    "tunnel_state": getattr(d, "tunnel_state", None),
+                    "coredevice_id": getattr(d, "coredevice_id", None),
                     "hid_supported": reg is not None,
                     "last_seen": d.last_seen,
                     "unavailable_reason": d.unavailable_reason,
@@ -2059,11 +2149,15 @@ def tool_logs(arguments: dict) -> dict:
             # Device path: idevicesyslog does not speak NSPredicate.
             # When predicate_kind='nspredicate' on device, get_log_tail downgrades
             # to 'substring' and logs a one-time WARNING about the limitation.
+            # idevicesyslog needs the hardware UDID; session.device.udid may be
+            # the CoreDevice UUID (get_log_tail maps it if so).
+            extra = {"process": arguments["process"]} if arguments.get("process") else {}
             text = device.get_log_tail(
-                s.device.udid,
+                getattr(s, "hardware_udid", None) or s.device.udid,
                 lines=lines,
                 predicate=predicate,
                 predicate_kind=predicate_kind,
+                **extra,
             )
         except device.DeviceError as exc:
             # F-003: surface missing idevicesyslog as a structured error rather
@@ -2080,7 +2174,10 @@ def tool_logs(arguments: dict) -> dict:
                         ),
                     },
                 }
-            raise
+            return {
+                "ok": False,
+                "error": {"code": "device_logs_failed", "message": msg},
+            }
     else:
         # Simulator path: NSPredicate is passed natively to `log show --predicate`.
         # regex/substring kinds are applied Python-side after capture.
@@ -2139,16 +2236,34 @@ def _resolve_prefs_bundle_id(s, arguments: dict) -> str:
     return str(bid)
 
 
-def _require_simulator(s, tool_name: str) -> None:
+_SIM_ONLY_REASON_DEFAULT = (
+    "it reads the app container via `simctl get_app_container`, which has no "
+    "real-device equivalent."
+)
+
+
+def _require_simulator(s, tool_name: str, reason: str = _SIM_ONLY_REASON_DEFAULT) -> None:
     if s.target == "device":
         raise errors.SimdriveError(
             code="not_supported_on_device",
-            message=(
-                f"{tool_name} is simulator-only — it reads the app container via "
-                "`simctl get_app_container`, which has no real-device equivalent."
-            ),
+            message=f"{tool_name} is simulator-only — {reason}",
             details={"tool": tool_name, "target": s.target},
         )
+
+
+# perf/memory sample the app process with host `ps`/`vmmap`, which only see
+# simulator processes (they run on the Mac). crashes scans the Mac's
+# DiagnosticReports, where device crash logs do not land.
+_PERF_SIM_ONLY = (
+    "it samples the app process with host tools (ps/vmmap), which cannot see "
+    "processes on a real device. For device performance use Instruments "
+    "(`xcrun xctrace record --device <udid>`)."
+)
+_CRASHES_SIM_ONLY = (
+    "it scans ~/Library/Logs/DiagnosticReports on this Mac, where real-device "
+    "crash logs do not land. Pull device crash logs with Xcode > Devices and "
+    "Simulators, or `xcrun devicectl device info files`."
+)
 
 
 def tool_app_defaults(arguments: dict) -> dict:
@@ -2389,6 +2504,7 @@ def _resolve_bundle_id(s, arguments: dict) -> str:
 def tool_perf(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "perf", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     snap = perf.snapshot(s.device.udid, bundle_id)
     if snap.get("pid") is None:
@@ -2404,6 +2520,7 @@ def tool_perf(arguments: dict) -> dict:
 def tool_perf_baseline(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "perf_baseline", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     label = str(arguments.get("label") or "default")
     snap = perf.snapshot(s.device.udid, bundle_id)
@@ -2421,6 +2538,7 @@ def tool_perf_baseline(arguments: dict) -> dict:
 def tool_perf_compare(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "perf_compare", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     label = str(arguments.get("label") or "default")
     baseline = s.perf_baselines.get(label)
@@ -2447,6 +2565,7 @@ def tool_perf_compare(arguments: dict) -> dict:
 def tool_memory(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "memory", _PERF_SIM_ONLY)
     bundle_id = _resolve_bundle_id(s, arguments)
     return perf.memory_detail(s.device.udid, bundle_id)
 
@@ -2487,6 +2606,7 @@ def tool_apps(arguments: dict) -> dict:
 def tool_crashes(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_simulator(s, "crashes", _CRASHES_SIM_ONLY)
     since = bool(arguments.get("since_session_start", True))
     since_ts = s.started_at if since else 0.0
     bundle_id = arguments.get("app_bundle_id") or s.app_bundle_id  # optional
@@ -2495,6 +2615,69 @@ def tool_crashes(arguments: dict) -> dict:
         since_ts=since_ts, bundle_id=bundle_id, max_results=max_results,
     )
     return {"crashes": crashes}
+
+
+# --------------------- Device traces (xctrace) -------------------------- #
+
+
+def _trace_call(fn, *args, **kwargs) -> dict:
+    from . import trace as _trace
+    try:
+        return {"ok": True, **fn(*args, **kwargs)}
+    except _trace.TraceError as exc:
+        return {"ok": False, "error": {"code": "trace_failed", "message": str(exc)}}
+
+
+def tool_trace_start(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    device_id = arguments.get("udid")
+    sid = arguments.get("session_id")
+    if not device_id and sid:
+        s = session.get(sid)
+        if s.target != "device":
+            raise errors.SimdriveError(
+                code="not_supported_on_simulator",
+                message="trace_start records a real device; pass udid or a device session_id.",
+                details={"tool": "trace_start", "target": s.target},
+            )
+        device_id = getattr(s, "hardware_udid", None) or s.device.udid
+    if not device_id:
+        raise errors.invalid_argument("session_id|udid", None,
+                                      "supply a device session_id or a device udid")
+    return _trace_call(
+        _trace.start, device_id, str(arguments.get("attach") or ""),
+        template=str(arguments.get("template") or _trace.DEFAULT_TEMPLATE),
+        time_limit=str(arguments.get("time_limit") or "60s"),
+    )
+
+
+def tool_trace_status(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.status, str(arguments.get("trace_id") or ""))
+
+
+def tool_trace_stop(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.stop, str(arguments.get("trace_id") or ""),
+                       wait_s=float(arguments.get("wait_s", 30)))
+
+
+def tool_trace_export(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.export, str(arguments.get("trace_id") or ""),
+                       xpath=arguments.get("xpath"), toc=bool(arguments.get("toc", False)),
+                       name=arguments.get("name"))
+
+
+def tool_trace_import(arguments: dict) -> dict:
+    _entitlement_gate()
+    from . import trace as _trace
+    return _trace_call(_trace.import_file, str(arguments.get("path") or ""),
+                       template=str(arguments.get("template") or _trace.DEFAULT_TEMPLATE))
 
 
 def tool_dismiss_first_launch_alerts(arguments: dict) -> dict:
@@ -2561,6 +2744,7 @@ def tool_set_appearance(arguments: dict) -> dict:
 def tool_dismiss_sheet(arguments: dict) -> dict:
     _entitlement_gate()
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     sw, sh = _ensure_screenshot_dims(s)
     direction = str(arguments.get("direction", "down")).lower()
     if direction not in ("down", "up"):
@@ -2800,6 +2984,7 @@ def tool_clear_field(arguments: dict) -> dict:
     _entitlement_gate()
     from . import hid_inject
     s = session.get(arguments["session_id"])
+    _require_device_wda(s)
     target = arguments.get("target")
     # Capture pre-state so the recorder can serialize a clear_field step with a
     # "before" screenshot. Without this, b3 dogfood reported that
@@ -3090,7 +3275,7 @@ _TOOLS: list[dict] = [
                 "device": {"type": "string", "description": "Device name, e.g. 'iPhone 17 Pro'. Optional if a sim is already booted. Alias: 'device_name'."},
                 "device_name": {"type": "string", "description": "Alias for 'device'. Accepted by the handler but missing from this schema until INIT-2026-641 item 4.2, so no agent could discover it."},
                 "os_version": {"type": "string", "description": "iOS version, e.g. '26.3'. Optional."},
-                "udid": {"type": "string", "description": "Simulator UDID, or coredevice UUID when target='device'. Alias: 'device_udid'."},
+                "udid": {"type": "string", "description": "Simulator UDID, or (target='device') the CoreDevice UUID or hardware UDID. A device without a WebDriverAgent registry still gets a session (observe via screenshot + OCR, logs, app_state, apps, launch/terminate); input tools then return wda_not_bootstrapped. Alias: 'device_udid'."},
                 "device_udid": {"type": "string", "description": "Alias for 'udid'. Coredevice UUID for real-device sessions (target='device')."},
                 "app_bundle_id": {"type": "string", "description": "Optional bundle id to launch after boot, e.g. 'com.apple.Preferences'."},
                 "replace_existing": {"type": "boolean", "default": False, "description": "When True, end any existing session for the same UDID before starting a new one (app stays foreground). Avoids the 'session already active' error on reconnect."},
@@ -3150,7 +3335,7 @@ _TOOLS: list[dict] = [
                 "capture_logs": {"type": "boolean", "default": False, "description": "Include a tail of recent simulator logs."},
                 "log_lines": {"type": "integer", "default": 50},
                 "log_predicate": {"type": "string", "description": "Optional NSPredicate to filter logs."},
-                "allow_ax": {"type": "boolean", "default": True, "description": "Default true. Pass false to force the OCR view of the screen. AX-primary perception is ground truth where the app exposes its tree, but on some content-dense screens the tree yields only a few container marks while OCR resolves every visible label — if `marks` looks implausibly short for what is on screen, re-observe with allow_ax=false and compare. This can only narrow to OCR: a multi-simulator or headless session already reports resolution_method=\"ocr\" and passing true will not re-enable AX."},
+                "allow_ax": {"type": "boolean", "default": True, "description": "Default true. Pass false to force the OCR view of the screen (on a device: OCR of the screenshot instead of the WebDriverAgent accessibility tree; device marks are always screenshot pixels, see `coordinate_space`). AX-primary perception is ground truth where the app exposes its tree, but on some content-dense screens the tree yields only a few container marks while OCR resolves every visible label — if `marks` looks implausibly short for what is on screen, re-observe with allow_ax=false and compare. This can only narrow to OCR: a multi-simulator or headless session already reports resolution_method=\"ocr\" and passing true will not re-enable AX."},
                 "include_screenshot_b64": {"type": "boolean", "default": False, "description": "Inline the PNG as base64 in the response. Off by default — the payload overflows the MCP token budget. Read screenshot_path from disk instead."},
                 "compact": {"type": "boolean", "default": False, "description": "Emit the slim 7-key mark dict (id, stable_id, text, center, bbox, confidence_band, english_like) instead of the full diagnostic dict. Roughly 1.7x smaller on the wire (bbox/center/text are identical in both shapes, so most bytes are shared)."},
                 "confidence_floor": {"type": "string", "enum": ["low", "med", "medium", "high"], "description": "Drop marks whose confidence_band ranks below this floor before returning. Default keeps every band."},
@@ -3471,13 +3656,20 @@ _TOOLS: list[dict] = [
             "and support tap/swipe/type_text/press_key. Run "
             "`simdrive bootstrap-device <udid>` once to enable HID on a device. "
             "Pass compact=true to slim per-device entries to {udid, name, state, "
-            "hid_supported} — useful when you only need to pick one to attach to."
+            "reachable, hid_supported} — useful when you only need to pick one to attach to. "
+            "`state='available'` only means devicectl knows a transport (it stays set for a "
+            "sleeping or out-of-range phone). `reachable` is true when the CoreDevice tunnel "
+            "is connected, false with no transport or a failed probe, null when unknown; "
+            "pass probe=true to check each device with `devicectl device info lockState` "
+            "(about 4 s worst case, run in parallel)."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "compact": {"type": "boolean", "default": False,
                             "description": "Slim per-device entries + drop diagnostic top-level fields."},
+                "probe": {"type": "boolean", "default": False,
+                          "description": "Probe each device with a transport (devicectl lockState, 4 s cap, parallel) and set `reachable` from the result."},
             },
         },
         "handler": tool_list_devices,
@@ -3529,6 +3721,7 @@ _TOOLS: list[dict] = [
                     ),
                 },
                 "predicate": {"type": "string", "description": "Filter string. Interpretation depends on predicate_kind."},
+                "process": {"type": "string", "description": "(device only) Process name passed to `idevicesyslog -p`, e.g. 'Palace'. Narrows capture to that process."},
                 "predicate_kind": {
                     "type": "string",
                     "enum": ["nspredicate", "regex", "substring"],
@@ -3870,6 +4063,88 @@ _TOOLS: list[dict] = [
             },
         },
         "handler": tool_crashes,
+    },
+    # ── Device traces (xctrace) ─────────────────────────────────────────
+    {
+        "name": "trace_start",
+        "description": (
+            "(device only) Start an Instruments recording on a real device in the background: "
+            "`xcrun xctrace record --device <udid> --template <template> --attach <process> "
+            "--time-limit <dur>`. Returns trace_id immediately; state lives under "
+            "~/.simdrive/traces/<trace_id>/. Poll trace_status, end early with trace_stop, "
+            "then trace_export."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "A target='device' session; its hardware UDID is used."},
+                "udid": {"type": "string", "description": "Device UDID or name, instead of session_id."},
+                "attach": {"type": "string", "description": "Process name (e.g. 'Palace') or pid to attach to. Required."},
+                "template": {"type": "string", "default": "Power Profiler", "description": "Instruments template name."},
+                "time_limit": {"type": "string", "default": "60s", "description": "Recording limit: 500ms, 30s, 5m, 1h."},
+            },
+            "required": ["attach"],
+        },
+        "handler": tool_trace_start,
+    },
+    {
+        "name": "trace_status",
+        "description": "(device only) State of a trace started by trace_start or trace_import: recording / finished / stopped / failed / imported, plus the recorder log tail.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["trace_id"],
+            "properties": {"trace_id": {"type": "string"}},
+        },
+        "handler": tool_trace_status,
+    },
+    {
+        "name": "trace_stop",
+        "description": "(device only) Stop a recording with SIGINT so xctrace finalizes the trace file, waiting up to wait_s seconds.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["trace_id"],
+            "properties": {
+                "trace_id": {"type": "string"},
+                "wait_s": {"type": "number", "default": 30},
+            },
+        },
+        "handler": tool_trace_stop,
+    },
+    {
+        "name": "trace_export",
+        "description": (
+            "(device only) `xctrace export` a finished trace to XML in the trace directory. "
+            "Pass toc=true for the table of contents, or an xpath for one table. Exit 139 "
+            "(xctrace segfault) after a non-empty file is reported with a warning, not an error."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["trace_id"],
+            "properties": {
+                "trace_id": {"type": "string"},
+                "toc": {"type": "boolean", "default": False},
+                "xpath": {"type": "string", "description": "e.g. /trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]"},
+                "name": {"type": "string", "description": "Output file stem (default toc / export-N)."},
+            },
+        },
+        "handler": tool_trace_export,
+    },
+    {
+        "name": "trace_import",
+        "description": (
+            "(device only) Import an on-device Performance Trace (Settings > Developer). A .aar "
+            "archive is unpacked with `aa extract`, then `xctrace import --template` builds a "
+            ".trace. Returns a trace_id usable with trace_export."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string"},
+                "template": {"type": "string", "default": "Power Profiler"},
+            },
+        },
+        "handler": tool_trace_import,
     },
     # ── Robustness ──────────────────────────────────────────────────────
     {
