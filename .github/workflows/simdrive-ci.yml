@@ -41,7 +41,9 @@ jobs:
       - name: Verify Xcode tools available
         run: |
           xcrun --show-sdk-path
-          ls /Applications/Xcode*.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework
+          # SimulatorKit moved to Contents/SharedFrameworks in Xcode 27.
+          [ -n "$(ls -d /Applications/Xcode*.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework \
+                /Applications/Xcode*.app/Contents/SharedFrameworks/SimulatorKit.framework 2>/dev/null)" ]
 
       - name: Build native HID helper (universal2)
         run: cd native && make clean && make

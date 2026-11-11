@@ -18,6 +18,7 @@
 //   simdrive-input <udid> button <home|lock|side|siri>
 //   simdrive-input <udid> key <keycode>            (HID usage code; e.g. 4=A, 40=Return)
 //   simdrive-input <udid> text "Hello"
+//   simdrive-input --simkit-path                   (print the SimulatorKit path loaded)
 
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -67,28 +68,84 @@ static MessageForButtonFn gMessageForButton;
 #define DIRECTION_DOWN 1
 #define DIRECTION_UP   2
 
-static int loadFrameworks(NSError **outErr) {
-  void *handles[2] = {0};
-  handles[0] = dlopen(
+// Developer dir for SimulatorKit and SimServiceContext: $DEVELOPER_DIR, then
+// `xcode-select -p`, then the default Xcode install. Accepts an Xcode.app root
+// as well as its Contents/Developer folder, as xcode-select does.
+static NSString *resolveDeveloperDir(void) {
+  NSString *dir = nil;
+  const char *env = getenv("DEVELOPER_DIR");
+  if (env && *env) {
+    dir = [NSString stringWithUTF8String:env];
+  } else {
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/xcode-select"];
+    task.arguments = @[@"-p"];
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = [NSFileHandle fileHandleWithNullDevice];
+    if ([task launchAndReturnError:nil]) {
+      NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+      [task waitUntilExit];
+      if (task.terminationStatus == 0) {
+        dir = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+               stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+      }
+    }
+  }
+  if (dir.length == 0) dir = @"/Applications/Xcode.app/Contents/Developer";
+  NSString *nested = [dir stringByAppendingPathComponent:@"Contents/Developer"];
+  BOOL isDir = NO;
+  if ([[NSFileManager defaultManager] fileExistsAtPath:nested isDirectory:&isDir] && isDir) {
+    dir = nested;
+  }
+  return dir;
+}
+
+// SimulatorKit lives in <dev>/Library/PrivateFrameworks up to Xcode 26 and in
+// <Xcode.app>/Contents/SharedFrameworks from Xcode 27.
+static NSArray<NSString *> *simulatorKitCandidates(NSString *devDir) {
+  NSString *rel = @"SimulatorKit.framework/SimulatorKit";
+  return @[
+    [[devDir stringByAppendingPathComponent:@"Library/PrivateFrameworks"] stringByAppendingPathComponent:rel],
+    [[[devDir stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"SharedFrameworks"]
+      stringByAppendingPathComponent:rel],
+  ];
+}
+
+static NSString *gDeveloperDir;
+static NSString *gSimulatorKitPath;
+
+static int loadFrameworks(void) {
+  void *coreSim = dlopen(
     "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator", RTLD_NOW);
-  if (!handles[0]) { fprintf(stderr, "dlopen CoreSimulator: %s\n", dlerror()); return 1; }
-  handles[1] = dlopen(
-    "/Applications/Xcode.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit",
-    RTLD_NOW);
-  if (!handles[1]) { fprintf(stderr, "dlopen SimulatorKit: %s\n", dlerror()); return 2; }
-  gMessageForMouse = dlsym(handles[1], "IndigoHIDMessageForMouseNSEvent");
-  gMessageForKeyboard = dlsym(handles[1], "IndigoHIDMessageForKeyboardArbitrary");
-  gMessageForButton = dlsym(handles[1], "IndigoHIDMessageForButton");
+  if (!coreSim) { fprintf(stderr, "dlopen CoreSimulator: %s\n", dlerror()); return 1; }
+
+  gDeveloperDir = resolveDeveloperDir();
+  void *simKit = NULL;
+  NSMutableString *tried = [NSMutableString string];
+  for (NSString *path in simulatorKitCandidates(gDeveloperDir)) {
+    simKit = dlopen(path.fileSystemRepresentation, RTLD_NOW);
+    if (simKit) { gSimulatorKitPath = path; break; }
+    const char *why = dlerror();
+    [tried appendFormat:@"\n  %@ (%s)", path, why ? why : "unknown error"];
+  }
+  if (!simKit) {
+    fprintf(stderr, "dlopen SimulatorKit failed for developer dir %s; tried:%s\n",
+            gDeveloperDir.UTF8String, tried.UTF8String);
+    return 2;
+  }
+  gMessageForMouse = dlsym(simKit, "IndigoHIDMessageForMouseNSEvent");
+  gMessageForKeyboard = dlsym(simKit, "IndigoHIDMessageForKeyboardArbitrary");
+  gMessageForButton = dlsym(simKit, "IndigoHIDMessageForButton");
   if (!gMessageForMouse || !gMessageForKeyboard || !gMessageForButton) {
-    fprintf(stderr, "dlsym Indigo functions failed\n"); return 3;
+    fprintf(stderr, "dlsym Indigo functions failed in %s\n", gSimulatorKitPath.UTF8String); return 3;
   }
   return 0;
 }
 
 static SimDevice *findDevice(NSString *udid, NSError **err) {
   Class CtxClass = objc_lookUpClass("SimServiceContext");
-  NSString *devDir = @"/Applications/Xcode.app/Contents/Developer";
-  id ctx = [CtxClass sharedServiceContextForDeveloperDir:devDir error:err];
+  id ctx = [CtxClass sharedServiceContextForDeveloperDir:gDeveloperDir error:err];
   if (!ctx) return nil;
   id deviceSet = [ctx defaultDeviceSetWithError:err];
   if (!deviceSet) return nil;
@@ -208,14 +265,20 @@ static void usage(void) {
     "  button <home|lock|side|siri>         — hardware button press\n"
     "  key    <usage>                       — keyboard key press (HID usage code)\n"
     "  text   <string>                      — type ASCII text\n"
-    "  size                                 — print device screen size in points\n");
+    "  size                                 — print device screen size in points\n"
+    "simdrive-input --simkit-path            — load SimulatorKit, print its path\n");
 }
 
 int main(int argc, const char *argv[]) {
   @autoreleasepool {
+    if (argc == 2 && strcmp(argv[1], "--simkit-path") == 0) {
+      if (loadFrameworks() != 0) return 5;
+      printf("%s\n", gSimulatorKitPath.fileSystemRepresentation);
+      return 0;
+    }
     if (argc < 3) { usage(); return 1; }
     NSError *err = nil;
-    if (loadFrameworks(&err) != 0) return 5;
+    if (loadFrameworks() != 0) return 5;
 
     NSString *udid = [NSString stringWithUTF8String:argv[1]];
     SimDevice *device = findDevice(udid, &err);
