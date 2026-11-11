@@ -15,6 +15,15 @@
 
 ## [Unreleased]
 
+### Fixed: taps and typing work with Xcode 27
+
+- Xcode 27 moved SimulatorKit into `Contents/SharedFrameworks`. The bundled
+  input helper linked it from the old folder, so it failed to start and every
+  tap, key and button press on a simulator failed. The helper now loads
+  SimulatorKit at runtime from either location.
+- The helper now uses the Xcode chosen by `DEVELOPER_DIR` or `xcode-select`
+  instead of always using `/Applications/Xcode.app`.
+
 ### Fixed: replay reports a mid-run crash as a crash
 
 - A crash partway through a replay now halts with `crash_detected`, even
